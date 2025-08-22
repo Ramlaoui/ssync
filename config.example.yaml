@@ -1,0 +1,23 @@
+# ssync configuration
+# Copy to ~/.config/ssync/config.yaml
+
+hosts:
+  # SSH config alias (uses ~/.ssh/config)
+  - hostname: my-cluster
+    work_dir: /home/user/work
+    scratch_dir: /scratch/user
+
+  # SSH config with password
+  - hostname: secure-cluster
+    password: ${CLUSTER_PASSWORD}
+    work_dir: /lustre/work/user
+    scratch_dir: /lustre/scratch/user
+
+  # Manual connection details
+  - hostname: direct.cluster.edu
+    username: myuser
+    port: 22
+    key_file: ~/.ssh/cluster_key
+    use_ssh_config: false
+    work_dir: /home/myuser/projects
+    scratch_dir: /tmp/scratch

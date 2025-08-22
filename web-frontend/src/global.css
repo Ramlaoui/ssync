@@ -1,0 +1,159 @@
+/* Global styles for SLURM Manager */
+
+:root {
+    --primary: #2c3e50;
+    --secondary: #3498db;
+    --success: #28a745;
+    --danger: #dc3545;
+    --warning: #f39c12;
+    --info: #17a2b8;
+    --light: #f8f9fa;
+    --dark: #343a40;
+    --border-color: #dee2e6;
+    --body-bg: #f9fafb;
+    --body-color: #495057;
+    --font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: var(--font-family);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--body-color);
+    background-color: var(--body-bg);
+}
+
+/* Better button styles */
+button {
+    position: relative;
+    overflow: hidden;
+}
+
+button::after {
+    content: '';
+    display: block;
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    background-image: radial-gradient(circle, #fff 10%, transparent 10.01%);
+    background-repeat: no-repeat;
+    background-position: 50%;
+    transform: scale(10, 10);
+    opacity: 0;
+    transition: transform .5s, opacity 0.8s;
+}
+
+button:active::after {
+    transform: scale(0, 0);
+    opacity: 0.3;
+    transition: 0s;
+}
+
+/* Focus styles for better accessibility */
+a:focus,
+button:focus,
+input:focus,
+select:focus,
+textarea:focus,
+[tabindex]:focus {
+    outline: 3px solid rgba(52, 152, 219, 0.5);
+    outline-offset: 2px;
+}
+
+/* Prevent content jumping during loads */
+.sidebar,
+.content {
+    min-height: 100px;
+}
+
+/* Smooth transitions */
+.fade-in {
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+/* Disable user selection when appropriate */
+.no-select {
+    user-select: none;
+}
+
+/* Better loading animations */
+.loading-ripple {
+    display: inline-block;
+    position: relative;
+    width: 80px;
+    height: 80px;
+}
+
+.loading-ripple div {
+    position: absolute;
+    border: 4px solid var(--secondary);
+    opacity: 1;
+    border-radius: 50%;
+    animation: loading-ripple 1s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+}
+
+.loading-ripple div:nth-child(2) {
+    animation-delay: -0.5s;
+}
+
+@keyframes loading-ripple {
+    0% {
+        top: 36px;
+        left: 36px;
+        width: 0;
+        height: 0;
+        opacity: 1;
+    }
+
+    100% {
+        top: 0px;
+        left: 0px;
+        width: 72px;
+        height: 72px;
+        opacity: 0;
+    }
+}
+
+/* Prevent layout shifts during loading */
+.placeholder {
+    background: #eee;
+    border-radius: 4px;
+    display: inline-block;
+    position: relative;
+    animation: placeholder-pulse 1.5s infinite;
+}
+
+@keyframes placeholder-pulse {
+    0% {
+        opacity: 0.6;
+    }
+
+    50% {
+        opacity: 0.3;
+    }
+
+    100% {
+        opacity: 0.6;
+    }
+}

@@ -1,0 +1,37 @@
+[project]
+name = "ssync"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.2.1",
+    "fabric>=3.2.2",
+    "pyyaml>=6.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+ssync = "ssync.cli:main"
+ssync-web = "ssync.web.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ipython>=8.29.0",
+    "ipykernel>=6.30.1",
+    "ipdb>=0.13.13",
+    "ruff>=0.7.1",
+    "pytest>=8.3",
+    "pre-commit>=4.0.1",
+    "lxml>=5.3.0",
+    "requests>=2.32.3",
+]
+
+[tool.ruff.lint]
+extend-select = ["I"]
