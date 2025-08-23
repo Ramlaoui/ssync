@@ -1,31 +1,67 @@
-<script>
+<script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import type { JobInfo } from '../types/api';
   
-  export let hostname;
-  export let jobs;
-  export let queryTime;
-  export let getStateColor;
+  export let hostname: string;
+  export let jobs: JobInfo[];
+  export let queryTime: string;
+  export let getStateColor: (state: string) => string;
   export let loading = false;
   
-  const dispatch = createEventDispatcher();
+  const dispatch = createEventDispatcher<{
+    jobSelect: JobInfo;
+  }>();
   
-  function selectJob(job) {
+  function selectJob(job: JobInfo): void {
     if (loading) return;
     dispatch('jobSelect', job);
   }
   
-  function formatTime(timeStr) {
+  function formatTime(timeStr: string | null): string {
     if (!timeStr || timeStr === 'N/A') return 'N/A';
     try {
-      return new Date(timeStr).toLocaleString();
+      const date = new Date(timeStr);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffHours / 24);
+      
+      // Show relative time for recent submissions
+      if (diffHours < 1) {
+        const diffMinutes = Math.floor(diffMs / (1000 * 60));
+        return `${diffMinutes}m ago`;
+      } else if (diffHours < 24) {
+        return `${diffHours}h ago`;
+      } else if (diffDays < 7) {
+        return `${diffDays}d ago`;
+      } else {
+        // Show actual date for older submissions
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      }
     } catch {
       return timeStr;
     }
   }
   
-  function truncate(str, length = 20) {
-    if (!str || str.length <= length) return str;
+  function truncate(str: string | null, length = 20): string {
+    if (!str || str.length <= length) return str || '';
     return str.substring(0, length) + '...';
+  }
+
+  function smartTruncate(str: string | null, maxLength = 30): string {
+    if (!str || str.length <= maxLength) return str || '';
+    // Try to break at word boundaries if possible
+    const truncated = str.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > maxLength * 0.6) {
+      return str.substring(0, lastSpace) + '...';
+    }
+    return truncated + '...';
   }
 </script>
 
@@ -59,9 +95,11 @@
       <div class="table-header">
         <div class="col job-id">Job ID</div>
         <div class="col name">Name</div>
+        <div class="col user">User</div>
         <div class="col state">State</div>
         <div class="col runtime">Runtime</div>
         <div class="col resources">Resources</div>
+        <div class="col partition">Partition</div>
         <div class="col submitted">Submitted</div>
       </div>
       
@@ -69,6 +107,7 @@
         <div 
           class="job-row" 
           on:click={() => selectJob(job)}
+          on:keydown={(e) => e.key === 'Enter' && selectJob(job)}
           class:loading={loading}
           class:clickable={!loading}
           role="button"
@@ -79,7 +118,10 @@
             <strong>{job.job_id}</strong>
           </div>
           <div class="col name" title={job.name}>
-            {truncate(job.name)}
+            <span class="job-name">{smartTruncate(job.name, 35)}</span>
+          </div>
+          <div class="col user">
+            {job.user || 'N/A'}
           </div>
           <div class="col state">
             <span 
@@ -93,21 +135,38 @@
             {job.runtime || 'N/A'}
           </div>
           <div class="col resources">
-            {#if job.cpus || job.memory}
-              <div class="resource-info">
+            {#if job.cpus || job.memory || job.nodes}
+              <div class="resource-grid">
+                {#if job.nodes && job.nodes !== 'N/A'}
+                  <div class="resource-item">
+                    <span class="resource-label">Nodes</span>
+                    <span class="resource-value">{job.nodes}</span>
+                  </div>
+                {/if}
                 {#if job.cpus && job.cpus !== 'N/A'}
-                  <span>CPU: {job.cpus}</span>
+                  <div class="resource-item">
+                    <span class="resource-label">CPUs</span>
+                    <span class="resource-value">{job.cpus}</span>
+                  </div>
                 {/if}
                 {#if job.memory && job.memory !== 'N/A'}
-                  <span>Mem: {job.memory}</span>
+                  <div class="resource-item">
+                    <span class="resource-label">Memory</span>
+                    <span class="resource-value">{job.memory}</span>
+                  </div>
                 {/if}
               </div>
             {:else}
-              N/A
+              <span class="no-resources">N/A</span>
             {/if}
           </div>
+          <div class="col partition">
+            {job.partition || 'N/A'}
+          </div>
           <div class="col submitted">
-            {job.submit_time ? formatTime(job.submit_time) : 'N/A'}
+            <span class="submitted-time" title={job.submit_time ? new Date(job.submit_time).toLocaleString() : 'N/A'}>
+              {job.submit_time ? formatTime(job.submit_time) : 'N/A'}
+            </span>
           </div>
         </div>
       {/each}
@@ -121,6 +180,7 @@
     border-radius: 0.5rem;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     overflow: hidden;
+    flex-shrink: 0;
   }
 
   .header {
@@ -185,27 +245,33 @@
   .job-table {
     display: flex;
     flex-direction: column;
+    max-height: 70vh;
+    overflow-y: auto;
   }
 
   .table-header {
     display: grid;
-    grid-template-columns: 100px 1fr 80px 100px 120px 140px;
-    gap: 1rem;
+    grid-template-columns: 90px 1fr 140px 130px 100px 170px 120px 150px;
+    gap: 0.75rem;
     padding: 0.75rem 1rem;
     background: #f8f9fa;
     border-bottom: 1px solid #dee2e6;
     font-weight: 600;
     color: #495057;
     font-size: 0.9rem;
+    position: sticky;
+    top: 0;
+    z-index: 1;
   }
 
   .job-row {
     display: grid;
-    grid-template-columns: 100px 1fr 80px 100px 120px 140px;
-    gap: 1rem;
+    grid-template-columns: 90px 1fr 140px 130px 100px 170px 120px 150px;
+    gap: 0.75rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid #f1f3f4;
     transition: background-color 0.2s;
+    min-height: 3.5rem;
   }
   
   .job-row.clickable {
@@ -233,10 +299,25 @@
   .col {
     display: flex;
     align-items: center;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .col.name {
+    font-size: 0.9rem;
+  }
+
+  .col.resources {
+    align-items: flex-start;
+    padding-top: 0.2rem;
+  }
+
+  .job-name {
+    font-weight: 500;
+    color: #374151;
+    line-height: 1.3;
   }
 
   .col.job-id strong {
@@ -246,42 +327,125 @@
   .state-badge {
     color: white;
     padding: 0.2rem 0.6rem;
-    border-radius: 1rem;
-    font-size: 0.75rem;
+    border-radius: 0.75rem;
+    font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
+    text-align: center;
+    min-width: fit-content;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    display: inline-block;
   }
 
-  .resource-info {
+  .resource-grid {
     display: flex;
     flex-direction: column;
-    gap: 0.1rem;
+    gap: 0.15rem;
+    align-items: flex-start;
   }
 
-  .resource-info span {
+  .resource-item {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
     font-size: 0.75rem;
-    color: #6c757d;
+    line-height: 1.2;
   }
 
-  @media (max-width: 1200px) {
+  .resource-label {
+    color: #6c757d;
+    font-weight: 500;
+    min-width: 45px;
+    font-size: 0.7rem;
+  }
+
+  .resource-value {
+    color: #374151;
+    font-weight: 600;
+    font-size: 0.75rem;
+  }
+
+  .no-resources {
+    color: #9ca3af;
+    font-size: 0.8rem;
+  }
+
+  .submitted-time {
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .col.submitted {
+    font-size: 0.8rem;
+  }
+
+  @media (max-width: 1400px) {
     .table-header,
     .job-row {
-      grid-template-columns: 80px 1fr 70px 80px 100px;
+      grid-template-columns: 80px 1fr 130px 120px 90px 150px;
     }
     
+    .col.partition,
     .col.submitted {
       display: none;
     }
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1000px) {
     .table-header,
     .job-row {
-      grid-template-columns: 80px 1fr 70px 80px;
+      grid-template-columns: 80px 1fr 120px 110px 140px;
+    }
+    
+    .col.user {
+      display: none;
+    }
+  }
+
+  @media (max-width: 800px) {
+    .table-header,
+    .job-row {
+      grid-template-columns: 80px 1fr 110px 120px;
     }
     
     .col.resources {
       display: none;
     }
+    
+    .job-name {
+      font-size: 0.9rem;
+    }
+    
+    .job-table {
+      max-height: 60vh;
+    }
+  }
+
+  /* Scrollbar styling for job table */
+  .job-table::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .job-table::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+  }
+
+  .job-table::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+  }
+
+  .job-table::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  /* Firefox scrollbar */
+  .job-table {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
   }
 </style>

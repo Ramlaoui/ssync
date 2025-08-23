@@ -133,7 +133,6 @@ class SlurmParser:
         # Infer stdout/stderr paths
         work_dir = get_field("WorkDir")
         var_dict = cls.create_var_dict(fields)
-        breakpoint()
         stdout_file = cls.expand_slurm_path_vars(get_field("StdOut") or "", var_dict)
         stderr_file = cls.expand_slurm_path_vars(get_field("StdErr") or "", var_dict)
 

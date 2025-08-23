@@ -4,7 +4,7 @@ from pathlib import Path
 
 import click
 
-from .cli.commands import StatusCommand, SubmitCommand, SyncCommand
+from .cli.commands import LaunchCommand, StatusCommand, SubmitCommand, SyncCommand
 from .config import ConfigError, get_default_config_path, load_config
 
 
@@ -180,6 +180,81 @@ def submit_command(
         output=output,
         error=error,
         python_env=python_env,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="launch")
+@click.option("--host", required=True, help="Target host for job submission")
+@click.option("--job-name", help="SLURM job name")
+@click.option("--cpus", type=int, help="Number of CPUs per task")
+@click.option("--mem", type=int, help="Memory in GB")
+@click.option("--time", type=int, help="Time limit in minutes")
+@click.option("--partition", help="SLURM partition")
+@click.option("--output", help="Output file path")
+@click.option("--error", help="Error file path")
+@click.option("--constraint", help="Node constraints (e.g., gpu, bigmem)")
+@click.option("--account", help="SLURM account for billing")
+@click.option("--python-env", help="Python environment setup command")
+@click.option(
+    "--exclude", multiple=True, help="Additional patterns to exclude from sync"
+)
+@click.option(
+    "--include", multiple=True, help="Patterns to include (overrides .gitignore)"
+)
+@click.option("--no-gitignore", is_flag=True, help="Disable .gitignore usage")
+@click.argument("script_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("source_dir", type=click.Path(exists=True, path_type=Path))
+@click.pass_context
+def launch_command(
+    ctx,
+    host,
+    job_name,
+    cpus,
+    mem,
+    time,
+    partition,
+    output,
+    error,
+    constraint,
+    account,
+    python_env,
+    exclude,
+    include,
+    no_gitignore,
+    script_path,
+    source_dir,
+):
+    """Launch job by syncing source directory and submitting script.
+    
+    SCRIPT_PATH: Path to the script to submit (.sh or .slurm)
+    SOURCE_DIR: Source directory to sync to remote host
+    """
+    command = LaunchCommand(
+        config_path=ctx.obj["config_path"],
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        script_path=script_path,
+        source_dir=source_dir,
+        host=host,
+        job_name=job_name,
+        cpus=cpus,
+        mem=mem,
+        time=time,
+        partition=partition,
+        output=output,
+        error=error,
+        constraint=constraint,
+        account=account,
+        python_env=python_env,
+        exclude=list(exclude),
+        include=list(include),
+        no_gitignore=no_gitignore,
     )
 
     if not success:

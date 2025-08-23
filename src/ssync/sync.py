@@ -53,7 +53,14 @@ class SyncManager:
         else:
             target = f"{slurm_host.host.hostname}:{target_dir}/"
 
-        rsync_cmd = ["rsync", "-avz", *exclude_args, f"{self.source_dir}/", target]
+        rsync_cmd = []
+        if slurm_host.host.password:
+            rsync_cmd = [
+                "sshpass",
+                "-p",
+                slurm_host.host.password
+            ]
+        rsync_cmd += ["rsync", "-avz", *exclude_args, f"{self.source_dir}/", target]
 
         try:
             # Use fabric's local() to run rsync locally (it handles SSH properly)

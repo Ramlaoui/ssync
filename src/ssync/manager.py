@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -10,21 +11,14 @@ from .models import JobInfo
 from .models.cluster import Host, SlurmHost
 from .slurm import SlurmClient
 from .utils.logging import setup_logger
+from .utils.config import config
+from .utils.ssh import send_file
+from .utils.slurm_params import SlurmParams
 
 logger = setup_logger(__name__, "DEBUG")
 
 
 @dataclass
-class SlurmParams:
-    """Parameters for SLURM job submission."""
-
-    job_name: Optional[str] = None
-    time_min: Optional[int] = None
-    cpus_per_task: Optional[int] = None
-    mem_gb: Optional[int] = None
-    partition: Optional[str] = None
-    output: Optional[str] = None
-    error: Optional[str] = None
 
 
 class Job:
@@ -180,9 +174,15 @@ class SlurmManager:
         return jobs
 
     def submit_script(
-        self, slurm_host: SlurmHost, script_path: str, params: SlurmParams
+        self, slurm_host: SlurmHost | str, params: SlurmParams | None = None, local_script_path: str | None = None, remote_script_path: str | None = None
     ) -> Optional[Job]:
         """Submit a script to SLURM."""
+
+        params = params or SlurmParams()
+
+        if isinstance(slurm_host, str):
+            slurm_host = self.get_host_by_name(slurm_host)
+
         host = slurm_host.host
         conn = self._get_connection(host)
 
@@ -204,8 +204,25 @@ class SlurmManager:
                 cmd.append(f"--output={params.output}")
             if params.error:
                 cmd.append(f"--error={params.error}")
+            if params.constraint:
+                cmd.append(f"--constraint={params.constraint}")
+            if params.account:
+                cmd.append(f"--account={params.account}")
+            if params.nodes:
+                cmd.append(f"--nodes={params.nodes}")
+            if params.n_tasks_per_node:
+                cmd.append(f"--ntasks-per-node={params.n_tasks_per_node}")
+            if params.gpus_per_node:
+                cmd.append(f"--gpus-per-node={params.gpus_per_node}")
+            if params.gres:
+                cmd.append(f"--gres={params.gres}")
 
-            cmd.append(script_path)
+            # Send script to remote scratch dir
+            if local_script_path:
+                remote_scratch_dir = config.get_remote_cache_path(slurm_host)
+                remote_script_path = send_file(conn=conn, local_path=local_script_path, remote_path=remote_scratch_dir, is_remote_dir=True)
+
+            cmd.append(remote_script_path)
 
             # Submit job
             result = conn.run(" ".join(cmd), hide=False)
@@ -230,12 +247,12 @@ class SlurmManager:
         return self.slurm_client.cancel_job(conn, job_id)
 
     def get_job_info(
-        self, slurm_host: SlurmHost | str, job_id: str
+        self, slurm_host: SlurmHost | str, job_id: str, username: str | None = None
     ) -> Optional[JobInfo]:
         """Get detailed information about a SLURM job."""
         host = self.get_host_by_name(slurm_host)
         conn = self._get_connection(host.host)
-        return self.slurm_client.get_job_details(conn, job_id, host.host.hostname)
+        return self.slurm_client.get_job_details(conn, job_id, host.host.hostname, username)
 
     def get_host_by_name(self, hostname: str | SlurmHost) -> SlurmHost:
         """Get a SLURM host by hostname."""

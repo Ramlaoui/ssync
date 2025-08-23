@@ -1,20 +1,28 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
-  import axios from 'axios';
+  import axios, { type AxiosError } from 'axios';
   import JobList from './components/JobList.svelte';
   import JobDetail from './components/JobDetail.svelte';
   import FilterPanel from './components/FilterPanel.svelte';
+  import LaunchJob from './components/LaunchJob.svelte';
   import ErrorBoundary from './components/ErrorBoundary.svelte';
+  import type { 
+    HostInfo, 
+    JobInfo, 
+    JobStatusResponse, 
+    JobOutputResponse, 
+    JobFilters 
+  } from './types/api';
 
-  let hosts = [];
-  let jobsByHost = new Map();
-  let selectedJob = null;
+  let hosts: HostInfo[] = [];
+  let jobsByHost = new Map<string, JobStatusResponse>();
+  let selectedJob: JobInfo | null = null;
   let loading = false;
   let hostsLoading = false;
-  let error = null;
+  let error: string | null = null;
   let lastRequestId = 0;
-  let activeRequests = new Set();
-  let filters = {
+  let activeRequests = new Set<string>();
+  let filters: JobFilters = {
     host: '',
     user: '',
     since: '1d',
@@ -24,32 +32,36 @@
     completedOnly: false
   };
 
+  // Tab state
+  let activeTab: 'jobs' | 'launch' = 'jobs';
+
   const API_BASE = '/api';
 
-  onMount(async () => {
-    await loadHosts();
-    await loadJobs();
+  onMount(() => {
+    loadHosts();
+    loadJobs();
     
     // Auto-refresh every 30 seconds
     const interval = setInterval(loadJobs, 30000);
     return () => clearInterval(interval);
   });
 
-  async function loadHosts() {
+  async function loadHosts(): Promise<void> {
     if (hostsLoading) return; // Prevent concurrent requests
     
     hostsLoading = true;
     try {
-      const response = await axios.get(`${API_BASE}/hosts`);
+      const response = await axios.get<HostInfo[]>(`${API_BASE}/hosts`);
       hosts = response.data;
-    } catch (err) {
-      error = `Failed to load hosts: ${err.message}`;
+    } catch (err: unknown) {
+      const axiosError = err as AxiosError;
+      error = `Failed to load hosts: ${axiosError.message}`;
     } finally {
       hostsLoading = false;
     }
   }
 
-  async function loadJobs() {
+  async function loadJobs(): Promise<void> {
     const requestId = ++lastRequestId;
     const requestKey = 'loadJobs';
     
@@ -72,22 +84,23 @@
       if (filters.activeOnly) params.append('active_only', 'true');
       if (filters.completedOnly) params.append('completed_only', 'true');
 
-      const response = await axios.get(`${API_BASE}/status?${params}`);
+      const response = await axios.get<JobStatusResponse[]>(`${API_BASE}/status?${params}`);
       
       // Only update if this is still the latest request
       if (requestId === lastRequestId) {
         // Convert to Map for easier access
-        jobsByHost = new Map();
-        response.data.forEach(hostData => {
+        jobsByHost = new Map<string, JobStatusResponse>();
+        response.data.forEach((hostData: JobStatusResponse) => {
           jobsByHost.set(hostData.hostname, hostData);
         });
         
         jobsByHost = new Map(jobsByHost); // Trigger reactivity
       }
-    } catch (err) {
+    } catch (err: unknown) {
       // Only show error if this is still the latest request
       if (requestId === lastRequestId) {
-        error = `Failed to load jobs: ${err.message}`;
+        const axiosError = err as AxiosError;
+        error = `Failed to load jobs: ${axiosError.message}`;
       }
     } finally {
       activeRequests.delete(requestKey);
@@ -97,7 +110,7 @@
     }
   }
 
-  async function loadJobOutput(jobId, hostname) {
+  async function loadJobOutput(jobId: string, hostname: string): Promise<JobOutputResponse | { loading: true }> {
     const requestKey = `output-${jobId}-${hostname}`;
     
     // Prevent duplicate requests for the same job output
@@ -107,21 +120,21 @@
     
     activeRequests.add(requestKey);
     try {
-      const response = await axios.get(`${API_BASE}/jobs/${jobId}/output?host=${hostname}`);
+      const response = await axios.get<JobOutputResponse>(`${API_BASE}/jobs/${jobId}/output?host=${hostname}`);
       
       const data = response.data;
       
       // Add additional info about file access for better debugging
-      if (data.stdout === null && data.output_files?.stdout_path) {
-        data.stdout = `[No output file found at: ${data.output_files.stdout_path}]`;
+      if (data.stdout === null && (data as any).output_files?.stdout_path) {
+        data.stdout = `[No output file found at: ${(data as any).output_files.stdout_path}]`;
       }
       
-      if (data.stderr === null && data.output_files?.stderr_path) {
-        data.stderr = `[No error file found at: ${data.output_files.stderr_path}]`;
+      if (data.stderr === null && (data as any).output_files?.stderr_path) {
+        data.stderr = `[No error file found at: ${(data as any).output_files.stderr_path}]`;
       }
       
       return data;
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to load job output:', err);
       throw err; // Let JobDetail component handle the error properly
     } finally {
@@ -129,7 +142,7 @@
     }
   }
 
-  function handleFilterChange() {
+  function handleFilterChange(): void {
     // Debounce rapid filter changes
     clearTimeout(filterChangeTimeout);
     filterChangeTimeout = setTimeout(() => {
@@ -137,20 +150,20 @@
     }, 300);
   }
   
-  let filterChangeTimeout;
+  let filterChangeTimeout: ReturnType<typeof setTimeout>;
 
-  function handleJobSelect(job) {
+  function handleJobSelect(job: JobInfo): void {
     selectedJob = job;
   }
   
   // Manual refresh handler
-  function handleManualRefresh() {
+  function handleManualRefresh(): void {
     if (!loading) {
       loadJobs();
     }
   }
 
-  function getStateColor(state) {
+  function getStateColor(state: string): string {
     switch (state) {
       case 'R': return '#28a745';
       case 'PD': return '#ffc107';
@@ -162,7 +175,7 @@
     }
   }
 
-  function getTotalJobs() {
+  function getTotalJobs(): number {
     let total = 0;
     for (let hostData of jobsByHost.values()) {
       total += hostData.jobs.length;
@@ -178,33 +191,50 @@
 }}>
   <div class="app">
     <header class="header">
-      <h1 class="app-title" on:click={() => selectedJob = null}>
-        <svg class="logo-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2L2 7v10c0 5.55 3.84 10 9 11 1.04-.02 2-.02 3 0 5.16-1 9-5.45 9-11V7l-10-5z"/>
-          <path d="M12 8v8m-4-4h8"/>
-        </svg>
-        SLURM Manager
-      </h1>
+      <div class="header-left">
+        <button class="app-title" on:click={() => {selectedJob = null; activeTab = 'jobs';}}>
+          ssync
+        </button>
+
+        <nav class="tab-nav">
+          <button 
+            class="tab-button"
+            class:active={activeTab === 'jobs'}
+            on:click={() => {activeTab = 'jobs'; selectedJob = null;}}
+          >
+            Jobs
+          </button>
+          <button 
+            class="tab-button"
+            class:active={activeTab === 'launch'}
+            on:click={() => {activeTab = 'launch'; selectedJob = null;}}
+          >
+            Launch Job
+          </button>
+        </nav>
+      </div>
+      
       <div class="stats">
         <span class="stat">
           {hosts.length} Hosts
         </span>
-        <span class="stat">
-          {getTotalJobs()} Jobs
-        </span>
-        <span 
-          class="stat refresh-button" 
-          class:loading 
-          on:click={handleManualRefresh}
-          role="button"
-          tabindex="0"
-          aria-label="Refresh data"
-        >
-          {loading ? 'Refreshing...' : 'Refresh'}
-          <svg class="refresh-icon" class:spinning={loading} viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z"/>
-          </svg>
-        </span>
+        {#if activeTab === 'jobs'}
+          <span class="stat">
+            {getTotalJobs()} Jobs
+          </span>
+          <button 
+            class="stat refresh-button" 
+            class:loading 
+            on:click={handleManualRefresh}
+            disabled={loading}
+            aria-label="Refresh data"
+          >
+            {loading ? 'Refreshing...' : 'Refresh'}
+            <svg class="refresh-icon" class:spinning={loading} viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z"/>
+            </svg>
+          </button>
+        {/if}
       </div>
     </header>
 
@@ -225,71 +255,77 @@
   {/if}
 
   <div class="main-content">
-    <div class="sidebar">
-      <FilterPanel 
-        bind:filters 
-        {hosts}
-        on:change={handleFilterChange}
-      />
-      
-      <div class="hosts-section">
-        <h3>Hosts</h3>
-        {#if hostsLoading && hosts.length === 0}
-          <div class="loading-placeholder">Loading hosts...</div>
+    {#if activeTab === 'jobs'}
+      <div class="sidebar">
+        <FilterPanel 
+          bind:filters 
+          {hosts}
+          on:change={handleFilterChange}
+        />
+        
+        <div class="hosts-section">
+          <h3>Hosts</h3>
+          {#if hostsLoading && hosts.length === 0}
+            <div class="loading-placeholder">Loading hosts...</div>
+          {:else}
+            {#each hosts as host}
+              <div class="host-item" class:active={filters.host === host.hostname}>
+                <button 
+                  class="host-name"
+                  on:click={() => {
+                    filters.host = filters.host === host.hostname ? '' : host.hostname;
+                    handleFilterChange();
+                  }}
+                  disabled={loading}
+                  aria-pressed={filters.host === host.hostname}
+                >
+                  {host.hostname}
+                  {#if jobsByHost.has(host.hostname)}
+                    <span class="job-count">
+                      {jobsByHost.get(host.hostname)?.jobs.length ?? 0}
+                    </span>
+                  {/if}
+                </button>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      </div>
+
+      <div class="content">
+        {#if selectedJob}
+          <JobDetail 
+            job={selectedJob} 
+            {loadJobOutput}
+            onClose={() => selectedJob = null}
+          />
         {:else}
-          {#each hosts as host}
-            <div class="host-item" class:active={filters.host === host.hostname}>
-              <button 
-                class="host-name"
-                on:click={() => {
-                  filters.host = filters.host === host.hostname ? '' : host.hostname;
-                  handleFilterChange();
-                }}
-                disabled={loading}
-                aria-selected={filters.host === host.hostname}
-              >
-                {host.hostname}
-                {#if jobsByHost.has(host.hostname)}
-                  <span class="job-count">
-                    {jobsByHost.get(host.hostname).jobs.length}
-                  </span>
-                {/if}
-              </button>
+          {#if loading && jobsByHost.size === 0}
+            <div class="loading-container">
+              <div class="loading-spinner"></div>
+              <p>Loading jobs...</p>
             </div>
-          {/each}
+          {:else}
+            <div class="job-lists">
+              {#each [...jobsByHost.entries()] as [hostname, hostData]}
+                <JobList 
+                  {hostname}
+                  jobs={hostData.jobs}
+                  queryTime={hostData.query_time}
+                  {getStateColor}
+                  on:jobSelect={(event) => handleJobSelect(event.detail)}
+                  {loading}
+                />
+              {/each}
+            </div>
+          {/if}
         {/if}
       </div>
-    </div>
-
-    <div class="content">
-      {#if selectedJob}
-        <JobDetail 
-          job={selectedJob} 
-          {loadJobOutput}
-          onClose={() => selectedJob = null}
-        />
-      {:else}
-        {#if loading && jobsByHost.size === 0}
-          <div class="loading-container">
-            <div class="loading-spinner"></div>
-            <p>Loading jobs...</p>
-          </div>
-        {:else}
-          <div class="job-lists">
-            {#each [...jobsByHost.entries()] as [hostname, hostData]}
-              <JobList 
-                {hostname}
-                jobs={hostData.jobs}
-                queryTime={hostData.query_time}
-                {getStateColor}
-                on:jobSelect={(event) => handleJobSelect(event.detail)}
-                {loading}
-              />
-            {/each}
-          </div>
-        {/if}
-      {/if}
-    </div>
+    {:else if activeTab === 'launch'}
+      <div class="launch-content">
+        <LaunchJob />
+      </div>
+    {/if}
   </div>
 </div>
 </ErrorBoundary>
@@ -297,38 +333,47 @@
 <style>
   .app {
     min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
 
   .header {
-    background: #2c3e50;
+    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
     color: white;
     padding: 1rem 2rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    backdrop-filter: blur(10px);
+    position: relative;
+    z-index: 10;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
   }
 
   .app-title {
     margin: 0;
     font-size: 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
     cursor: pointer;
     transition: opacity 0.2s;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
   }
 
   .app-title:hover {
     opacity: 0.8;
   }
 
-  .logo-icon {
-    width: 28px;
-    height: 28px;
-  }
 
   .error-icon {
     width: 20px;
@@ -352,24 +397,29 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: #3498db;
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     cursor: pointer;
     user-select: none;
-    transition: background-color 0.2s;
+    transition: all 0.2s ease;
+    border: none;
+    box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
   }
 
   .stat.refresh-button:hover:not(.loading) {
-    background: #2980b9;
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
   }
 
   .stat.refresh-button:focus {
-    outline: 2px solid white;
+    outline: 2px solid rgba(255, 255, 255, 0.5);
     outline-offset: 2px;
   }
 
   .stat.refresh-button.loading {
-    background: #f39c12;
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     cursor: not-allowed;
+    box-shadow: 0 2px 4px rgba(245, 158, 11, 0.2);
   }
 
   .refresh-icon {
@@ -423,6 +473,8 @@
   .main-content {
     flex: 1;
     display: flex;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .sidebar {
@@ -438,7 +490,10 @@
     flex: 1;
     padding: 1rem;
     overflow-y: auto;
+    overflow-x: hidden;
     background: #f9fafb;
+    min-height: 0;
+    height: 100%;
   }
 
   .hosts-section h3 {
@@ -492,6 +547,7 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    min-height: min-content;
   }
 
   .loading-container {
@@ -520,5 +576,115 @@
     font-style: italic;
     background: rgba(0,0,0,0.03);
     border-radius: 0.25rem;
+  }
+
+  .tab-nav {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .tab-button {
+    padding: 0.625rem 1.25rem;
+    background: rgba(255,255,255,0.1);
+    border: none;
+    border-radius: 8px;
+    color: rgba(255,255,255,0.8);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tab-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    transition: left 0.5s;
+  }
+
+  .tab-button:hover {
+    background: rgba(255,255,255,0.2);
+    color: white;
+    transform: translateY(-1px);
+  }
+
+  .tab-button:hover::before {
+    left: 100%;
+  }
+
+  .tab-button.active {
+    background: rgba(255,255,255,0.95);
+    color: #2c3e50;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transform: translateY(-1px);
+  }
+
+  .tab-button.active::before {
+    display: none;
+  }
+
+
+  .launch-content {
+    flex: 1;
+    overflow: hidden;
+    background: #f9fafb;
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media (max-width: 768px) {
+    .header {
+      padding: 1rem;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .header-left {
+      gap: 1rem;
+    }
+
+    .app-title {
+      font-size: 1.25rem;
+    }
+
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+    }
+
+    .stats {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .stat {
+      font-size: 0.8rem;
+      padding: 0.2rem 0.6rem;
+    }
+
+    .tab-nav {
+      gap: 0.25rem;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .tab-button {
+      font-size: 0.8rem;
+      padding: 0.5rem 0.75rem;
+      flex: 1;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .content {
+      padding: 0.5rem;
+    }
   }
 </style>

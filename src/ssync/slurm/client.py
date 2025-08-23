@@ -165,17 +165,7 @@ class SlurmClient:
             cmd = f"squeue --format='{format_str}' --noheader"
 
             # Default to current user if no user specified (unless explicitly skipping)
-            query_user = user
-            if not query_user and not skip_user_detection:
-                try:
-                    whoami_result = conn.run(
-                        "whoami", hide=True, timeout=3, warn=True, pty=True
-                    )
-                    if whoami_result.ok and whoami_result.stdout.strip():
-                        query_user = whoami_result.stdout.strip()
-                        logger.info(f"Auto-detected user for {hostname}: {query_user}")
-                except Exception as e:
-                    logger.debug(f"Failed to get current user: {e}")
+            query_user = self.get_username(conn) if not skip_user_detection else user
 
             if query_user:
                 cmd += f" --user={query_user}"
@@ -284,19 +274,7 @@ class SlurmClient:
                 cmd += f" --starttime={since_str}"
 
             # Default to current user if no user specified (unless explicitly skipping)
-            query_user = user
-            if not query_user and not skip_user_detection:
-                try:
-                    whoami_result = conn.run(
-                        "whoami", hide=True, timeout=3, warn=True, pty=True
-                    )
-                    if whoami_result.ok and whoami_result.stdout.strip():
-                        query_user = whoami_result.stdout.strip()
-                        logger.info(
-                            f"Auto-detected user for sacct {hostname}: {query_user}"
-                        )
-                except Exception as e:
-                    logger.debug(f"Failed to get current user for sacct: {e}")
+            query_user = self.get_username(conn) if not skip_user_detection else user
 
             if query_user:
                 cmd += f" --user={query_user}"
@@ -433,41 +411,74 @@ class SlurmClient:
 
         return all_jobs[:limit] if limit else all_jobs
 
+    def get_username(self, conn: Connection, user: str | None = None) -> Optional[str]:
+        """Get the username to use for SLURM queries."""
+        if user:
+            return user
+
+        try:
+            result = conn.run("whoami", hide=True, timeout=3, warn=True, pty=True)
+            if result.ok and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception as e:
+            logger.debug(f"Failed to get current user: {e}")
+
+        return None
+
     def get_job_details(
-        self, conn: Connection, job_id: str, hostname: str
+        self, conn: Connection, job_id: str, hostname: str, user: str | None = None
     ) -> Optional[JobInfo]:
         """Get detailed information about a specific job."""
         try:
+            job_info = None
+
+            user = user or self.get_username(conn)
+
             # Try squeue first (for active jobs)
             format_str = "|".join(SQUEUE_FIELDS)
             result = conn.run(
-                f"squeue -j {job_id} --format='{format_str}' --noheader",
+                f"squeue --user {user} -j {job_id} --format='{format_str}' --noheader",
                 hide=True,
                 timeout=10,
+                warn=True,  # Don't throw exception on "Invalid job id"
             )
 
-            if result.stdout.strip():
+            if result.ok and result.stdout.strip():
                 fields = result.stdout.strip().split("|")
                 if len(fields) >= len(SQUEUE_FIELDS):
-                    return self.parser.from_squeue_fields(fields, hostname)
+                    job_info = self.parser.from_squeue_fields(fields, hostname)
 
-            # Try sacct for completed jobs
-            format_str = ",".join(SACCT_FIELDS)
-            result = conn.run(
-                f"sacct -X -j {job_id} --format={format_str} --parsable2 --noheader",
-                hide=True,
-                timeout=10,
-            )
+            # Try sacct for completed jobs if not found in squeue
+            if not job_info:
+                available_fields = self.get_available_sacct_fields(conn, hostname)
+                format_str = ",".join(available_fields)
+                result = conn.run(
+                    f"sacct -X -j {job_id} --format={format_str} --parsable2 --noheader --user {user}",
+                    hide=True,
+                    timeout=10,
+                    warn=True,  # Don't throw exception if job not found in sacct either
+                )
 
-            if result.stdout.strip():
-                # Take the first line (main job, not job steps)
-                lines = result.stdout.strip().split("\n")
-                for line in lines:
-                    fields = line.strip().split("|")
-                    if (
-                        len(fields) >= len(SACCT_FIELDS) and "." not in fields[0]
-                    ):  # Avoid job steps
-                        return self.parser.from_sacct_fields(fields, hostname)
+                if result.ok and result.stdout.strip():
+                    # Take the first line (main job, not job steps)
+                    lines = result.stdout.strip().split("\n")
+                    for line in lines:
+                        fields = line.strip().split("|")
+                        if (
+                            len(fields) >= len(available_fields) and "." not in fields[0]
+                        ):  # Avoid job steps
+                            job_info = self.parser.from_sacct_fields(fields, hostname, available_fields)
+                            break
+
+            # If we found job info but don't have stdout/stderr paths, try scontrol
+            if job_info and not (job_info.stdout_file or job_info.stderr_file):
+                stdout_path, stderr_path = self.get_job_output_files(conn, job_id, hostname)
+                if stdout_path:
+                    job_info.stdout_file = stdout_path
+                if stderr_path:
+                    job_info.stderr_file = stderr_path
+
+            return job_info
 
         except Exception as e:
             logger.debug(f"Failed to get job details for {job_id}: {e}")
@@ -482,6 +493,143 @@ class SlurmClient:
         except Exception as e:
             logger.debug(f"Failed to cancel job {job_id}: {e}")
             return False
+
+    def get_job_output_files(
+        self, conn: Connection, job_id: str, hostname: str, user: str | None = None
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Get stdout and stderr file paths for a job using scontrol show job.
+        
+        Args:
+            conn: SSH connection to the cluster
+            job_id: SLURM job ID
+            hostname: Cluster hostname
+            
+        Returns:
+            Tuple of (stdout_path, stderr_path). Either may be None if not found.
+        """
+        try:
+            logger.debug(f"Getting output files for job {job_id} on {hostname}")
+
+            user = user or self.get_username(conn)
+
+            result = conn.run(
+                f"scontrol show job {job_id}",
+                hide=True,
+                timeout=10,
+                warn=True,
+                pty=True
+            )
+            
+            if not result.ok:
+                logger.debug(f"scontrol show job failed for {job_id}: {result.stderr}")
+                return None, None
+                
+            stdout_path = None
+            stderr_path = None
+            
+            # Parse the scontrol output
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                if 'StdOut=' in line:
+                    # Extract StdOut path - format is typically "StdOut=/path/to/file"
+                    for part in line.split():
+                        if part.startswith('StdOut='):
+                            stdout_path = part.split('=', 1)[1]
+                            break
+                elif 'StdErr=' in line:
+                    # Extract StdErr path - format is typically "StdErr=/path/to/file"  
+                    for part in line.split():
+                        if part.startswith('StdErr='):
+                            stderr_path = part.split('=', 1)[1]
+                            break
+                            
+            logger.debug(f"Found output files for job {job_id}: stdout={stdout_path}, stderr={stderr_path}")
+            return stdout_path, stderr_path
+            
+        except Exception as e:
+            logger.debug(f"Failed to get output files for job {job_id}: {e}")
+            return None, None
+
+    def read_job_output_content(
+        self, conn: Connection, job_id: str, hostname: str, output_type: str = "stdout"
+    ) -> Optional[str]:
+        """Read the content of a job's output file (stdout or stderr).
+        
+        Args:
+            conn: SSH connection to the cluster
+            job_id: SLURM job ID
+            hostname: Cluster hostname
+            output_type: Either "stdout" or "stderr"
+            
+        Returns:
+            File content as string, or None if file not found/readable
+        """
+        try:
+            stdout_path, stderr_path = self.get_job_output_files(conn, job_id, hostname)
+            
+            file_path = stdout_path if output_type == "stdout" else stderr_path
+            if not file_path:
+                logger.debug(f"No {output_type} file path found for job {job_id}")
+                return None
+                
+            logger.debug(f"Reading {output_type} content from {file_path} for job {job_id}")
+            result = conn.run(
+                f"cat '{file_path}'",
+                hide=True,
+                timeout=30,
+                warn=True,
+                pty=True
+            )
+            
+            if not result.ok:
+                logger.debug(f"Failed to read {file_path}: {result.stderr}")
+                return None
+                
+            return result.stdout
+            
+        except Exception as e:
+            logger.debug(f"Failed to read {output_type} for job {job_id}: {e}")
+            return None
+
+    def get_job_batch_script(
+        self, conn: Connection, job_id: str, hostname: str
+    ) -> Optional[str]:
+        """Get the batch script content for a job using scontrol write batch_script.
+        
+        Args:
+            conn: SSH connection to the cluster
+            job_id: SLURM job ID
+            hostname: Cluster hostname
+            
+        Returns:
+            Batch script content as string, or None if not available
+        """
+        try:
+            logger.debug(f"Getting batch script for job {job_id} on {hostname}")
+            result = conn.run(
+                f"scontrol write batch_script {job_id} -",
+                hide=True,
+                timeout=30,
+                warn=True,
+                pty=True
+            )
+            
+            if not result.ok:
+                logger.debug(f"scontrol write batch_script failed for {job_id}: {result.stderr}")
+                return None
+                
+            # The batch script content is in stdout
+            script_content = result.stdout.strip()
+            if script_content:
+                logger.debug(f"Retrieved batch script for job {job_id} ({len(script_content)} chars)")
+                return script_content
+            else:
+                logger.debug(f"No batch script content found for job {job_id}")
+                return None
+            
+        except Exception as e:
+            logger.debug(f"Failed to get batch script for job {job_id}: {e}")
+            return None
 
     def check_slurm_availability(self, conn: Connection, hostname: str) -> bool:
         """Check if SLURM is available on the host."""

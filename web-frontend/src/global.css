@@ -13,6 +13,25 @@
     --body-bg: #f9fafb;
     --body-color: #495057;
     --font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    /* LaunchJob component variables */
+    --color-background: #ffffff;
+    --color-surface: #ffffff;
+    --color-surface-hover: #f8f9fa;
+    --color-border: #dee2e6;
+    --color-text-primary: #212529;
+    --color-text-secondary: #6c757d;
+    --color-accent: #3498db;
+    --color-accent-hover: #2980b9;
+    --color-accent-alpha: rgba(52, 152, 219, 0.15);
+    
+    /* Status colors */
+    --color-success: #28a745;
+    --color-success-bg: #d4edda;
+    --color-success-border: #c3e6cb;
+    --color-error: #dc3545;
+    --color-error-bg: #f8d7da;
+    --color-error-border: #f5c6cb;
 }
 
 * {

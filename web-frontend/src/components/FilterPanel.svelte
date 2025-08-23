@@ -1,17 +1,21 @@
-<script>
+<script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import type { JobFilters, HostInfo } from '../types/api';
   
-  export let filters;
-  export let hosts;
+  export let filters: JobFilters;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  export let hosts: HostInfo[]; // Available for future use
   export let loading = false;
   
-  const dispatch = createEventDispatcher();
+  const dispatch = createEventDispatcher<{
+    change: void;
+  }>();
   
-  function handleChange() {
+  function handleChange(): void {
     dispatch('change');
   }
   
-  function clearFilters() {
+  function clearFilters(): void {
     if (loading) return;
     
     filters.host = '';

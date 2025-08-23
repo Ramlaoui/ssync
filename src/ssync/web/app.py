@@ -1,6 +1,7 @@
 import threading
 from datetime import datetime
 from typing import List, Optional
+import os
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,10 @@ from .models import (
     JobInfoWeb,
     JobOutputResponse,
     JobStatusResponse,
+    LaunchJobRequest,
+    LaunchJobResponse,
 )
+from ..utils.slurm_params import SlurmParams
 
 logger = setup_logger(__name__, "DEBUG")
 
@@ -24,19 +28,50 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Enable CORS for web frontend
+# Configure CORS using environment variables (safe defaults)
+# SSYNC_ALLOWED_ORIGINS: comma-separated list, defaults to http://localhost:5173
+# SSYNC_ALLOW_CREDENTIALS: "true"/"1" to allow credentials (default: false)
+allowed_origins_env = os.getenv("SSYNC_ALLOWED_ORIGINS", "http://localhost:5173")
+allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+allow_credentials = os.getenv("SSYNC_ALLOW_CREDENTIALS", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure this properly for production
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Optional API key enforcement. If SSYNC_API_KEY is set in the environment,
+# require incoming requests to present that key as header `X-API-Key` or as
+# a Bearer token in `Authorization: Bearer <key>`.
+from fastapi.responses import JSONResponse
+
+SSYNC_API_KEY = os.getenv("SSYNC_API_KEY")
+
+if SSYNC_API_KEY:
+    @app.middleware("http")
+    async def _verify_api_key_middleware(request: Request, call_next):
+        # Allow health checks or open endpoints if desired by path checks here.
+        key = request.headers.get("x-api-key")
+        if not key:
+            auth = request.headers.get("authorization")
+            if auth and auth.lower().startswith("bearer "):
+                key = auth.split(" ", 1)[1].strip()
+
+        if key != SSYNC_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+        return await call_next(request)
+
 # Global manager instance with connection pooling
 _slurm_manager: Optional[SlurmManager] = None
 _config_last_modified: Optional[float] = None
-_health_check_thread: Optional[threading.Thread] = None
 _shutdown_event = threading.Event()
 
 
@@ -71,41 +106,9 @@ def get_slurm_manager() -> SlurmManager:
     return _slurm_manager
 
 
-def connection_health_check_worker():
-    """Background worker to periodically check connection health."""
-    logger.debug("Health check worker disabled for debugging")
-    # Temporarily disabled to debug connection persistence
-    # while not _shutdown_event.is_set():
-    #     try:
-    #         manager = get_slurm_manager()
-    #         if manager:
-    #             unhealthy_count = manager.check_connection_health()
-    #             if unhealthy_count > 0:
-    #                 print(f"Health check: cleaned up {unhealthy_count} unhealthy connections")
-    #     except Exception as e:
-    #         print(f"Health check error: {e}")
-    #
-    #     # Wait for 5 minutes or until shutdown
-    #     _shutdown_event.wait(300)
-
-
-def start_background_tasks():
-    """Start background tasks like connection health checks."""
-    global _health_check_thread
-    if _health_check_thread is None or not _health_check_thread.is_alive():
-        _health_check_thread = threading.Thread(
-            target=connection_health_check_worker, daemon=True
-        )
-        _health_check_thread.start()
-        print("Started connection health check background task")
-
-
 @app.get("/")
 async def root():
     """API root endpoint."""
-    # Start background tasks on first request
-    start_background_tasks()
-
     return {
         "message": "SLURM Manager API",
         "version": "1.0.0",
@@ -114,6 +117,7 @@ async def root():
             "/status",
             "/jobs/{job_id}",
             "/jobs/{job_id}/output",
+            "/jobs/{job_id}/script",
             "/connections/stats",
         ],
     }
@@ -273,12 +277,12 @@ async def get_job_details(
         if not slurm_hosts:
             raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
 
-    # Search for job across hosts
+    # Search for job across hosts using get_job_info for better details
     for slurm_host in slurm_hosts:
         try:
-            jobs = manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
-            if jobs:
-                return JobInfoWeb.from_job_info(jobs[0])
+            job_info = manager.get_job_info(slurm_host, job_id)
+            if job_info:
+                return JobInfoWeb.from_job_info(job_info)
         except Exception:
             continue
 
@@ -358,9 +362,8 @@ async def get_job_output(
 
     for slurm_host in slurm_hosts:
         try:
-            jobs = manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
-            if jobs:
-                job_info = jobs[0]
+            job_info = manager.get_job_info(slurm_host, job_id)
+            if job_info:
                 target_host = slurm_host
                 break
         except Exception as e:
@@ -373,6 +376,16 @@ async def get_job_output(
     try:
         # Get connection to target host
         conn = manager._get_connection(target_host.host)
+        
+        # If stdout/stderr files are missing, try to get them using scontrol
+        if not job_info.stdout_file or not job_info.stderr_file:
+            stdout_path, stderr_path = manager.slurm_client.get_job_output_files(
+                conn, job_id, target_host.host.hostname
+            )
+            if stdout_path and not job_info.stdout_file:
+                job_info.stdout_file = stdout_path
+            if stderr_path and not job_info.stderr_file:
+                job_info.stderr_file = stderr_path
 
         # Process stdout and stderr files
         stdout_content, stdout_metadata = _get_file_metadata_and_content(
@@ -454,9 +467,8 @@ async def get_job_file(
 
     for slurm_host in slurm_hosts:
         try:
-            jobs = manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
-            if jobs:
-                job_info = jobs[0]
+            job_info = manager.get_job_info(slurm_host, job_id)
+            if job_info:
                 target_host = slurm_host
                 break
         except Exception:
@@ -465,8 +477,16 @@ async def get_job_file(
     if not job_info or not target_host:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    # Get the appropriate file path
+    # Get the appropriate file path, using scontrol as fallback
     file_path = job_info.stdout_file if file_type == "stdout" else job_info.stderr_file
+    
+    # If file path is missing, try scontrol
+    if not file_path:
+        conn = manager._get_connection(target_host.host)
+        stdout_path, stderr_path = manager.slurm_client.get_job_output_files(
+            conn, job_id, target_host.host.hostname
+        )
+        file_path = stdout_path if file_type == "stdout" else stderr_path
 
     if not file_path or file_path == "N/A":
         raise HTTPException(
@@ -534,6 +554,51 @@ async def get_job_file(
         raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
 
 
+@app.get("/jobs/{job_id}/script")
+async def get_job_script(
+    job_id: str,
+    host: Optional[str] = Query(None, description="Specific host to search"),
+):
+    """Get the batch script content for a specific job."""
+    manager = get_slurm_manager()
+
+    # Filter hosts
+    slurm_hosts = manager.slurm_hosts
+    if host:
+        slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
+        if not slurm_hosts:
+            raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+
+    # Search for job across hosts
+    for slurm_host in slurm_hosts:
+        try:
+            job_info = manager.get_job_info(slurm_host, job_id)
+            if job_info:
+                # Get connection and batch script
+                conn = manager._get_connection(slurm_host.host)
+                script_content = manager.slurm_client.get_job_batch_script(
+                    conn, job_id, slurm_host.host.hostname
+                )
+                
+                if script_content is not None:
+                    return {
+                        "job_id": job_id,
+                        "hostname": slurm_host.host.hostname,
+                        "script_content": script_content,
+                        "content_length": len(script_content)
+                    }
+                else:
+                    raise HTTPException(
+                        status_code=404, 
+                        detail=f"Batch script not available for job {job_id}"
+                    )
+        except Exception as e:
+            logger.debug(f"Error getting script for job {job_id} on {slurm_host.host.hostname}: {e}")
+            continue
+
+    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+
 @app.post("/jobs/{job_id}/cancel")
 async def cancel_job(
     job_id: str, host: Optional[str] = Query(None, description="Specific host")
@@ -576,6 +641,74 @@ async def get_connection_stats():
         )
 
 
+@app.get("/local/list")
+async def list_local_path(
+    path: str = Query("/", description="Local filesystem path to list"),
+    limit: int = Query(100, description="Maximum number of entries to return"),
+    show_hidden: bool = Query(False, description="Include hidden files/directories"),
+    dirs_only: bool = Query(False, description="Show directories only")
+):
+    """List entries in a local filesystem path to help the web UI pick a source_dir.
+
+    NOTE: This exposes the server's filesystem to the UI. Ensure proper deployment and
+    access controls if enabling in production. The endpoint resolves and returns
+    name, path, and is_dir for entries under the given path.
+    """
+    from pathlib import Path
+
+    try:
+        base = Path(path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}")
+
+    # Security: prevent path traversal attacks
+    # Allow reasonable root directories for local development
+    ALLOWED_ROOT_PATHS = ["/home", "/Users", "/opt", "/mnt", "/tmp", "/var/tmp"]
+    if not any(str(base).startswith(allowed) for allowed in ALLOWED_ROOT_PATHS):
+        # For localhost development, allow current user's home area
+        import os
+        user_home = Path.home()
+        if not base.is_relative_to(user_home):
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Access denied. Path must be under {ALLOWED_ROOT_PATHS} or {user_home}"
+            )
+
+    # Basic safety: ensure path exists and is a directory
+    if not base.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+    if not base.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {path}")
+
+    entries = []
+    try:
+        all_children = sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        count = 0
+        for child in all_children:
+            # Skip hidden files unless requested
+            if not show_hidden and child.name.startswith('.'):
+                continue
+            # Skip files if dirs_only is True
+            if dirs_only and not child.is_dir():
+                continue
+            
+            entries.append({
+                "name": child.name,
+                "path": str(child),
+                "is_dir": child.is_dir(),
+            })
+            
+            count += 1
+            if limit and count >= limit:
+                break
+
+        return {"path": str(base), "entries": entries}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read directory: {str(e)}")
+
+
+
+
 @app.post("/connections/health-check")
 async def manual_health_check():
     """Manually trigger connection health check."""
@@ -594,6 +727,137 @@ async def manual_health_check():
         )
 
 
+def validate_script_content(script_content: str) -> None:
+    """Basic validation for script content to prevent obviously dangerous commands."""
+    # Check for obviously dangerous patterns (not comprehensive, just basic safety)
+    dangerous_patterns = [
+        'rm -rf /',
+        'chmod 777',  
+        'sudo ',
+        '> /etc/',
+        'curl http',  # Prevent data exfiltration
+        'wget http',
+        'nc -l',      # Prevent backdoors
+        '& sleep',    # Prevent infinite loops/DOS
+    ]
+    
+    script_lower = script_content.lower()
+    for pattern in dangerous_patterns:
+        if pattern in script_lower:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Script contains potentially dangerous command: {pattern}"
+            )
+
+@app.post("/jobs/launch", response_model=LaunchJobResponse)
+async def launch_job(request: LaunchJobRequest):
+    """Launch a job by syncing source directory and submitting script."""
+    from pathlib import Path
+    import tempfile
+    import os
+    
+    from ..launch import LaunchManager
+    
+    # Basic script validation for safety
+    validate_script_content(request.script_content)
+    
+    manager = get_slurm_manager()
+    
+    # Validate host exists
+    try:
+        slurm_host = manager.get_host_by_name(request.host)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Host '{request.host}' not found in configuration"
+        )
+    
+    # Validate source directory exists
+    source_dir = Path(request.source_dir).expanduser().resolve()
+    if not source_dir.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source directory '{request.source_dir}' does not exist"
+        )
+    
+    if not source_dir.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source path '{request.source_dir}' is not a directory"
+        )
+    
+    try:
+        # Create temporary script file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tmp_script:
+            tmp_script.write(request.script_content)
+            script_path = Path(tmp_script.name)
+        
+        try:
+            # Initialize launch manager
+            launch_manager = LaunchManager(manager)
+
+            slurm_params = SlurmParams(
+                job_name=request.job_name,
+                time_min=request.time,
+                cpus_per_task=request.cpus,
+                mem_gb=request.mem,
+                partition=request.partition,
+                output=request.output,
+                error=request.error,
+                constraint=request.constraint,
+                account=request.account,
+                nodes=request.nodes,
+                n_tasks_per_node=request.n_tasks_per_node,
+                gpus_per_node=request.gpus_per_node,
+                gres=request.gres,
+            )
+
+            # Launch the job
+            job = launch_manager.launch_job(
+                script_path=script_path,
+                source_dir=source_dir,
+                host=request.host,
+                slurm_params=slurm_params,
+                python_env=request.python_env,
+                exclude=request.exclude,
+                include=request.include,
+                no_gitignore=request.no_gitignore,
+            )
+            
+            if job:
+                return LaunchJobResponse(
+                    success=True,
+                    job_id=job.job_id,
+                    message=f"Job launched successfully with ID: {job.job_id}",
+                    hostname=request.host
+                )
+            else:
+                return LaunchJobResponse(
+                    success=False,
+                    message="Failed to launch job",
+                    hostname=request.host
+                )
+                
+        finally:
+            # Clean up temporary script file
+            try:
+                os.unlink(script_path)
+            except Exception:
+                pass
+                
+    except Exception as e:
+        logger.error(f"Error launching job: {e}")
+        return LaunchJobResponse(
+            success=False,
+            message=f"Error launching job: {str(e)}",
+            hostname=request.host
+        )
+
+
+
+
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup."""
@@ -601,21 +865,13 @@ async def startup_event():
     manager = get_slurm_manager()
     print("API started, manager initialized")
 
-    # Start background tasks
-    start_background_tasks()
-
-
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up connections and background tasks on shutdown."""
-    global _slurm_manager, _health_check_thread
+    global _slurm_manager
 
     # Signal shutdown to background tasks
     _shutdown_event.set()
-
-    # Wait for health check thread to finish
-    if _health_check_thread and _health_check_thread.is_alive():
-        _health_check_thread.join(timeout=5)
 
     # Close connections
     if _slurm_manager:
@@ -627,7 +883,9 @@ def main():
     """Run the web server."""
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Avoid exposing the API
+    # to the local network
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 
 
 if __name__ == "__main__":

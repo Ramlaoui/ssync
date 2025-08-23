@@ -1,47 +1,83 @@
-<script>
-  export let job;
-  export let loadJobOutput;
-  export let onClose;
+<script lang="ts">
+  import type { JobInfo, JobOutputResponse, JobScriptResponse } from '../types/api';
   
-  let outputData = null;
+  export let job: JobInfo;
+  export let loadJobOutput: (jobId: string, hostname: string) => Promise<JobOutputResponse | { loading: true }>;
+  export let onClose: () => void;
+  
+  let outputData: JobOutputResponse | null = null;
   let loadingOutput = false;
-  let outputError = null;
-  let activeTab = 'info';
+  let outputError: string | null = null;
+  let scriptData: JobScriptResponse | null = null;
+  let loadingScript = false;
+  let scriptError: string | null = null;
+  let activeTab: 'info' | 'stdout' | 'stderr' | 'script' = 'info';
   
   $: if (job && (activeTab === 'stdout' || activeTab === 'stderr') && !outputData) {
     loadOutput();
   }
   
-  async function loadOutput() {
+  $: if (job && activeTab === 'script' && !scriptData) {
+    loadScript();
+  }
+  
+  async function loadOutput(): Promise<void> {
     if (!job) return;
     
     loadingOutput = true;
     outputError = null;
     
     try {
-      outputData = await loadJobOutput(job.job_id, job.hostname);
+      const result = await loadJobOutput(job.job_id, job.hostname);
       
       // Handle case where output is already loading from another request
-      if (outputData && outputData.loading) {
+      if ('loading' in result && result.loading) {
         // Poll for output every second
         setTimeout(() => loadOutput(), 1000);
+      } else {
+        outputData = result as JobOutputResponse;
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error loading job output:', error);
-      outputError = error.message || 'Failed to load output';
+      outputError = (error as Error).message || 'Failed to load output';
     } finally {
-      if (!(outputData && outputData.loading)) {
+      if (!(outputData && 'loading' in outputData)) {
         loadingOutput = false;
       }
     }
   }
   
-  function retryLoadOutput() {
+  function retryLoadOutput(): void {
     outputData = null;
     loadOutput();
   }
   
-  function formatTime(timeStr) {
+  async function loadScript(): Promise<void> {
+    if (!job) return;
+    
+    loadingScript = true;
+    scriptError = null;
+    
+    try {
+      const response = await fetch(`/api/jobs/${job.job_id}/script?host=${encodeURIComponent(job.hostname)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      scriptData = await response.json() as JobScriptResponse;
+    } catch (error: unknown) {
+      console.error('Error loading job script:', error);
+      scriptError = (error as Error).message || 'Failed to load script';
+    } finally {
+      loadingScript = false;
+    }
+  }
+  
+  function retryLoadScript(): void {
+    scriptData = null;
+    loadScript();
+  }
+  
+  function formatTime(timeStr: string | null): string {
     if (!timeStr || timeStr === 'N/A') return 'N/A';
     try {
       return new Date(timeStr).toLocaleString();
@@ -50,7 +86,7 @@
     }
   }
   
-  function getStateColor(state) {
+  function getStateColor(state: string): string {
     switch (state) {
       case 'R': return '#28a745';
       case 'PD': return '#ffc107';
@@ -62,7 +98,7 @@
     }
   }
   
-  function getStateLabel(state) {
+  function getStateLabel(state: string): string {
     switch (state) {
       case 'R': return 'Running';
       case 'PD': return 'Pending';
@@ -74,7 +110,7 @@
     }
   }
   
-  function formatFileSize(bytes) {
+  function formatFileSize(bytes: number | null | undefined): string {
     if (bytes === null || bytes === undefined) return 'Unknown';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -82,7 +118,7 @@
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
   
-  function formatDate(dateStr) {
+  function formatDate(dateStr: string | null): string {
     if (!dateStr) return 'Unknown';
     try {
       return new Date(dateStr).toLocaleString();
@@ -94,8 +130,24 @@
 
 <div class="job-detail">
   <div class="header">
-    <div class="title">
-      <h2>Job {job.job_id}: {job.name}</h2>
+    <div class="title-row">
+      <div class="job-info">
+        <div class="job-header">
+          <button 
+            class="back-btn" 
+            on:click={onClose}
+            aria-label="Back to job list"
+          >
+            <svg class="back-arrow" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
+            </svg>
+          </button>
+          <div class="job-details">
+            <h2>Job {job.job_id}</h2>
+            <div class="job-name">{job.name}</div>
+          </div>
+        </div>
+      </div>
       <span 
         class="state-badge" 
         style="background-color: {getStateColor(job.state)}"
@@ -103,13 +155,6 @@
         {getStateLabel(job.state)}
       </span>
     </div>
-    <button 
-      class="close-btn" 
-      on:click={onClose}
-      aria-label="Close job details"
-    >
-      ×
-    </button>
   </div>
   
   <div class="tabs">
@@ -142,6 +187,16 @@
         <path d="M13,13H11V7H13M13,17H11V15H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
       </svg>
       Errors
+    </button>
+    <button 
+      class="tab" 
+      class:active={activeTab === 'script'}
+      on:click={() => activeTab = 'script'}
+    >
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8,3A2,2 0 0,0 6,5V9A2,2 0 0,1 4,11H3V13H4A2,2 0 0,1 6,15V19A2,2 0 0,0 8,21H10V19H8V14A2,2 0 0,0 6,12A2,2 0 0,0 8,10V5H10V3M16,3A2,2 0 0,1 18,5V9A2,2 0 0,0 20,11H21V13H20A2,2 0 0,0 18,15V19A2,2 0 0,1 16,21H14V19H16V14A2,2 0 0,1 18,12A2,2 0 0,1 16,10V5H14V3H16Z"/>
+      </svg>
+      Script
     </button>
   </div>
   
@@ -219,7 +274,13 @@
         </div>
         
         <div class="info-section full-width">
-          <h3>Files & Directories</h3>
+          <h3>Command & Files</h3>
+          {#if job.submit_line && job.submit_line !== 'N/A'}
+            <div class="info-item">
+              <div class="item-label">Submit Line:</div>
+              <span class="monospace">{job.submit_line}</span>
+            </div>
+          {/if}
           <div class="info-item">
             <div class="item-label">Work Dir:</div>
             <span class="monospace">{job.work_dir || 'N/A'}</span>
@@ -232,7 +293,61 @@
             <div class="item-label">Error File:</div>
             <span class="monospace">{job.stderr_file || 'N/A'}</span>
           </div>
+          {#if job.node_list && job.node_list !== 'N/A'}
+            <div class="info-item">
+              <div class="item-label">Node List:</div>
+              <span class="monospace">{job.node_list}</span>
+            </div>
+          {/if}
         </div>
+        
+        {#if job.alloc_tres || job.req_tres}
+          <div class="info-section">
+            <h3>Resource Allocation</h3>
+            {#if job.req_tres && job.req_tres !== 'N/A'}
+              <div class="info-item">
+                <div class="item-label">Requested:</div>
+                <span class="monospace">{job.req_tres}</span>
+              </div>
+            {/if}
+            {#if job.alloc_tres && job.alloc_tres !== 'N/A'}
+              <div class="info-item">
+                <div class="item-label">Allocated:</div>
+                <span class="monospace">{job.alloc_tres}</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
+        
+        {#if job.cpu_time || job.total_cpu || job.max_rss || job.consumed_energy}
+          <div class="info-section">
+            <h3>Performance Metrics</h3>
+            {#if job.cpu_time && job.cpu_time !== 'N/A'}
+              <div class="info-item">
+                <div class="item-label">CPU Time:</div>
+                <span>{job.cpu_time}</span>
+              </div>
+            {/if}
+            {#if job.total_cpu && job.total_cpu !== 'N/A'}
+              <div class="info-item">
+                <div class="item-label">Total CPU:</div>
+                <span>{job.total_cpu}</span>
+              </div>
+            {/if}
+            {#if job.max_rss && job.max_rss !== 'N/A'}
+              <div class="info-item">
+                <div class="item-label">Max Memory:</div>
+                <span>{job.max_rss}</span>
+              </div>
+            {/if}
+            {#if job.consumed_energy && job.consumed_energy !== 'N/A'}
+              <div class="info-item">
+                <div class="item-label">Energy:</div>
+                <span>{job.consumed_energy}</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
       
     {:else if activeTab === 'stdout'}
@@ -308,6 +423,46 @@
           <div class="no-output">No errors</div>
         {/if}
       </div>
+      
+    {:else if activeTab === 'script'}
+      <div class="output-section">
+        {#if loadingScript}
+          <div class="loading">Loading batch script...</div>
+        {:else if scriptError}
+          <div class="error">
+            Failed to load batch script: {scriptError}
+            <button class="retry-output-btn" on:click={retryLoadScript}>Retry</button>
+          </div>
+        {:else if scriptData?.script_content}
+          <div class="output-controls">
+            <div class="file-info">
+              <span class="file-size">{scriptData.content_length} characters</span>
+              <span class="modified-date">Job {scriptData.job_id} batch script</span>
+            </div>
+            <div class="actions">
+              <button 
+                class="download-btn" 
+                on:click={() => {
+                  if (scriptData) {
+                    const blob = new Blob([scriptData.script_content], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `job_${job.job_id}_script.sh`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }
+                }}
+              >Download</button>
+            </div>
+          </div>
+          <pre class="output-content script">{scriptData.script_content}</pre>
+        {:else}
+          <div class="no-output">Batch script not available</div>
+        {/if}
+      </div>
     {/if}
   </div>
 </div>
@@ -325,20 +480,45 @@
   .header {
     padding: 1.5rem;
     border-bottom: 1px solid #dee2e6;
+  }
+
+  .title-row {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-  }
-
-  .title {
-    display: flex;
-    align-items: center;
     gap: 1rem;
   }
 
-  .title h2 {
+  .job-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .job-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .job-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .job-details h2 {
     margin: 0;
     color: #495057;
+    font-size: 1.25rem;
+    line-height: 1.2;
+  }
+
+  .job-name {
+    color: #6c757d;
+    font-size: 0.9rem;
+    word-wrap: break-word;
+    line-height: 1.3;
+    margin: 0;
   }
 
   .state-badge {
@@ -348,24 +528,35 @@
     font-size: 0.8rem;
     font-weight: 600;
     text-transform: uppercase;
+    align-self: flex-start;
+    margin-top: 0.2rem;
   }
 
-  .close-btn {
-    background: #6c757d;
-    color: white;
-    border: none;
+  .back-btn {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.2);
     width: 2rem;
     height: 2rem;
-    border-radius: 50%;
-    font-size: 1.2rem;
+    border-radius: 0.5rem;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    margin-right: 0.5rem;
   }
 
-  .close-btn:hover {
-    background: #5a6268;
+  .back-btn:hover {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.4);
+    color: #2563eb;
+  }
+
+  .back-arrow {
+    width: 1.25rem;
+    height: 1.25rem;
   }
   
   .close-btn:focus {
@@ -481,6 +672,11 @@
   .output-content.stderr {
     background: #fff5f5;
     color: #c53030;
+  }
+
+  .output-content.script {
+    background: #f0f8ff;
+    border-left: 4px solid #007bff;
   }
 
   .loading, .no-output {

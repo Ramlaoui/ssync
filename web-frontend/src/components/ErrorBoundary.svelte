@@ -1,7 +1,7 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
 
-  export let resetError = () => {};
+  export let resetError: () => void = () => {};
   
   let hasError = false;
   let errorMessage = '';
@@ -11,9 +11,9 @@
   onMount(() => {
     const originalOnError = window.onerror;
     
-    window.onerror = (message, source, line, column, error) => {
+    window.onerror = (message: string | Event, source?: string, line?: number, column?: number, error?: Error) => {
       hasError = true;
-      errorMessage = message || 'An unknown error occurred';
+      errorMessage = typeof message === 'string' ? message : 'An unknown error occurred';
       errorInfo = `${source || ''}:${line || ''}:${column || ''}`;
       
       if (originalOnError) {
@@ -24,7 +24,7 @@
     };
     
     // Also handle unhandled promise rejections
-    const onUnhandledRejection = (event) => {
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       hasError = true;
       errorMessage = event.reason?.message || 'Unhandled Promise Rejection';
       errorInfo = event.reason?.stack || '';

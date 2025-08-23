@@ -1,3 +1,7 @@
+config.yaml
+.env
+test_dir/
+
 # Python-generated files
 __pycache__/
 *.py[oc]

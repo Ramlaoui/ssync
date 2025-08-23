@@ -129,5 +129,10 @@ class Config:
 
         return hosts
 
+    def get_remote_cache_path(self, host: SlurmHost) -> Path:
+        """Get the remote cache directory path for a given host."""
+        remote_cache = host.scratch_dir / ".cache" / "ssync"
+        return remote_cache
+
 
 config = Config()

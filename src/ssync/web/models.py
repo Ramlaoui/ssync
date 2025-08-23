@@ -36,6 +36,7 @@ class JobInfoWeb(BaseModel):
     stdout_file: Optional[str] = None
     stderr_file: Optional[str] = None
     submit_time: Optional[str] = None
+    submit_line: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     node_list: Optional[str] = None
@@ -87,6 +88,7 @@ class JobInfoWeb(BaseModel):
             stdout_file=job_info.stdout_file,
             stderr_file=job_info.stderr_file,
             submit_time=job_info.submit_time,
+            submit_line=job_info.submit_line,
             start_time=job_info.start_time,
             end_time=job_info.end_time,
             node_list=job_info.node_list,
@@ -164,3 +166,43 @@ class StatusQueryParams(BaseModel):
     active_only: Optional[bool] = False
     completed_only: Optional[bool] = False
     simple: Optional[bool] = False
+
+
+class LaunchJobRequest(BaseModel):
+    """Request model for job launch endpoint."""
+
+    script_content: str
+    source_dir: str
+    host: str
+    
+    # SLURM parameters
+    job_name: Optional[str] = None
+    cpus: Optional[int] = None
+    mem: Optional[int] = None
+    time: Optional[int] = None
+    partition: Optional[str] = None
+    ntasks_per_node: Optional[int] = None
+    # Alternate field name accepted by the API and used in parts of the codebase
+    n_tasks_per_node: Optional[int] = None
+    nodes: Optional[int] = None
+    gpus_per_node: Optional[int] = None
+    gres: Optional[str] = None
+    output: Optional[str] = None
+    error: Optional[str] = None
+    constraint: Optional[str] = None
+    account: Optional[str] = None
+    python_env: Optional[str] = None
+    
+    # Sync parameters
+    exclude: List[str] = []
+    include: List[str] = []
+    no_gitignore: bool = False
+
+
+class LaunchJobResponse(BaseModel):
+    """Response model for job launch endpoint."""
+
+    success: bool
+    job_id: Optional[str] = None
+    message: str
+    hostname: str
