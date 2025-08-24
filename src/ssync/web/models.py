@@ -5,6 +5,16 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 
+class SlurmDefaultsWeb(BaseModel):
+    """Web-serializable SLURM default parameters."""
+
+    partition: Optional[str] = None
+    account: Optional[str] = None
+    constraint: Optional[str] = None
+    cpus: Optional[int] = None
+    time: Optional[str] = None
+
+
 class JobStateWeb(str, Enum):
     """SLURM job states for web API."""
 
@@ -116,6 +126,55 @@ class JobInfoWeb(BaseModel):
             consumed_energy=job_info.consumed_energy,
         )
 
+    def to_job_info(self):
+        """Convert web model back to CLI JobInfo."""
+        from ..models.job import JobInfo, JobState
+
+        return JobInfo(
+            job_id=self.job_id,
+            name=self.name,
+            state=JobState(self.state.value),
+            hostname=self.hostname,
+            user=self.user,
+            partition=self.partition,
+            nodes=self.nodes,
+            cpus=self.cpus,
+            memory=self.memory,
+            time_limit=self.time_limit,
+            runtime=self.runtime,
+            reason=self.reason,
+            work_dir=self.work_dir,
+            stdout_file=self.stdout_file,
+            stderr_file=self.stderr_file,
+            submit_time=self.submit_time,
+            submit_line=self.submit_line,
+            start_time=self.start_time,
+            end_time=self.end_time,
+            node_list=self.node_list,
+            # Resource allocation
+            alloc_tres=self.alloc_tres,
+            req_tres=self.req_tres,
+            # CPU metrics
+            cpu_time=self.cpu_time,
+            total_cpu=self.total_cpu,
+            user_cpu=self.user_cpu,
+            system_cpu=self.system_cpu,
+            ave_cpu=self.ave_cpu,
+            ave_cpu_freq=self.ave_cpu_freq,
+            # Memory metrics
+            max_rss=self.max_rss,
+            ave_rss=self.ave_rss,
+            max_vmsize=self.max_vmsize,
+            ave_vmsize=self.ave_vmsize,
+            # Disk I/O metrics
+            max_disk_read=self.max_disk_read,
+            max_disk_write=self.max_disk_write,
+            ave_disk_read=self.ave_disk_read,
+            ave_disk_write=self.ave_disk_write,
+            # Energy metrics
+            consumed_energy=self.consumed_energy,
+        )
+
 
 class HostInfoWeb(BaseModel):
     """Web-serializable host information."""
@@ -123,6 +182,7 @@ class HostInfoWeb(BaseModel):
     hostname: str
     work_dir: str
     scratch_dir: str
+    slurm_defaults: Optional[SlurmDefaultsWeb] = None
 
 
 class JobStatusResponse(BaseModel):
@@ -174,7 +234,7 @@ class LaunchJobRequest(BaseModel):
     script_content: str
     source_dir: str
     host: str
-    
+
     # SLURM parameters
     job_name: Optional[str] = None
     cpus: Optional[int] = None
@@ -192,7 +252,7 @@ class LaunchJobRequest(BaseModel):
     constraint: Optional[str] = None
     account: Optional[str] = None
     python_env: Optional[str] = None
-    
+
     # Sync parameters
     exclude: List[str] = []
     include: List[str] = []

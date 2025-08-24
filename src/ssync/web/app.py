@@ -1,7 +1,7 @@
+import os
 import threading
 from datetime import datetime
 from typing import List, Optional
-import os
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .. import config
 from ..manager import SlurmManager
 from ..utils.logging import setup_logger
+from ..utils.slurm_params import SlurmParams
+from .cache_middleware import get_cache_middleware
+from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
 from .models import (
     FileMetadata,
     HostInfoWeb,
@@ -17,8 +20,8 @@ from .models import (
     JobStatusResponse,
     LaunchJobRequest,
     LaunchJobResponse,
+    SlurmDefaultsWeb,
 )
-from ..utils.slurm_params import SlurmParams
 
 logger = setup_logger(__name__, "DEBUG")
 
@@ -55,6 +58,7 @@ from fastapi.responses import JSONResponse
 SSYNC_API_KEY = os.getenv("SSYNC_API_KEY")
 
 if SSYNC_API_KEY:
+
     @app.middleware("http")
     async def _verify_api_key_middleware(request: Request, call_next):
         # Allow health checks or open endpoints if desired by path checks here.
@@ -69,10 +73,14 @@ if SSYNC_API_KEY:
 
         return await call_next(request)
 
+
 # Global manager instance with connection pooling
 _slurm_manager: Optional[SlurmManager] = None
 _config_last_modified: Optional[float] = None
 _shutdown_event = threading.Event()
+
+# Global cache middleware
+_cache_middleware = get_cache_middleware()
 
 
 def get_slurm_manager() -> SlurmManager:
@@ -119,6 +127,10 @@ async def root():
             "/jobs/{job_id}/output",
             "/jobs/{job_id}/script",
             "/connections/stats",
+            "/cache/stats",
+            "/cache/config",
+            "/cache/cleanup",
+            "/cache/export",
         ],
     }
 
@@ -129,11 +141,15 @@ async def get_hosts():
     manager = get_slurm_manager()
     hosts = []
     for slurm_host in manager.slurm_hosts:
+        slurm_defaults_web = None
+        if slurm_host.slurm_defaults:
+            slurm_defaults_web = SlurmDefaultsWeb(**slurm_host.slurm_defaults.__dict__)
         hosts.append(
             HostInfoWeb(
                 hostname=slurm_host.host.hostname,
                 work_dir=str(slurm_host.work_dir),
                 scratch_dir=str(slurm_host.scratch_dir),
+                slurm_defaults=slurm_defaults_web,
             )
         )
     return hosts
@@ -238,14 +254,13 @@ async def get_job_status(
 
             web_jobs = [JobInfoWeb.from_job_info(job) for job in jobs]
 
-            results.append(
-                JobStatusResponse(
-                    hostname=slurm_host.host.hostname,
-                    jobs=web_jobs,
-                    total_jobs=len(web_jobs),
-                    query_time=datetime.now(),
-                )
+            response = JobStatusResponse(
+                hostname=slurm_host.host.hostname,
+                jobs=web_jobs,
+                total_jobs=len(web_jobs),
+                query_time=datetime.now(),
             )
+            results.append(response)
 
         except Exception as e:
             # Continue with other hosts even if one fails
@@ -259,7 +274,9 @@ async def get_job_status(
                 )
             )
 
-    return results
+    # Cache the results transparently
+    cached_results = await _cache_middleware.cache_job_status_response(results)
+    return cached_results
 
 
 @app.get("/jobs/{job_id}", response_model=JobInfoWeb)
@@ -282,9 +299,27 @@ async def get_job_details(
         try:
             job_info = manager.get_job_info(slurm_host, job_id)
             if job_info:
-                return JobInfoWeb.from_job_info(job_info)
+                job_web = JobInfoWeb.from_job_info(job_info)
+                # Cache the job data
+                await _cache_middleware.cache_job_status_response(
+                    [
+                        JobStatusResponse(
+                            hostname=slurm_host.host.hostname,
+                            jobs=[job_web],
+                            total_jobs=1,
+                            query_time=datetime.now(),
+                        )
+                    ]
+                )
+                return job_web
         except Exception:
             continue
+
+    # Try cache fallback
+    cached_job = await _cache_middleware.get_job_with_cache_fallback(job_id, host)
+    if cached_job:
+        logger.info(f"Returning cached job {job_id} (not found in SLURM)")
+        return cached_job
 
     raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -376,7 +411,7 @@ async def get_job_output(
     try:
         # Get connection to target host
         conn = manager._get_connection(target_host.host)
-        
+
         # If stdout/stderr files are missing, try to get them using scontrol
         if not job_info.stdout_file or not job_info.stderr_file:
             stdout_path, stderr_path = manager.slurm_client.get_job_output_files(
@@ -408,7 +443,7 @@ async def get_job_output(
             metadata_only=metadata_only,
         )
 
-        return JobOutputResponse(
+        response = JobOutputResponse(
             job_id=job_id,
             hostname=target_host.host.hostname,
             stdout=stdout_content,
@@ -417,7 +452,22 @@ async def get_job_output(
             stderr_metadata=stderr_metadata,
         )
 
+        # Cache the output
+        await _cache_middleware.cache_job_output(
+            job_id, target_host.host.hostname, response
+        )
+
+        return response
+
     except Exception as e:
+        # Try cache fallback for output
+        cached_output = await _cache_middleware.get_cached_job_output(job_id, host)
+        if cached_output:
+            logger.info(
+                f"Returning cached output for job {job_id} (SLURM query failed)"
+            )
+            return cached_output
+
         raise HTTPException(
             status_code=500, detail=f"Failed to read job output: {str(e)}"
         )
@@ -479,7 +529,7 @@ async def get_job_file(
 
     # Get the appropriate file path, using scontrol as fallback
     file_path = job_info.stdout_file if file_type == "stdout" else job_info.stderr_file
-    
+
     # If file path is missing, try scontrol
     if not file_path:
         conn = manager._get_connection(target_host.host)
@@ -579,22 +629,37 @@ async def get_job_script(
                 script_content = manager.slurm_client.get_job_batch_script(
                     conn, job_id, slurm_host.host.hostname
                 )
-                
+
                 if script_content is not None:
-                    return {
+                    response = {
                         "job_id": job_id,
                         "hostname": slurm_host.host.hostname,
                         "script_content": script_content,
-                        "content_length": len(script_content)
+                        "content_length": len(script_content),
                     }
+
+                    # Cache the script
+                    await _cache_middleware.cache_job_script(
+                        job_id, slurm_host.host.hostname, script_content
+                    )
+
+                    return response
                 else:
                     raise HTTPException(
-                        status_code=404, 
-                        detail=f"Batch script not available for job {job_id}"
+                        status_code=404,
+                        detail=f"Batch script not available for job {job_id}",
                     )
         except Exception as e:
-            logger.debug(f"Error getting script for job {job_id} on {slurm_host.host.hostname}: {e}")
+            logger.debug(
+                f"Error getting script for job {job_id} on {slurm_host.host.hostname}: {e}"
+            )
             continue
+
+    # Try cache fallback for script
+    cached_script = await _cache_middleware.get_cached_job_script(job_id, host)
+    if cached_script:
+        logger.info(f"Returning cached script for job {job_id} (not found in SLURM)")
+        return cached_script
 
     raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -641,12 +706,144 @@ async def get_connection_stats():
         )
 
 
+@app.get("/cache/stats")
+async def get_cache_stats():
+    """Get job cache statistics."""
+    try:
+        stats = await _cache_middleware.get_cache_stats()
+        return {"cache_stats": stats, "status": "healthy"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get cache stats: {str(e)}"
+        )
+
+
+@app.post("/cache/cleanup")
+async def cleanup_cache(
+    max_age_days: Optional[int] = Query(
+        None, description="Max age in days (0=never, -1=force all)"
+    ),
+    preserve_scripts: bool = Query(True, description="Preserve entries with scripts"),
+    force: bool = Query(
+        False, description="Force cleanup ignoring preservation settings"
+    ),
+):
+    """Clean up old cache entries with preservation controls."""
+    try:
+        from .cache_scheduler import get_cache_scheduler
+
+        if max_age_days == -1 and force:
+            # Nuclear option - clean everything
+            cleaned_count = _cache_middleware.cache.cleanup_old_entries(
+                max_age_days=1,  # Very aggressive
+                preserve_scripts=False,
+                force_cleanup=True,
+            )
+            message = f"⚠️  FORCE CLEANUP: Removed ALL {cleaned_count} cache entries (including scripts)!"
+        else:
+            scheduler = await get_cache_scheduler()
+            cleaned_count = await scheduler.force_cleanup(
+                max_age_days=max_age_days, preserve_scripts=preserve_scripts
+            )
+            if max_age_days == 0:
+                message = "No cleanup performed (preservation mode: max_age_days=0)"
+            else:
+                preserve_msg = " (preserving scripts)" if preserve_scripts else ""
+                message = f"Cache cleanup completed. Removed {cleaned_count} entries{preserve_msg}."
+
+        return {
+            "message": message,
+            "entries_removed": cleaned_count,
+            "preservation_mode": max_age_days == 0,
+            "scripts_preserved": preserve_scripts and not force,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to clean up cache: {str(e)}"
+        )
+
+
+@app.post("/cache/export")
+async def export_cache(
+    output_filename: str = Query("cache_export.json", description="Output filename"),
+    job_ids: Optional[str] = Query(
+        None, description="Comma-separated job IDs to export"
+    ),
+):
+    """Export cache data to JSON for backup/archival."""
+    try:
+        export_path = _cache_middleware.cache.cache_dir / output_filename
+
+        job_id_list = None
+        if job_ids:
+            job_id_list = [jid.strip() for jid in job_ids.split(",")]
+
+        exported_count = _cache_middleware.cache.export_cache_data(
+            export_path, job_id_list
+        )
+
+        return {
+            "message": f"Cache export completed. Exported {exported_count} jobs.",
+            "export_file": str(export_path),
+            "jobs_exported": exported_count,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export cache: {str(e)}")
+
+
+@app.get("/cache/config")
+async def get_cache_config_info():
+    """Get current cache configuration and recommendations."""
+    try:
+        from ..cache_config import get_cache_config
+
+        config = get_cache_config()
+        stats = await _cache_middleware.get_cache_stats()
+
+        # Generate recommendations
+        recommendations = []
+
+        if config.max_age_days > 0 and config.max_age_days < 365:
+            recommendations.append(
+                "⚠️  Consider increasing max_age_days - SLURM data may be permanently lost after cleanup"
+            )
+
+        if not config.auto_cleanup_enabled and stats["db_size_mb"] > 500:
+            recommendations.append(
+                "💾 Cache is large and auto-cleanup disabled. Consider manual cleanup or size limits."
+            )
+
+        if config.max_age_days == 0:
+            recommendations.append(
+                "✅ Preservation mode enabled - cache never expires (recommended for job archival)"
+            )
+
+        return {
+            "config": {
+                "enabled": config.enabled,
+                "cache_dir": str(config.cache_dir),
+                "max_age_days": config.max_age_days,
+                "script_max_age_days": config.script_max_age_days,
+                "auto_cleanup_enabled": config.auto_cleanup_enabled,
+                "max_cache_size_mb": config.max_cache_size_mb,
+                "cleanup_interval_hours": config.cleanup_interval_hours,
+            },
+            "stats": stats,
+            "recommendations": recommendations,
+            "preservation_mode": config.max_age_days == 0,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get cache config: {str(e)}"
+        )
+
+
 @app.get("/local/list")
 async def list_local_path(
     path: str = Query("/", description="Local filesystem path to list"),
     limit: int = Query(100, description="Maximum number of entries to return"),
     show_hidden: bool = Query(False, description="Include hidden files/directories"),
-    dirs_only: bool = Query(False, description="Show directories only")
+    dirs_only: bool = Query(False, description="Show directories only"),
 ):
     """List entries in a local filesystem path to help the web UI pick a source_dir.
 
@@ -666,12 +863,12 @@ async def list_local_path(
     ALLOWED_ROOT_PATHS = ["/home", "/Users", "/opt", "/mnt", "/tmp", "/var/tmp"]
     if not any(str(base).startswith(allowed) for allowed in ALLOWED_ROOT_PATHS):
         # For localhost development, allow current user's home area
-        import os
+
         user_home = Path.home()
         if not base.is_relative_to(user_home):
             raise HTTPException(
-                status_code=403, 
-                detail=f"Access denied. Path must be under {ALLOWED_ROOT_PATHS} or {user_home}"
+                status_code=403,
+                detail=f"Access denied. Path must be under {ALLOWED_ROOT_PATHS} or {user_home}",
             )
 
     # Basic safety: ensure path exists and is a directory
@@ -682,31 +879,35 @@ async def list_local_path(
 
     entries = []
     try:
-        all_children = sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        all_children = sorted(
+            base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())
+        )
         count = 0
         for child in all_children:
             # Skip hidden files unless requested
-            if not show_hidden and child.name.startswith('.'):
+            if not show_hidden and child.name.startswith("."):
                 continue
             # Skip files if dirs_only is True
             if dirs_only and not child.is_dir():
                 continue
-            
-            entries.append({
-                "name": child.name,
-                "path": str(child),
-                "is_dir": child.is_dir(),
-            })
-            
+
+            entries.append(
+                {
+                    "name": child.name,
+                    "path": str(child),
+                    "is_dir": child.is_dir(),
+                }
+            )
+
             count += 1
             if limit and count >= limit:
                 break
 
         return {"path": str(base), "entries": entries}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read directory: {str(e)}")
-
-
+        raise HTTPException(
+            status_code=500, detail=f"Failed to read directory: {str(e)}"
+        )
 
 
 @app.post("/connections/health-check")
@@ -731,67 +932,69 @@ def validate_script_content(script_content: str) -> None:
     """Basic validation for script content to prevent obviously dangerous commands."""
     # Check for obviously dangerous patterns (not comprehensive, just basic safety)
     dangerous_patterns = [
-        'rm -rf /',
-        'chmod 777',  
-        'sudo ',
-        '> /etc/',
-        'curl http',  # Prevent data exfiltration
-        'wget http',
-        'nc -l',      # Prevent backdoors
-        '& sleep',    # Prevent infinite loops/DOS
+        "rm -rf /",
+        "chmod 777",
+        "sudo ",
+        "> /etc/",
+        "curl http",  # Prevent data exfiltration
+        "wget http",
+        "nc -l",  # Prevent backdoors
+        "& sleep",  # Prevent infinite loops/DOS
     ]
-    
+
     script_lower = script_content.lower()
     for pattern in dangerous_patterns:
         if pattern in script_lower:
             raise HTTPException(
-                status_code=400, 
-                detail=f"Script contains potentially dangerous command: {pattern}"
+                status_code=400,
+                detail=f"Script contains potentially dangerous command: {pattern}",
             )
+
 
 @app.post("/jobs/launch", response_model=LaunchJobResponse)
 async def launch_job(request: LaunchJobRequest):
     """Launch a job by syncing source directory and submitting script."""
-    from pathlib import Path
-    import tempfile
     import os
-    
+    import tempfile
+    from pathlib import Path
+
     from ..launch import LaunchManager
-    
+
     # Basic script validation for safety
     validate_script_content(request.script_content)
-    
+
     manager = get_slurm_manager()
-    
+
     # Validate host exists
     try:
         slurm_host = manager.get_host_by_name(request.host)
     except ValueError:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Host '{request.host}' not found in configuration"
+            status_code=400, detail=f"Host '{request.host}' not found in configuration"
         )
-    
+
     # Validate source directory exists
     source_dir = Path(request.source_dir).expanduser().resolve()
     if not source_dir.exists():
         raise HTTPException(
             status_code=400,
-            detail=f"Source directory '{request.source_dir}' does not exist"
+            detail=f"Source directory '{request.source_dir}' does not exist",
         )
-    
+
     if not source_dir.is_dir():
         raise HTTPException(
             status_code=400,
-            detail=f"Source path '{request.source_dir}' is not a directory"
+            detail=f"Source path '{request.source_dir}' is not a directory",
         )
-    
+
     try:
         # Create temporary script file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tmp_script:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sh", delete=False
+        ) as tmp_script:
             tmp_script.write(request.script_content)
             script_path = Path(tmp_script.name)
-        
+
         try:
             # Initialize launch manager
             launch_manager = LaunchManager(manager)
@@ -823,39 +1026,33 @@ async def launch_job(request: LaunchJobRequest):
                 include=request.include,
                 no_gitignore=request.no_gitignore,
             )
-            
+
             if job:
                 return LaunchJobResponse(
                     success=True,
                     job_id=job.job_id,
                     message=f"Job launched successfully with ID: {job.job_id}",
-                    hostname=request.host
+                    hostname=request.host,
                 )
             else:
                 return LaunchJobResponse(
-                    success=False,
-                    message="Failed to launch job",
-                    hostname=request.host
+                    success=False, message="Failed to launch job", hostname=request.host
                 )
-                
+
         finally:
             # Clean up temporary script file
             try:
                 os.unlink(script_path)
             except Exception:
                 pass
-                
+
     except Exception as e:
         logger.error(f"Error launching job: {e}")
         return LaunchJobResponse(
             success=False,
             message=f"Error launching job: {str(e)}",
-            hostname=request.host
+            hostname=request.host,
         )
-
-
-
-
 
 
 @app.on_event("startup")
@@ -865,6 +1062,14 @@ async def startup_event():
     manager = get_slurm_manager()
     print("API started, manager initialized")
 
+    # Start cache scheduler
+    try:
+        await start_cache_scheduler()
+        print("Cache scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start cache scheduler: {e}")
+
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up connections and background tasks on shutdown."""
@@ -873,10 +1078,24 @@ async def shutdown_event():
     # Signal shutdown to background tasks
     _shutdown_event.set()
 
+    # Stop cache scheduler
+    try:
+        await stop_cache_scheduler()
+        print("Cache scheduler stopped")
+    except Exception as e:
+        print(f"Error stopping cache scheduler: {e}")
+
     # Close connections
     if _slurm_manager:
         _slurm_manager.close_connections()
         print("Closed all SSH connections")
+
+    # Cleanup cache
+    try:
+        _cache_middleware.cache.close()
+        print("Closed job cache")
+    except Exception as e:
+        print(f"Error closing cache: {e}")
 
 
 def main():

@@ -3,7 +3,8 @@
 import re
 from pathlib import Path
 from typing import Optional, Union
-from .utils.slurm_params import to_directives, SlurmParams
+
+from .utils.slurm_params import SlurmParams, to_directives
 
 
 class ScriptProcessor:
@@ -15,15 +16,15 @@ class ScriptProcessor:
         try:
             content = script_path.read_text()
             # Look for SLURM directives like #SBATCH
-            return bool(re.search(r'#SBATCH\s+', content))
+            return bool(re.search(r"#SBATCH\s+", content))
         except Exception:
             return False
 
     @staticmethod
     def ensure_shebang(content: str) -> str:
         """Ensure script has proper shebang."""
-        if not content.startswith('#!'):
-            return '#!/bin/bash\n\n' + content
+        if not content.startswith("#!"):
+            return "#!/bin/bash\n\n" + content
         return content
 
     @staticmethod
@@ -70,14 +71,14 @@ class ScriptProcessor:
             return content
 
         # Find insertion point after shebang
-        lines = content.split('\n')
-        insert_idx = 1 if lines and lines[0].startswith('#!') else 0
+        lines = content.split("\n")
+        insert_idx = 1 if lines and lines[0].startswith("#!") else 0
 
         # Insert directives
         for i, directive in enumerate(directives):
             lines.insert(insert_idx + i, directive)
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     @classmethod
     def prepare_script(
@@ -87,7 +88,7 @@ class ScriptProcessor:
         params: Optional[Union[SlurmParams, dict]] = None,
     ) -> Path:
         """Prepare script for SLURM submission.
-        
+
         Returns path to the prepared script in target directory.
         """
         content = script_path.read_text()
@@ -108,14 +109,14 @@ class ScriptProcessor:
             directives = to_directives(directive_params)
             if directives:
                 # Insert directives after shebang
-                lines = content.split('\n')
-                insert_idx = 1 if lines and lines[0].startswith('#!') else 0
+                lines = content.split("\n")
+                insert_idx = 1 if lines and lines[0].startswith("#!") else 0
                 for i, directive in enumerate(directives):
                     lines.insert(insert_idx + i, directive)
-                content = '\n'.join(lines)
+                content = "\n".join(lines)
 
         # Create target script path with .slurm extension
-        script_name = script_path.stem + '.slurm'
+        script_name = script_path.stem + ".slurm"
         target_script = target_dir / script_name
 
         # Ensure target directory exists

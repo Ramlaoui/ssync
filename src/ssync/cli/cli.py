@@ -4,14 +4,11 @@ from pathlib import Path
 
 import click
 
-from .cli.commands import LaunchCommand, StatusCommand, SubmitCommand, SyncCommand
-from .config import ConfigError, get_default_config_path, load_config
+from ..utils.config import ConfigError, config
+from .commands import LaunchCommand, StatusCommand, SubmitCommand, SyncCommand
 
 
 @click.group()
-@click.option(
-    "--config", "-c", type=click.Path(path_type=Path), help="Configuration file path"
-)
 @click.option(
     "--no-ssh-config",
     is_flag=True,
@@ -19,24 +16,18 @@ from .config import ConfigError, get_default_config_path, load_config
 )
 @click.option("--verbose", is_flag=True, help="Enable verbose output")
 @click.pass_context
-def cli(ctx, config, no_ssh_config, verbose):
+def cli(ctx, no_ssh_config, verbose):
     """Sync files and manage SLURM jobs across multiple clusters."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     ctx.obj["use_ssh_config"] = not no_ssh_config
 
     # Load configuration
-    config_path = config or get_default_config_path()
     try:
-        slurm_hosts = load_config(config_path)
+        slurm_hosts = config.load_config()
         ctx.obj["slurm_hosts"] = slurm_hosts
-        ctx.obj["config_path"] = config_path
     except ConfigError as e:
         click.echo(f"Configuration error: {e}", err=True)
-        if not config_path.exists():
-            click.echo(
-                f"Create a config file at {config_path} or use --config", err=True
-            )
         ctx.exit(1)
 
 
@@ -45,9 +36,11 @@ def cli(ctx, config, no_ssh_config, verbose):
 @click.option("--user", help="Check jobs for specific user")
 @click.option("--simple", is_flag=True, help="Show simple tabular output")
 @click.option(
-    "--since", help="Include completed jobs since time (e.g., 1h, 1d, 1w, 2025-08-20)"
+    "--since",
+    default="1d",
+    help="Include completed jobs since time (e.g., 1h, 1d, 1w, 2025-08-20)",
 )
-@click.option("--limit", type=int, help="Limit number of jobs to show")
+@click.option("--limit", default=20, type=int, help="Limit number of jobs to show")
 @click.option("--job-id", help="Show specific job ID(s), comma-separated")
 @click.option("--state", help="Filter by job state (PD, R, CD, F, CA, TO)")
 @click.option("--active-only", is_flag=True, help="Show only running/pending jobs")
@@ -73,7 +66,7 @@ def status_command(
 ):
     """Check SLURM queue status across hosts."""
     command = StatusCommand(
-        config_path=ctx.obj["config_path"],
+        config_path=config.config_path,
         slurm_hosts=ctx.obj["slurm_hosts"],
         verbose=ctx.obj["verbose"],
     )
@@ -104,12 +97,18 @@ def status_command(
 )
 @click.option("--no-gitignore", is_flag=True, help="Disable .gitignore usage")
 @click.option("--host", help="Sync to specific host only")
+@click.option(
+    "--max-depth",
+    default=3,
+    type=int,
+    help="Maximum depth for recursive .gitignore search (default: 3)",
+)
 @click.argument("source_dir", type=click.Path(exists=True, path_type=Path))
 @click.pass_context
-def sync_command(ctx, exclude, include, no_gitignore, host, source_dir):
+def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_dir):
     """Sync source directory to SLURM hosts."""
     command = SyncCommand(
-        config_path=ctx.obj["config_path"],
+        config_path=config.config_path,
         slurm_hosts=ctx.obj["slurm_hosts"],
         verbose=ctx.obj["verbose"],
     )
@@ -120,6 +119,7 @@ def sync_command(ctx, exclude, include, no_gitignore, host, source_dir):
         include=list(include),
         no_gitignore=no_gitignore,
         host=host,
+        max_depth=max_depth,
     )
 
     if not success:
@@ -163,7 +163,7 @@ def submit_command(
     ARGS are passed to the script/function.
     """
     command = SubmitCommand(
-        config_path=ctx.obj["config_path"],
+        config_path=config.config_path,
         slurm_hosts=ctx.obj["slurm_hosts"],
         verbose=ctx.obj["verbose"],
     )
@@ -228,12 +228,12 @@ def launch_command(
     source_dir,
 ):
     """Launch job by syncing source directory and submitting script.
-    
+
     SCRIPT_PATH: Path to the script to submit (.sh or .slurm)
     SOURCE_DIR: Source directory to sync to remote host
     """
     command = LaunchCommand(
-        config_path=ctx.obj["config_path"],
+        config_path=config.config_path,
         slurm_hosts=ctx.obj["slurm_hosts"],
         verbose=ctx.obj["verbose"],
     )

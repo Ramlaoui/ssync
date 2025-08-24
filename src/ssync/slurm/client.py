@@ -7,7 +7,7 @@ from fabric import Connection
 
 from ..models.job import JobInfo
 from ..utils.logging import setup_logger
-from .fields import SACCT_FIELDS, SQUEUE_FIELDS
+from .fields import SQUEUE_FIELDS
 from .parser import SlurmParser
 
 logger = setup_logger(__name__, "DEBUG")
@@ -465,14 +465,19 @@ class SlurmClient:
                     for line in lines:
                         fields = line.strip().split("|")
                         if (
-                            len(fields) >= len(available_fields) and "." not in fields[0]
+                            len(fields) >= len(available_fields)
+                            and "." not in fields[0]
                         ):  # Avoid job steps
-                            job_info = self.parser.from_sacct_fields(fields, hostname, available_fields)
+                            job_info = self.parser.from_sacct_fields(
+                                fields, hostname, available_fields
+                            )
                             break
 
             # If we found job info but don't have stdout/stderr paths, try scontrol
             if job_info and not (job_info.stdout_file or job_info.stderr_file):
-                stdout_path, stderr_path = self.get_job_output_files(conn, job_id, hostname)
+                stdout_path, stderr_path = self.get_job_output_files(
+                    conn, job_id, hostname
+                )
                 if stdout_path:
                     job_info.stdout_file = stdout_path
                 if stderr_path:
@@ -498,12 +503,12 @@ class SlurmClient:
         self, conn: Connection, job_id: str, hostname: str, user: str | None = None
     ) -> tuple[Optional[str], Optional[str]]:
         """Get stdout and stderr file paths for a job using scontrol show job.
-        
+
         Args:
             conn: SSH connection to the cluster
             job_id: SLURM job ID
             hostname: Cluster hostname
-            
+
         Returns:
             Tuple of (stdout_path, stderr_path). Either may be None if not found.
         """
@@ -517,35 +522,37 @@ class SlurmClient:
                 hide=True,
                 timeout=10,
                 warn=True,
-                pty=True
+                pty=True,
             )
-            
+
             if not result.ok:
                 logger.debug(f"scontrol show job failed for {job_id}: {result.stderr}")
                 return None, None
-                
+
             stdout_path = None
             stderr_path = None
-            
+
             # Parse the scontrol output
-            for line in result.stdout.split('\n'):
+            for line in result.stdout.split("\n"):
                 line = line.strip()
-                if 'StdOut=' in line:
+                if "StdOut=" in line:
                     # Extract StdOut path - format is typically "StdOut=/path/to/file"
                     for part in line.split():
-                        if part.startswith('StdOut='):
-                            stdout_path = part.split('=', 1)[1]
+                        if part.startswith("StdOut="):
+                            stdout_path = part.split("=", 1)[1]
                             break
-                elif 'StdErr=' in line:
-                    # Extract StdErr path - format is typically "StdErr=/path/to/file"  
+                elif "StdErr=" in line:
+                    # Extract StdErr path - format is typically "StdErr=/path/to/file"
                     for part in line.split():
-                        if part.startswith('StdErr='):
-                            stderr_path = part.split('=', 1)[1]
+                        if part.startswith("StdErr="):
+                            stderr_path = part.split("=", 1)[1]
                             break
-                            
-            logger.debug(f"Found output files for job {job_id}: stdout={stdout_path}, stderr={stderr_path}")
+
+            logger.debug(
+                f"Found output files for job {job_id}: stdout={stdout_path}, stderr={stderr_path}"
+            )
             return stdout_path, stderr_path
-            
+
         except Exception as e:
             logger.debug(f"Failed to get output files for job {job_id}: {e}")
             return None, None
@@ -554,39 +561,37 @@ class SlurmClient:
         self, conn: Connection, job_id: str, hostname: str, output_type: str = "stdout"
     ) -> Optional[str]:
         """Read the content of a job's output file (stdout or stderr).
-        
+
         Args:
             conn: SSH connection to the cluster
             job_id: SLURM job ID
             hostname: Cluster hostname
             output_type: Either "stdout" or "stderr"
-            
+
         Returns:
             File content as string, or None if file not found/readable
         """
         try:
             stdout_path, stderr_path = self.get_job_output_files(conn, job_id, hostname)
-            
+
             file_path = stdout_path if output_type == "stdout" else stderr_path
             if not file_path:
                 logger.debug(f"No {output_type} file path found for job {job_id}")
                 return None
-                
-            logger.debug(f"Reading {output_type} content from {file_path} for job {job_id}")
-            result = conn.run(
-                f"cat '{file_path}'",
-                hide=True,
-                timeout=30,
-                warn=True,
-                pty=True
+
+            logger.debug(
+                f"Reading {output_type} content from {file_path} for job {job_id}"
             )
-            
+            result = conn.run(
+                f"cat '{file_path}'", hide=True, timeout=30, warn=True, pty=True
+            )
+
             if not result.ok:
                 logger.debug(f"Failed to read {file_path}: {result.stderr}")
                 return None
-                
+
             return result.stdout
-            
+
         except Exception as e:
             logger.debug(f"Failed to read {output_type} for job {job_id}: {e}")
             return None
@@ -595,12 +600,12 @@ class SlurmClient:
         self, conn: Connection, job_id: str, hostname: str
     ) -> Optional[str]:
         """Get the batch script content for a job using scontrol write batch_script.
-        
+
         Args:
             conn: SSH connection to the cluster
             job_id: SLURM job ID
             hostname: Cluster hostname
-            
+
         Returns:
             Batch script content as string, or None if not available
         """
@@ -611,22 +616,26 @@ class SlurmClient:
                 hide=True,
                 timeout=30,
                 warn=True,
-                pty=True
+                pty=True,
             )
-            
+
             if not result.ok:
-                logger.debug(f"scontrol write batch_script failed for {job_id}: {result.stderr}")
+                logger.debug(
+                    f"scontrol write batch_script failed for {job_id}: {result.stderr}"
+                )
                 return None
-                
+
             # The batch script content is in stdout
             script_content = result.stdout.strip()
             if script_content:
-                logger.debug(f"Retrieved batch script for job {job_id} ({len(script_content)} chars)")
+                logger.debug(
+                    f"Retrieved batch script for job {job_id} ({len(script_content)} chars)"
+                )
                 return script_content
             else:
                 logger.debug(f"No batch script content found for job {job_id}")
                 return None
-            
+
         except Exception as e:
             logger.debug(f"Failed to get batch script for job {job_id}: {e}")
             return None

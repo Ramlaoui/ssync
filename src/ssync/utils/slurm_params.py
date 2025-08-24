@@ -3,9 +3,9 @@
 Centralizes conversion of common aliases, memory/time formatting and
 generation of SBATCH directive lines.
 """
-from typing import Any, Dict, List
+
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -31,8 +31,7 @@ class SlurmParams:
     account: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
-        """Return a dict suitable for `to_directives` (maps time_min -> time).
-        """
+        """Return a dict suitable for `to_directives` (maps time_min -> time)."""
         d = {
             "job_name": self.job_name,
             "time": self.time_min,

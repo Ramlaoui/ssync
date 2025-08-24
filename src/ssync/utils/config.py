@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from ..models.cluster import Host, SlurmHost
+from ..models.cluster import Host, SlurmDefaults, SlurmHost
 
 XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME", os.environ.get("SSYNC_CONFIG", ""))
 XDG_CACHE = os.environ.get("XDG_CACHE_HOME", os.environ.get("SSYNC_CACHE", ""))
@@ -115,10 +115,18 @@ class Config:
                     use_ssh_config=host_config.get("use_ssh_config", True),
                 )
 
+                slurm_defaults_config = host_config.get("slurm_defaults")
+                slurm_defaults = (
+                    SlurmDefaults(**slurm_defaults_config)
+                    if slurm_defaults_config
+                    else None
+                )
+
                 slurm_host = SlurmHost(
                     host=host,
                     work_dir=Path(host_config["work_dir"]),
                     scratch_dir=Path(host_config["scratch_dir"]),
+                    slurm_defaults=slurm_defaults,
                 )
                 hosts.append(slurm_host)
 

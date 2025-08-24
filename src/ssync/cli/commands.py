@@ -8,6 +8,7 @@ import click
 from ..api import ApiClient
 from ..launch import LaunchManager
 from ..manager import SlurmManager
+from ..sync import SyncManager
 from ..utils.slurm_params import SlurmParams
 from .display import JobDisplay
 
@@ -110,12 +111,77 @@ class SyncCommand(BaseCommand):
         include: List[str] = None,
         no_gitignore: bool = False,
         host: Optional[str] = None,
+        max_depth: int = 3,
     ):
         """Execute sync command."""
-        click.echo(
-            "Sync command will be implemented via API in a future update", err=True
-        )
-        return False
+        try:
+            # Initialize SLURM manager
+            slurm_manager = SlurmManager(self.slurm_hosts, use_ssh_config=True)
+
+            # Initialize sync manager
+            sync_manager = SyncManager(
+                slurm_manager=slurm_manager,
+                source_dir=source_dir,
+                use_gitignore=not no_gitignore,
+                max_depth=max_depth,
+            )
+
+            # Filter hosts if specific host requested
+            if host:
+                filtered_hosts = [
+                    h for h in self.slurm_hosts if h.host.hostname == host
+                ]
+                if not filtered_hosts:
+                    click.echo(f"Host '{host}' not found in configuration", err=True)
+                    return False
+                target_host = filtered_hosts[0]
+
+                # Sync to specific host
+                if self.verbose:
+                    click.echo(f"Syncing {source_dir} to {host}...")
+
+                success = sync_manager.sync_to_host(
+                    slurm_host=target_host,
+                    exclude=exclude or [],
+                    include_patterns=include or [],
+                )
+
+                if success:
+                    click.echo(f"Successfully synced to {host}")
+                    return True
+                else:
+                    click.echo(f"Failed to sync to {host}", err=True)
+                    return False
+            else:
+                # Sync to all hosts
+                if self.verbose:
+                    click.echo(f"Syncing {source_dir} to all hosts...")
+
+                results = sync_manager.sync_to_all(
+                    exclude=exclude or [], include_patterns=include or []
+                )
+
+                success_count = sum(1 for success in results.values() if success)
+                total_count = len(results)
+
+                for hostname, success in results.items():
+                    if success:
+                        click.echo(f"✓ Successfully synced to {hostname}")
+                    else:
+                        click.echo(f"✗ Failed to sync to {hostname}")
+
+                if success_count == total_count:
+                    click.echo(f"Successfully synced to all {total_count} hosts")
+                    return True
+                else:
+                    click.echo(
+                        f"Synced to {success_count}/{total_count} hosts", err=True
+                    )
+                    return success_count > 0
+
+        except Exception as e:
+            click.echo(f"Error during sync: {e}", err=True)
+            return False
 
 
 class SubmitCommand(BaseCommand):
@@ -172,10 +238,10 @@ class LaunchCommand(BaseCommand):
         try:
             # Initialize SLURM manager
             slurm_manager = SlurmManager(self.slurm_hosts, use_ssh_config=True)
-            
+
             # Initialize launch manager
             launch_manager = LaunchManager(slurm_manager)
-            
+
             # Launch the job
             slurm_params = SlurmParams(
                 job_name=job_name,
@@ -203,14 +269,14 @@ class LaunchCommand(BaseCommand):
                 include=include or [],
                 no_gitignore=no_gitignore,
             )
-            
+
             if job:
                 click.echo(f"Job launched successfully with ID: {job.job_id}")
                 return True
             else:
                 click.echo("Failed to launch job", err=True)
                 return False
-                
+
         except Exception as e:
             click.echo(f"Error launching job: {e}", err=True)
             return False

@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class SlurmDefaults:
+    partition: Optional[str] = None
+    account: Optional[str] = None
+    constraint: Optional[str] = None
+    cpus: Optional[int] = None
+    time: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -26,3 +36,4 @@ class SlurmHost:
     host: Host
     work_dir: Path
     scratch_dir: Path
+    slurm_defaults: Optional[SlurmDefaults] = None

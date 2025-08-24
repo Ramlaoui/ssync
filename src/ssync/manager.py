@@ -2,7 +2,6 @@
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -10,17 +9,15 @@ from .connection import ConnectionManager
 from .models import JobInfo
 from .models.cluster import Host, SlurmHost
 from .slurm import SlurmClient
-from .utils.logging import setup_logger
 from .utils.config import config
-from .utils.ssh import send_file
+from .utils.logging import setup_logger
 from .utils.slurm_params import SlurmParams
+from .utils.ssh import send_file
 
 logger = setup_logger(__name__, "DEBUG")
 
 
 @dataclass
-
-
 class Job:
     """Represents a submitted SLURM job."""
 
@@ -174,7 +171,11 @@ class SlurmManager:
         return jobs
 
     def submit_script(
-        self, slurm_host: SlurmHost | str, params: SlurmParams | None = None, local_script_path: str | None = None, remote_script_path: str | None = None
+        self,
+        slurm_host: SlurmHost | str,
+        params: SlurmParams | None = None,
+        local_script_path: str | None = None,
+        remote_script_path: str | None = None,
     ) -> Optional[Job]:
         """Submit a script to SLURM."""
 
@@ -220,7 +221,12 @@ class SlurmManager:
             # Send script to remote scratch dir
             if local_script_path:
                 remote_scratch_dir = config.get_remote_cache_path(slurm_host)
-                remote_script_path = send_file(conn=conn, local_path=local_script_path, remote_path=remote_scratch_dir, is_remote_dir=True)
+                remote_script_path = send_file(
+                    conn=conn,
+                    local_path=local_script_path,
+                    remote_path=remote_scratch_dir,
+                    is_remote_dir=True,
+                )
 
             cmd.append(remote_script_path)
 
@@ -252,7 +258,9 @@ class SlurmManager:
         """Get detailed information about a SLURM job."""
         host = self.get_host_by_name(slurm_host)
         conn = self._get_connection(host.host)
-        return self.slurm_client.get_job_details(conn, job_id, host.host.hostname, username)
+        return self.slurm_client.get_job_details(
+            conn, job_id, host.host.hostname, username
+        )
 
     def get_host_by_name(self, hostname: str | SlurmHost) -> SlurmHost:
         """Get a SLURM host by hostname."""
