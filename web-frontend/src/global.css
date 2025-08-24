@@ -50,6 +50,46 @@ body {
     background-color: var(--body-bg);
 }
 
+/* Mobile responsive typography and layout */
+@media (max-width: 768px) {
+    html,
+    body {
+        font-size: 15px;
+        line-height: 1.4;
+    }
+}
+
+@media (max-width: 480px) {
+    html,
+    body {
+        font-size: 14px;
+        line-height: 1.35;
+    }
+}
+
+/* Touch device improvements */
+@media (hover: none) and (pointer: coarse) {
+    /* Increase tap targets for mobile */
+    button,
+    .clickable {
+        min-height: 44px;
+        min-width: 44px;
+    }
+    
+    /* Disable hover effects on touch devices */
+    .tab:hover {
+        background: none !important;
+    }
+    
+    .download-btn:hover {
+        background: #e9ecef !important;
+    }
+    
+    .download-btn.download:hover {
+        background: #007bff !important;
+    }
+}
+
 /* Better button styles */
 button {
     position: relative;

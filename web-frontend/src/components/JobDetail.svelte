@@ -477,9 +477,28 @@
     flex-direction: column;
   }
 
+  @media (max-width: 768px) {
+    .job-detail {
+      border-radius: 0;
+      box-shadow: none;
+      height: 100vh;
+    }
+  }
+
   .header {
     padding: 1.5rem;
     border-bottom: 1px solid #dee2e6;
+  }
+
+  @media (max-width: 768px) {
+    .header {
+      padding: 1rem;
+      position: sticky;
+      top: 0;
+      background: white;
+      z-index: 10;
+      border-bottom: 2px solid #dee2e6;
+    }
   }
 
   .title-row {
@@ -487,6 +506,14 @@
     justify-content: space-between;
     align-items: flex-start;
     gap: 1rem;
+  }
+
+  @media (max-width: 768px) {
+    .title-row {
+      flex-direction: column;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
   }
 
   .job-info {
@@ -498,6 +525,13 @@
     display: flex;
     align-items: flex-start;
     gap: 0.75rem;
+  }
+
+  @media (max-width: 768px) {
+    .job-header {
+      width: 100%;
+      align-items: center;
+    }
   }
 
   .job-details {
@@ -513,12 +547,28 @@
     line-height: 1.2;
   }
 
+  @media (max-width: 768px) {
+    .job-details h2 {
+      font-size: 1.1rem;
+    }
+  }
+
   .job-name {
     color: #6c757d;
     font-size: 0.9rem;
     word-wrap: break-word;
     line-height: 1.3;
     margin: 0;
+  }
+
+  @media (max-width: 768px) {
+    .job-name {
+      font-size: 0.85rem;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
 
   .state-badge {
@@ -530,6 +580,15 @@
     text-transform: uppercase;
     align-self: flex-start;
     margin-top: 0.2rem;
+  }
+
+  @media (max-width: 768px) {
+    .state-badge {
+      padding: 0.3rem 0.8rem;
+      font-size: 0.75rem;
+      align-self: flex-end;
+      margin-top: -0.5rem;
+    }
   }
 
   .back-btn {
@@ -567,6 +626,25 @@
   .tabs {
     display: flex;
     border-bottom: 1px solid #dee2e6;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    .tabs {
+      position: sticky;
+      top: 73px;
+      background: white;
+      z-index: 9;
+      border-bottom: 2px solid #dee2e6;
+      padding: 0 1rem;
+      margin: 0 -1rem;
+    }
   }
 
   .tab {
@@ -580,6 +658,27 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 768px) {
+    .tab {
+      padding: 0.75rem 1rem;
+      font-size: 0.9rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .tab {
+      padding: 0.75rem 0.75rem;
+      gap: 0.25rem;
+    }
+
+    .tab-icon {
+      width: 14px;
+      height: 14px;
+    }
   }
 
   .tab-icon {
@@ -602,16 +701,37 @@
     padding: 1.5rem;
   }
 
+  @media (max-width: 768px) {
+    .content {
+      padding: 1rem;
+      -webkit-overflow-scrolling: touch;
+    }
+  }
+
   .info-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 2rem;
   }
 
+  @media (max-width: 768px) {
+    .info-grid {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+  }
+
   .info-section {
     background: #f8f9fa;
     padding: 1.5rem;
     border-radius: 0.5rem;
+  }
+
+  @media (max-width: 768px) {
+    .info-section {
+      padding: 1rem;
+      border-radius: 0.375rem;
+    }
   }
 
   .info-section.full-width {
@@ -636,6 +756,25 @@
     width: 120px;
     flex-shrink: 0;
     margin-right: 1rem;
+  }
+
+  @media (max-width: 768px) {
+    .info-item {
+      flex-direction: column;
+      gap: 0.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .info-item .item-label {
+      width: auto;
+      margin-right: 0;
+      font-size: 0.9rem;
+    }
+
+    .info-item span {
+      padding-left: 0.5rem;
+      font-size: 0.95rem;
+    }
   }
 
   .info-item span {
@@ -667,6 +806,15 @@
     line-height: 1.4;
     white-space: pre-wrap;
     margin: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  @media (max-width: 768px) {
+    .output-content {
+      font-size: 0.8rem;
+      padding: 0.75rem;
+      line-height: 1.3;
+    }
   }
 
   .output-content.stderr {
@@ -728,6 +876,24 @@
     border-bottom: 1px solid #dee2e6;
     margin-bottom: -1px;
   }
+
+  @media (max-width: 768px) {
+    .output-controls {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }
+
+    .file-info {
+      order: 1;
+    }
+
+    .actions {
+      order: 2;
+      align-self: flex-end;
+    }
+  }
   
   .file-info {
     display: flex;
@@ -759,6 +925,15 @@
     background: #e9ecef;
     color: #495057;
     transition: all 0.2s;
+    border: none;
+    cursor: pointer;
+  }
+
+  @media (max-width: 768px) {
+    .download-btn {
+      font-size: 0.85rem;
+      padding: 0.4rem 0.75rem;
+    }
   }
   
   .download-btn:hover {

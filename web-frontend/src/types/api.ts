@@ -54,10 +54,19 @@ export interface JobInfo {
   consumed_energy: string | null;
 }
 
+export interface SlurmDefaults {
+  partition?: string;
+  account?: string;
+  constraint?: string;
+  cpus?: number;
+  time?: string;
+}
+
 export interface HostInfo {
   hostname: string;
   work_dir: string;
   scratch_dir: string;
+  slurm_defaults?: SlurmDefaults;
 }
 
 export interface JobStatusResponse {

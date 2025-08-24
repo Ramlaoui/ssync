@@ -34,6 +34,18 @@
 
   // Tab state
   let activeTab: 'jobs' | 'launch' = 'jobs';
+  
+  // Mobile UI state
+  let showMobileFilters = false;
+  let isMobile = false;
+  
+  // Check if we're on mobile
+  function checkMobile() {
+    isMobile = window.innerWidth <= 768;
+    if (!isMobile) {
+      showMobileFilters = false; // Reset on desktop
+    }
+  }
 
   const API_BASE = '/api';
 
@@ -41,9 +53,17 @@
     loadHosts();
     loadJobs();
     
+    // Check mobile state
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
     // Auto-refresh every 30 seconds
     const interval = setInterval(loadJobs, 30000);
-    return () => clearInterval(interval);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('resize', checkMobile);
+    };
   });
 
   async function loadHosts(): Promise<void> {
@@ -196,22 +216,38 @@
           ssync
         </button>
 
-        <nav class="tab-nav">
-          <button 
-            class="tab-button"
-            class:active={activeTab === 'jobs'}
-            on:click={() => {activeTab = 'jobs'; selectedJob = null;}}
-          >
-            Jobs
-          </button>
-          <button 
-            class="tab-button"
-            class:active={activeTab === 'launch'}
-            on:click={() => {activeTab = 'launch'; selectedJob = null;}}
-          >
-            Launch Job
-          </button>
-        </nav>
+        <div class="nav-container">
+          <nav class="tab-nav">
+            <button 
+              class="tab-button"
+              class:active={activeTab === 'jobs'}
+              on:click={() => {activeTab = 'jobs'; selectedJob = null;}}
+            >
+              Jobs
+            </button>
+            <button 
+              class="tab-button"
+              class:active={activeTab === 'launch'}
+              on:click={() => {activeTab = 'launch'; selectedJob = null;}}
+            >
+              Launch Job
+            </button>
+          </nav>
+          
+          {#if activeTab === 'jobs' && isMobile}
+            <button 
+              class="mobile-filter-toggle"
+              class:active={showMobileFilters}
+              on:click={() => showMobileFilters = !showMobileFilters}
+              aria-label="Toggle filters"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3,4A1,1 0 0,1 4,3H20A1,1 0 0,1 21,4V6A1,1 0 0,1 20,7H4A1,1 0 0,1 3,6V4M7,10A1,1 0 0,1 8,9H16A1,1 0 0,1 17,10V12A1,1 0 0,1 16,13H8A1,1 0 0,1 7,12V10M10,16A1,1 0 0,1 11,15H13A1,1 0 0,1 14,16V18A1,1 0 0,1 13,19H11A1,1 0 0,1 10,18V16Z" />
+              </svg>
+              Filters
+            </button>
+          {/if}
+        </div>
       </div>
       
       <div class="stats">
@@ -256,7 +292,59 @@
 
   <div class="main-content">
     {#if activeTab === 'jobs'}
-      <div class="sidebar">
+      <!-- Mobile Filter Overlay -->
+      {#if isMobile && showMobileFilters}
+        <div class="mobile-filter-overlay" on:click={() => showMobileFilters = false}>
+          <div class="mobile-filter-panel" on:click|stopPropagation>
+            <div class="mobile-filter-header">
+              <h3>Filters & Hosts</h3>
+              <button class="close-filters" on:click={() => showMobileFilters = false}>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />
+                </svg>
+              </button>
+            </div>
+            
+            <FilterPanel 
+              bind:filters 
+              {hosts}
+              on:change={handleFilterChange}
+            />
+            
+            <div class="hosts-section">
+              <h3>Hosts</h3>
+              {#if hostsLoading && hosts.length === 0}
+                <div class="loading-placeholder">Loading hosts...</div>
+              {:else}
+                {#each hosts as host}
+                  <div class="host-item" class:active={filters.host === host.hostname}>
+                    <button 
+                      class="host-name"
+                      on:click={() => {
+                        filters.host = filters.host === host.hostname ? '' : host.hostname;
+                        handleFilterChange();
+                        if (isMobile) showMobileFilters = false;
+                      }}
+                      disabled={loading}
+                      aria-pressed={filters.host === host.hostname}
+                    >
+                      {host.hostname}
+                      {#if jobsByHost.has(host.hostname)}
+                        <span class="job-count">
+                          {jobsByHost.get(host.hostname)?.jobs.length ?? 0}
+                        </span>
+                      {/if}
+                    </button>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+      
+      <!-- Desktop Sidebar -->
+      <div class="sidebar" class:mobile-hidden={isMobile}>
         <FilterPanel 
           bind:filters 
           {hosts}
@@ -383,7 +471,14 @@
 
   .stats {
     display: flex;
-    gap: 1rem;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  @media (max-width: 768px) {
+    .stats {
+      gap: 0.5rem;
+    }
   }
 
   .stat {
@@ -391,18 +486,36 @@
     padding: 0.25rem 0.75rem;
     border-radius: 1rem;
     font-size: 0.9rem;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 768px) {
+    .stat {
+      padding: 0.2rem 0.6rem;
+      font-size: 0.8rem;
+    }
   }
 
   .stat.refresh-button {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.375rem;
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     cursor: pointer;
     user-select: none;
     transition: all 0.2s ease;
     border: none;
     box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+    padding: 0.25rem 0.625rem;
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 768px) {
+    .stat.refresh-button {
+      padding: 0.2rem 0.5rem;
+      font-size: 0.8rem;
+      gap: 0.25rem;
+    }
   }
 
   .stat.refresh-button:hover:not(.loading) {
@@ -423,8 +536,15 @@
   }
 
   .refresh-icon {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
+  }
+
+  @media (max-width: 768px) {
+    .refresh-icon {
+      width: 12px;
+      height: 12px;
+    }
   }
 
   .spinning {
@@ -639,29 +759,136 @@
     flex-direction: column;
   }
 
+  /* Mobile Navigation */
+  .nav-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 1rem;
+  }
+  
+  .mobile-filter-toggle {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    color: white;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .mobile-filter-toggle svg {
+    width: 16px;
+    height: 16px;
+  }
+  
+  .mobile-filter-toggle:hover {
+    background: rgba(255,255,255,0.25);
+  }
+  
+  .mobile-filter-toggle.active {
+    background: rgba(255,255,255,0.9);
+    color: #2c3e50;
+  }
+  
+  /* Mobile Filter Overlay */
+  .mobile-filter-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 1rem;
+    backdrop-filter: blur(4px);
+  }
+  
+  .mobile-filter-panel {
+    background: white;
+    border-radius: 12px;
+    max-width: 400px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    margin-top: 2rem;
+  }
+  
+  .mobile-filter-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid #e5e7eb;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border-radius: 12px 12px 0 0;
+  }
+  
+  .mobile-filter-header h3 {
+    margin: 0;
+    color: #374151;
+    font-size: 1.1rem;
+  }
+  
+  .close-filters {
+    background: none;
+    border: none;
+    color: #6b7280;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+  }
+  
+  .close-filters:hover {
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+  }
+  
+  .close-filters svg {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .mobile-hidden {
+    display: none;
+  }
+
   @media (max-width: 768px) {
     .header {
       padding: 1rem;
       flex-direction: column;
       gap: 1rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(10px);
     }
 
     .header-left {
       gap: 1rem;
+      width: 100%;
+      justify-content: space-between;
     }
 
     .app-title {
       font-size: 1.25rem;
-    }
-
-    .logo-icon {
-      width: 24px;
-      height: 24px;
+      font-weight: 700;
     }
 
     .stats {
       flex-wrap: wrap;
       gap: 0.5rem;
+      justify-content: center;
     }
 
     .stat {
@@ -669,10 +896,13 @@
       padding: 0.2rem 0.6rem;
     }
 
+    .nav-container {
+      width: 100%;
+    }
+    
     .tab-nav {
       gap: 0.25rem;
-      width: 100%;
-      justify-content: center;
+      flex: 1;
     }
 
     .tab-button {
@@ -682,9 +912,25 @@
       justify-content: center;
       min-width: 0;
     }
+    
+    .mobile-filter-toggle {
+      display: flex;
+      flex-shrink: 0;
+    }
 
+    .main-content {
+      flex-direction: column;
+      padding: 0;
+    }
+    
     .content {
-      padding: 0.5rem;
+      padding: 1rem;
+      min-height: calc(100vh - 200px);
+    }
+    
+    /* Hide sidebar on mobile */
+    .sidebar.mobile-hidden {
+      display: none;
     }
   }
 </style>
