@@ -122,10 +122,12 @@ async def root():
         "version": "1.0.0",
         "endpoints": [
             "/hosts",
+            "/hosts/{hostname}/defaults",
             "/status",
             "/jobs/{job_id}",
             "/jobs/{job_id}/output",
             "/jobs/{job_id}/script",
+            "/jobs/launch",
             "/connections/stats",
             "/cache/stats",
             "/cache/config",
@@ -153,6 +155,29 @@ async def get_hosts():
             )
         )
     return hosts
+
+
+@app.get("/hosts/{hostname}/defaults", response_model=SlurmDefaultsWeb)
+async def get_host_defaults(hostname: str):
+    """Get SLURM default parameters for a specific host."""
+    manager = get_slurm_manager()
+
+    # Find the host
+    slurm_host = None
+    for host in manager.slurm_hosts:
+        if host.host.hostname == hostname:
+            slurm_host = host
+            break
+
+    if not slurm_host:
+        raise HTTPException(status_code=404, detail=f"Host '{hostname}' not found")
+
+    if not slurm_host.slurm_defaults:
+        # Return empty defaults if none configured
+        return SlurmDefaultsWeb()
+
+    # Convert to web model
+    return SlurmDefaultsWeb(**slurm_host.slurm_defaults.__dict__)
 
 
 @app.get("/status", response_model=List[JobStatusResponse])
@@ -928,6 +953,54 @@ async def manual_health_check():
         )
 
 
+def apply_slurm_defaults(
+    request: LaunchJobRequest, defaults: Optional[SlurmDefaultsWeb]
+) -> LaunchJobRequest:
+    """Apply SLURM defaults to launch request, with request values taking precedence."""
+    if not defaults:
+        return request
+
+    # Create a dict with defaults, then overlay with request values
+    merged_params = {}
+
+    # Copy defaults to merged params (excluding None values)
+    defaults_dict = defaults.model_dump(exclude_none=True)
+    for key, value in defaults_dict.items():
+        merged_params[key] = value
+
+    # Handle special mappings and transformations
+    if defaults.job_name_prefix and not request.job_name:
+        # Auto-generate job name with prefix if none provided
+        import time
+
+        timestamp = int(time.time())
+        merged_params["job_name"] = f"{defaults.job_name_prefix}-{timestamp}"
+
+    if defaults.output_pattern and not request.output:
+        merged_params["output"] = defaults.output_pattern
+
+    if defaults.error_pattern and not request.error:
+        merged_params["error"] = defaults.error_pattern
+
+    if defaults.python_env and not request.python_env:
+        merged_params["python_env"] = defaults.python_env
+
+    # Copy request values, overriding defaults (excluding None values)
+    request_dict = request.model_dump(exclude_none=True)
+    for key, value in request_dict.items():
+        if key in ["job_name_prefix", "output_pattern", "error_pattern"]:
+            # Skip these default-only fields
+            continue
+        merged_params[key] = value
+
+    # Create new request with merged parameters
+    try:
+        return LaunchJobRequest(**merged_params)
+    except Exception as e:
+        logger.warning(f"Error merging defaults with request: {e}")
+        return request  # Fallback to original request
+
+
 def validate_script_content(script_content: str) -> None:
     """Basic validation for script content to prevent obviously dangerous commands."""
     # Check for obviously dangerous patterns (not comprehensive, just basic safety)
@@ -965,13 +1038,21 @@ async def launch_job(request: LaunchJobRequest):
 
     manager = get_slurm_manager()
 
-    # Validate host exists
+    # Validate host exists and get defaults
     try:
         slurm_host = manager.get_host_by_name(request.host)
     except ValueError:
         raise HTTPException(
             status_code=400, detail=f"Host '{request.host}' not found in configuration"
         )
+
+    # Apply defaults from host configuration
+    defaults = None
+    if slurm_host.slurm_defaults:
+        defaults = SlurmDefaultsWeb(**slurm_host.slurm_defaults.__dict__)
+
+    # Merge defaults with request parameters
+    request = apply_slurm_defaults(request, defaults)
 
     # Validate source directory exists
     source_dir = Path(request.source_dir).expanduser().resolve()

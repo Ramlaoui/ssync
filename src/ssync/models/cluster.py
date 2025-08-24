@@ -7,11 +7,33 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class SlurmDefaults:
+    # Basic job parameters
     partition: Optional[str] = None
     account: Optional[str] = None
     constraint: Optional[str] = None
+
+    # Resource allocation
     cpus: Optional[int] = None
-    time: Optional[str] = None
+    mem: Optional[int] = None  # Memory in GB
+    time: Optional[str] = None  # Time limit (HH:MM:SS or minutes)
+    nodes: Optional[int] = None
+    ntasks_per_node: Optional[int] = None
+    gpus_per_node: Optional[int] = None
+    gres: Optional[str] = None  # Generic resources (e.g., "gpu:2")
+
+    # Job naming and output
+    job_name_prefix: Optional[str] = None  # Prefix for job names
+    output_pattern: Optional[str] = (
+        None  # Pattern for stdout files (e.g., "job_%j.out")
+    )
+    error_pattern: Optional[str] = None  # Pattern for stderr files (e.g., "job_%j.err")
+
+    # Environment and execution
+    python_env: Optional[str] = None  # Default Python environment setup command
+
+    # Quality of Service and priority
+    qos: Optional[str] = None  # Quality of Service
+    priority: Optional[int] = None  # Job priority
 
 
 @dataclass(frozen=True)

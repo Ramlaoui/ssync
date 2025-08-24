@@ -6,12 +6,50 @@ hosts:
   - hostname: my-cluster
     work_dir: /home/user/work
     scratch_dir: /scratch/user
+    slurm_defaults:
+      # Basic job parameters
+      partition: "gpu"
+      account: "project-123"
+      constraint: "gpu"
+      
+      # Resource allocation defaults
+      cpus: 2
+      mem: 8  # GB
+      time: "01:00:00"
+      nodes: 1
+      gpus_per_node: 1
+      gres: "gpu:1"
+      
+      # Job naming and output patterns
+      job_name_prefix: "ml-exp"
+      output_pattern: "logs/job_%j_%x.out"
+      error_pattern: "logs/job_%j_%x.err"
+      
+      # Environment setup
+      python_env: "source activate pytorch"
+      
+      # QoS settings
+      qos: "gpu-short"
 
   # SSH config with password
   - hostname: secure-cluster
     password: ${CLUSTER_PASSWORD}
     work_dir: /lustre/work/user
     scratch_dir: /lustre/scratch/user
+    slurm_defaults:
+      # Basic compute cluster defaults
+      partition: "compute"
+      account: "research-group"
+      constraint: "intel"
+      
+      # Conservative resource defaults
+      cpus: 4
+      mem: 16
+      time: "02:00:00"
+      
+      # Standard output patterns
+      output_pattern: "slurm-%j.out"
+      error_pattern: "slurm-%j.err"
 
   # Manual connection details
   - hostname: direct.cluster.edu
