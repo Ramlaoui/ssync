@@ -266,7 +266,7 @@ cli.add_command(auth)
 
 
 @cli.command(name="api")
-@click.option("--port", default=8000, help="Port to run the API on")
+@click.option("--port", default=8042, help="Port to run the API on")
 @click.pass_context
 def api(ctx, port):
     """Start the API server only (no UI)."""
@@ -283,7 +283,7 @@ def api(ctx, port):
 
 
 @cli.command(name="web")
-@click.option("--port", default=8000, help="Port to run on")
+@click.option("--port", default=8042, help="Port to run on")
 @click.option("--stop", is_flag=True, help="Stop the running server")
 @click.option("--status", is_flag=True, help="Check server status")
 @click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
@@ -302,7 +302,7 @@ def web(ctx, port, stop, status, foreground, no_browser, skip_build):
     try:
         # Build command line args for the launcher
         args = []
-        if port != 8000:
+        if port != 8042:
             args.extend(["--port", str(port)])
         if stop:
             args.append("--stop")

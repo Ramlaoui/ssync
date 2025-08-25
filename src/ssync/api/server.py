@@ -14,7 +14,7 @@ logger = setup_logger(__name__, "DEBUG")
 class ServerManager:
     """Manages the ssync API server lifecycle."""
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8042"):
         self.base_url = base_url
 
     def is_running(self) -> bool:

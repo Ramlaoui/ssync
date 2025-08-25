@@ -107,7 +107,7 @@ The `ssync web` command:
 - Serves both API and UI on the same port
 - Opens your browser automatically
 
-Access at http://localhost:8000
+Access at http://localhost:8042
 
 For API-only mode (no UI):
 ```bash
@@ -158,11 +158,11 @@ ssync provides a REST API for programmatic access:
 import requests
 
 # Query job status
-response = requests.get("http://localhost:8000/status")
+response = requests.get("http://localhost:8042/api/status")
 jobs = response.json()
 
 # Submit a job
-response = requests.post("http://localhost:8000/jobs/launch", json={
+response = requests.post("http://localhost:8042/api/jobs/launch", json={
     "host": "cluster1",
     "script_content": "#!/bin/bash\npython train.py",
     "source_dir": "/path/to/project"

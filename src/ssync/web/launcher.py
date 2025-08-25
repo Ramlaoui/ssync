@@ -12,7 +12,7 @@ import click
 import requests
 
 
-def is_api_running(port: int = 8000) -> bool:
+def is_api_running(port: int = 8042) -> bool:
     """Check if API is already running."""
     try:
         response = requests.get(f"http://localhost:{port}/health", timeout=1)
@@ -193,7 +193,7 @@ def start_server_background(port: int):
 
 
 @click.command()
-@click.option("--port", default=8000, help="Port to run on")
+@click.option("--port", default=8042, help="Port to run on")
 @click.option("--stop", is_flag=True, help="Stop the running server")
 @click.option("--status", is_flag=True, help="Check server status")
 @click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")

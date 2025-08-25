@@ -957,13 +957,13 @@ def main():
         print("   To enable authentication: export SSYNC_REQUIRE_API_KEY=true")
         print("   To generate API key: ssync auth setup")
 
-    print("📡 Server starting at http://127.0.0.1:8000")
+    print("📡 Server starting at http://127.0.0.1:8042")
 
     # Production settings
     uvicorn.run(
         app,
         host="127.0.0.1",  # Only bind to localhost
-        port=int(os.getenv("SSYNC_PORT", "8000")),
+        port=int(os.getenv("SSYNC_PORT", "8042")),
         log_level=os.getenv("SSYNC_LOG_LEVEL", "info").lower(),
         access_log=False,  # Disable access logs for security
         server_header=False,  # Don't expose server info

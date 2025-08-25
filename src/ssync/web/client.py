@@ -18,7 +18,7 @@ class AuthenticatedSlurmApiClient:
     """API client with authentication support."""
 
     def __init__(
-        self, base_url: str = "http://localhost:8000", api_key: Optional[str] = None
+        self, base_url: str = "http://localhost:8042", api_key: Optional[str] = None
     ):
         self.base_url = base_url
         self.api_key = api_key or self._get_api_key()

@@ -15,7 +15,7 @@ logger = setup_logger(__name__, "DEBUG")
 class ApiClient:
     """Client for communicating with ssync web API."""
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8042"):
         self.base_url = base_url
         self.server_manager = ServerManager(base_url)
 
