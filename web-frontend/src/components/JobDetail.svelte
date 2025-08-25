@@ -5,6 +5,8 @@
   export let job: JobInfo;
   export let loadJobOutput: (jobId: string, hostname: string) => Promise<JobOutputResponse | { loading: true }>;
   export let onClose: () => void;
+  export let fullPage: boolean = false;
+  export let isLoading: boolean = false;
   
   let outputData: JobOutputResponse | null = null;
   let loadingOutput = false;
@@ -60,7 +62,7 @@
     scriptError = null;
     
     try {
-      const response = await api.get<JobScriptResponse>(`/jobs/${job.job_id}/script?host=${encodeURIComponent(job.hostname)}`);
+      const response = await api.get<JobScriptResponse>(`/api/jobs/${job.job_id}/script?host=${encodeURIComponent(job.hostname)}`);
       scriptData = response.data;
     } catch (error: unknown) {
       console.error('Error loading job script:', error);
@@ -126,11 +128,12 @@
   }
 </script>
 
-<div class="job-detail">
+<div class="job-detail" class:full-page={fullPage}>
   <div class="header">
     <div class="title-row">
       <div class="job-info">
         <div class="job-header">
+          {#if !fullPage}
           <button 
             class="back-btn" 
             on:click={onClose}
@@ -140,18 +143,28 @@
               <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
             </svg>
           </button>
+          {/if}
           <div class="job-details">
-            <h2>Job {job.job_id}</h2>
-            <div class="job-name">{job.name}</div>
+            {#if isLoading}
+              <h2 class="skeleton skeleton-text">Job ...</h2>
+              <div class="job-name skeleton skeleton-text">Loading job name...</div>
+            {:else}
+              <h2>Job {job.job_id}</h2>
+              <div class="job-name">{job.name}</div>
+            {/if}
           </div>
         </div>
       </div>
-      <span 
-        class="state-badge" 
-        style="background-color: {getStateColor(job.state)}"
-      >
-        {getStateLabel(job.state)}
-      </span>
+      {#if isLoading}
+        <span class="state-badge skeleton">...</span>
+      {:else}
+        <span 
+          class="state-badge" 
+          style="background-color: {getStateColor(job.state)}"
+        >
+          {getStateLabel(job.state)}
+        </span>
+      {/if}
     </div>
   </div>
   
@@ -473,6 +486,13 @@
     height: 100%;
     display: flex;
     flex-direction: column;
+  }
+
+  .job-detail.full-page {
+    border-radius: 0;
+    box-shadow: none;
+    height: 100%;
+    width: 100%;
   }
 
   @media (max-width: 768px) {
@@ -958,5 +978,30 @@
   
   .retry-output-btn:hover {
     background: #c82333;
+  }
+
+  /* Skeleton loading styles */
+  .skeleton {
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+  }
+
+  .skeleton-text {
+    border-radius: 4px;
+    display: inline-block;
+    min-width: 100px;
+    color: transparent !important;
+  }
+
+  @keyframes skeleton-loading {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
   }
 </style>

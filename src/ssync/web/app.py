@@ -221,6 +221,27 @@ async def api_info(authenticated: bool = Depends(verify_api_key)):
     }
 
 
+@app.get("/api/cache/stats")
+async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
+    """Get cache statistics including date range cache information."""
+    try:
+        stats = await _cache_middleware.get_cache_stats()
+
+        # Clean up expired entries while we're at it
+        _cache_middleware.cache.cleanup_expired_ranges()
+
+        return {
+            "status": "success",
+            "statistics": stats,
+            "message": "Cache statistics retrieved successfully",
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve cache statistics"
+        )
+
+
 @app.get("/api/hosts", response_model=List[HostInfoWeb])
 async def get_hosts(authenticated: bool = Depends(verify_api_key)):
     """Get list of configured SLURM hosts."""
@@ -302,9 +323,62 @@ async def get_job_status(
             if not slurm_hosts:
                 raise HTTPException(status_code=404, detail="Host not found")
 
+        # Get cache middleware
+        cache_middleware = get_cache_middleware()
+
         results = []
 
         for slurm_host in slurm_hosts:
+            hostname = slurm_host.host.hostname
+
+            # Check date range cache first if we have a single host and since parameter
+            if (
+                host and since and not job_id_list
+            ):  # Only use cache for date-range queries
+                # Build filters dict for cache key
+                cache_filters = {
+                    "user": user,
+                    "state": state,
+                    "active_only": active_only,
+                    "completed_only": completed_only,
+                }
+
+                # Check cache
+                cached_jobs = await cache_middleware.check_date_range_cache(
+                    hostname=hostname, filters=cache_filters, since=since
+                )
+
+                if cached_jobs is not None:
+                    # Apply search filter if provided
+                    web_jobs = cached_jobs
+                    if search:
+                        search_lower = search.lower()
+                        filtered_jobs = []
+                        for job in web_jobs:
+                            if search_lower in job.job_id.lower() or (
+                                job.name and search_lower in job.name.lower()
+                            ):
+                                filtered_jobs.append(job)
+                        web_jobs = filtered_jobs
+
+                    # Apply limit if specified
+                    if limit:
+                        web_jobs = web_jobs[:limit]
+
+                    response = JobStatusResponse(
+                        hostname=hostname,
+                        jobs=web_jobs,
+                        total_jobs=len(web_jobs),
+                        query_time=datetime.now(),
+                        cached=True,  # Mark as cached
+                    )
+                    results.append(response)
+                    logger.info(
+                        f"Served {len(web_jobs)} jobs from date range cache for {hostname}"
+                    )
+                    continue
+
+            # Cache miss or not a cacheable query - fetch from SLURM
             try:
                 jobs = manager.get_all_jobs(
                     slurm_host=slurm_host,
@@ -351,8 +425,20 @@ async def get_job_status(
                     )
                 )
 
-        # Cache the results
-        cached_results = await _cache_middleware.cache_job_status_response(results)
+        # Cache the results with date range info if applicable
+        if host and since and not job_id_list:
+            cache_filters = {
+                "user": user,
+                "state": state,
+                "active_only": active_only,
+                "completed_only": completed_only,
+            }
+            cached_results = await cache_middleware.cache_job_status_response(
+                results, hostname=host, filters=cache_filters, since=since
+            )
+        else:
+            cached_results = await cache_middleware.cache_job_status_response(results)
+
         return cached_results
 
     except HTTPException:

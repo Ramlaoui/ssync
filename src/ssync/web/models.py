@@ -214,6 +214,7 @@ class JobStatusResponse(BaseModel):
     jobs: List[JobInfoWeb]
     total_jobs: int
     query_time: datetime
+    cached: bool = False  # Indicates if the response was served from cache
 
 
 class FileMetadata(BaseModel):

@@ -7,7 +7,7 @@ import { writable, get } from 'svelte/store';
 
 // Store for API configuration
 export const apiConfig = writable({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL: import.meta.env.VITE_API_URL || '',
   apiKey: localStorage.getItem('ssync_api_key') || import.meta.env.VITE_API_KEY || '',
   authenticated: false,
   authError: null as string | null
@@ -62,7 +62,7 @@ apiConfig.subscribe(config => {
 export async function testConnection(): Promise<boolean> {
   try {
     // Test authentication directly using the API instance
-    const response = await apiInstance.get('/hosts');
+    const response = await apiInstance.get('/api/hosts');
     apiConfig.update(c => ({
       ...c,
       authenticated: true,

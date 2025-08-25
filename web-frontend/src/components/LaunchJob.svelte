@@ -78,7 +78,7 @@
   async function loadHosts(): Promise<void> {
     jobLaunchActions.setLoading(true);
     try {
-      const response = await api.get('/hosts');
+      const response = await api.get('/api/hosts');
       jobLaunchActions.setHosts(response.data);
 
       // Auto-select first host if none selected
@@ -139,7 +139,7 @@
       };
 
       const response = await api.post<LaunchJobResponse>(
-        '/jobs/launch',
+        '/api/jobs/launch',
         request,
       );
 

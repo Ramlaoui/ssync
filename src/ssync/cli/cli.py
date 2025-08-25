@@ -196,6 +196,10 @@ def submit_command(
 @click.option("--partition", help="SLURM partition")
 @click.option("--output", help="Output file path")
 @click.option("--error", help="Error file path")
+@click.option("--nodes", type=int, help="Number of nodes")
+@click.option("--ntasks-per-node", type=int, help="Number of tasks per node")
+@click.option("--gpus-per-node", type=int, help="Number of GPUs per node")
+@click.option("--gres", help="Generic resources (e.g., 'gpu:2')")
 @click.option("--constraint", help="Node constraints (e.g., gpu, bigmem)")
 @click.option("--account", help="SLURM account for billing")
 @click.option("--python-env", help="Python environment setup command")
@@ -206,6 +210,7 @@ def submit_command(
     "--include", multiple=True, help="Patterns to include (overrides .gitignore)"
 )
 @click.option("--no-gitignore", is_flag=True, help="Disable .gitignore usage")
+@click.option("--no-defaults", is_flag=True, help="Ignore per-host SLURM defaults")
 @click.argument("script_path", type=click.Path(exists=True, path_type=Path))
 @click.argument("source_dir", type=click.Path(exists=True, path_type=Path))
 @click.pass_context
@@ -219,12 +224,17 @@ def launch_command(
     partition,
     output,
     error,
+    nodes,
+    ntasks_per_node,
+    gpus_per_node,
+    gres,
     constraint,
     account,
     python_env,
     exclude,
     include,
     no_gitignore,
+    no_defaults,
     script_path,
     source_dir,
 ):
@@ -248,6 +258,10 @@ def launch_command(
         mem=mem,
         time=time,
         partition=partition,
+        nodes=nodes,
+        ntasks_per_node=ntasks_per_node,
+        gpus_per_node=gpus_per_node,
+        gres=gres,
         output=output,
         error=error,
         constraint=constraint,
@@ -256,6 +270,7 @@ def launch_command(
         exclude=list(exclude),
         include=list(include),
         no_gitignore=no_gitignore,
+        no_defaults=no_defaults,
     )
 
     if not success:

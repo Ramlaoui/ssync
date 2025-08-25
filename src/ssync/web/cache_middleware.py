@@ -27,13 +27,20 @@ class CacheMiddleware:
         self.cache = get_cache()
 
     async def cache_job_status_response(
-        self, responses: List[JobStatusResponse]
+        self,
+        responses: List[JobStatusResponse],
+        hostname: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
     ) -> List[JobStatusResponse]:
         """
         Cache job status responses and enhance with cached data.
 
         Args:
             responses: List of JobStatusResponse from SLURM queries
+            hostname: Optional hostname for date range caching
+            filters: Optional filters for date range caching
+            since: Optional since parameter for date range caching
 
         Returns:
             Enhanced responses with cached data when appropriate
@@ -42,22 +49,38 @@ class CacheMiddleware:
         current_job_ids = {}
 
         for response in responses:
-            hostname = response.hostname
+            response_hostname = response.hostname
             current_jobs = []
 
             # Cache current jobs
-            current_job_ids[hostname] = []
+            current_job_ids[response_hostname] = []
+            job_ids_for_range = []
+
             for job_web in response.jobs:
                 job_info = job_web.to_job_info()
-                current_job_ids[hostname].append(job_info.job_id)
+                current_job_ids[response_hostname].append(job_info.job_id)
+                job_ids_for_range.append(job_info.job_id)
 
                 # Cache the job data
                 self.cache.cache_job(job_info)
                 current_jobs.append(job_web)
 
+            # Cache date range query if applicable
+            if hostname and filters and since and response_hostname == hostname:
+                self.cache.cache_date_range_query(
+                    hostname=hostname,
+                    filters=filters,
+                    since=since,
+                    job_ids=job_ids_for_range,
+                    ttl_seconds=60,  # 60 second TTL for date range cache
+                )
+                logger.info(
+                    f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs"
+                )
+
             enhanced_responses.append(
                 JobStatusResponse(
-                    hostname=hostname,
+                    hostname=response_hostname,
                     jobs=current_jobs,
                     total_jobs=len(current_jobs),
                     query_time=response.query_time,
@@ -68,6 +91,40 @@ class CacheMiddleware:
         await self._verify_and_update_cache(current_job_ids)
 
         return enhanced_responses
+
+    async def check_date_range_cache(
+        self, hostname: str, filters: Dict[str, Any], since: str
+    ) -> Optional[List[JobInfoWeb]]:
+        """
+        Check if we have cached jobs for this date range query.
+
+        Args:
+            hostname: Hostname to query
+            filters: Query filters
+            since: Time range parameter
+
+        Returns:
+            List of JobInfoWeb if cache hit, None if cache miss
+        """
+        cached_job_ids = self.cache.check_date_range_cache(hostname, filters, since)
+
+        if cached_job_ids is None:
+            return None
+
+        # Retrieve full job info for cached IDs
+        cached_jobs = []
+        for job_id in cached_job_ids:
+            cached_job = self.cache.get_cached_job(job_id, hostname)
+            if cached_job:
+                cached_jobs.append(JobInfoWeb.from_job_info(cached_job.job_info))
+
+        if cached_jobs:
+            logger.info(
+                f"Date range cache HIT: returning {len(cached_jobs)} cached jobs for {hostname}"
+            )
+            return cached_jobs
+
+        return None
 
     async def get_job_with_cache_fallback(
         self, job_id: str, hostname: Optional[str] = None

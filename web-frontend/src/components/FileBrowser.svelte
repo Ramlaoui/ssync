@@ -38,7 +38,7 @@
     error = null;
 
     try {
-      const response = await api.get('/local/list', {
+      const response = await api.get('/api/local/list', {
         params: {
           path,
           limit: maxEntries,

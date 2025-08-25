@@ -4,6 +4,9 @@ from pathlib import Path
 
 from .manager import SlurmManager
 from .models.cluster import SlurmHost
+from .utils.logging import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class SyncManager:
@@ -161,7 +164,7 @@ class SyncManager:
             result = conn.local(" ".join(rsync_cmd), hide=False)
             return result.ok
         except Exception as e:
-            print(f"Failed to sync to {slurm_host.host.hostname}: {e}")
+            logger.warning(f"Failed to sync to {slurm_host.host.hostname}: {e}")
             return False
         finally:
             # Clean up temporary gitignore file

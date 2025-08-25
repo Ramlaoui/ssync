@@ -5,6 +5,7 @@ This module provides persistent caching for job information, scripts, and output
 to preserve data even when jobs are no longer queryable from SLURM.
 """
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -116,6 +117,21 @@ class JobDataCache:
                 )
             """)
 
+            # Create table for date range caching
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cached_job_ranges (
+                    cache_key TEXT PRIMARY KEY,
+                    hostname TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    filters_json TEXT NOT NULL,
+                    job_ids_json TEXT NOT NULL,
+                    cached_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    hit_count INTEGER DEFAULT 0
+                )
+            """)
+
             # Create indexes for common queries
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hostname ON cached_jobs(hostname)"
@@ -125,6 +141,14 @@ class JobDataCache:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_is_active ON cached_jobs(is_active)"
+            )
+
+            # Indexes for date range cache
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_range_hostname ON cached_job_ranges(hostname)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_range_expires ON cached_job_ranges(expires_at)"
             )
 
             conn.commit()
@@ -494,6 +518,164 @@ class JobDataCache:
 
             return deleted_count
 
+    def _generate_cache_key(self, hostname: str, filters: Dict[str, Any]) -> str:
+        """Generate a unique cache key for a query."""
+        # Create a deterministic string from filters
+        filter_str = json.dumps(filters, sort_keys=True)
+        key_source = f"{hostname}:{filter_str}"
+        return hashlib.sha256(key_source.encode()).hexdigest()[:16]
+
+    def _parse_since_to_dates(self, since: str) -> Tuple[datetime, datetime]:
+        """Parse 'since' parameter to date range."""
+        end_date = datetime.now()
+
+        # Parse the since format (e.g., "1d", "1w", "1m")
+        import re
+
+        match = re.match(r"^(\d+)([hdwm])$", since)
+        if not match:
+            # Default to 1 day if invalid format
+            start_date = end_date - timedelta(days=1)
+        else:
+            value = int(match.group(1))
+            unit = match.group(2)
+
+            if unit == "h":
+                start_date = end_date - timedelta(hours=value)
+            elif unit == "d":
+                start_date = end_date - timedelta(days=value)
+            elif unit == "w":
+                start_date = end_date - timedelta(weeks=value)
+            elif unit == "m":
+                start_date = end_date - timedelta(days=value * 30)
+            else:
+                start_date = end_date - timedelta(days=1)
+
+        return start_date, end_date
+
+    def check_date_range_cache(
+        self, hostname: str, filters: Dict[str, Any], since: Optional[str] = None
+    ) -> Optional[List[str]]:
+        """Check if we have cached job IDs for this date range query.
+
+        Returns:
+            List of job IDs if cache hit, None if cache miss
+        """
+        if not since:
+            return None
+
+        cache_key = self._generate_cache_key(hostname, filters)
+        requested_start, requested_end = self._parse_since_to_dates(since)
+
+        with self._get_connection() as conn:
+            # Look for cached ranges that cover the requested range
+            cursor = conn.execute(
+                """
+                SELECT job_ids_json, cached_at, hit_count
+                FROM cached_job_ranges
+                WHERE hostname = ?
+                  AND cache_key = ?
+                  AND start_date <= ?
+                  AND end_date >= ?
+                  AND expires_at > ?
+                ORDER BY cached_at DESC
+                LIMIT 1
+            """,
+                (
+                    hostname,
+                    cache_key,
+                    requested_start.isoformat(),
+                    requested_end.isoformat(),
+                    datetime.now().isoformat(),
+                ),
+            )
+
+            row = cursor.fetchone()
+            if row:
+                # Update hit count
+                conn.execute(
+                    """
+                    UPDATE cached_job_ranges
+                    SET hit_count = hit_count + 1
+                    WHERE cache_key = ?
+                """,
+                    (cache_key,),
+                )
+                conn.commit()
+
+                job_ids = json.loads(row["job_ids_json"])
+                logger.debug(
+                    f"Date range cache HIT for {hostname}: {len(job_ids)} jobs "
+                    f"(hit #{row['hit_count'] + 1})"
+                )
+                return job_ids
+
+        logger.debug(f"Date range cache MISS for {hostname} with filters: {filters}")
+        return None
+
+    def cache_date_range_query(
+        self,
+        hostname: str,
+        filters: Dict[str, Any],
+        since: str,
+        job_ids: List[str],
+        ttl_seconds: int = 60,
+    ):
+        """Cache the job IDs from a date range query."""
+        cache_key = self._generate_cache_key(hostname, filters)
+        start_date, end_date = self._parse_since_to_dates(since)
+
+        with self._get_connection() as conn:
+            now = datetime.now()
+            expires_at = now + timedelta(seconds=ttl_seconds)
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO cached_job_ranges
+                (cache_key, hostname, start_date, end_date, filters_json,
+                 job_ids_json, cached_at, expires_at, hit_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+                (
+                    cache_key,
+                    hostname,
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                    json.dumps(filters),
+                    json.dumps(job_ids),
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+            conn.commit()
+
+            logger.info(
+                f"Cached date range query for {hostname}: {len(job_ids)} jobs, "
+                f"TTL={ttl_seconds}s"
+            )
+
+    def cleanup_expired_ranges(self) -> int:
+        """Clean up expired date range cache entries.
+
+        Returns:
+            Number of entries cleaned up
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM cached_job_ranges
+                WHERE expires_at < ?
+            """,
+                (datetime.now().isoformat(),),
+            )
+
+            deleted = cursor.rowcount
+            if deleted > 0:
+                conn.commit()
+                logger.info(f"Cleaned up {deleted} expired date range cache entries")
+
+            return deleted
+
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         with self._get_connection() as conn:
@@ -527,6 +709,41 @@ class JobDataCache:
             )
             with_stdout = cursor.fetchone()["with_stdout"]
 
+            # Date range cache stats
+            cursor = conn.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_ranges,
+                    SUM(hit_count) as total_hits,
+                    AVG(hit_count) as avg_hits_per_range
+                FROM cached_job_ranges
+                WHERE expires_at > ?
+            """,
+                (datetime.now().isoformat(),),
+            )
+            range_stats = cursor.fetchone()
+
+            # Get top cached ranges by hit count
+            cursor = conn.execute(
+                """
+                SELECT hostname, filters_json, hit_count, cached_at
+                FROM cached_job_ranges
+                WHERE expires_at > ?
+                ORDER BY hit_count DESC
+                LIMIT 5
+            """,
+                (datetime.now().isoformat(),),
+            )
+            top_ranges = [
+                {
+                    "hostname": row["hostname"],
+                    "filters": json.loads(row["filters_json"]),
+                    "hits": row["hit_count"],
+                    "cached_at": row["cached_at"],
+                }
+                for row in cursor.fetchall()
+            ]
+
             return {
                 "total_jobs": total,
                 "active_jobs": active,
@@ -538,6 +755,12 @@ class JobDataCache:
                 "db_size_mb": self.db_path.stat().st_size / (1024 * 1024)
                 if self.db_path.exists()
                 else 0,
+                "date_range_cache": {
+                    "active_ranges": range_stats["total_ranges"] or 0,
+                    "total_hits": range_stats["total_hits"] or 0,
+                    "avg_hits_per_range": float(range_stats["avg_hits_per_range"] or 0),
+                    "top_ranges": top_ranges,
+                },
             }
 
     def verify_cached_jobs(

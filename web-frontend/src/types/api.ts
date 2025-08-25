@@ -74,6 +74,7 @@ export interface JobStatusResponse {
   jobs: JobInfo[];
   total_jobs: number;
   query_time: string;
+  cached?: boolean;  // Indicates if data was served from cache
 }
 
 export interface FileMetadata {

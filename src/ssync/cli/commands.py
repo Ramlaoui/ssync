@@ -233,31 +233,77 @@ class LaunchCommand(BaseCommand):
         exclude: List[str] = None,
         include: List[str] = None,
         no_gitignore: bool = False,
+        no_defaults: bool = False,
     ):
         """Execute launch command."""
         try:
             # Initialize SLURM manager
             slurm_manager = SlurmManager(self.slurm_hosts, use_ssh_config=True)
 
+            # Get the target host to access its defaults
+            try:
+                slurm_host = slurm_manager.get_host_by_name(host)
+            except ValueError as e:
+                click.echo(f"Error: {e}", err=True)
+                return False
+
             # Initialize launch manager
             launch_manager = LaunchManager(slurm_manager)
 
-            # Launch the job
-            slurm_params = SlurmParams(
-                job_name=job_name,
-                time_min=time,
-                cpus_per_task=cpus,
-                mem_gb=mem,
-                partition=partition,
-                output=output,
-                error=error,
-                constraint=constraint,
-                account=account,
-                nodes=nodes,
-                n_tasks_per_node=ntasks_per_node,
-                gpus_per_node=gpus_per_node,
-                gres=gres,
-            )
+            # Start with host defaults if available and not disabled
+            if not no_defaults and slurm_host.slurm_defaults:
+                defaults = slurm_host.slurm_defaults
+                # Create params starting with defaults
+                slurm_params = SlurmParams(
+                    job_name=job_name
+                    or (
+                        defaults.job_name_prefix + "_job"
+                        if defaults.job_name_prefix
+                        else None
+                    ),
+                    time_min=time
+                    if time is not None
+                    else (
+                        int(defaults.time)
+                        if defaults.time and defaults.time.isdigit()
+                        else None
+                    ),
+                    cpus_per_task=cpus if cpus is not None else defaults.cpus,
+                    mem_gb=mem if mem is not None else defaults.mem,
+                    partition=partition or defaults.partition,
+                    output=output or defaults.output_pattern,
+                    error=error or defaults.error_pattern,
+                    constraint=constraint or defaults.constraint,
+                    account=account or defaults.account,
+                    nodes=nodes if nodes is not None else defaults.nodes,
+                    n_tasks_per_node=ntasks_per_node
+                    if ntasks_per_node is not None
+                    else defaults.ntasks_per_node,
+                    gpus_per_node=gpus_per_node
+                    if gpus_per_node is not None
+                    else defaults.gpus_per_node,
+                    gres=gres or defaults.gres,
+                )
+                # Use default python_env if not provided
+                if not python_env and defaults.python_env:
+                    python_env = defaults.python_env
+            else:
+                # No defaults or explicitly disabled - use only CLI params
+                slurm_params = SlurmParams(
+                    job_name=job_name,
+                    time_min=time,
+                    cpus_per_task=cpus,
+                    mem_gb=mem,
+                    partition=partition,
+                    output=output,
+                    error=error,
+                    constraint=constraint,
+                    account=account,
+                    nodes=nodes,
+                    n_tasks_per_node=ntasks_per_node,
+                    gpus_per_node=gpus_per_node,
+                    gres=gres,
+                )
 
             job = launch_manager.launch_job(
                 script_path=script_path,
