@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import type { HostInfo } from '../types/api';
 
   const dispatch = createEventDispatcher<{
@@ -20,7 +20,6 @@
       gres: string;
       outputFile: string;
       errorFile: string;
-      pythonEnv: string;
     };
   }>();
 
@@ -41,7 +40,6 @@
   export let gres = '';
   export let outputFile = '';
   export let errorFile = '';
-  export let pythonEnv = '';
   export let loading = false;
 
   function onHostChanged(newHostName: string): void {
@@ -95,17 +93,18 @@
       gpusPerNode,
       gres,
       outputFile,
-      errorFile,
-      pythonEnv
+      errorFile
     });
   }
 
-  // React to changes
-  $: {
+  onMount(() => {
     dispatchChange();
-  }
+    onHostChanged(selectedHost);
+  });
 
-  $: onHostChanged(selectedHost);
+  
+
+  
 </script>
 
 <div class="job-config-form">
@@ -117,7 +116,7 @@
     </div>
     <div class="field">
       <label for="host">SLURM Host *</label>
-      <select id="host" bind:value={selectedHost} required disabled={loading} class="select-input">
+      <select id="host" bind:value={selectedHost} required disabled={loading} class="select-input" on:change={() => onHostChanged(selectedHost)}>
         <option value="">Select a host...</option>
         {#if loading}
           <option disabled>Loading hosts...</option>
@@ -145,6 +144,7 @@
         placeholder="/path/to/your/project"
         required
         class="text-input"
+        on:input={dispatchChange}
       />
       <div class="field-help">
         <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -164,18 +164,18 @@
     <div class="field-group">
       <div class="field">
         <label for="job-name">Job Name</label>
-        <input id="job-name" type="text" bind:value={jobName} placeholder="my-job" class="text-input" />
+        <input id="job-name" type="text" bind:value={jobName} placeholder="my-job" class="text-input" on:input={dispatchChange} />
       </div>
       <div class="field">
         <label for="partition">Partition</label>
-        <input id="partition" type="text" bind:value={partition} placeholder="gpu" class="text-input" />
+        <input id="partition" type="text" bind:value={partition} placeholder="gpu" class="text-input" on:input={dispatchChange} />
       </div>
     </div>
     
     <div class="field-group">
       <div class="field">
         <label for="constraint">Constraint</label>
-        <input id="constraint" type="text" bind:value={constraint} placeholder="gpu" class="text-input" />
+        <input id="constraint" type="text" bind:value={constraint} placeholder="gpu" class="text-input" on:input={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -185,7 +185,7 @@
       </div>
       <div class="field">
         <label for="account">Account</label>
-        <input id="account" type="text" bind:value={account} placeholder="project-123" class="text-input" />
+        <input id="account" type="text" bind:value={account} placeholder="project-123" class="text-input" on:input={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -213,20 +213,21 @@
           max="64"
           bind:value={cpus}
           class="slider"
+          on:input={dispatchChange}
         />
       </div>
       
       <div class="field">
-        <label>Memory</label>
+        <label for="memory">Memory</label>
         <div class="memory-control">
           <label class="checkbox-control">
-            <input type="checkbox" bind:checked={useMemory} />
+            <input type="checkbox" bind:checked={useMemory} on:change={dispatchChange} />
             <span>Specify memory limit</span>
           </label>
           {#if useMemory}
             <div class="memory-slider">
               <label for="memory">{formatMemoryLabel(memory)}</label>
-              <input id="memory" type="range" min="1" max="512" bind:value={memory} class="slider" />
+              <input id="memory" type="range" min="1" max="512" bind:value={memory} class="slider" on:input={dispatchChange} />
             </div>
           {/if}
         </div>
@@ -243,6 +244,7 @@
           max="16"
           bind:value={nodes}
           class="slider"
+          on:input={dispatchChange}
         />
       </div>
       
@@ -255,6 +257,7 @@
           max="128"
           bind:value={ntasksPerNode}
           class="slider"
+          on:input={dispatchChange}
         />
       </div>
     </div>
@@ -269,6 +272,7 @@
         step="5"
         bind:value={timeLimit}
         class="slider"
+        on:input={dispatchChange}
       />
     </div>
   </section>
@@ -290,12 +294,13 @@
           max="8"
           bind:value={gpusPerNode}
           class="slider"
+          on:input={dispatchChange}
         />
       </div>
       
       <div class="field">
         <label for="gres">Generic Resources</label>
-        <input id="gres" type="text" bind:value={gres} placeholder="gpu:tesla:2" class="text-input" />
+        <input id="gres" type="text" bind:value={gres} placeholder="gpu:tesla:2" class="text-input" on:input={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,1 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -322,6 +327,7 @@
           bind:value={outputFile}
           placeholder="job-%j.out"
           class="text-input"
+          on:input={dispatchChange}
         />
       </div>
       
@@ -333,26 +339,11 @@
           bind:value={errorFile}
           placeholder="job-%j.err"
           class="text-input"
+          on:input={dispatchChange}
         />
       </div>
     </div>
 
-    <div class="field">
-      <label for="python-env">Python Environment Setup</label>
-      <input
-        id="python-env"
-        type="text"
-        bind:value={pythonEnv}
-        placeholder="conda activate myenv"
-        class="text-input"
-      />
-      <div class="field-help">
-        <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
-        </svg>
-        Command to set up Python environment (e.g., conda activate, source venv/bin/activate)
-      </div>
-    </div>
   </section>
 </div>
 
@@ -477,6 +468,7 @@
     gap: 0.375rem;
     line-height: 1.4;
   }
+
 
   .info-icon {
     width: 14px;
@@ -603,6 +595,7 @@
     .field-help {
       font-size: 0.75rem;
     }
+
 
     .memory-control {
       gap: 0.5rem;

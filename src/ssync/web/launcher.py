@@ -1,0 +1,301 @@
+"""Simple launcher for ssync web interface (API + UI)."""
+
+import os
+import signal
+import subprocess
+import sys
+import time
+import webbrowser
+from pathlib import Path
+
+import click
+import requests
+
+
+def is_api_running(port: int = 8000) -> bool:
+    """Check if API is already running."""
+    try:
+        response = requests.get(f"http://localhost:{port}/health", timeout=1)
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
+def get_pid_file() -> Path:
+    """Get the PID file path."""
+    return Path.home() / ".config" / "ssync" / "ssync-web.pid"
+
+
+def save_pid(pid: int):
+    """Save the process PID."""
+    pid_file = get_pid_file()
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(pid))
+
+
+def get_saved_pid() -> int | None:
+    """Get the saved PID if it exists."""
+    pid_file = get_pid_file()
+    if pid_file.exists():
+        try:
+            return int(pid_file.read_text().strip())
+        except Exception:
+            return None
+    return None
+
+
+def is_process_running(pid: int) -> bool:
+    """Check if a process with given PID is running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def stop_server():
+    """Stop the running server."""
+    pid = get_saved_pid()
+    if pid and is_process_running(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print(f"✓ Stopped server (PID: {pid})")
+            get_pid_file().unlink(missing_ok=True)
+            return True
+        except Exception:
+            print(f"❌ Could not stop server (PID: {pid})")
+            return False
+    else:
+        get_pid_file().unlink(missing_ok=True)
+    return False
+
+
+def check_frontend_built() -> bool:
+    """Check if frontend is built."""
+    frontend_dist = Path(__file__).parent.parent.parent.parent / "web-frontend" / "dist"
+    return frontend_dist.exists() and (frontend_dist / "index.html").exists()
+
+
+def build_frontend() -> bool:
+    """Build the frontend if needed."""
+    frontend_dir = Path(__file__).parent.parent.parent.parent / "web-frontend"
+
+    # Check if npm is installed
+    try:
+        subprocess.run(["npm", "--version"], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("❌ npm is not installed. Please install Node.js and npm first.")
+        return False
+
+    print("Building frontend...")
+
+    # Install dependencies if needed
+    if not (frontend_dir / "node_modules").exists():
+        print("Installing frontend dependencies...")
+        result = subprocess.run(
+            ["npm", "install"], cwd=frontend_dir, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"Failed to install dependencies: {result.stderr}")
+            return False
+
+    # Build frontend
+    result = subprocess.run(
+        ["npm", "run", "build"], cwd=frontend_dir, capture_output=True, text=True
+    )
+
+    if result.returncode == 0:
+        print("✓ Frontend built successfully")
+        return True
+    else:
+        print(f"Failed to build frontend: {result.stderr}")
+        return False
+
+
+def start_server_background(port: int):
+    """Start the server in the background using nohup or direct detachment."""
+    # Method 1: Try using nohup if available (most Unix systems)
+    try:
+        subprocess.run(["which", "nohup"], capture_output=True, check=True)
+        # Use nohup to fully detach the process
+        log_file = Path.home() / ".config" / "ssync" / "ssync-web.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = f"nohup {sys.executable} -m uvicorn ssync.web.app:app --host 127.0.0.1 --port {port} > {log_file} 2>&1 &"
+        process = subprocess.Popen(
+            cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        # Get the actual uvicorn PID (not the shell PID)
+        time.sleep(1)
+        # Try to find the uvicorn process
+        result = subprocess.run(
+            f"pgrep -f 'uvicorn.*ssync.web.app.*{port}'",
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip():
+            pid = int(result.stdout.strip().split("\n")[0])
+            save_pid(pid)
+            return True
+    except Exception:
+        pass
+
+    # Method 2: Python subprocess with full detachment
+    try:
+        # Use Python to spawn the process
+        if sys.platform == "win32":
+            # Windows
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            DETACHED_PROCESS = 0x00000008
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "ssync.web.app:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            # Unix/Linux/Mac
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "ssync.web.app:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                preexec_fn=os.setpgrp,  # Fully detach from parent process group
+            )
+
+        save_pid(process.pid)
+        return True
+    except Exception as e:
+        print(f"Failed to start server: {e}")
+        return False
+
+
+@click.command()
+@click.option("--port", default=8000, help="Port to run on")
+@click.option("--stop", is_flag=True, help="Stop the running server")
+@click.option("--status", is_flag=True, help="Check server status")
+@click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
+@click.option("--no-browser", is_flag=True, help="Don't open browser")
+@click.option("--skip-build", is_flag=True, help="Skip frontend build check")
+def main(
+    port: int,
+    stop: bool,
+    status: bool,
+    foreground: bool,
+    no_browser: bool,
+    skip_build: bool,
+):
+    """Launch ssync web interface (API + UI in one server)."""
+
+    # Handle stop command
+    if stop:
+        if stop_server():
+            print("Server stopped.")
+        else:
+            print("No server running.")
+        return
+
+    # Handle status command
+    if status:
+        if is_api_running(port):
+            pid = get_saved_pid()
+            print(f"✓ ssync is running on port {port} (PID: {pid})")
+        else:
+            print(f"✗ ssync is not running on port {port}")
+        return
+
+    url = f"http://localhost:{port}"
+
+    # Check if already running
+    if is_api_running(port):
+        print(f"✓ ssync is already running at {url}")
+        pid = get_saved_pid()
+        if pid:
+            print(f"  PID: {pid}")
+        print("\nTo stop the server: ssync web --stop")
+        if not no_browser:
+            webbrowser.open(url)
+        return
+
+    # Check if frontend is built
+    if not skip_build and not check_frontend_built():
+        print("Frontend not built. Building now...")
+        if not build_frontend():
+            print("\n⚠️  Could not build frontend. API will run without UI.")
+            print("To build manually: cd web-frontend && npm install && npm run build")
+
+    # Start API server
+    print(f"Starting ssync on port {port}...")
+
+    if foreground:
+        # Run in foreground (useful for debugging)
+        print("Running in foreground mode. Press Ctrl+C to stop.")
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "ssync.web.app:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ]
+            )
+        except KeyboardInterrupt:
+            print("\nServer stopped.")
+    else:
+        # Run in background (default)
+        if start_server_background(port):
+            # Wait for server to start
+            started = False
+            for _ in range(20):
+                time.sleep(0.5)
+                if is_api_running(port):
+                    started = True
+                    break
+
+            if started:
+                pid = get_saved_pid()
+                print(f"✓ ssync is running at {url}")
+                if pid:
+                    print(f"  PID: {pid}")
+                print("\nThe server is running in the background.")
+                print("To stop it: ssync web --stop")
+                print("To check status: ssync web --status")
+
+                # Open browser
+                if not no_browser:
+                    webbrowser.open(url)
+            else:
+                print("❌ Failed to start server")
+                stop_server()
+        else:
+            print("❌ Failed to launch server process")
+
+
+if __name__ == "__main__":
+    main()

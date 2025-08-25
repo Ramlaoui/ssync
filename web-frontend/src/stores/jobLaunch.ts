@@ -1,4 +1,4 @@
-import { writable, derived, get } from 'svelte/store';
+import { derived, get, writable } from 'svelte/store';
 import type { HostInfo } from '../types/api';
 
 // Types for our store
@@ -6,13 +6,13 @@ export interface JobLaunchConfig {
   // Host and directory
   selectedHost: string;
   sourceDir: string;
-  
+
   // Script configuration
   scriptSource: 'editor' | 'local' | 'upload';
   scriptContent: string;
   localScriptPath: string;
   uploadedScriptName: string;
-  
+
   // SLURM parameters
   jobName: string;
   partition: string;
@@ -28,8 +28,7 @@ export interface JobLaunchConfig {
   gres: string;
   outputFile: string;
   errorFile: string;
-  pythonEnv: string;
-  
+
   // Sync settings
   excludePatterns: string[];
   includePatterns: string[];
@@ -45,12 +44,13 @@ export interface JobLaunchState {
   success: string | null;
 }
 
+
 // Initial state
 const initialConfig: JobLaunchConfig = {
   selectedHost: '',
   sourceDir: '',
   scriptSource: 'editor',
-  scriptContent: '#!/bin/bash\n\n# Your script here\necho "Hello, SLURM!"',
+  scriptContent: '#!/bin/bash\n\n#LOGIN_SETUP_BEGIN\n# Environment setup commands (run on login node)\n# Example: conda activate myenv\n# Example: pip install -r requirements.txt\n#LOGIN_SETUP_END\n\n# Main job commands (run on compute node)\necho "Job started on $(hostname)"\necho "Hello from ssync!"\n',
   localScriptPath: '',
   uploadedScriptName: '',
   jobName: '',
@@ -67,7 +67,6 @@ const initialConfig: JobLaunchConfig = {
   gres: '',
   outputFile: '',
   errorFile: '',
-  pythonEnv: '',
   excludePatterns: ['*.log', '*.tmp', '__pycache__/'],
   includePatterns: [],
   noGitignore: false
@@ -82,207 +81,217 @@ const initialState: JobLaunchState = {
   success: null
 };
 
-// Create the main store
-export const jobLaunchStore = writable<JobLaunchState>(initialState);
+// Create a single store
+const { subscribe, update, set } = writable<JobLaunchState>(initialState);
 
-// Individual config stores for easier component binding
-export const config = writable<JobLaunchConfig>(initialConfig);
-export const hosts = writable<HostInfo[]>([]);
-export const loading = writable<boolean>(false);
-export const launching = writable<boolean>(false);
-export const error = writable<string | null>(null);
-export const success = writable<string | null>(null);
-
-// Sync individual stores with main store
-config.subscribe(configValue => {
-  jobLaunchStore.update(state => ({ ...state, config: configValue }));
-});
-
-hosts.subscribe(hostsValue => {
-  jobLaunchStore.update(state => ({ ...state, hosts: hostsValue }));
-});
-
-loading.subscribe(loadingValue => {
-  jobLaunchStore.update(state => ({ ...state, loading: loadingValue }));
-});
-
-launching.subscribe(launchingValue => {
-  jobLaunchStore.update(state => ({ ...state, launching: launchingValue }));
-});
-
-error.subscribe(errorValue => {
-  jobLaunchStore.update(state => ({ ...state, error: errorValue }));
-});
-
-success.subscribe(successValue => {
-  jobLaunchStore.update(state => ({ ...state, success: successValue }));
-});
+// Derived stores for individual state slices for easier component binding
+export const config = derived({ subscribe }, $state => $state.config);
+export const hosts = derived({ subscribe }, $state => $state.hosts);
+export const loading = derived({ subscribe }, $state => $state.loading);
+export const launching = derived({ subscribe }, $state => $state.launching);
+export const error = derived({ subscribe }, $state => $state.error);
+export const success = derived({ subscribe }, $state => $state.success);
 
 // Derived store for generated SLURM script
-export const generatedScript = derived(
-  config,
-  ($config) => generateSlurmScript($config)
-);
+export const generatedScript = derived(config, $config => generateSlurmScript($config));
+console.log(generatedScript);
+
+// Helper function to get validation details
+function getValidationDetails(config: JobLaunchConfig) {
+  const missing: string[] = [];
+  const hasHost = config.selectedHost && config.selectedHost.trim();
+  const hasSourceDir = config.sourceDir && config.sourceDir.trim();
+  const hasScript = 
+    (config.scriptSource === 'editor' && config.scriptContent.trim()) ||
+    (config.scriptSource === 'local' && config.localScriptPath.trim()) ||
+    (config.scriptSource === 'upload' && config.uploadedScriptName);
+
+  if (!hasHost) missing.push('Select a host');
+  if (!hasSourceDir) missing.push('Select source directory');
+  if (!hasScript) {
+    if (config.scriptSource === 'editor') missing.push('Add script content');
+    else if (config.scriptSource === 'local') missing.push('Select local script file');
+    else if (config.scriptSource === 'upload') missing.push('Upload script file');
+  }
+
+  return {
+    isValid: missing.length === 0,
+    missing,
+    missingText: missing.length > 0 ? `Missing: ${missing.join(', ')}` : 'Ready to launch'
+  };
+}
 
 // Derived store for validation
-export const isValid = derived(
-  config,
-  ($config) => {
-    return $config.selectedHost && $config.sourceDir && (
-      ($config.scriptSource === 'editor' && $config.scriptContent.trim()) ||
-      ($config.scriptSource === 'local' && $config.localScriptPath.trim()) ||
-      ($config.scriptSource === 'upload' && $config.uploadedScriptName)
-    );
-  }
-);
+export const isValid = derived(config, $config => {
+  return getValidationDetails($config).isValid;
+});
 
-// Action creators for updating specific parts of config
+// Derived store for validation details
+export const validationDetails = derived(config, $config => {
+  return getValidationDetails($config);
+});
+
+// Actions to update the store
 export const jobLaunchActions = {
-  // Host and directory actions
-  setSelectedHost: (host: string) => {
-    config.update(c => ({ ...c, selectedHost: host }));
-  },
-  
-  setSourceDir: (dir: string) => {
-    config.update(c => ({ ...c, sourceDir: dir }));
-  },
-  
-  // Script actions
-  setScriptConfig: (scriptConfig: { source: string; content: string; localPath?: string; uploadedName?: string }) => {
-    config.update(c => ({
-      ...c,
-      scriptSource: scriptConfig.source as 'editor' | 'local' | 'upload',
-      scriptContent: scriptConfig.content,
-      localScriptPath: scriptConfig.localPath || '',
-      uploadedScriptName: scriptConfig.uploadedName || ''
+  updateJobConfig: (newConfig: Partial<JobLaunchConfig>) => {
+    update(state => ({
+      ...state,
+      config: { ...state.config, ...newConfig }
     }));
   },
 
-  // Set script content directly (for manual edits)
+  setSelectedHost: (host: string) => {
+    update(state => ({
+      ...state,
+      config: { ...state.config, selectedHost: host }
+    }));
+  },
+
+  setSourceDir: (dir: string) => {
+    update(state => ({
+      ...state,
+      config: { ...state.config, sourceDir: dir }
+    }));
+  },
+
+  setScriptConfig: (scriptConfig: { source: string; content: string; localPath?: string; uploadedName?: string }) => {
+    update(state => ({
+      ...state,
+      config: {
+        ...state.config,
+        scriptSource: scriptConfig.source as 'editor' | 'local' | 'upload',
+        scriptContent: scriptConfig.content,
+        localScriptPath: scriptConfig.localPath || '',
+        uploadedScriptName: scriptConfig.uploadedName || ''
+      }
+    }));
+  },
+
   setScriptContent: (content: string) => {
-    config.update(c => ({
-      ...c,
-      scriptContent: content,
-      scriptSource: 'editor' // Switch to editor mode when manually editing
+    update(state => ({
+      ...state,
+      config: {
+        ...state.config,
+        scriptContent: content,
+        scriptSource: 'editor'
+      }
     }));
   },
-  
-  // Job config actions
-  updateJobConfig: (jobConfig: Partial<JobLaunchConfig>) => {
-    config.update(c => ({ ...c, ...jobConfig }));
-  },
-  
-  // Sync settings actions
+
   setSyncSettings: (syncSettings: { excludePatterns: string[]; includePatterns: string[]; noGitignore: boolean }) => {
-    config.update(c => ({
-      ...c,
-      excludePatterns: syncSettings.excludePatterns,
-      includePatterns: syncSettings.includePatterns,
-      noGitignore: syncSettings.noGitignore
+    update(state => ({
+      ...state,
+      config: { ...state.config, ...syncSettings }
     }));
   },
-  
-  // State management actions
-  setLoading: (isLoading: boolean) => loading.set(isLoading),
-  setLaunching: (isLaunching: boolean) => launching.set(isLaunching),
-  setError: (errorMessage: string | null) => error.set(errorMessage),
-  setSuccess: (successMessage: string | null) => success.set(successMessage),
-  
-  // Host management
-  setHosts: (hostList: HostInfo[]) => hosts.set(hostList),
-  
-  // Reset actions
-  resetState: () => {
-    jobLaunchStore.set(initialState);
-    config.set(initialConfig);
-    hosts.set([]);
-    loading.set(false);
-    launching.set(false);
-    error.set(null);
-    success.set(null);
-  },
-  
+
+  setLoading: (isLoading: boolean) => update(state => ({ ...state, loading: isLoading })),
+  setLaunching: (isLaunching: boolean) => update(state => ({ ...state, launching: isLaunching })),
+  setError: (errorMessage: string | null) => update(state => ({ ...state, error: errorMessage })),
+  setSuccess: (successMessage: string | null) => update(state => ({ ...state, success: successMessage })),
+
+  setHosts: (hostList: HostInfo[]) => update(state => ({ ...state, hosts: hostList })),
+
+  resetState: () => set(initialState),
+
   resetMessages: () => {
-    error.set(null);
-    success.set(null);
+    update(state => ({
+      ...state,
+      error: null,
+      success: null
+    }));
   },
-  
-  // Apply host defaults when host is selected
+
   applyHostDefaults: (hostname: string) => {
-    const currentHosts = get(hosts);
-    const host = currentHosts.find(h => h.hostname === hostname);
-    
+    const state = get({ subscribe });
+    const host = state.hosts.find(h => h.hostname === hostname);
+
     if (host && host.slurm_defaults) {
       const defaults = host.slurm_defaults;
-      config.update(c => {
-        const updates: Partial<JobLaunchConfig> = {};
-        
-        if (defaults.partition) updates.partition = defaults.partition;
-        if (defaults.account) updates.account = defaults.account;
-        if (defaults.constraint) updates.constraint = defaults.constraint;
-        if (defaults.cpus) updates.cpus = defaults.cpus;
-        if (defaults.time) {
-          const timeParts = defaults.time.split(':');
-          const hours = parseInt(timeParts[0], 10) || 0;
-          const minutes = parseInt(timeParts[1], 10) || 0;
-          updates.timeLimit = hours * 60 + minutes;
-        }
-        
-        return { ...c, ...updates };
-      });
+      const updates: Partial<JobLaunchConfig> = {};
+
+      if (defaults.partition) updates.partition = defaults.partition;
+      if (defaults.account) updates.account = defaults.account;
+      if (defaults.constraint) updates.constraint = defaults.constraint;
+      if (defaults.cpus) updates.cpus = defaults.cpus;
+      if (defaults.time) {
+        const timeParts = defaults.time.split(':');
+        const hours = parseInt(timeParts[0], 10) || 0;
+        const minutes = parseInt(timeParts[1], 10) || 0;
+        updates.timeLimit = hours * 60 + minutes;
+      }
+
+      update(s => ({
+        ...s,
+        config: { ...s.config, ...updates }
+      }));
     }
   }
 };
 
+
 // SLURM script generation function
 function generateSlurmScript(config: JobLaunchConfig): string {
+  if (!config) return '#!/bin/bash\n';
+
   let script = '#!/bin/bash\n\n';
-  
+
   // Header comment
-  script += `# SLURM Job Script - Generated ${new Date().toLocaleString()}\n`;
+  script += `# Generated by ssync\n`;
   script += `# Host: ${config.selectedHost || '[Please select a host]'}\n`;
   script += `# Source: ${config.sourceDir || '[Please select source directory]'}\n\n`;
-  
+
   // Add SLURM directives
-  script += '# SLURM Configuration\n';
   if (config.jobName) script += `#SBATCH --job-name=${config.jobName}\n`;
   if (config.partition) script += `#SBATCH --partition=${config.partition}\n`;
   if (config.constraint) script += `#SBATCH --constraint=${config.constraint}\n`;
   if (config.account) script += `#SBATCH --account=${config.account}\n`;
-  
+
   script += `#SBATCH --cpus-per-task=${config.cpus}\n`;
   if (config.useMemory) script += `#SBATCH --mem=${config.memory}GB\n`;
+
+  const hours = Math.floor(config.timeLimit / 60);
   const minutes = config.timeLimit % 60;
+  const hoursStr = hours < 10 ? '0' + hours : hours.toString();
   const minutesStr = minutes < 10 ? '0' + minutes : minutes.toString();
-  script += `#SBATCH --time=${Math.floor(config.timeLimit/60)}:${minutesStr}:00\n`;
+  script += `#SBATCH --time=${hoursStr}:${minutesStr}:00\n`;
+
   script += `#SBATCH --nodes=${config.nodes}\n`;
   script += `#SBATCH --ntasks-per-node=${config.ntasksPerNode}\n`;
-  
+
   if (config.gpusPerNode > 0) script += `#SBATCH --gpus-per-node=${config.gpusPerNode}\n`;
   if (config.gres) script += `#SBATCH --gres=${config.gres}\n`;
   if (config.outputFile) script += `#SBATCH --output=${config.outputFile}\n`;
   if (config.errorFile) script += `#SBATCH --error=${config.errorFile}\n`;
-  
-  if (config.pythonEnv) {
-    script += '\n# Python environment activation\n';
-    script += `${config.pythonEnv}\n`;
-  }
-  
-  script += '\n# Job execution\n';
-  script += 'cd "$SLURM_SUBMIT_DIR" || exit 1\n';
-  script += 'echo "=== Job Information ==="\n';
-  script += 'echo "Job ID: $SLURM_JOB_ID"\n';
-  script += 'echo "Node: $(hostname)"\n';
-  script += 'echo "Started: $(date)"\n';
-  script += 'echo "Working directory: $(pwd)"\n';
-  script += 'echo "======================"\n\n';
-  
+
   // Add user script content
-  script += '# User Script Content\n';
   if (config.scriptSource === 'editor') {
-    const lines = config.scriptContent.split('\n');
-    script += lines.map(line => line.startsWith('#') ? line : line).join('\n');
+    // Clean up the content to avoid duplicating comments and headers
+    let cleanContent = config.scriptContent;
+    
+    // Remove shebang if present (we already have one)
+    cleanContent = cleanContent.replace(/^#![^\n]*\n?/, '');
+    
+    // Remove duplicate "Generated by ssync" comments if they exist
+    cleanContent = cleanContent.replace(/^# Generated by ssync\n# Host:.*\n# Source:.*\n\n?/m, '');
+    
+    // Remove duplicate "Main job script" comment if it exists
+    cleanContent = cleanContent.replace(/^# Main job script \(runs on compute node\)\n/m, '');
+    
+    // Only add the comment if the content doesn't start with a SLURM directive or login setup
+    // and isn't empty
+    const trimmedContent = cleanContent.trim();
+    if (trimmedContent !== '' && 
+        !trimmedContent.startsWith('#SBATCH') && 
+        !trimmedContent.startsWith('#LOGIN_SETUP_BEGIN')) {
+      script += '\n# Main job script (runs on compute node)\n';
+    } else if (trimmedContent !== '') {
+      script += '\n';
+    }
+    
+    script += cleanContent;
   } else if (config.scriptSource === 'local') {
+    script += '\n# Main job script (runs on compute node)\n';
     script += `# Execute local script: ${config.localScriptPath}\n`;
     script += `if [ -f "./${config.localScriptPath}" ]; then\n`;
     script += `    chmod +x "./${config.localScriptPath}"\n`;
@@ -290,20 +299,14 @@ function generateSlurmScript(config: JobLaunchConfig): string {
     script += 'else\n';
     script += `    echo "ERROR: Script ${config.localScriptPath} not found!"\n`;
     script += '    exit 1\n';
-    script += 'fi';
+    script += 'fi\n';
   } else if (config.scriptSource === 'upload') {
     script += `# Uploaded script: ${config.uploadedScriptName}\n`;
-    script += config.scriptContent;
+    script += config.scriptContent.replace(/^#![^\n]*\n?/, ''); // Remove only the shebang line
   }
-  
-  script += '\n\n# Job completion\n';
-  script += 'echo "=== Job Completed ==="\n';
-  script += 'echo "Finished: $(date)"\n';
-  script += 'echo "Exit code: $?"\n';
-  script += 'echo "===================="\n';
-  
+
   return script;
 }
 
 // Export the store and actions for use in components
-export default jobLaunchStore;
+export default { subscribe, set, update };

@@ -1,3 +1,6 @@
+"""Authenticated API client for SLURM Manager."""
+
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -8,61 +11,134 @@ import requests
 from ..manager import JobInfo, JobState
 from ..utils.logging import setup_logger
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
-class SlurmApiClient:
-    def __init__(self, base_url: str = "http://localhost:8000"):
+class AuthenticatedSlurmApiClient:
+    """API client with authentication support."""
+
+    def __init__(
+        self, base_url: str = "http://localhost:8000", api_key: Optional[str] = None
+    ):
         self.base_url = base_url
+        self.api_key = api_key or self._get_api_key()
+        self.session = requests.Session()
+
+        # Set up authentication if we have an API key
+        if self.api_key:
+            self.session.headers.update({"X-API-Key": self.api_key})
+
+    def _get_api_key(self) -> Optional[str]:
+        """Get API key from various sources."""
+        # 1. Environment variable (highest priority)
+        api_key = os.getenv("SSYNC_API_KEY")
+        if api_key:
+            return api_key
+
+        # 2. Config file
+        try:
+            from ..utils.config import config as global_config
+
+            config_path = global_config.config_path
+            if config_path and config_path.exists():
+                import yaml
+
+                with open(config_path, "r") as f:
+                    config_data = yaml.safe_load(f)
+                    api_key = config_data.get("api_key")
+                    if api_key:
+                        return api_key
+        except Exception:
+            pass
+
+        # 3. API key file in config directory
+        try:
+            api_key_file = Path.home() / ".config" / "ssync" / ".api_key"
+            if api_key_file.exists():
+                api_key = api_key_file.read_text().strip()
+                if api_key:
+                    return api_key
+        except Exception:
+            pass
+
+        return None
 
     def is_running(self) -> bool:
         """Check if API is running."""
         try:
-            response = requests.get(f"{self.base_url}/", timeout=5)
+            # Health endpoint doesn't require auth
+            response = requests.get(f"{self.base_url}/health", timeout=5)
             return response.status_code == 200
         except requests.exceptions.RequestException:
             return False
 
-    def start_server(self, config_path: Path) -> bool:
+    def test_auth(self) -> bool:
+        """Test if authentication is working."""
+        try:
+            response = self.session.get(f"{self.base_url}/", timeout=5)
+            return response.status_code == 200
+        except requests.exceptions.RequestException as e:
+            if hasattr(e, "response") and e.response and e.response.status_code == 401:
+                logger.error("Authentication failed. Please check your API key.")
+            return False
+
+    def start_server(self, config_path: Path, secure: bool = True) -> bool:
         """Start API server if not running."""
         if self.is_running():
+            logger.info("API server is already running")
             return True
 
-        logger.debug("Starting ssync API server...")
+        logger.info("Starting ssync API server...")
         try:
+            # Choose which app to start
+            app_module = "ssync.web.app_secure" if secure else "ssync.web.app"
+
             # Start API server in background
             cmd = [
                 "uvicorn",
-                "src.ssync.web.app:app",
+                f"{app_module}:app",
                 "--host",
                 "127.0.0.1",
                 "--port",
                 "8000",
             ]
 
+            # Set up environment for secure mode
+            env = os.environ.copy()
+            if secure and not self.api_key:
+                # If no API key exists, run in open mode temporarily
+                env["SSYNC_REQUIRE_API_KEY"] = "false"
+                logger.warning(
+                    "Starting in open mode (no API key configured). Run 'ssync auth setup' to enable security."
+                )
+
             # Start in background, detached from terminal
             subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True,  # Detach from parent
-                cwd=Path(
-                    __file__
-                ).parent.parent.parent.parent,  # Set working directory to project root
+                start_new_session=True,
+                env=env,
+                cwd=Path(__file__).parent.parent.parent.parent,
             )
 
             # Wait for API to start
             for i in range(20):  # Wait up to 10 seconds
                 time.sleep(0.5)
                 if self.is_running():
-                    logger.debug("API server started successfully")
+                    logger.info("API server started successfully")
+
+                    # Test authentication if we have an API key
+                    if self.api_key and not self.test_auth():
+                        logger.warning("API is running but authentication failed")
+
                     return True
 
-            logger.debug("Failed to start API server")
+            logger.error("Failed to start API server")
             return False
 
         except Exception as e:
-            logger.debug(f"Failed to start API server: {e}")
+            logger.error(f"Failed to start API server: {e}")
             return False
 
     def get_jobs(
@@ -96,7 +172,15 @@ class SlurmApiClient:
         if completed_only:
             params["completed_only"] = "true"
 
-        response = requests.get(f"{self.base_url}/status", params=params, timeout=30)
+        response = self.session.get(
+            f"{self.base_url}/status", params=params, timeout=30
+        )
+
+        if response.status_code == 401:
+            raise Exception(
+                "Authentication failed. Please run 'ssync auth setup' to configure API key."
+            )
+
         response.raise_for_status()
 
         data = response.json()
@@ -137,3 +221,21 @@ class SlurmApiClient:
                 all_jobs.append(job)
 
         return all_jobs
+
+    def launch_job(self, request_data: dict) -> dict:
+        """Launch a job through the API."""
+        response = self.session.post(
+            f"{self.base_url}/jobs/launch", json=request_data, timeout=60
+        )
+
+        if response.status_code == 401:
+            raise Exception(
+                "Authentication failed. Please run 'ssync auth setup' to configure API key."
+            )
+
+        response.raise_for_status()
+        return response.json()
+
+
+# Backward compatibility - use authenticated client by default
+SlurmApiClient = AuthenticatedSlurmApiClient

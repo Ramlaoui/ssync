@@ -15,7 +15,6 @@ dependencies = [
 
 [project.scripts]
 ssync = "ssync.cli:main"
-ssync-web = "ssync.web.app:main"
 
 [build-system]
 requires = ["hatchling"]

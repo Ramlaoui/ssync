@@ -254,7 +254,7 @@ class LaunchJobRequest(BaseModel):
     """Request model for job launch endpoint."""
 
     script_content: str
-    source_dir: str
+    source_dir: Optional[str] = None  # Optional - only required if sync is enabled
     host: str
 
     # SLURM parameters
@@ -279,6 +279,7 @@ class LaunchJobRequest(BaseModel):
     exclude: List[str] = []
     include: List[str] = []
     no_gitignore: bool = False
+    force_sync: bool = False  # Override directory size validation
 
 
 class LaunchJobResponse(BaseModel):
@@ -288,3 +289,8 @@ class LaunchJobResponse(BaseModel):
     job_id: Optional[str] = None
     message: str
     hostname: str
+
+    # Directory validation information
+    directory_warning: Optional[str] = None
+    directory_stats: Optional[dict] = None
+    requires_confirmation: bool = False

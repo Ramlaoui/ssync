@@ -1,30 +1,33 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import axios, { type AxiosError } from 'axios';
+  import { api } from "../services/api";
+  import type { AxiosError } from "axios";
+  import { createEventDispatcher } from "svelte";
 
   const dispatch = createEventDispatcher<{
     pathSelected: string;
   }>();
 
-  export let sourceDir = '';
-  
+  export let sourceDir = "";
+  export let initialPath = "/";
+
   // Browser state
   let localEntries: { name: string; path: string; is_dir: boolean }[] = [];
-  let currentLocalPath = '/';
+  let currentLocalPath = "/";
   let maxEntries = 50;
   let showHiddenFiles = false;
   let showFilesInBrowser = false;
   let loading = false;
   let error: string | null = null;
 
-  const API_BASE = '/api';
+
+  console.log(localEntries, initialPath);
 
   // Load directory browser in background on mount
   setTimeout(() => {
-    loadLocalPath('/home').catch(() => {
-      // Fallback to root if /home doesn't exist
-      loadLocalPath('/').catch(() => {
-        console.warn('Could not load directory browser');
+    loadLocalPath(initialPath).catch(() => {
+      // Fallback to root if initialPath doesn't exist
+      loadLocalPath("/").catch(() => {
+        console.warn("Could not load directory browser");
       });
     });
   }, 100);
@@ -33,19 +36,19 @@
   async function loadLocalPath(path: string): Promise<void> {
     loading = true;
     error = null;
-    
+
     try {
-      const response = await axios.get(`${API_BASE}/local/list`, { 
-        params: { 
+      const response = await api.get('/local/list', {
+        params: {
           path,
           limit: maxEntries,
           show_hidden: showHiddenFiles,
-          dirs_only: !showFilesInBrowser
-        } 
+          dirs_only: !showFilesInBrowser,
+        },
       });
       localEntries = response.data.entries;
       currentLocalPath = response.data.path;
-      
+
       // Show warning if we hit the limit (as info, not error)
       if (localEntries.length >= maxEntries) {
         console.log(`Directory listing limited to ${maxEntries} entries.`);
@@ -61,24 +64,25 @@
   function selectCurrentLocalPath(): void {
     if (currentLocalPath) {
       sourceDir = currentLocalPath;
-      dispatch('pathSelected', currentLocalPath);
+      dispatch("pathSelected", currentLocalPath);
     }
   }
 
   function navigateUp(): void {
-    if (currentLocalPath && currentLocalPath !== '/') {
-      const parentPath = currentLocalPath.split('/').slice(0, -1).join('/') || '/';
+    if (currentLocalPath && currentLocalPath !== "/") {
+      const parentPath =
+        currentLocalPath.split("/").slice(0, -1).join("/") || "/";
       loadLocalPath(parentPath);
     }
   }
 
   function goToHome(): void {
-    const homePath = '/home';
+    const homePath = "/home";
     loadLocalPath(homePath);
   }
 
   function goToRoot(): void {
-    loadLocalPath('/');
+    loadLocalPath("/");
   }
 
   function handleDirectoryClick(entryPath: string): void {
@@ -96,24 +100,48 @@
   <div class="browser-nav">
     <button type="button" on:click={goToRoot} class="nav-btn">Root</button>
     <button type="button" on:click={goToHome} class="nav-btn">Home</button>
-    <button type="button" on:click={navigateUp} disabled={currentLocalPath === '/'} class="nav-btn">Up</button>
-    <button type="button" on:click={() => loadLocalPath(currentLocalPath)} disabled={!currentLocalPath} class="nav-btn">Refresh</button>
+    <button
+      type="button"
+      on:click={navigateUp}
+      disabled={currentLocalPath === "/"}
+      class="nav-btn">Up</button
+    >
+    <button
+      type="button"
+      on:click={() => loadLocalPath(currentLocalPath)}
+      disabled={!currentLocalPath}
+      class="nav-btn">Refresh</button
+    >
   </div>
 
   <div class="browser-path">
-    <strong>Current:</strong> {currentLocalPath || '/'}
-    <button type="button" on:click={selectCurrentLocalPath} disabled={!currentLocalPath} class="select-btn">
+    <strong>Current:</strong>
+    {currentLocalPath || "/"}
+    <button
+      type="button"
+      on:click={selectCurrentLocalPath}
+      disabled={!currentLocalPath}
+      class="select-btn"
+    >
       Select This Directory
     </button>
   </div>
 
   <div class="browser-options">
     <label class="checkbox-label">
-      <input type="checkbox" bind:checked={showHiddenFiles} on:change={handleOptionsChange} />
+      <input
+        type="checkbox"
+        bind:checked={showHiddenFiles}
+        on:change={handleOptionsChange}
+      />
       Show hidden files
     </label>
     <label class="checkbox-label">
-      <input type="checkbox" bind:checked={showFilesInBrowser} on:change={handleOptionsChange} />
+      <input
+        type="checkbox"
+        bind:checked={showFilesInBrowser}
+        on:change={handleOptionsChange}
+      />
       Show files (directories only by default)
     </label>
     <div class="limit-info">Showing max {maxEntries} entries</div>
@@ -122,7 +150,11 @@
   {#if error}
     <div class="browser-error">
       <span>{error}</span>
-      <button type="button" on:click={() => loadLocalPath(currentLocalPath)} class="retry-btn">Retry</button>
+      <button
+        type="button"
+        on:click={() => loadLocalPath(currentLocalPath)}
+        class="retry-btn">Retry</button
+      >
     </div>
   {/if}
 
@@ -134,18 +166,30 @@
       </li>
     {:else if localEntries && localEntries.length > 0}
       {#each localEntries as entry}
-        <li class="browser-entry" class:dir={entry.is_dir} class:file={!entry.is_dir}>
+        <li
+          class="browser-entry"
+          class:dir={entry.is_dir}
+          class:file={!entry.is_dir}
+        >
           {#if entry.is_dir}
-            <button type="button" class="dir-button" on:click={() => handleDirectoryClick(entry.path)}>
+            <button
+              type="button"
+              class="dir-button"
+              on:click={() => handleDirectoryClick(entry.path)}
+            >
               <svg class="folder-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"/>
+                <path
+                  d="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"
+                />
               </svg>
               {entry.name}/
             </button>
           {:else}
             <div class="file-entry">
               <svg class="file-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                <path
+                  d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"
+                />
               </svg>
               <span class="file-name">{entry.name}</span>
             </div>
@@ -155,7 +199,9 @@
     {:else}
       <li class="browser-entry empty-entry">
         <svg class="empty-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9Z"/>
+          <path
+            d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9Z"
+          />
         </svg>
         No entries found
       </li>
@@ -356,7 +402,9 @@
     color: #6c757d;
   }
 
-  .folder-icon, .file-icon, .empty-icon {
+  .folder-icon,
+  .file-icon,
+  .empty-icon {
     width: 16px;
     height: 16px;
     flex-shrink: 0;
@@ -406,8 +454,12 @@
   }
 
   @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Mobile responsive improvements */

@@ -19,55 +19,112 @@ class LaunchManager:
     def __init__(self, slurm_manager: SlurmManager):
         self.slurm_manager = slurm_manager
 
+    def _parse_structured_script(self, script_content: str) -> tuple[str, str]:
+        """
+        Parse structured script format to separate login node setup from compute script.
+
+        Format:
+        #!/bin/bash
+        #SBATCH directives...
+
+        #LOGIN_SETUP_BEGIN
+        login node commands here
+        #LOGIN_SETUP_END
+
+        compute node commands here
+
+        Args:
+            script_content: Raw script content
+
+        Returns:
+            Tuple of (login_setup_commands, clean_compute_script)
+        """
+        lines = script_content.split("\n")
+        login_setup_lines = []
+        compute_script_lines = []
+
+        in_login_setup = False
+        login_setup_found = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            if stripped == "#LOGIN_SETUP_BEGIN":
+                in_login_setup = True
+                login_setup_found = True
+                continue
+            elif stripped == "#LOGIN_SETUP_END":
+                in_login_setup = False
+                continue
+            elif in_login_setup:
+                # Remove the line from login setup section
+                login_setup_lines.append(line)
+            else:
+                # Keep all other lines in the compute script
+                compute_script_lines.append(line)
+
+        # Join the lines back together
+        login_setup_commands = "\n".join(login_setup_lines).strip()
+        clean_compute_script = "\n".join(compute_script_lines)
+
+        # If no login setup section found, return empty setup and full script
+        if not login_setup_found:
+            return "", script_content
+
+        logger.debug(
+            f"Parsed structured script: {len(login_setup_lines)} login setup lines, {len(compute_script_lines)} compute script lines"
+        )
+
+        return login_setup_commands, clean_compute_script
+
     def launch_job(
         self,
         script_path: str | Path,
-        source_dir: str | Path,
+        source_dir: Optional[str | Path],
         host: str,
         slurm_params: SlurmParams,
         python_env: Optional[str] = None,
         exclude: List[str] = None,
         include: List[str] = None,
         no_gitignore: bool = False,
+        sync_enabled: bool = True,
     ) -> Optional[Job]:
-        """Launch a job with sync and submission.
+        """Launch a job with optional sync and submission.
 
         Args:
             script_path: Path to the script to submit (.sh or .slurm)
-            source_dir: Source directory to sync to remote
+            source_dir: Source directory to sync to remote (optional, required only if sync_enabled=True)
             host: Target host (required)
-            job_name: SLURM job name
-            cpus: Number of CPUs per task
-            mem: Memory in GB
-            time: Time limit in minutes
-            n_tasks_per_node: Number of tasks per node
-            nodes: Number of nodes
-            gpus_per_node: Number of GPUs per node
-            gres: Generic resources (e.g., "gpu:1")
-            partition: SLURM partition
-            output: Output file path
-            error: Error file path
-            constraint: Node constraints (e.g., "gpu", "bigmem")
-            account: SLURM account for billing
+            slurm_params: SLURM parameters for job submission
             python_env: Python environment setup command
             exclude: Patterns to exclude from sync
             include: Patterns to include in sync
             no_gitignore: Disable .gitignore usage
+            sync_enabled: Whether to sync source directory (default: True)
 
         Returns:
             Job object if successful, None otherwise
         """
         # Validate inputs
         script_path = Path(script_path)
-        source_dir = Path(source_dir)
 
         if not script_path.exists():
             logger.error(f"Script not found: {script_path}")
             return None
 
-        if not source_dir.exists():
-            logger.error(f"Source directory not found: {source_dir}")
-            return None
+        # Validate source_dir only if sync is enabled
+        if sync_enabled:
+            if source_dir is None:
+                logger.error("Source directory is required when sync is enabled")
+                return None
+            source_dir = Path(source_dir)
+            if not source_dir.exists():
+                logger.error(f"Source directory not found: {source_dir}")
+                return None
+        else:
+            # Convert to Path for consistency, but it might be None
+            if source_dir is not None:
+                source_dir = Path(source_dir)
 
         # Get target host
         try:
@@ -79,34 +136,69 @@ class LaunchManager:
         logger.info(f"Launching job on {slurm_host.host.hostname}")
 
         try:
-            # Step 1: Sync source directory to remote
-            logger.info("Syncing source directory to remote host...")
-            sync_manager = SyncManager(
-                self.slurm_manager, source_dir, use_gitignore=not no_gitignore
+            # Determine working directory
+            if sync_enabled and source_dir:
+                # Step 1: Sync source directory to remote
+                logger.info("Syncing source directory to remote host...")
+                sync_manager = SyncManager(
+                    self.slurm_manager, source_dir, use_gitignore=not no_gitignore
+                )
+
+                sync_success = sync_manager.sync_to_host(
+                    slurm_host, exclude=exclude, include_patterns=include
+                )
+
+                if not sync_success:
+                    logger.error("Failed to sync source directory")
+                    return None
+
+                logger.info("Sync completed successfully")
+
+                # Use synced directory as working directory
+                remote_work_dir = Path(slurm_host.work_dir) / source_dir.name
+            else:
+                # No sync - use host's work directory directly
+                logger.info("Skipping sync - submitting job in host work directory")
+                remote_work_dir = Path(slurm_host.work_dir)
+
+            # Step 2: Parse structured script format
+            logger.info("Parsing script for login node setup and compute commands...")
+
+            # Read and parse the script content
+            with open(script_path, "r") as f:
+                original_script_content = f.read()
+
+            login_setup_commands, clean_compute_script = self._parse_structured_script(
+                original_script_content
             )
 
-            sync_success = sync_manager.sync_to_host(
-                slurm_host, exclude=exclude, include_patterns=include
-            )
+            # Combine with legacy python_env parameter if provided
+            if python_env:
+                if login_setup_commands:
+                    logger.info(
+                        "Combining structured script login setup with python_env parameter"
+                    )
+                    login_setup_commands = f"{login_setup_commands}\n{python_env}"
+                else:
+                    login_setup_commands = python_env
 
-            if not sync_success:
-                logger.error("Failed to sync source directory")
-                return None
+            # Step 3: Prepare clean compute script for submission
+            logger.info("Preparing clean compute script for SLURM submission...")
 
-            logger.info("Sync completed successfully")
-
-            # Step 2: Prepare script for submission
-            logger.info("Preparing script for SLURM submission...")
-
-            # Create remote script directory in work_dir
-            remote_work_dir = Path(slurm_host.work_dir) / source_dir.name
+            # Create remote script directory
             remote_script_dir = remote_work_dir / "scripts"
 
-            # Process script locally first to determine parameters
+            # Create temporary clean script file for processing
             temp_dir = Path("/tmp/slurm_launch")
+            temp_dir.mkdir(exist_ok=True)
+            clean_script_path = temp_dir / f"clean_{script_path.name}"
 
+            with open(clean_script_path, "w") as f:
+                f.write(clean_compute_script)
+
+            # Process the clean compute script
             prepared_script = ScriptProcessor.prepare_script(
-                script_path, temp_dir, params=slurm_params
+                clean_script_path, temp_dir, params=slurm_params
             )
 
             # Upload prepared script to remote
@@ -126,20 +218,38 @@ class LaunchManager:
 
             logger.info(f"Script uploaded to {remote_script_path}")
 
-            # Step 3: Add Python environment setup if specified
-            if python_env:
-                # Prepend python environment setup to the script
-                env_setup = f"# Python environment setup\n{python_env}\n\n"
-                conn.run(f'sed -i "1a\\{env_setup}" {remote_script_path}')
+            # Step 4: Execute login node setup commands if specified
+            if login_setup_commands:
+                logger.info("Executing login node setup commands...")
+                logger.debug(f"Login setup commands:\n{login_setup_commands}")
+                try:
+                    # Change to the target work directory first to ensure proper context
+                    with conn.cd(remote_work_dir):
+                        # Execute login node setup commands
+                        setup_result = conn.run(login_setup_commands, warn=True)
 
-            # Step 4: Submit job to SLURM
+                        if setup_result.ok:
+                            logger.info("Login node setup completed successfully")
+                            logger.debug(f"Setup output: {setup_result.stdout}")
+                        else:
+                            logger.warning("Login node setup completed with warnings")
+                            logger.warning(f"Setup stderr: {setup_result.stderr}")
+
+                except Exception as e:
+                    logger.error(f"Login node setup failed: {e}")
+                    # Continue with job submission even if setup fails
+                    # The user can troubleshoot this based on the error message
+
+            # Step 5: Submit job to SLURM
             logger.info("Submitting job to SLURM...")
 
-            # slurm_params was created earlier and can be reused for submission
+            # Change to the correct working directory before submitting
+            logger.info(f"Changing to working directory: {remote_work_dir}")
+            conn.run(f"cd {remote_work_dir}")
 
-            # Submit the job
-            job = self.slurm_manager.submit_script(
-                slurm_host, params=slurm_params, remote_script_path=remote_script_path
+            # Submit the job from the correct working directory
+            job = self._submit_script_in_workdir(
+                slurm_host, slurm_params, remote_script_path, remote_work_dir
             )
 
             if job:
@@ -154,7 +264,92 @@ class LaunchManager:
             return None
         finally:
             # Clean up temporary files
-            if "temp_dir" in locals() and temp_dir.exists():
-                import shutil
+            try:
+                if "clean_script_path" in locals() and clean_script_path.exists():
+                    clean_script_path.unlink()
+                    logger.debug("Cleaned up temporary clean script file")
+            except Exception as e:
+                logger.debug(f"Could not clean up temporary file: {e}")
 
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            try:
+                if "temp_dir" in locals() and temp_dir.exists():
+                    import shutil
+
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.debug("Cleaned up temporary directory")
+            except Exception as e:
+                logger.debug(f"Could not clean up temporary directory: {e}")
+
+    def _submit_script_in_workdir(
+        self,
+        slurm_host,
+        slurm_params: SlurmParams,
+        remote_script_path: str,
+        work_dir: Path,
+    ) -> Optional[Job]:
+        """Submit a script to SLURM from a specific working directory.
+
+        Args:
+            slurm_host: The SLURM host to submit to
+            slurm_params: SLURM parameters for the job
+            remote_script_path: Path to the script on the remote host
+            work_dir: Working directory to run sbatch from
+
+        Returns:
+            Job object if successful, None otherwise
+        """
+        import re
+
+        conn = self.slurm_manager._get_connection(slurm_host.host)
+
+        try:
+            # Build sbatch command (similar to SlurmManager.submit_script)
+            cmd = ["sbatch"]
+
+            if slurm_params.job_name:
+                cmd.append(f"--job-name={slurm_params.job_name}")
+            if slurm_params.time_min:
+                cmd.append(f"--time={slurm_params.time_min}")
+            if slurm_params.cpus_per_task:
+                cmd.append(f"--cpus-per-task={slurm_params.cpus_per_task}")
+            if slurm_params.mem_gb:
+                cmd.append(f"--mem={slurm_params.mem_gb}G")
+            if slurm_params.partition:
+                cmd.append(f"--partition={slurm_params.partition}")
+            if slurm_params.output:
+                cmd.append(f"--output={slurm_params.output}")
+            if slurm_params.error:
+                cmd.append(f"--error={slurm_params.error}")
+            if slurm_params.constraint:
+                cmd.append(f"--constraint={slurm_params.constraint}")
+            if slurm_params.account:
+                cmd.append(f"--account={slurm_params.account}")
+            if slurm_params.nodes:
+                cmd.append(f"--nodes={slurm_params.nodes}")
+            if slurm_params.n_tasks_per_node:
+                cmd.append(f"--ntasks-per-node={slurm_params.n_tasks_per_node}")
+            if slurm_params.gpus_per_node:
+                cmd.append(f"--gpus-per-node={slurm_params.gpus_per_node}")
+            if slurm_params.gres:
+                cmd.append(f"--gres={slurm_params.gres}")
+
+            cmd.append(remote_script_path)
+
+            # Run sbatch from the specific working directory
+            full_cmd = f"cd {work_dir} && {' '.join(cmd)}"
+            logger.info(f"Running: {full_cmd}")
+
+            result = conn.run(full_cmd, hide=False)
+
+            # Parse job ID from output (same as SlurmManager.submit_script)
+            job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
+            if job_id_match:
+                job_id = job_id_match.group(1)
+                return Job(job_id, slurm_host, self.slurm_manager)
+            else:
+                logger.error(f"Could not parse job ID from: {result.stdout}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to submit job from {work_dir}: {e}")
+            return None

@@ -6,7 +6,6 @@ to preserve data even when jobs are no longer queryable from SLURM.
 """
 
 import json
-import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -151,14 +150,34 @@ class JobDataCache:
         """
         Cache job information and associated data.
 
+        IMPORTANT: This method preserves existing script/output content if not provided.
+        This ensures scripts cached at job launch time are not lost when job status is updated.
+
         Args:
             job_info: JobInfo object to cache
-            script_content: Optional script content
-            stdout_content: Optional stdout content
-            stderr_content: Optional stderr content
+            script_content: Optional script content (if None, preserves existing)
+            stdout_content: Optional stdout content (if None, preserves existing)
+            stderr_content: Optional stderr content (if None, preserves existing)
         """
         now = datetime.now()
         is_active = job_info.state in ["PD", "R"]  # Pending or Running
+
+        # Check if we have existing cached data to preserve
+        existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
+
+        # Preserve existing content if new content not provided
+        if existing_cached:
+            if script_content is None and existing_cached.script_content:
+                script_content = existing_cached.script_content
+                logger.debug(f"Preserving existing script for job {job_info.job_id}")
+            if stdout_content is None and existing_cached.stdout_content:
+                stdout_content = existing_cached.stdout_content
+            if stderr_content is None and existing_cached.stderr_content:
+                stderr_content = existing_cached.stderr_content
+            # Use original cached_at time if updating existing entry
+            cached_at = existing_cached.cached_at
+        else:
+            cached_at = now
 
         cached_data = CachedJobData(
             job_id=job_info.job_id,
@@ -167,7 +186,7 @@ class JobDataCache:
             script_content=script_content,
             stdout_content=stdout_content,
             stderr_content=stderr_content,
-            cached_at=now,
+            cached_at=cached_at,
             last_updated=now,
             is_active=is_active,
         )
@@ -343,6 +362,64 @@ class JobDataCache:
 
                 logger.debug(f"Updated outputs for job {job_id} on {hostname}")
 
+    def update_job_script(
+        self,
+        job_id: str,
+        hostname: str,
+        script_content: str,
+    ):
+        """
+        Update or set cached job script without replacing the entire entry.
+        Creates a minimal entry if the job doesn't exist in cache yet.
+
+        Args:
+            job_id: Job ID
+            hostname: Hostname
+            script_content: Script content to cache
+        """
+        with self._get_connection() as conn:
+            # Check if job exists in cache
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM cached_jobs WHERE job_id = ? AND hostname = ?",
+                (job_id, hostname),
+            )
+            exists = cursor.fetchone()["count"] > 0
+
+            if exists:
+                # Update existing entry
+                conn.execute(
+                    """
+                    UPDATE cached_jobs 
+                    SET script_content = ?, last_updated = ?
+                    WHERE job_id = ? AND hostname = ?
+                    """,
+                    (script_content, datetime.now().isoformat(), job_id, hostname),
+                )
+                logger.debug(f"Updated script for existing cached job {job_id}")
+            else:
+                # Create minimal entry with script
+                from .models.job import JobInfo, JobState
+
+                minimal_job_info = JobInfo(
+                    job_id=job_id,
+                    name=f"job_{job_id}",
+                    state=JobState.PENDING,
+                    hostname=hostname,
+                )
+
+                cached_data = CachedJobData(
+                    job_id=job_id,
+                    hostname=hostname,
+                    job_info=minimal_job_info,
+                    script_content=script_content,
+                    is_active=True,
+                )
+
+                self._store_cached_data(cached_data)
+                logger.debug(f"Created new cache entry with script for job {job_id}")
+
+            conn.commit()
+
     def mark_job_completed(self, job_id: str, hostname: str):
         """Mark a job as no longer active (completed/failed/cancelled)."""
         with self._get_connection() as conn:
@@ -375,6 +452,11 @@ class JobDataCache:
         Returns:
             Number of entries cleaned up
         """
+        # Import config to check script preservation settings
+        from .cache_config import get_cache_config
+
+        config = get_cache_config()
+
         if max_age_days is None:
             max_age_days = self.max_age_days
 
@@ -390,10 +472,16 @@ class JobDataCache:
             query = "DELETE FROM cached_jobs WHERE cached_at < ?"
             params = [cutoff_date.isoformat()]
 
-            # Preserve entries with scripts unless forced
-            if preserve_scripts and not force_cleanup:
+            # Always preserve scripts if configured (unless forced)
+            script_preservation = (
+                config.script_max_age_days == 0 or preserve_scripts
+            ) and not force_cleanup
+
+            if script_preservation:
                 query += ' AND (script_content IS NULL OR script_content = "")'
-                logger.info("Cleaning up old cache entries (preserving scripts)")
+                logger.info(
+                    "Cleaning up old cache entries (preserving all scripts indefinitely)"
+                )
             else:
                 logger.warning("Cleaning up old cache entries (including scripts!)")
 
@@ -580,19 +668,24 @@ def get_cache() -> JobDataCache:
 
     with _cache_lock:
         if _cache_instance is None:
-            cache_dir = os.getenv("SSYNC_CACHE_DIR")
-            max_age = int(
-                os.getenv("SSYNC_CACHE_MAX_AGE_DAYS", "365")
-            )  # Conservative default
+            # Use the centralized cache configuration
+            from .cache_config import get_cache_config
+
+            config = get_cache_config()
 
             _cache_instance = JobDataCache(
-                cache_dir=Path(cache_dir) if cache_dir else None, max_age_days=max_age
+                cache_dir=config.cache_dir, max_age_days=config.max_age_days
             )
 
             # Log cache strategy
-            if max_age == 0:
+            if config.is_preservation_mode():
                 logger.info("Cache initialized in PRESERVATION mode (never expires)")
             else:
-                logger.info(f"Cache initialized with {max_age} day retention policy")
+                logger.info(
+                    f"Cache initialized with {config.max_age_days} day retention policy"
+                )
+
+            if config.script_max_age_days == 0:
+                logger.info("Scripts will be preserved indefinitely")
 
         return _cache_instance

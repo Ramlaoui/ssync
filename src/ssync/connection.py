@@ -55,7 +55,7 @@ class ConnectionManager:
                 logger.debug(f"✗ Connection health check failed for {host_string}: {e}")
                 try:
                     self._connections[host_string].close()
-                except:
+                except Exception:
                     pass
                 del self._connections[host_string]
 
@@ -112,7 +112,7 @@ class ConnectionManager:
             if host_string in self._connections:
                 try:
                     self._connections[host_string].close()
-                except:
+                except Exception:
                     pass
                 del self._connections[host_string]
                 logger.debug(f"Removed stale connection to {host_string}")
@@ -146,7 +146,7 @@ class ConnectionManager:
         for host_string in unhealthy_connections:
             try:
                 self._connections[host_string].close()
-            except:
+            except Exception:
                 pass
             del self._connections[host_string]
             logger.debug(f"Removed unhealthy connection to {host_string}")

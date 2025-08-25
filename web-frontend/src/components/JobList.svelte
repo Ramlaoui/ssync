@@ -312,6 +312,7 @@
   .col.resources {
     align-items: flex-start;
     padding-top: 0.2rem;
+    overflow: visible;
   }
 
   .job-name {
@@ -351,6 +352,8 @@
     gap: 0.3rem;
     font-size: 0.75rem;
     line-height: 1.2;
+    white-space: nowrap;
+    overflow: visible;
   }
 
   .resource-label {
@@ -364,6 +367,9 @@
     color: #374151;
     font-weight: 600;
     font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: visible;
+    min-width: 0;
   }
 
   .no-resources {

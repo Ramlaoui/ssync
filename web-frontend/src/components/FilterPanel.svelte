@@ -4,8 +4,9 @@
   
   export let filters: JobFilters;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  export let hosts: HostInfo[]; // Available for future use
+    export let hosts: HostInfo[]; // Available for future use
   export let loading = false;
+  export let search = '';
   
   const dispatch = createEventDispatcher<{
     change: void;
@@ -25,6 +26,7 @@
     filters.state = '';
     filters.activeOnly = false;
     filters.completedOnly = false;
+    search = '';
     handleChange();
   }
 </script>
@@ -40,6 +42,18 @@
     >
       Clear
     </button>
+  </div>
+  
+  <div class="filter-group">
+    <label for="search">Search:</label>
+    <input 
+      id="search"
+      type="text" 
+      bind:value={search} 
+      on:input={handleChange}
+      placeholder="Job name or ID..."
+      disabled={loading}
+    />
   </div>
   
   <div class="filter-group">

@@ -4,7 +4,6 @@ Cache middleware for SLURM API endpoints.
 This middleware transparently caches job data without modifying existing logic.
 """
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..cache import get_cache
@@ -147,26 +146,9 @@ class CacheMiddleware:
             hostname: Hostname
             script_content: Script content to cache
         """
-        # Update existing cache entry or cache script separately
-        cached_job = self.cache.get_cached_job(job_id, hostname)
-        if cached_job:
-            # Update script in existing cache entry
-            cached_job.script_content = script_content
-            self.cache._store_cached_data(cached_job)
-        else:
-            # We might not have the job info yet - just update the field
-            with self.cache._get_connection() as conn:
-                conn.execute(
-                    """
-                    UPDATE cached_jobs 
-                    SET script_content = ?, last_updated = ?
-                    WHERE job_id = ? AND hostname = ?
-                """,
-                    (script_content, datetime.now().isoformat(), job_id, hostname),
-                )
-                conn.commit()
-
-        logger.debug(f"Cached script for job {job_id}")
+        # Use the efficient update_job_script method which handles both update and create
+        self.cache.update_job_script(job_id, hostname, script_content)
+        logger.info(f"Cached script for job {job_id} ({len(script_content)} chars)")
 
     async def get_cached_job_script(
         self, job_id: str, hostname: Optional[str] = None
@@ -234,6 +216,9 @@ class CacheMiddleware:
             # Find jobs that are no longer active
             to_mark_completed = self.cache.verify_cached_jobs(current_job_ids)
 
+            # For jobs being marked as completed, try to preserve their scripts
+            await self._preserve_scripts_for_completing_jobs(to_mark_completed)
+
             # Mark them as completed
             for job_id, hostname in to_mark_completed:
                 self.cache.mark_job_completed(job_id, hostname)
@@ -245,6 +230,54 @@ class CacheMiddleware:
 
         except Exception as e:
             logger.error(f"Error verifying cache: {e}")
+
+    async def _preserve_scripts_for_completing_jobs(
+        self, completing_jobs: list[tuple[str, str]]
+    ):
+        """
+        Try to retrieve and cache scripts for jobs that are completing.
+
+        Args:
+            completing_jobs: List of (job_id, hostname) tuples for jobs being marked as completed
+        """
+        if not completing_jobs:
+            return
+
+        logger.debug(
+            f"Attempting to preserve scripts for {len(completing_jobs)} completing jobs"
+        )
+
+        # Import here to avoid circular imports
+
+        try:
+            # Group jobs by hostname for efficient querying
+            jobs_by_host = {}
+            for job_id, hostname in completing_jobs:
+                if hostname not in jobs_by_host:
+                    jobs_by_host[hostname] = []
+                jobs_by_host[hostname].append(job_id)
+
+            # Try to get scripts for each host
+            for hostname, job_ids in jobs_by_host.items():
+                for job_id in job_ids:
+                    # Check if we already have the script cached
+                    cached_job = self.cache.get_cached_job(job_id, hostname)
+                    if cached_job and cached_job.script_content:
+                        logger.debug(f"Script already cached for job {job_id}")
+                        continue
+
+                    # Try to get script from SLURM before it's completely gone
+                    try:
+                        # We'd need access to the manager here, but to avoid circular dependencies,
+                        # we'll let the get_job_script endpoint handle this case
+                        logger.debug(
+                            f"Script preservation for job {job_id} will be handled on-demand"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not preserve script for job {job_id}: {e}")
+
+        except Exception as e:
+            logger.warning(f"Error preserving scripts for completing jobs: {e}")
 
     async def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

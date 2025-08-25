@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from ..utils.config import ConfigError, config
+from .auth import auth
 from .commands import LaunchCommand, StatusCommand, SubmitCommand, SyncCommand
 
 
@@ -259,6 +260,69 @@ def launch_command(
 
     if not success:
         ctx.exit(1)
+
+
+cli.add_command(auth)
+
+
+@cli.command(name="api")
+@click.option("--port", default=8000, help="Port to run the API on")
+@click.pass_context
+def api(ctx, port):
+    """Start the API server only (no UI)."""
+    import os
+
+    from ..web.app import main as api_main
+
+    # Set port environment variable if different from default
+    if port != 8000:
+        os.environ["SSYNC_PORT"] = str(port)
+
+    # Run the API
+    api_main()
+
+
+@cli.command(name="web")
+@click.option("--port", default=8000, help="Port to run on")
+@click.option("--stop", is_flag=True, help="Stop the running server")
+@click.option("--status", is_flag=True, help="Check server status")
+@click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
+@click.option("--no-browser", is_flag=True, help="Don't open browser")
+@click.option("--skip-build", is_flag=True, help="Skip frontend build check")
+@click.pass_context
+def web(ctx, port, stop, status, foreground, no_browser, skip_build):
+    """Launch the web interface (API + UI)."""
+    # Call the web launcher directly
+    # Create a mock context for the launcher since it expects click options
+    import sys
+
+    from ..web.launcher import main as web_launcher
+
+    original_argv = sys.argv
+    try:
+        # Build command line args for the launcher
+        args = []
+        if port != 8000:
+            args.extend(["--port", str(port)])
+        if stop:
+            args.append("--stop")
+        if status:
+            args.append("--status")
+        if foreground:
+            args.append("--foreground")
+        if no_browser:
+            args.append("--no-browser")
+        if skip_build:
+            args.append("--skip-build")
+
+        # Temporarily replace argv
+        sys.argv = ["ssync-web"] + args
+
+        # Call the launcher
+        web_launcher()
+    finally:
+        # Restore original argv
+        sys.argv = original_argv
 
 
 def main():

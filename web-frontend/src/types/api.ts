@@ -1,4 +1,4 @@
-// API Type definitions for SLURM Manager
+// API Type definitions for ssync
 
 export type JobState = 'PD' | 'R' | 'CD' | 'F' | 'CA' | 'TO' | 'UNKNOWN';
 
@@ -159,6 +159,7 @@ export interface LaunchJobRequest {
   exclude: string[];
   include: string[];
   no_gitignore: boolean;
+  force_sync?: boolean;
 }
 
 export interface LaunchJobResponse {
@@ -166,6 +167,16 @@ export interface LaunchJobResponse {
   job_id?: string;
   message: string;
   hostname: string;
+  
+  // Directory validation information
+  directory_warning?: string;
+  directory_stats?: {
+    file_count: number;
+    size_mb: number;
+    dangerous_path: boolean;
+    gitignore_applied?: boolean;
+  };
+  requires_confirmation?: boolean;
 }
 
 // API client types

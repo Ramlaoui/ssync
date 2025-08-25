@@ -1,10 +1,17 @@
+"""Secure version of the SLURM Manager API with enhanced security measures."""
+
 import os
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import config
 from ..manager import SlurmManager
@@ -22,56 +29,102 @@ from .models import (
     LaunchJobResponse,
     SlurmDefaultsWeb,
 )
+from .security import (
+    APIKeyManager,
+    InputSanitizer,
+    PathValidator,
+    RateLimiter,
+    ScriptValidator,
+    sanitize_error_message,
+)
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 app = FastAPI(
     title="SLURM Manager API",
-    description="Web API for managing SLURM jobs across multiple clusters",
-    version="1.0.0",
+    description="Secure Web API for managing SLURM jobs across multiple clusters",
+    version="2.0.0",
+    docs_url=None,  # Disable interactive docs in production
+    redoc_url=None,  # Disable ReDoc in production
 )
 
-# Configure CORS using environment variables (safe defaults)
-# SSYNC_ALLOWED_ORIGINS: comma-separated list, defaults to http://localhost:5173
-# SSYNC_ALLOW_CREDENTIALS: "true"/"1" to allow credentials (default: false)
-allowed_origins_env = os.getenv("SSYNC_ALLOWED_ORIGINS", "http://localhost:5173")
-allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
-allow_credentials = os.getenv("SSYNC_ALLOW_CREDENTIALS", "false").lower() in (
-    "1",
-    "true",
-    "yes",
+# Security Configuration
+ENABLE_DOCS = os.getenv("SSYNC_ENABLE_DOCS", "false").lower() == "true"
+if ENABLE_DOCS:
+    app.docs_url = "/docs"
+    app.redoc_url = "/redoc"
+
+# Trusted hosts middleware (prevent host header injection)
+TRUSTED_HOSTS = os.getenv("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1").split(",")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
+
+# Configure CORS with strict settings
+ALLOWED_ORIGINS = os.getenv("SSYNC_ALLOWED_ORIGINS", "").split(",")
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
+
+if ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_credentials=False,  # Disable credentials by default
+        allow_methods=["GET", "POST"],  # Only allow necessary methods
+        allow_headers=["X-API-Key", "Content-Type"],  # Restrict headers
+        max_age=3600,  # Cache preflight requests
+    )
+
+# Initialize security components
+rate_limiter = RateLimiter(
+    requests_per_minute=int(os.getenv("SSYNC_RATE_LIMIT_PER_MINUTE", "60")),
+    requests_per_hour=int(os.getenv("SSYNC_RATE_LIMIT_PER_HOUR", "1000")),
+    burst_size=int(os.getenv("SSYNC_BURST_SIZE", "10")),
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+api_key_manager = APIKeyManager()
 
-# Optional API key enforcement. If SSYNC_API_KEY is set in the environment,
-# require incoming requests to present that key as header `X-API-Key` or as
-# a Bearer token in `Authorization: Bearer <key>`.
-from fastapi.responses import JSONResponse
 
-SSYNC_API_KEY = os.getenv("SSYNC_API_KEY")
+# Rate limiting middleware
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for health checks
+        if request.url.path == "/health":
+            return await call_next(request)
 
-if SSYNC_API_KEY:
-
-    @app.middleware("http")
-    async def _verify_api_key_middleware(request: Request, call_next):
-        # Allow health checks or open endpoints if desired by path checks here.
-        key = request.headers.get("x-api-key")
-        if not key:
-            auth = request.headers.get("authorization")
-            if auth and auth.lower().startswith("bearer "):
-                key = auth.split(" ", 1)[1].strip()
-
-        if key != SSYNC_API_KEY:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        if not await rate_limiter.check_rate_limit(request):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Please try again later."},
+                headers={"Retry-After": "60"},
+            )
 
         return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
+
+# API Key Authentication - Optional by default for personal use
+# Set SSYNC_REQUIRE_API_KEY=true for production/shared deployments
+REQUIRE_API_KEY = os.getenv("SSYNC_REQUIRE_API_KEY", "false").lower() == "true"
+
+
+async def verify_api_key(request: Request):
+    """Verify API key for protected endpoints."""
+    if not REQUIRE_API_KEY:
+        return True
+
+    # Allow health endpoint without auth
+    if request.url.path == "/health":
+        return True
+
+    api_key = request.headers.get("x-api-key")
+    if not api_key:
+        raise HTTPException(
+            status_code=401, detail="API key required. Please provide X-API-Key header."
+        )
+
+    if not api_key_manager.validate_key(api_key):
+        raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+    return True
 
 
 # Global manager instance with connection pooling
@@ -81,6 +134,43 @@ _shutdown_event = threading.Event()
 
 # Global cache middleware
 _cache_middleware = get_cache_middleware()
+
+# Serve static frontend files if they exist
+frontend_dist = Path(__file__).parent.parent.parent.parent / "web-frontend" / "dist"
+if frontend_dist.exists():
+    # Mount static files for assets
+    app.mount(
+        "/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets"
+    )
+
+    # Serve index.html for root and any unmatched routes (for client-side routing)
+    @app.get("/", response_class=FileResponse)
+    async def serve_frontend():
+        """Serve the frontend application."""
+        return FileResponse(str(frontend_dist / "index.html"))
+
+    # Serve favicon
+    @app.get("/favicon.ico", response_class=FileResponse)
+    async def serve_favicon():
+        """Serve favicon."""
+        return FileResponse(str(frontend_dist / "favicon.ico"))
+
+    @app.get("/favicon.svg", response_class=FileResponse)
+    async def serve_favicon_svg():
+        """Serve SVG favicon."""
+        return FileResponse(str(frontend_dist / "favicon.svg"))
+else:
+    # If no frontend built, just return API info
+    @app.get("/")
+    async def root(authenticated: bool = Depends(verify_api_key)):
+        """API root endpoint."""
+        return {
+            "message": "SLURM Manager API",
+            "version": "2.0.0",
+            "security": "enhanced",
+            "documentation": "/docs" if ENABLE_DOCS else "disabled",
+            "frontend": "Not built. Run 'npm run build' in web-frontend directory.",
+        }
 
 
 def get_slurm_manager() -> SlurmManager:
@@ -114,239 +204,220 @@ def get_slurm_manager() -> SlurmManager:
     return _slurm_manager
 
 
-@app.get("/")
-async def root():
-    """API root endpoint."""
+@app.get("/health")
+async def health_check():
+    """Health check endpoint (no auth required)."""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+
+@app.get("/api/info")
+async def api_info(authenticated: bool = Depends(verify_api_key)):
+    """API info endpoint."""
     return {
         "message": "SLURM Manager API",
-        "version": "1.0.0",
-        "endpoints": [
-            "/hosts",
-            "/hosts/{hostname}/defaults",
-            "/status",
-            "/jobs/{job_id}",
-            "/jobs/{job_id}/output",
-            "/jobs/{job_id}/script",
-            "/jobs/launch",
-            "/connections/stats",
-            "/cache/stats",
-            "/cache/config",
-            "/cache/cleanup",
-            "/cache/export",
-        ],
+        "version": "2.0.0",
+        "security": "enhanced",
+        "documentation": "/docs" if ENABLE_DOCS else "disabled",
     }
 
 
-@app.get("/hosts", response_model=List[HostInfoWeb])
-async def get_hosts():
+@app.get("/api/hosts", response_model=List[HostInfoWeb])
+async def get_hosts(authenticated: bool = Depends(verify_api_key)):
     """Get list of configured SLURM hosts."""
-    manager = get_slurm_manager()
-    hosts = []
-    for slurm_host in manager.slurm_hosts:
-        slurm_defaults_web = None
-        if slurm_host.slurm_defaults:
-            slurm_defaults_web = SlurmDefaultsWeb(**slurm_host.slurm_defaults.__dict__)
-        hosts.append(
-            HostInfoWeb(
-                hostname=slurm_host.host.hostname,
-                work_dir=str(slurm_host.work_dir),
-                scratch_dir=str(slurm_host.scratch_dir),
-                slurm_defaults=slurm_defaults_web,
+    try:
+        manager = get_slurm_manager()
+        hosts = []
+        for slurm_host in manager.slurm_hosts:
+            slurm_defaults_web = None
+            if slurm_host.slurm_defaults:
+                slurm_defaults_web = SlurmDefaultsWeb(
+                    **slurm_host.slurm_defaults.__dict__
+                )
+
+            # Don't expose sensitive path information
+            hosts.append(
+                HostInfoWeb(
+                    hostname=slurm_host.host.hostname,
+                    work_dir="[CONFIGURED]",  # Don't expose actual paths
+                    scratch_dir="[CONFIGURED]",
+                    slurm_defaults=slurm_defaults_web,
+                )
             )
-        )
-    return hosts
+        return hosts
+    except Exception as e:
+        logger.error(f"Error getting hosts: {e}")
+        raise HTTPException(status_code=500, detail=sanitize_error_message(e))
 
 
-@app.get("/hosts/{hostname}/defaults", response_model=SlurmDefaultsWeb)
-async def get_host_defaults(hostname: str):
-    """Get SLURM default parameters for a specific host."""
-    manager = get_slurm_manager()
-
-    # Find the host
-    slurm_host = None
-    for host in manager.slurm_hosts:
-        if host.host.hostname == hostname:
-            slurm_host = host
-            break
-
-    if not slurm_host:
-        raise HTTPException(status_code=404, detail=f"Host '{hostname}' not found")
-
-    if not slurm_host.slurm_defaults:
-        # Return empty defaults if none configured
-        return SlurmDefaultsWeb()
-
-    # Convert to web model
-    return SlurmDefaultsWeb(**slurm_host.slurm_defaults.__dict__)
-
-
-@app.get("/status", response_model=List[JobStatusResponse])
+@app.get("/api/status", response_model=List[JobStatusResponse])
 async def get_job_status(
     request: Request,
     host: Optional[str] = Query(None, description="Specific host to query"),
     user: Optional[str] = Query(None, description="User to filter jobs for"),
     since: Optional[str] = Query(
-        None, description="Time range for completed jobs (e.g., 1h, 1d, 1w)"
+        None,
+        description="Time range for completed jobs",
+        regex="^[0-9]+[hdwm]$",  # Validate format
     ),
-    limit: Optional[int] = Query(None, description="Limit number of jobs returned"),
+    limit: Optional[int] = Query(
+        None,
+        description="Limit number of jobs returned",
+        ge=1,
+        le=1000,  # Enforce reasonable limits
+    ),
     job_ids: Optional[str] = Query(None, description="Comma-separated job IDs"),
     state: Optional[str] = Query(
-        None, description="Filter by job state (PD, R, CD, F, CA, TO)"
+        None,
+        description="Filter by job state",
+        regex="^(PD|R|CD|F|CA|TO)$",  # Validate state values
     ),
     active_only: bool = Query(False, description="Show only running/pending jobs"),
     completed_only: bool = Query(False, description="Show only completed jobs"),
+    search: Optional[str] = Query(None, description="Search for jobs by name or ID"),
+    authenticated: bool = Depends(verify_api_key),
 ):
     """Get job status across hosts."""
-    # Handle compact tokens like 'since1w' or 'limit20' which appear as keys with empty values
-    expected = (
-        "since",
-        "limit",
-        "host",
-        "user",
-        "state",
-        "job_ids",
-        "active_only",
-        "completed_only",
-    )
-    for k, v in request.query_params.items():
-        if k in expected:
-            # already parsed normally
-            continue
-        for prefix in expected:
-            if k.startswith(prefix) and (v == "" or v is None):
-                token_val = k[len(prefix) :]
-                if not token_val:
-                    continue
-                if prefix == "limit":
-                    try:
-                        limit = int(token_val)
-                    except Exception:
-                        pass
-                elif prefix in ("active_only", "completed_only"):
-                    if token_val.lower() in ("1", "true", "yes", "y"):
-                        if prefix == "active_only":
-                            active_only = True
-                        else:
-                            completed_only = True
-                elif prefix == "job_ids":
-                    job_ids = token_val
-                elif prefix == "since":
-                    since = token_val
-                elif prefix == "host":
-                    host = token_val
-                elif prefix == "user":
-                    user = token_val
-                elif prefix == "state":
-                    state = token_val
+    try:
+        # Sanitize inputs
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
+        if user:
+            user = InputSanitizer.sanitize_username(user)
+        if search:
+            search = InputSanitizer.sanitize_text(search)
+        if job_ids:
+            job_id_list = [
+                InputSanitizer.sanitize_job_id(jid.strip())
+                for jid in job_ids.split(",")
+            ]
+        else:
+            job_id_list = None
 
-    manager = get_slurm_manager()
+        manager = get_slurm_manager()
 
-    # Filter hosts
-    slurm_hosts = manager.slurm_hosts
-    if host:
-        slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
-        if not slurm_hosts:
-            raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+        # Filter hosts
+        slurm_hosts = manager.slurm_hosts
+        if host:
+            slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
+            if not slurm_hosts:
+                raise HTTPException(status_code=404, detail="Host not found")
 
-    # Parse job IDs
-    job_id_list = None
-    if job_ids:
-        job_id_list = [jid.strip() for jid in job_ids.split(",")]
+        results = []
 
-    results = []
+        for slurm_host in slurm_hosts:
+            try:
+                jobs = manager.get_all_jobs(
+                    slurm_host=slurm_host,
+                    user=user,
+                    since=since,
+                    limit=limit,
+                    job_ids=job_id_list,
+                    state_filter=state,
+                    active_only=active_only,
+                    completed_only=completed_only,
+                )
 
-    # Handle special user values
-    query_user = user
-    skip_user_detection = False
+                web_jobs = [JobInfoWeb.from_job_info(job) for job in jobs]
 
-    if user == "*" or user == "all":
-        query_user = None  # None with skip_user_detection=True means get all users
-        skip_user_detection = True
+                # Apply search filter if provided
+                if search:
+                    search_lower = search.lower()
+                    filtered_jobs = []
+                    for job in web_jobs:
+                        # Search in job ID and job name
+                        if search_lower in job.job_id.lower() or (
+                            job.name and search_lower in job.name.lower()
+                        ):
+                            filtered_jobs.append(job)
+                    web_jobs = filtered_jobs
 
-    for slurm_host in slurm_hosts:
-        try:
-            jobs = manager.get_all_jobs(
-                slurm_host=slurm_host,
-                user=query_user,
-                since=since,
-                limit=limit,
-                job_ids=job_id_list,
-                state_filter=state,
-                active_only=active_only,
-                completed_only=completed_only,
-                skip_user_detection=skip_user_detection,
-            )
-
-            web_jobs = [JobInfoWeb.from_job_info(job) for job in jobs]
-
-            response = JobStatusResponse(
-                hostname=slurm_host.host.hostname,
-                jobs=web_jobs,
-                total_jobs=len(web_jobs),
-                query_time=datetime.now(),
-            )
-            results.append(response)
-
-        except Exception as e:
-            # Continue with other hosts even if one fails
-            print(f"Error querying {slurm_host.host.hostname}: {e}")
-            results.append(
-                JobStatusResponse(
+                response = JobStatusResponse(
                     hostname=slurm_host.host.hostname,
-                    jobs=[],
-                    total_jobs=0,
+                    jobs=web_jobs,
+                    total_jobs=len(web_jobs),
                     query_time=datetime.now(),
                 )
-            )
+                results.append(response)
 
-    # Cache the results transparently
-    cached_results = await _cache_middleware.cache_job_status_response(results)
-    return cached_results
+            except Exception as e:
+                logger.error(f"Error querying {slurm_host.host.hostname}: {e}")
+                # Don't expose internal errors
+                results.append(
+                    JobStatusResponse(
+                        hostname=slurm_host.host.hostname,
+                        jobs=[],
+                        total_jobs=0,
+                        query_time=datetime.now(),
+                    )
+                )
+
+        # Cache the results
+        cached_results = await _cache_middleware.cache_job_status_response(results)
+        return cached_results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_job_status: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 
-@app.get("/jobs/{job_id}", response_model=JobInfoWeb)
+@app.get("/api/jobs/{job_id}", response_model=JobInfoWeb)
 async def get_job_details(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host to search"),
+    authenticated: bool = Depends(verify_api_key),
 ):
     """Get detailed information for a specific job."""
-    manager = get_slurm_manager()
+    try:
+        # Sanitize inputs
+        job_id = InputSanitizer.sanitize_job_id(job_id)
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
 
-    # Filter hosts
-    slurm_hosts = manager.slurm_hosts
-    if host:
-        slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
-        if not slurm_hosts:
-            raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+        manager = get_slurm_manager()
 
-    # Search for job across hosts using get_job_info for better details
-    for slurm_host in slurm_hosts:
-        try:
-            job_info = manager.get_job_info(slurm_host, job_id)
-            if job_info:
-                job_web = JobInfoWeb.from_job_info(job_info)
-                # Cache the job data
-                await _cache_middleware.cache_job_status_response(
-                    [
-                        JobStatusResponse(
-                            hostname=slurm_host.host.hostname,
-                            jobs=[job_web],
-                            total_jobs=1,
-                            query_time=datetime.now(),
-                        )
-                    ]
-                )
-                return job_web
-        except Exception:
-            continue
+        # Filter hosts
+        slurm_hosts = manager.slurm_hosts
+        if host:
+            slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
+            if not slurm_hosts:
+                raise HTTPException(status_code=404, detail="Host not found")
 
-    # Try cache fallback
-    cached_job = await _cache_middleware.get_job_with_cache_fallback(job_id, host)
-    if cached_job:
-        logger.info(f"Returning cached job {job_id} (not found in SLURM)")
-        return cached_job
+        # Search for job across hosts
+        for slurm_host in slurm_hosts:
+            try:
+                job_info = manager.get_job_info(slurm_host, job_id)
+                if job_info:
+                    job_web = JobInfoWeb.from_job_info(job_info)
+                    # Cache the job data
+                    await _cache_middleware.cache_job_status_response(
+                        [
+                            JobStatusResponse(
+                                hostname=slurm_host.host.hostname,
+                                jobs=[job_web],
+                                total_jobs=1,
+                                query_time=datetime.now(),
+                            )
+                        ]
+                    )
+                    return job_web
+            except Exception:
+                continue
 
-    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        # Try cache fallback
+        cached_job = await _cache_middleware.get_job_with_cache_fallback(job_id, host)
+        if cached_job:
+            logger.info(f"Returning cached job {job_id}")
+            return cached_job
+
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_job_details: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 
 def _get_file_metadata_and_content(
@@ -359,6 +430,8 @@ def _get_file_metadata_and_content(
     metadata_only: bool = False,
 ) -> tuple[Optional[str], Optional[FileMetadata]]:
     """Helper function to get file metadata and content."""
+    from .models import FileMetadata
+
     if not file_path or file_path == "N/A":
         return None, None
 
@@ -398,7 +471,7 @@ def _get_file_metadata_and_content(
         return f"[Error reading {file_type} file: {str(e)}]", None
 
 
-@app.get("/jobs/{job_id}/output", response_model=JobOutputResponse)
+@app.get("/api/jobs/{job_id}/output", response_model=JobOutputResponse)
 async def get_job_output(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host to search"),
@@ -406,34 +479,40 @@ async def get_job_output(
     metadata_only: bool = Query(
         False, description="Return only metadata about output files, not content"
     ),
+    authenticated: bool = Depends(verify_api_key),
 ):
     """Get output files content for a specific job."""
-    manager = get_slurm_manager()
-
-    # Get job info
-    slurm_hosts = [
-        h for h in manager.slurm_hosts if not host or h.host.hostname == host
-    ]
-    if host and not slurm_hosts:
-        raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
-
-    job_info = None
-    target_host = None
-
-    for slurm_host in slurm_hosts:
-        try:
-            job_info = manager.get_job_info(slurm_host, job_id)
-            if job_info:
-                target_host = slurm_host
-                break
-        except Exception as e:
-            logger.debug(f"Error querying {slurm_host.host.hostname}: {e}")
-            continue
-
-    if not job_info or not target_host:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
     try:
+        # Sanitize inputs
+        job_id = InputSanitizer.sanitize_job_id(job_id)
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
+
+        manager = get_slurm_manager()
+
+        # Get job info
+        slurm_hosts = [
+            h for h in manager.slurm_hosts if not host or h.host.hostname == host
+        ]
+        if host and not slurm_hosts:
+            raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+
+        job_info = None
+        target_host = None
+
+        for slurm_host in slurm_hosts:
+            try:
+                job_info = manager.get_job_info(slurm_host, job_id)
+                if job_info:
+                    target_host = slurm_host
+                    break
+            except Exception as e:
+                logger.debug(f"Error querying {slurm_host.host.hostname}: {e}")
+                continue
+
+        if not job_info or not target_host:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
         # Get connection to target host
         conn = manager._get_connection(target_host.host)
 
@@ -484,6 +563,8 @@ async def get_job_output(
 
         return response
 
+    except HTTPException:
+        raise
     except Exception as e:
         # Try cache fallback for output
         cached_output = await _cache_middleware.get_cached_job_output(job_id, host)
@@ -493,169 +574,51 @@ async def get_job_output(
             )
             return cached_output
 
+        logger.error(f"Error in get_job_output: {e}")
         raise HTTPException(
             status_code=500, detail=f"Failed to read job output: {str(e)}"
         )
 
 
-@app.get("/jobs/{job_id}/files/{file_type}")
-async def get_job_file(
-    job_id: str,
-    file_type: str,
-    host: Optional[str] = Query(None, description="Specific host to search"),
-    download: bool = Query(
-        False, description="Whether to download the file or view it"
-    ),
-    offset: Optional[int] = Query(
-        None, description="Byte offset to start reading from"
-    ),
-    limit: Optional[int] = Query(None, description="Max number of bytes to read"),
-):
-    """Get a job's output or error file as a downloadable file or a stream.
-
-    Args:
-        job_id: ID of the job
-        file_type: Type of file to download (stdout or stderr)
-        host: Host to search for the job
-        download: Whether to serve as attachment
-        offset: Starting byte position (for large file streaming)
-        limit: Maximum bytes to read (for large file streaming)
-    """
-    import io
-
-    from fastapi.responses import StreamingResponse
-
-    if file_type not in ["stdout", "stderr"]:
-        raise HTTPException(
-            status_code=400, detail="Invalid file type. Use 'stdout' or 'stderr'."
-        )
-
-    manager = get_slurm_manager()
-
-    # First find the job to get file paths
-    job_info = None
-    target_host = None
-
-    slurm_hosts = manager.slurm_hosts
-    if host:
-        slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
-
-    for slurm_host in slurm_hosts:
-        try:
-            job_info = manager.get_job_info(slurm_host, job_id)
-            if job_info:
-                target_host = slurm_host
-                break
-        except Exception:
-            continue
-
-    if not job_info or not target_host:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-    # Get the appropriate file path, using scontrol as fallback
-    file_path = job_info.stdout_file if file_type == "stdout" else job_info.stderr_file
-
-    # If file path is missing, try scontrol
-    if not file_path:
-        conn = manager._get_connection(target_host.host)
-        stdout_path, stderr_path = manager.slurm_client.get_job_output_files(
-            conn, job_id, target_host.host.hostname
-        )
-        file_path = stdout_path if file_type == "stdout" else stderr_path
-
-    if not file_path or file_path == "N/A":
-        raise HTTPException(
-            status_code=404,
-            detail=f"{file_type.capitalize()} file not found for job {job_id}",
-        )
-
-    # Read output file
-    conn = manager._get_connection(target_host.host)
-
-    try:
-        # Check if file exists
-        check_cmd = f"test -f {file_path} && echo 'exists' || echo 'not found'"
-        check_result = conn.run(check_cmd, hide=True)
-
-        if "not found" in check_result.stdout:
-            raise HTTPException(
-                status_code=404,
-                detail=f"File {file_path} not found on host {target_host.host.hostname}",
-            )
-
-        # Get file size
-        stat_cmd = f"stat -c '%s' {file_path}"
-        stat_result = conn.run(stat_cmd, hide=True)
-        file_size = int(stat_result.stdout.strip())
-
-        # Prepare for partial content if needed
-        start_byte = offset if offset is not None else 0
-        end_byte = (
-            min(start_byte + limit, file_size) if limit is not None else file_size
-        )
-        content_length = end_byte - start_byte
-
-        # Read the file content
-        if limit is not None or offset is not None:
-            cmd = f"dd if={file_path} bs=1 skip={start_byte} count={content_length} 2>/dev/null"
-        else:
-            cmd = f"cat {file_path}"
-
-        result = conn.run(cmd, hide=True)
-        content = result.stdout
-
-        # Set filename
-        job_name = job_info.name.replace(" ", "_")
-        filename = f"{job_name}_{job_id}_{file_type}.txt"
-
-        # Return as streaming response
-        headers = {
-            "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{filename}"',
-        }
-
-        if offset is not None or limit is not None:
-            headers["Content-Range"] = f"bytes {start_byte}-{end_byte - 1}/{file_size}"
-            headers["Accept-Ranges"] = "bytes"
-
-        return StreamingResponse(
-            io.BytesIO(content.encode("utf-8")),
-            media_type="text/plain",
-            headers=headers,
-        )
-
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
-
-
-@app.get("/jobs/{job_id}/script")
+@app.get("/api/jobs/{job_id}/script")
 async def get_job_script(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host to search"),
+    authenticated: bool = Depends(verify_api_key),
 ):
     """Get the batch script content for a specific job."""
-    manager = get_slurm_manager()
+    try:
+        # Sanitize inputs
+        job_id = InputSanitizer.sanitize_job_id(job_id)
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
 
-    # Filter hosts
-    slurm_hosts = manager.slurm_hosts
-    if host:
-        slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
-        if not slurm_hosts:
-            raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+        manager = get_slurm_manager()
 
-    # Search for job across hosts
-    for slurm_host in slurm_hosts:
-        try:
-            job_info = manager.get_job_info(slurm_host, job_id)
-            if job_info:
-                # Get connection and batch script
+        # Filter hosts
+        slurm_hosts = manager.slurm_hosts
+        if host:
+            slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
+            if not slurm_hosts:
+                raise HTTPException(status_code=404, detail="Host not found")
+
+        # Check cache first - this should be our primary source
+        cached_script = await _cache_middleware.get_cached_job_script(job_id, host)
+        if cached_script:
+            logger.info(f"Returning cached script for job {job_id}")
+            return cached_script
+
+        # Try to get from SLURM and cache it
+        script_found_in_slurm = False
+        for slurm_host in slurm_hosts:
+            try:
                 conn = manager._get_connection(slurm_host.host)
                 script_content = manager.slurm_client.get_job_batch_script(
                     conn, job_id, slurm_host.host.hostname
                 )
 
                 if script_content is not None:
+                    script_found_in_slurm = True
                     response = {
                         "job_id": job_id,
                         "hostname": slurm_host.host.hostname,
@@ -663,212 +626,216 @@ async def get_job_script(
                         "content_length": len(script_content),
                     }
 
-                    # Cache the script
+                    # Cache the script for future use
                     await _cache_middleware.cache_job_script(
                         job_id, slurm_host.host.hostname, script_content
                     )
 
                     return response
-                else:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Batch script not available for job {job_id}",
-                    )
-        except Exception as e:
-            logger.debug(
-                f"Error getting script for job {job_id} on {slurm_host.host.hostname}: {e}"
+
+            except Exception as e:
+                logger.debug(
+                    f"Error getting script from {slurm_host.host.hostname}: {e}"
+                )
+                continue
+
+        # If we didn't find the script in SLURM, check cache again without host filter
+        # This handles cases where the job moved hosts or host wasn't specified correctly
+        if not script_found_in_slurm and host:
+            cached_script = await _cache_middleware.get_cached_job_script(job_id, None)
+            if cached_script:
+                logger.info(
+                    f"Returning cached script for job {job_id} (found without host filter)"
+                )
+                return cached_script
+
+        # Script not found anywhere
+        logger.warning(f"Script not found for job {job_id} in cache or SLURM")
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_job_script: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
+
+
+@app.post("/api/jobs/launch", response_model=LaunchJobResponse)
+async def launch_job(
+    request: LaunchJobRequest, authenticated: bool = Depends(verify_api_key)
+):
+    """Launch a job by syncing source directory and submitting script."""
+    import tempfile
+
+    from ..launch import LaunchManager
+
+    try:
+        # Validate and sanitize script
+        request.script_content = ScriptValidator.validate_script(request.script_content)
+
+        # Sanitize host
+        request.host = InputSanitizer.sanitize_hostname(request.host)
+
+        manager = get_slurm_manager()
+
+        # Validate host exists
+        try:
+            _ = manager.get_host_by_name(request.host)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Host not found")
+
+        # Apply defaults from host configuration if needed
+        # Note: Currently defaults are applied at the manager level
+        # This could be used for frontend defaults display if needed
+
+        # Validate source directory if provided
+        source_dir = None
+        if request.source_dir:
+            source_dir = PathValidator.validate_path(
+                request.source_dir, base_type="local", user_home=Path.home()
             )
-            continue
 
-    # Try cache fallback for script
-    cached_script = await _cache_middleware.get_cached_job_script(job_id, host)
-    if cached_script:
-        logger.info(f"Returning cached script for job {job_id} (not found in SLURM)")
-        return cached_script
+            if not source_dir.exists():
+                raise HTTPException(
+                    status_code=400, detail="Source directory not found"
+                )
 
-    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            if not source_dir.is_dir():
+                raise HTTPException(
+                    status_code=400, detail="Source path is not a directory"
+                )
+
+        # Create temporary script file
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sh", delete=False
+        ) as tmp_script:
+            tmp_script.write(request.script_content)
+            script_path = Path(tmp_script.name)
+
+        try:
+            # Initialize launch manager
+            launch_manager = LaunchManager(manager)
+
+            # Validate SLURM parameters
+            slurm_params = SlurmParams(
+                job_name=request.job_name[:64]
+                if request.job_name
+                else None,  # Limit length
+                time_min=request.time,
+                cpus_per_task=min(request.cpus, 256)
+                if request.cpus
+                else None,  # Reasonable limit
+                mem_gb=min(request.mem, 1024) if request.mem else None,  # 1TB max
+                partition=request.partition,
+                output=request.output,
+                error=request.error,
+                constraint=request.constraint,
+                account=request.account,
+                nodes=min(request.nodes, 100)
+                if request.nodes
+                else None,  # Reasonable limit
+                n_tasks_per_node=request.n_tasks_per_node,
+                gpus_per_node=request.gpus_per_node,
+                gres=request.gres,
+            )
+
+            # Launch the job
+            job = launch_manager.launch_job(
+                script_path=script_path,
+                source_dir=source_dir,
+                host=request.host,
+                slurm_params=slurm_params,
+                python_env=request.python_env,
+                exclude=request.exclude,
+                include=request.include,
+                no_gitignore=request.no_gitignore,
+                sync_enabled=source_dir is not None,
+            )
+
+            if job:
+                # Cache the script
+                try:
+                    await _cache_middleware.cache_job_script(
+                        job.job_id, request.host, request.script_content
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to cache script: {e}")
+
+                return LaunchJobResponse(
+                    success=True,
+                    job_id=job.job_id,
+                    message="Job launched successfully",
+                    hostname=request.host,
+                )
+            else:
+                return LaunchJobResponse(
+                    success=False, message="Failed to launch job", hostname=request.host
+                )
+
+        finally:
+            # Clean up temporary script file
+            try:
+                os.unlink(script_path)
+            except Exception:
+                pass
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error launching job: {e}")
+        raise HTTPException(status_code=500, detail="Failed to launch job")
 
 
-@app.post("/jobs/{job_id}/cancel")
+@app.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(
-    job_id: str, host: Optional[str] = Query(None, description="Specific host")
+    job_id: str,
+    host: Optional[str] = Query(None, description="Specific host"),
+    authenticated: bool = Depends(verify_api_key),
 ):
     """Cancel a running job."""
-    manager = get_slurm_manager()
-
-    # Find the job first
-    slurm_hosts = manager.slurm_hosts
-    if host:
-        slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
-
-    for slurm_host in slurm_hosts:
-        try:
-            jobs = manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
-            if jobs:
-                success = manager.cancel_job(slurm_host, job_id)
-                if success:
-                    return {"message": f"Job {job_id} cancelled successfully"}
-                else:
-                    raise HTTPException(
-                        status_code=500, detail=f"Failed to cancel job {job_id}"
-                    )
-        except Exception:
-            continue
-
-    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-
-@app.get("/connections/stats")
-async def get_connection_stats():
-    """Get SSH connection pool statistics."""
-    manager = get_slurm_manager()
     try:
-        stats = manager.get_connection_stats()
-        return {"connection_stats": stats, "status": "healthy"}
+        # Sanitize inputs
+        job_id = InputSanitizer.sanitize_job_id(job_id)
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
+
+        manager = get_slurm_manager()
+
+        # Find the job first
+        slurm_hosts = manager.slurm_hosts
+        if host:
+            slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
+
+        for slurm_host in slurm_hosts:
+            try:
+                jobs = manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
+                if jobs:
+                    success = manager.cancel_job(slurm_host, job_id)
+                    if success:
+                        return {"message": "Job cancelled successfully"}
+                    else:
+                        raise HTTPException(
+                            status_code=500, detail="Failed to cancel job"
+                        )
+            except Exception:
+                continue
+
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get connection stats: {str(e)}"
-        )
+        logger.error(f"Error cancelling job: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 
-@app.get("/cache/stats")
-async def get_cache_stats():
-    """Get job cache statistics."""
-    try:
-        stats = await _cache_middleware.get_cache_stats()
-        return {"cache_stats": stats, "status": "healthy"}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get cache stats: {str(e)}"
-        )
-
-
-@app.post("/cache/cleanup")
-async def cleanup_cache(
-    max_age_days: Optional[int] = Query(
-        None, description="Max age in days (0=never, -1=force all)"
-    ),
-    preserve_scripts: bool = Query(True, description="Preserve entries with scripts"),
-    force: bool = Query(
-        False, description="Force cleanup ignoring preservation settings"
-    ),
-):
-    """Clean up old cache entries with preservation controls."""
-    try:
-        from .cache_scheduler import get_cache_scheduler
-
-        if max_age_days == -1 and force:
-            # Nuclear option - clean everything
-            cleaned_count = _cache_middleware.cache.cleanup_old_entries(
-                max_age_days=1,  # Very aggressive
-                preserve_scripts=False,
-                force_cleanup=True,
-            )
-            message = f"⚠️  FORCE CLEANUP: Removed ALL {cleaned_count} cache entries (including scripts)!"
-        else:
-            scheduler = await get_cache_scheduler()
-            cleaned_count = await scheduler.force_cleanup(
-                max_age_days=max_age_days, preserve_scripts=preserve_scripts
-            )
-            if max_age_days == 0:
-                message = "No cleanup performed (preservation mode: max_age_days=0)"
-            else:
-                preserve_msg = " (preserving scripts)" if preserve_scripts else ""
-                message = f"Cache cleanup completed. Removed {cleaned_count} entries{preserve_msg}."
-
-        return {
-            "message": message,
-            "entries_removed": cleaned_count,
-            "preservation_mode": max_age_days == 0,
-            "scripts_preserved": preserve_scripts and not force,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to clean up cache: {str(e)}"
-        )
-
-
-@app.post("/cache/export")
-async def export_cache(
-    output_filename: str = Query("cache_export.json", description="Output filename"),
-    job_ids: Optional[str] = Query(
-        None, description="Comma-separated job IDs to export"
-    ),
-):
-    """Export cache data to JSON for backup/archival."""
-    try:
-        export_path = _cache_middleware.cache.cache_dir / output_filename
-
-        job_id_list = None
-        if job_ids:
-            job_id_list = [jid.strip() for jid in job_ids.split(",")]
-
-        exported_count = _cache_middleware.cache.export_cache_data(
-            export_path, job_id_list
-        )
-
-        return {
-            "message": f"Cache export completed. Exported {exported_count} jobs.",
-            "export_file": str(export_path),
-            "jobs_exported": exported_count,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export cache: {str(e)}")
-
-
-@app.get("/cache/config")
-async def get_cache_config_info():
-    """Get current cache configuration and recommendations."""
-    try:
-        from ..cache_config import get_cache_config
-
-        config = get_cache_config()
-        stats = await _cache_middleware.get_cache_stats()
-
-        # Generate recommendations
-        recommendations = []
-
-        if config.max_age_days > 0 and config.max_age_days < 365:
-            recommendations.append(
-                "⚠️  Consider increasing max_age_days - SLURM data may be permanently lost after cleanup"
-            )
-
-        if not config.auto_cleanup_enabled and stats["db_size_mb"] > 500:
-            recommendations.append(
-                "💾 Cache is large and auto-cleanup disabled. Consider manual cleanup or size limits."
-            )
-
-        if config.max_age_days == 0:
-            recommendations.append(
-                "✅ Preservation mode enabled - cache never expires (recommended for job archival)"
-            )
-
-        return {
-            "config": {
-                "enabled": config.enabled,
-                "cache_dir": str(config.cache_dir),
-                "max_age_days": config.max_age_days,
-                "script_max_age_days": config.script_max_age_days,
-                "auto_cleanup_enabled": config.auto_cleanup_enabled,
-                "max_cache_size_mb": config.max_cache_size_mb,
-                "cleanup_interval_hours": config.cleanup_interval_hours,
-            },
-            "stats": stats,
-            "recommendations": recommendations,
-            "preservation_mode": config.max_age_days == 0,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get cache config: {str(e)}"
-        )
-
-
-@app.get("/local/list")
+@app.get("/api/local/list")
 async def list_local_path(
     path: str = Query("/", description="Local filesystem path to list"),
     limit: int = Query(100, description="Maximum number of entries to return"),
     show_hidden: bool = Query(False, description="Include hidden files/directories"),
     dirs_only: bool = Query(False, description="Show directories only"),
+    authenticated: bool = Depends(verify_api_key),
 ):
     """List entries in a local filesystem path to help the web UI pick a source_dir.
 
@@ -888,7 +855,6 @@ async def list_local_path(
     ALLOWED_ROOT_PATHS = ["/home", "/Users", "/opt", "/mnt", "/tmp", "/var/tmp"]
     if not any(str(base).startswith(allowed) for allowed in ALLOWED_ROOT_PATHS):
         # For localhost development, allow current user's home area
-
         user_home = Path.home()
         if not base.is_relative_to(user_home):
             raise HTTPException(
@@ -935,218 +901,17 @@ async def list_local_path(
         )
 
 
-@app.post("/connections/health-check")
-async def manual_health_check():
-    """Manually trigger connection health check."""
-    manager = get_slurm_manager()
-    try:
-        unhealthy_count = manager.check_connection_health()
-        stats = manager.get_connection_stats()
-        return {
-            "message": f"Health check completed. Cleaned up {unhealthy_count} unhealthy connections.",
-            "unhealthy_connections_removed": unhealthy_count,
-            "current_stats": stats,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to perform health check: {str(e)}"
-        )
-
-
-def apply_slurm_defaults(
-    request: LaunchJobRequest, defaults: Optional[SlurmDefaultsWeb]
-) -> LaunchJobRequest:
-    """Apply SLURM defaults to launch request, with request values taking precedence."""
-    if not defaults:
-        return request
-
-    # Create a dict with defaults, then overlay with request values
-    merged_params = {}
-
-    # Copy defaults to merged params (excluding None values)
-    defaults_dict = defaults.model_dump(exclude_none=True)
-    for key, value in defaults_dict.items():
-        merged_params[key] = value
-
-    # Handle special mappings and transformations
-    if defaults.job_name_prefix and not request.job_name:
-        # Auto-generate job name with prefix if none provided
-        import time
-
-        timestamp = int(time.time())
-        merged_params["job_name"] = f"{defaults.job_name_prefix}-{timestamp}"
-
-    if defaults.output_pattern and not request.output:
-        merged_params["output"] = defaults.output_pattern
-
-    if defaults.error_pattern and not request.error:
-        merged_params["error"] = defaults.error_pattern
-
-    if defaults.python_env and not request.python_env:
-        merged_params["python_env"] = defaults.python_env
-
-    # Copy request values, overriding defaults (excluding None values)
-    request_dict = request.model_dump(exclude_none=True)
-    for key, value in request_dict.items():
-        if key in ["job_name_prefix", "output_pattern", "error_pattern"]:
-            # Skip these default-only fields
-            continue
-        merged_params[key] = value
-
-    # Create new request with merged parameters
-    try:
-        return LaunchJobRequest(**merged_params)
-    except Exception as e:
-        logger.warning(f"Error merging defaults with request: {e}")
-        return request  # Fallback to original request
-
-
-def validate_script_content(script_content: str) -> None:
-    """Basic validation for script content to prevent obviously dangerous commands."""
-    # Check for obviously dangerous patterns (not comprehensive, just basic safety)
-    dangerous_patterns = [
-        "rm -rf /",
-        "chmod 777",
-        "sudo ",
-        "> /etc/",
-        "curl http",  # Prevent data exfiltration
-        "wget http",
-        "nc -l",  # Prevent backdoors
-        "& sleep",  # Prevent infinite loops/DOS
-    ]
-
-    script_lower = script_content.lower()
-    for pattern in dangerous_patterns:
-        if pattern in script_lower:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Script contains potentially dangerous command: {pattern}",
-            )
-
-
-@app.post("/jobs/launch", response_model=LaunchJobResponse)
-async def launch_job(request: LaunchJobRequest):
-    """Launch a job by syncing source directory and submitting script."""
-    import os
-    import tempfile
-    from pathlib import Path
-
-    from ..launch import LaunchManager
-
-    # Basic script validation for safety
-    validate_script_content(request.script_content)
-
-    manager = get_slurm_manager()
-
-    # Validate host exists and get defaults
-    try:
-        slurm_host = manager.get_host_by_name(request.host)
-    except ValueError:
-        raise HTTPException(
-            status_code=400, detail=f"Host '{request.host}' not found in configuration"
-        )
-
-    # Apply defaults from host configuration
-    defaults = None
-    if slurm_host.slurm_defaults:
-        defaults = SlurmDefaultsWeb(**slurm_host.slurm_defaults.__dict__)
-
-    # Merge defaults with request parameters
-    request = apply_slurm_defaults(request, defaults)
-
-    # Validate source directory exists
-    source_dir = Path(request.source_dir).expanduser().resolve()
-    if not source_dir.exists():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Source directory '{request.source_dir}' does not exist",
-        )
-
-    if not source_dir.is_dir():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Source path '{request.source_dir}' is not a directory",
-        )
-
-    try:
-        # Create temporary script file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sh", delete=False
-        ) as tmp_script:
-            tmp_script.write(request.script_content)
-            script_path = Path(tmp_script.name)
-
-        try:
-            # Initialize launch manager
-            launch_manager = LaunchManager(manager)
-
-            slurm_params = SlurmParams(
-                job_name=request.job_name,
-                time_min=request.time,
-                cpus_per_task=request.cpus,
-                mem_gb=request.mem,
-                partition=request.partition,
-                output=request.output,
-                error=request.error,
-                constraint=request.constraint,
-                account=request.account,
-                nodes=request.nodes,
-                n_tasks_per_node=request.n_tasks_per_node,
-                gpus_per_node=request.gpus_per_node,
-                gres=request.gres,
-            )
-
-            # Launch the job
-            job = launch_manager.launch_job(
-                script_path=script_path,
-                source_dir=source_dir,
-                host=request.host,
-                slurm_params=slurm_params,
-                python_env=request.python_env,
-                exclude=request.exclude,
-                include=request.include,
-                no_gitignore=request.no_gitignore,
-            )
-
-            if job:
-                return LaunchJobResponse(
-                    success=True,
-                    job_id=job.job_id,
-                    message=f"Job launched successfully with ID: {job.job_id}",
-                    hostname=request.host,
-                )
-            else:
-                return LaunchJobResponse(
-                    success=False, message="Failed to launch job", hostname=request.host
-                )
-
-        finally:
-            # Clean up temporary script file
-            try:
-                os.unlink(script_path)
-            except Exception:
-                pass
-
-    except Exception as e:
-        logger.error(f"Error launching job: {e}")
-        return LaunchJobResponse(
-            success=False,
-            message=f"Error launching job: {str(e)}",
-            hostname=request.host,
-        )
-
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup."""
     # Initialize manager
-    manager = get_slurm_manager()
-    print("API started, manager initialized")
+    _ = get_slurm_manager()
+    logger.info("Secure API started, manager initialized")
 
     # Start cache scheduler
     try:
         await start_cache_scheduler()
-        print("Cache scheduler started")
+        logger.info("Cache scheduler started")
     except Exception as e:
         logger.error(f"Failed to start cache scheduler: {e}")
 
@@ -1162,30 +927,48 @@ async def shutdown_event():
     # Stop cache scheduler
     try:
         await stop_cache_scheduler()
-        print("Cache scheduler stopped")
-    except Exception as e:
-        print(f"Error stopping cache scheduler: {e}")
+        logger.info("Cache scheduler stopped")
+    except Exception:
+        pass
 
     # Close connections
     if _slurm_manager:
         _slurm_manager.close_connections()
-        print("Closed all SSH connections")
+        logger.info("Closed all SSH connections")
 
     # Cleanup cache
     try:
         _cache_middleware.cache.close()
-        print("Closed job cache")
-    except Exception as e:
-        print(f"Error closing cache: {e}")
+        logger.info("Closed job cache")
+    except Exception:
+        pass
 
 
 def main():
-    """Run the web server."""
+    """Run the secure web server."""
     import uvicorn
 
-    # Avoid exposing the API
-    # to the local network
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Show authentication status
+    if REQUIRE_API_KEY:
+        print("🔐 Starting SLURM Manager API with authentication enabled")
+        print("   API key required for all requests")
+    else:
+        print("🚀 Starting SLURM Manager API in open mode (no authentication)")
+        print("   To enable authentication: export SSYNC_REQUIRE_API_KEY=true")
+        print("   To generate API key: ssync auth setup")
+
+    print("📡 Server starting at http://127.0.0.1:8000")
+
+    # Production settings
+    uvicorn.run(
+        app,
+        host="127.0.0.1",  # Only bind to localhost
+        port=int(os.getenv("SSYNC_PORT", "8000")),
+        log_level=os.getenv("SSYNC_LOG_LEVEL", "info").lower(),
+        access_log=False,  # Disable access logs for security
+        server_header=False,  # Don't expose server info
+        date_header=False,  # Don't expose date
+    )
 
 
 if __name__ == "__main__":

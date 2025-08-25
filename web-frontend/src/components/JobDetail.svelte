@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { api } from '../services/api';
   import type { JobInfo, JobOutputResponse, JobScriptResponse } from '../types/api';
   
   export let job: JobInfo;
@@ -59,11 +60,8 @@
     scriptError = null;
     
     try {
-      const response = await fetch(`/api/jobs/${job.job_id}/script?host=${encodeURIComponent(job.hostname)}`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      scriptData = await response.json() as JobScriptResponse;
+      const response = await api.get<JobScriptResponse>(`/jobs/${job.job_id}/script?host=${encodeURIComponent(job.hostname)}`);
+      scriptData = response.data;
     } catch (error: unknown) {
       console.error('Error loading job script:', error);
       scriptError = (error as Error).message || 'Failed to load script';
@@ -618,10 +616,7 @@
     height: 1.25rem;
   }
   
-  .close-btn:focus {
-    outline: 2px solid #007bff;
-    outline-offset: 2px;
-  }
+  
 
   .tabs {
     display: flex;

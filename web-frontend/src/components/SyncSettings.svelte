@@ -91,7 +91,7 @@
   }
 </script>
 
-<div class="sync-settings">
+<div class="sync-settings" data-testid="sync-settings">
   <div class="settings-header">
     <h3>Sync Settings</h3>
     <div class="settings-description">
@@ -304,12 +304,18 @@
 
 <style>
   .sync-settings {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background: #fafbfc;
+    border: 1px solid #e1e5e9;
+    border-radius: 10px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    transition: all 0.2s ease;
+  }
+
+  .sync-settings:hover {
+    border-color: #c7d2fe;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.1);
   }
 
   .settings-header {
@@ -705,6 +711,9 @@
       min-height: auto;
       max-height: none;
       margin-bottom: 1rem;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
     }
 
     .settings-header {
