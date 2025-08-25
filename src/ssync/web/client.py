@@ -18,7 +18,7 @@ class AuthenticatedSlurmApiClient:
     """API client with authentication support."""
 
     def __init__(
-        self, base_url: str = "http://localhost:8042", api_key: Optional[str] = None
+        self, base_url: str = "https://localhost:8042", api_key: Optional[str] = None
     ):
         self.base_url = base_url
         self.api_key = api_key or self._get_api_key()
@@ -67,7 +67,7 @@ class AuthenticatedSlurmApiClient:
         """Check if API is running."""
         try:
             # Health endpoint doesn't require auth
-            response = requests.get(f"{self.base_url}/health", timeout=5)
+            response = requests.get(f"{self.base_url}/health", timeout=5, verify=False)
             return response.status_code == 200
         except requests.exceptions.RequestException:
             return False
@@ -75,7 +75,7 @@ class AuthenticatedSlurmApiClient:
     def test_auth(self) -> bool:
         """Test if authentication is working."""
         try:
-            response = self.session.get(f"{self.base_url}/", timeout=5)
+            response = self.session.get(f"{self.base_url}/", timeout=5, verify=False)
             return response.status_code == 200
         except requests.exceptions.RequestException as e:
             if hasattr(e, "response") and e.response and e.response.status_code == 401:

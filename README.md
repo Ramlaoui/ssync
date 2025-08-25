@@ -88,8 +88,11 @@ ssync status --job-id 12345 --cat-output
 
 Launch the complete web interface (serves both API and UI):
 ```bash
-# Start in background (default)
+# Start in background with HTTPS (default)
 ssync web
+
+# Use HTTP instead of HTTPS
+ssync web --no-https
 
 # Stop the server
 ssync web --stop
@@ -102,12 +105,15 @@ ssync web --foreground
 ```
 
 The `ssync web` command:
+- Uses HTTPS by default with auto-generated self-signed certificates
 - Runs in the background by default (doesn't block your terminal)
 - Builds the frontend automatically if needed
 - Serves both API and UI on the same port
 - Opens your browser automatically
 
-Access at http://localhost:8042
+Access at https://localhost:8042
+
+**Note on HTTPS**: The first time you access the site, your browser will warn about the self-signed certificate. This is normal for local development. Accept the certificate to proceed.
 
 For API-only mode (no UI):
 ```bash
@@ -158,11 +164,11 @@ ssync provides a REST API for programmatic access:
 import requests
 
 # Query job status
-response = requests.get("http://localhost:8042/api/status")
+response = requests.get("https://localhost:8042/api/status", verify=False)  # verify=False for self-signed cert
 jobs = response.json()
 
 # Submit a job
-response = requests.post("http://localhost:8042/api/jobs/launch", json={
+response = requests.post("https://localhost:8042/api/jobs/launch", json={
     "host": "cluster1",
     "script_content": "#!/bin/bash\npython train.py",
     "source_dir": "/path/to/project"

@@ -14,13 +14,13 @@ logger = setup_logger(__name__, "DEBUG")
 class ServerManager:
     """Manages the ssync API server lifecycle."""
 
-    def __init__(self, base_url: str = "http://localhost:8042"):
+    def __init__(self, base_url: str = "https://localhost:8042"):
         self.base_url = base_url
 
     def is_running(self) -> bool:
         """Check if API server is running."""
         try:
-            response = requests.get(f"{self.base_url}/", timeout=5)
+            response = requests.get(f"{self.base_url}/", timeout=5, verify=False)
             return response.status_code == 200
         except requests.exceptions.RequestException:
             return False

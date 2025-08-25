@@ -289,8 +289,9 @@ def api(ctx, port):
 @click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
 @click.option("--no-browser", is_flag=True, help="Don't open browser")
 @click.option("--skip-build", is_flag=True, help="Skip frontend build check")
+@click.option("--no-https", is_flag=True, help="Disable HTTPS (use HTTP instead)")
 @click.pass_context
-def web(ctx, port, stop, status, foreground, no_browser, skip_build):
+def web(ctx, port, stop, status, foreground, no_browser, skip_build, no_https):
     """Launch the web interface (API + UI)."""
     # Call the web launcher directly
     # Create a mock context for the launcher since it expects click options
@@ -314,6 +315,8 @@ def web(ctx, port, stop, status, foreground, no_browser, skip_build):
             args.append("--no-browser")
         if skip_build:
             args.append("--skip-build")
+        if no_https:
+            args.append("--no-https")
 
         # Temporarily replace argv
         sys.argv = ["ssync-web"] + args

@@ -5,18 +5,28 @@ import signal
 import subprocess
 import sys
 import time
+import warnings
 import webbrowser
 from pathlib import Path
 
 import click
 import requests
+from urllib3.exceptions import InsecureRequestWarning
 
 
-def is_api_running(port: int = 8042) -> bool:
+def is_api_running(port: int = 8042, use_https: bool = True) -> bool:
     """Check if API is already running."""
+    protocol = "https" if use_https else "http"
     try:
-        response = requests.get(f"http://localhost:{port}/health", timeout=1)
-        return response.status_code == 200
+        # Suppress SSL warnings for self-signed certs
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            response = requests.get(
+                f"{protocol}://localhost:{port}/health",
+                timeout=1,
+                verify=False,  # Allow self-signed certs
+            )
+            return response.status_code == 200
     except Exception:
         return False
 
@@ -112,8 +122,16 @@ def build_frontend() -> bool:
         return False
 
 
-def start_server_background(port: int):
+def start_server_background(port: int, use_https: bool = True):
     """Start the server in the background using nohup or direct detachment."""
+    # Generate SSL certificates if using HTTPS
+    ssl_args = ""
+    if use_https:
+        from .ssl_utils import generate_self_signed_cert
+
+        cert_path, key_path = generate_self_signed_cert()
+        ssl_args = f"--ssl-keyfile {key_path} --ssl-certfile {cert_path}"
+
     # Method 1: Try using nohup if available (most Unix systems)
     try:
         subprocess.run(["which", "nohup"], capture_output=True, check=True)
@@ -121,7 +139,7 @@ def start_server_background(port: int):
         log_file = Path.home() / ".config" / "ssync" / "ssync-web.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd = f"nohup {sys.executable} -m uvicorn ssync.web.app:app --host 127.0.0.1 --port {port} > {log_file} 2>&1 &"
+        cmd = f"nohup {sys.executable} -m uvicorn ssync.web.app:app --host 127.0.0.1 --port {port} {ssl_args} > {log_file} 2>&1 &"
         process = subprocess.Popen(
             cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
@@ -144,22 +162,33 @@ def start_server_background(port: int):
 
     # Method 2: Python subprocess with full detachment
     try:
+        # Build command args
+        cmd_args = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "ssync.web.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ]
+
+        # Add SSL args if using HTTPS
+        if use_https:
+            from .ssl_utils import generate_self_signed_cert
+
+            cert_path, key_path = generate_self_signed_cert()
+            cmd_args.extend(["--ssl-keyfile", str(key_path)])
+            cmd_args.extend(["--ssl-certfile", str(cert_path)])
+
         # Use Python to spawn the process
         if sys.platform == "win32":
             # Windows
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             DETACHED_PROCESS = 0x00000008
             process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "ssync.web.app:app",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
+                cmd_args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
@@ -168,16 +197,7 @@ def start_server_background(port: int):
         else:
             # Unix/Linux/Mac
             process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "ssync.web.app:app",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
+                cmd_args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
@@ -199,6 +219,7 @@ def start_server_background(port: int):
 @click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
 @click.option("--no-browser", is_flag=True, help="Don't open browser")
 @click.option("--skip-build", is_flag=True, help="Skip frontend build check")
+@click.option("--no-https", is_flag=True, help="Disable HTTPS (use HTTP instead)")
 def main(
     port: int,
     stop: bool,
@@ -206,6 +227,7 @@ def main(
     foreground: bool,
     no_browser: bool,
     skip_build: bool,
+    no_https: bool,
 ):
     """Launch ssync web interface (API + UI in one server)."""
 
@@ -226,10 +248,12 @@ def main(
             print(f"✗ ssync is not running on port {port}")
         return
 
-    url = f"http://localhost:{port}"
+    use_https = not no_https
+    protocol = "https" if use_https else "http"
+    url = f"{protocol}://localhost:{port}"
 
     # Check if already running
-    if is_api_running(port):
+    if is_api_running(port, use_https):
         print(f"✓ ssync is already running at {url}")
         pid = get_saved_pid()
         if pid:
@@ -252,29 +276,36 @@ def main(
     if foreground:
         # Run in foreground (useful for debugging)
         print("Running in foreground mode. Press Ctrl+C to stop.")
+        cmd_args = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "ssync.web.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ]
+
+        if use_https:
+            from .ssl_utils import generate_self_signed_cert
+
+            cert_path, key_path = generate_self_signed_cert()
+            cmd_args.extend(["--ssl-keyfile", str(key_path)])
+            cmd_args.extend(["--ssl-certfile", str(cert_path)])
+
         try:
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "ssync.web.app:app",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ]
-            )
+            subprocess.run(cmd_args)
         except KeyboardInterrupt:
             print("\nServer stopped.")
     else:
         # Run in background (default)
-        if start_server_background(port):
+        if start_server_background(port, use_https):
             # Wait for server to start
             started = False
             for _ in range(20):
                 time.sleep(0.5)
-                if is_api_running(port):
+                if is_api_running(port, use_https):
                     started = True
                     break
 
