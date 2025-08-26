@@ -63,7 +63,7 @@ hosts:
 # Cache configuration
 cache:
   enabled: true
-  cache_dir: ~/.ssync/cache  # Or use ${SSYNC_CACHE_DIR} for env var
+  cache_dir: ~/.cache/ssync  # Or use ${SSYNC_CACHE_DIR} for env var
   max_age_days: 365  # How long to keep cache entries (0 = never expire)
   script_max_age_days: 0  # Never expire scripts (important for reproducibility)
   cleanup_interval_hours: 168  # Run cleanup weekly
