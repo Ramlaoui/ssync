@@ -4,6 +4,7 @@
   import { jobsStore } from "../stores/jobs";
   import { api } from "../services/api";
   import type { JobInfo, JobOutputResponse, JobScriptResponse } from "../types/api";
+  import JobSidebar from "../components/JobSidebar.svelte";
 
   export let params: { id?: string; host?: string } = {};
 
@@ -12,6 +13,9 @@
   let error: string | null = null;
   let refreshInterval: ReturnType<typeof setInterval>;
   let mounted = true;
+  let sidebarCollapsed = false;
+  let showMobileSidebar = false;
+  let isMobile = false;
   
   // Tab state
   let activeTab: 'info' | 'output' | 'errors' | 'script' = 'info';
@@ -67,6 +71,11 @@
   async function loadOutput(): Promise<void> {
     if (!job || loadingOutput) return;
     
+    // Don't reload if we already have data for this job
+    if (outputData && outputData.job_id === job.job_id) {
+      return;
+    }
+    
     loadingOutput = true;
     outputError = null;
     
@@ -86,6 +95,11 @@
   async function loadScript(): Promise<void> {
     if (!job || loadingScript) return;
     
+    // Don't reload if we already have data for this job
+    if (scriptData && scriptData.job_id === job.job_id) {
+      return;
+    }
+    
     loadingScript = true;
     scriptError = null;
     
@@ -102,16 +116,27 @@
 
   function retryLoadOutput(): void {
     outputData = null;
+    outputError = null;
     loadOutput();
   }
 
   function retryLoadScript(): void {
     scriptData = null;
+    scriptError = null;
     loadScript();
+  }
+  
+  // Watch for tab changes to load data as needed
+  $: if (job && activeTab) {
+    if ((activeTab === 'output' || activeTab === 'errors') && (!outputData || outputData.job_id !== job.job_id)) {
+      loadOutput();
+    } else if (activeTab === 'script' && (!scriptData || scriptData.job_id !== job.job_id)) {
+      loadScript();
+    }
   }
 
   function handleClose() {
-    push('/jobs');
+    push('/');
   }
 
   function handleRefresh() {
@@ -177,6 +202,16 @@
     mounted = true;
     loadJob();
     
+    // Check if mobile
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    // Load collapsed state from localStorage
+    const saved = localStorage.getItem('jobSidebarCollapsed');
+    if (saved) {
+      sidebarCollapsed = saved === 'true';
+    }
+    
     // Auto-refresh running jobs
     refreshInterval = setInterval(() => {
       if (job && (job.state === 'R' || job.state === 'PD')) {
@@ -184,13 +219,26 @@
       }
     }, 30000);
   });
+  
+  function checkMobile() {
+    isMobile = window.innerWidth < 768;
+    if (isMobile) {
+      sidebarCollapsed = false; // Don't collapse on mobile
+    }
+  }
 
   onDestroy(() => {
     mounted = false;
     if (refreshInterval) {
       clearInterval(refreshInterval);
     }
+    window.removeEventListener('resize', checkMobile);
   });
+  
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    localStorage.setItem('jobSidebarCollapsed', String(sidebarCollapsed));
+  }
 
   // Track params changes
   let lastParams = { id: params.id, host: params.host };
@@ -198,28 +246,84 @@
   $: if (mounted && params.id && params.host && 
       (params.id !== lastParams.id || params.host !== lastParams.host)) {
     lastParams = { id: params.id, host: params.host };
+    // Reset data when switching jobs
+    outputData = null;
+    scriptData = null;
+    outputError = null;
+    scriptError = null;
     loadJob();
   }
   
-  $: if (job && (activeTab === 'output' || activeTab === 'errors') && !outputData) {
-    loadOutput();
+  // Reactive statements need to check job ID to re-trigger on job change
+  $: if (job && (activeTab === 'output' || activeTab === 'errors')) {
+    // Check if we need to load output for this specific job
+    if (!outputData || outputData.job_id !== job.job_id) {
+      loadOutput();
+    }
   }
   
-  $: if (job && activeTab === 'script' && !scriptData) {
-    loadScript();
+  $: if (job && activeTab === 'script') {
+    // Check if we need to load script for this specific job
+    if (!scriptData || scriptData.job_id !== job.job_id) {
+      loadScript();
+    }
   }
 </script>
 
 <div class="job-page">
-  <!-- Header -->
-  <div class="header">
-    <div class="header-left">
-      <button class="back-btn" on:click={handleClose} aria-label="Back">
+  {#if isMobile && showMobileSidebar}
+    <!-- Mobile Sidebar Overlay -->
+    <div class="mobile-sidebar-overlay">
+      <JobSidebar 
+        currentJobId={params.id || ''}
+        currentHost={params.host || ''}
+        collapsed={false}
+        {isMobile}
+      />
+      <button 
+        class="mobile-toggle-btn"
+        on:click={() => showMobileSidebar = false}
+      >
         <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
+          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
         </svg>
-        Jobs
+        Close List
       </button>
+    </div>
+  {:else}
+    <div class="page-layout" class:sidebar-collapsed={sidebarCollapsed}>
+      {#if !isMobile}
+        <!-- Desktop Sidebar -->
+        <JobSidebar 
+          currentJobId={params.id || ''}
+          currentHost={params.host || ''}
+          bind:collapsed={sidebarCollapsed}
+          {isMobile}
+        />
+      {/if}
+      
+      <div class="job-content-area">
+        <!-- Header -->
+        <div class="header">
+    <div class="header-left">
+      {#if isMobile}
+        <button 
+          class="mobile-sidebar-btn" 
+          on:click={() => showMobileSidebar = true}
+          aria-label="Show job list"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/>
+          </svg>
+        </button>
+      {:else}
+        <button class="back-btn" on:click={handleClose} aria-label="Back">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
+          </svg>
+          Jobs
+        </button>
+      {/if}
       {#if job}
       <div class="divider"></div>
       <div class="job-title">
@@ -462,6 +566,9 @@
       {/if}
     </div>
   {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -509,6 +616,12 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.15s ease;
+    outline: none !important;
+  }
+  
+  .back-btn:focus {
+    outline: none !important;
+    box-shadow: none !important;
   }
 
   .back-btn:hover {
@@ -565,6 +678,12 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.15s ease;
+    outline: none !important;
+  }
+  
+  .refresh-btn:focus, .cancel-btn:focus {
+    outline: none !important;
+    box-shadow: none !important;
   }
 
   .refresh-btn {
@@ -678,6 +797,12 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.15s ease;
+    outline: none !important;
+  }
+  
+  .tab:focus {
+    outline: none !important;
+    box-shadow: none !important;
   }
 
   .tab:hover {
@@ -711,25 +836,51 @@
   .info-card {
     background: white;
     border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 1.25rem;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    transition: all 0.2s ease;
+  }
+  
+  .info-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
   }
 
   .card-title {
-    margin: 0 0 1rem 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #94a3b8;
+    margin: 0 0 1.25rem 0;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #64748b;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .card-title::before {
+    content: '';
+    width: 3px;
+    height: 14px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 2px;
   }
 
   .info-row {
     display: grid;
-    grid-template-columns: 120px 1fr;
+    grid-template-columns: 110px 1fr;
     gap: 1rem;
-    padding: 0.625rem 0;
-    border-bottom: 1px solid #f1f5f9;
+    padding: 0.875rem 0.5rem;
+    border-bottom: 1px solid #f8fafc;
+    transition: background 0.15s ease;
+  }
+  
+  .info-row:hover {
+    background: #fafbfc;
+    border-radius: 6px;
+    margin: 0 -0.5rem;
+    padding: 0.875rem 0.5rem;
   }
 
   .info-row:last-child {
@@ -741,23 +892,30 @@
   }
 
   .info-label {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #64748b;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
   }
 
   .info-value {
-    font-size: 0.875rem;
-    color: #1e293b;
-    word-break: break-all;
+    font-size: 0.9rem;
+    color: #0f172a;
+    word-break: break-word;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
   }
 
   .info-value.mono {
-    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
-    background: #f1f5f9;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.8rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+    padding: 0.375rem 0.625rem;
+    border-radius: 6px;
+    font-size: 0.825rem;
+    border: 1px solid #e2e8f0;
+    font-weight: 400;
   }
 
   /* Output Section */
@@ -878,5 +1036,92 @@
       grid-template-columns: 1fr;
       gap: 0.25rem;
     }
+  }
+  /* Layout with sidebar */
+  .page-layout {
+    display: flex;
+    height: 100%;
+    position: relative;
+  }
+  
+  .job-content-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  
+  /* Mobile sidebar overlay */
+  .mobile-sidebar-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: white;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .mobile-toggle-btn {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 24px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    transition: all 0.2s ease;
+  }
+  
+  .mobile-toggle-btn:hover {
+    background: #2563eb;
+    transform: translateX(-50%) translateY(-2px);
+    box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+  }
+  
+  .mobile-toggle-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+  
+  .mobile-sidebar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    outline: none !important;
+  }
+  
+  .mobile-sidebar-btn:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  
+  .mobile-sidebar-btn:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+  }
+  
+  .mobile-sidebar-btn svg {
+    width: 20px;
+    height: 20px;
+    color: #64748b;
   }
 </style>

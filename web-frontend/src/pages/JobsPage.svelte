@@ -142,21 +142,21 @@
     }
   }
 
-  function getTotalJobs(): number {
+  $: totalJobs = (() => {
     let total = 0;
     for (let hostData of jobsByHost.values()) {
       total += hostData.jobs.length;
     }
     return total;
-  }
+  })();
   
-  function getJobCountMap(): Map<string, number> {
+  $: jobCountMap = (() => {
     const counts = new Map<string, number>();
     for (let [hostname, hostData] of jobsByHost.entries()) {
       counts.set(hostname, hostData.jobs.length);
     }
     return counts;
-  }
+  })();
   
   function handleHostSelect(event: CustomEvent<string>) {
     filters.host = event.detail;
@@ -170,8 +170,8 @@
     checkMobile();
     window.addEventListener("resize", checkMobile);
 
-    // Auto-refresh every 60 seconds
-    refreshInterval = setInterval(loadJobs, 60000);
+    // Auto-refresh every 2 minutes (120 seconds)
+    refreshInterval = setInterval(loadJobs, 120000);
   });
 
   onDestroy(() => {
@@ -189,7 +189,7 @@
       </div>
       <div class="stat-divider"></div>
       <div class="stat-item">
-        <span class="stat-value">{getTotalJobs()}</span>
+        <span class="stat-value">{totalJobs}</span>
         <span class="stat-label">Jobs</span>
       </div>
       {#if dataFromCache}
@@ -267,7 +267,7 @@
           <HostSelector 
             {hosts}
             selectedHost={filters.host}
-            jobCounts={getJobCountMap()}
+            jobCounts={jobCountMap}
             on:select={(e) => {
               handleHostSelect(e);
               if (isMobile) showMobileFilters = false;
@@ -285,7 +285,7 @@
       <HostSelector 
         {hosts} 
         selectedHost={filters.host}
-        jobCounts={getJobCountMap()}
+        jobCounts={jobCountMap}
         on:select={handleHostSelect}
         {loading}
       />

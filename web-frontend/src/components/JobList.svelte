@@ -91,7 +91,7 @@
       No jobs found
     </div>
   {:else}
-    <div class="job-table">
+    <div class="job-table-container">
       <div class="table-header">
         <div class="col job-id">Job ID</div>
         <div class="col name">Name</div>
@@ -103,73 +103,75 @@
         <div class="col submitted">Submitted</div>
       </div>
       
-      {#each jobs as job}
-        <div 
-          class="job-row" 
-          on:click={() => selectJob(job)}
-          on:keydown={(e) => e.key === 'Enter' && selectJob(job)}
-          class:loading={loading}
-          class:clickable={!loading}
-          role="button"
-          tabindex="0"
-          aria-label="View job details for job {job.job_id}"
-        >
-          <div class="col job-id">
-            <strong>{job.job_id}</strong>
+      <div class="job-table-body">
+        {#each jobs as job}
+          <div 
+            class="job-row" 
+            on:click={() => selectJob(job)}
+            on:keydown={(e) => e.key === 'Enter' && selectJob(job)}
+            class:loading={loading}
+            class:clickable={!loading}
+            role="button"
+            tabindex="0"
+            aria-label="View job details for job {job.job_id}"
+          >
+            <div class="col job-id">
+              <strong>{job.job_id}</strong>
+            </div>
+            <div class="col name" title={job.name}>
+              <span class="job-name">{smartTruncate(job.name, 35)}</span>
+            </div>
+            <div class="col user">
+              {job.user || 'N/A'}
+            </div>
+            <div class="col state">
+              <span 
+                class="state-badge" 
+                style="background-color: {getStateColor(job.state)}"
+              >
+                {job.state}
+              </span>
+            </div>
+            <div class="col runtime">
+              {job.runtime || 'N/A'}
+            </div>
+            <div class="col resources">
+              {#if job.cpus || job.memory || job.nodes}
+                <div class="resource-grid">
+                  {#if job.nodes && job.nodes !== 'N/A'}
+                    <div class="resource-item" title="Nodes: {job.nodes}">
+                      <span class="resource-label">Nodes</span>
+                      <span class="resource-value">{job.nodes}</span>
+                    </div>
+                  {/if}
+                  {#if job.cpus && job.cpus !== 'N/A'}
+                    <div class="resource-item" title="CPUs: {job.cpus}">
+                      <span class="resource-label">CPUs</span>
+                      <span class="resource-value">{job.cpus}</span>
+                    </div>
+                  {/if}
+                  {#if job.memory && job.memory !== 'N/A'}
+                    <div class="resource-item" title="Memory: {job.memory}">
+                      <span class="resource-label">Memory</span>
+                      <span class="resource-value">{job.memory}</span>
+                    </div>
+                  {/if}
+                </div>
+              {:else}
+                <span class="no-resources">N/A</span>
+              {/if}
+            </div>
+            <div class="col partition">
+              {job.partition || 'N/A'}
+            </div>
+            <div class="col submitted">
+              <span class="submitted-time" title={job.submit_time ? new Date(job.submit_time).toLocaleString() : 'N/A'}>
+                {job.submit_time ? formatTime(job.submit_time) : 'N/A'}
+              </span>
+            </div>
           </div>
-          <div class="col name" title={job.name}>
-            <span class="job-name">{smartTruncate(job.name, 35)}</span>
-          </div>
-          <div class="col user">
-            {job.user || 'N/A'}
-          </div>
-          <div class="col state">
-            <span 
-              class="state-badge" 
-              style="background-color: {getStateColor(job.state)}"
-            >
-              {job.state}
-            </span>
-          </div>
-          <div class="col runtime">
-            {job.runtime || 'N/A'}
-          </div>
-          <div class="col resources">
-            {#if job.cpus || job.memory || job.nodes}
-              <div class="resource-grid">
-                {#if job.nodes && job.nodes !== 'N/A'}
-                  <div class="resource-item" title="Nodes: {job.nodes}">
-                    <span class="resource-label">Nodes</span>
-                    <span class="resource-value">{job.nodes}</span>
-                  </div>
-                {/if}
-                {#if job.cpus && job.cpus !== 'N/A'}
-                  <div class="resource-item" title="CPUs: {job.cpus}">
-                    <span class="resource-label">CPUs</span>
-                    <span class="resource-value">{job.cpus}</span>
-                  </div>
-                {/if}
-                {#if job.memory && job.memory !== 'N/A'}
-                  <div class="resource-item" title="Memory: {job.memory}">
-                    <span class="resource-label">Memory</span>
-                    <span class="resource-value">{job.memory}</span>
-                  </div>
-                {/if}
-              </div>
-            {:else}
-              <span class="no-resources">N/A</span>
-            {/if}
-          </div>
-          <div class="col partition">
-            {job.partition || 'N/A'}
-          </div>
-          <div class="col submitted">
-            <span class="submitted-time" title={job.submit_time ? new Date(job.submit_time).toLocaleString() : 'N/A'}>
-              {job.submit_time ? formatTime(job.submit_time) : 'N/A'}
-            </span>
-          </div>
-        </div>
-      {/each}
+        {/each}
+      </div>
     </div>
   {/if}
 </div>
@@ -242,11 +244,11 @@
     color: #6c757d;
   }
 
-  .job-table {
+  .job-table-container {
     display: flex;
     flex-direction: column;
     max-height: 70vh;
-    overflow-y: auto;
+    background: white;
   }
 
   .table-header {
@@ -259,9 +261,12 @@
     font-weight: 600;
     color: #495057;
     font-size: 0.9rem;
-    position: sticky;
-    top: 0;
-    z-index: 1;
+    flex-shrink: 0;
+  }
+
+  .job-table-body {
+    overflow-y: auto;
+    background: white;
   }
 
   .job-row {
@@ -272,6 +277,7 @@
     border-bottom: 1px solid #f1f3f4;
     transition: background-color 0.2s;
     min-height: 3.5rem;
+    background: white;
   }
   
   .job-row.clickable {
@@ -310,8 +316,7 @@
   }
 
   .col.resources {
-    align-items: flex-start;
-    padding-top: 0.2rem;
+    align-items: center;
     overflow: hidden;
     min-width: 0;
   }
@@ -432,32 +437,32 @@
       font-size: 0.9rem;
     }
     
-    .job-table {
+    .job-table-container {
       max-height: 60vh;
     }
   }
 
-  /* Scrollbar styling for job table */
-  .job-table::-webkit-scrollbar {
+  /* Scrollbar styling for job table body */
+  .job-table-body::-webkit-scrollbar {
     width: 8px;
   }
 
-  .job-table::-webkit-scrollbar-track {
+  .job-table-body::-webkit-scrollbar-track {
     background: rgba(0, 0, 0, 0.05);
     border-radius: 4px;
   }
 
-  .job-table::-webkit-scrollbar-thumb {
+  .job-table-body::-webkit-scrollbar-thumb {
     background: rgba(0, 0, 0, 0.2);
     border-radius: 4px;
   }
 
-  .job-table::-webkit-scrollbar-thumb:hover {
+  .job-table-body::-webkit-scrollbar-thumb:hover {
     background: rgba(0, 0, 0, 0.3);
   }
 
   /* Firefox scrollbar */
-  .job-table {
+  .job-table-body {
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
   }

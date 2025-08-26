@@ -17,6 +17,8 @@ interface JobsState {
   errors: Map<string, string>;
   hostJobs: Map<string, JobStatusResponse>;
   lastFetch: Map<string, number>;
+  sidebarLastLoad: number;
+  sidebarJobs: JobInfo[];
 }
 
 const CACHE_DURATION = 30000; // 30 seconds cache for individual jobs
@@ -29,6 +31,8 @@ function createJobsStore() {
     errors: new Map(),
     hostJobs: new Map(),
     lastFetch: new Map(),
+    sidebarLastLoad: 0,
+    sidebarJobs: [],
   });
 
   return {
@@ -148,13 +152,87 @@ function createJobsStore() {
       }
     },
     
+    async fetchAllJobs(forceRefresh = false): Promise<JobInfo[]> {
+      const state = get({ subscribe });
+      const cacheKey = 'allJobs';
+      const lastFetch = state.lastFetch.get(cacheKey) || 0;
+      
+      // Don't fetch if recently fetched (within 15 seconds) unless forcing refresh
+      if (!forceRefresh && Date.now() - lastFetch < 15000) {
+        const allJobs: JobInfo[] = [];
+        state.hostJobs.forEach(hostData => {
+          hostData.jobs.forEach(job => {
+            // Ensure hostname is set
+            if (!job.hostname) {
+              job.hostname = hostData.hostname;
+            }
+            allJobs.push(job);
+          });
+        });
+        return allJobs;
+      }
+      
+      try {
+        const response = await api.get<JobStatusResponse[]>('/api/status');
+        const allJobs: JobInfo[] = [];
+        
+        update(s => {
+          // Update host jobs cache
+          response.data.forEach(hostData => {
+            s.hostJobs.set(hostData.hostname, hostData);
+            
+            // Collect all jobs and update individual cache
+            hostData.jobs.forEach(job => {
+              // Ensure hostname is set
+              if (!job.hostname) {
+                job.hostname = hostData.hostname;
+              }
+              allJobs.push(job);
+              
+              const jobCacheKey = `${hostData.hostname}:${job.job_id}`;
+              if (!s.cache[jobCacheKey] || s.cache[jobCacheKey].timestamp < Date.now() - CACHE_DURATION) {
+                s.cache[jobCacheKey] = {
+                  job,
+                  timestamp: Date.now(),
+                  output: s.cache[jobCacheKey]?.output,
+                  outputTimestamp: s.cache[jobCacheKey]?.outputTimestamp,
+                };
+              }
+            });
+          });
+          
+          s.lastFetch.set(cacheKey, Date.now());
+          return s;
+        });
+        
+        return allJobs;
+      } catch (error: any) {
+        console.error('Failed to fetch all jobs:', error);
+        // Return cached data on error
+        const allJobs: JobInfo[] = [];
+        state.hostJobs.forEach(hostData => {
+          hostData.jobs.forEach(job => {
+            if (!job.hostname) {
+              job.hostname = hostData.hostname;
+            }
+            allJobs.push(job);
+          });
+        });
+        return allJobs;
+      }
+    },
+    
     async fetchHostJobs(hostname?: string, filters?: any): Promise<JobStatusResponse[]> {
       const state = get({ subscribe });
       const cacheKey = hostname || 'all';
       const lastFetch = state.lastFetch.get(cacheKey) || 0;
       
-      // Don't fetch if recently fetched (within 5 seconds)
-      if (Date.now() - lastFetch < 5000) {
+      // Don't fetch if recently fetched (within 5 seconds) and we have the data we need
+      const hasValidCache = hostname 
+        ? state.hostJobs.has(hostname)
+        : state.hostJobs.size > 0;
+        
+      if (Date.now() - lastFetch < 5000 && hasValidCache) {
         const result: JobStatusResponse[] = [];
         if (hostname && state.hostJobs.has(hostname)) {
           result.push(state.hostJobs.get(hostname)!);
@@ -248,11 +326,63 @@ function createJobsStore() {
       const state = get({ subscribe });
       const cacheKey = `${hostname}:${jobId}`;
       return state.errors.get(cacheKey) || null;
+    },
+    
+    shouldLoadSidebar(): boolean {
+      const state = get({ subscribe });
+      // Load if never loaded or if more than 60 seconds have passed
+      // Also load if we have no sidebar jobs cached
+      return state.sidebarJobs.length === 0 || Date.now() - state.sidebarLastLoad > 60000;
+    },
+    
+    async loadSidebarJobs(forceRefresh = false): Promise<void> {
+      const state = get({ subscribe });
+      
+      // Skip if not forcing and we have recent data
+      if (!forceRefresh && state.sidebarJobs.length > 0 && Date.now() - state.sidebarLastLoad < 60000) {
+        return;
+      }
+      
+      try {
+        // Fetch all jobs with force refresh
+        const allJobs = await this.fetchAllJobs(forceRefresh || Date.now() - state.sidebarLastLoad > 15000);
+        
+        // Sort by submit time (newest first)
+        const sortedJobs = allJobs.sort((a, b) => {
+          const timeA = new Date(a.submit_time || 0).getTime();
+          const timeB = new Date(b.submit_time || 0).getTime();
+          return timeB - timeA;
+        });
+        
+        // Update store with sorted jobs and timestamp
+        update(s => {
+          s.sidebarJobs = sortedJobs;
+          s.sidebarLastLoad = Date.now();
+          return s;
+        });
+      } catch (error) {
+        console.error('Error loading sidebar jobs:', error);
+      }
+    },
+    
+    getSidebarJobs(): JobInfo[] {
+      const state = get({ subscribe });
+      return state.sidebarJobs;
     }
   };
 }
 
 export const jobsStore = createJobsStore();
+
+// Derived store for sidebar jobs
+export const sidebarJobs = derived(jobsStore, $state => {
+  return {
+    jobs: $state.sidebarJobs,
+    runningJobs: $state.sidebarJobs.filter(j => j.state === 'R'),
+    pendingJobs: $state.sidebarJobs.filter(j => j.state === 'PD'),
+    recentJobs: $state.sidebarJobs.filter(j => j.state !== 'R' && j.state !== 'PD').slice(0, 50)
+  };
+});
 
 // Derived store for getting a specific job
 export function getJob(jobId: string, hostname: string) {
