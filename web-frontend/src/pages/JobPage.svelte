@@ -4,7 +4,6 @@
   import { jobsStore } from "../stores/jobs";
   import { api } from "../services/api";
   import type { JobInfo, JobOutputResponse, JobScriptResponse } from "../types/api";
-  import OutputViewer from "../components/OutputViewer.svelte";
 
   export let params: { id?: string; host?: string } = {};
 
@@ -15,7 +14,7 @@
   let mounted = true;
   
   // Tab state
-  let activeTab: 'info' | 'stdout' | 'stderr' | 'script' = 'info';
+  let activeTab: 'info' | 'output' | 'errors' | 'script' = 'info';
   
   // Output data
   let outputData: JobOutputResponse | null = null;
@@ -32,7 +31,6 @@
   let cancelError: string | null = null;
 
   $: canCancelJob = job && (job.state === 'R' || job.state === 'PD');
-  $: console.log('JobPage - job state:', job?.state, 'canCancelJob:', canCancelJob);
 
   async function loadJob(forceRefresh = false) {
     if (!params.id || !params.host) {
@@ -102,10 +100,24 @@
     }
   }
 
-  function handleClose() {
-    push("/");
+  function retryLoadOutput(): void {
+    outputData = null;
+    loadOutput();
   }
-  
+
+  function retryLoadScript(): void {
+    scriptData = null;
+    loadScript();
+  }
+
+  function handleClose() {
+    push('/jobs');
+  }
+
+  function handleRefresh() {
+    loadJob(true);
+  }
+
   async function cancelJob(): Promise<void> {
     if (!job || cancellingJob) return;
     
@@ -117,11 +129,8 @@
     
     try {
       await api.post(`/api/jobs/${job.job_id}/cancel?host=${encodeURIComponent(job.hostname)}`);
-      // Update job state locally
       job.state = 'CA';
-      // Show success message and redirect
       alert(`Job ${job.job_id} has been cancelled successfully.`);
-      push("/");
     } catch (error: unknown) {
       console.error('Error cancelling job:', error);
       cancelError = (error as Error).message || 'Failed to cancel job';
@@ -131,58 +140,49 @@
     }
   }
 
-  function handleRefresh() {
-    loadJob(true);
+  function formatTime(timeStr: string | null): string {
+    if (!timeStr || timeStr === 'N/A') return 'N/A';
+    try {
+      return new Date(timeStr).toLocaleString();
+    } catch {
+      return timeStr;
+    }
   }
 
   function getStateColor(state: string): string {
     switch (state) {
-      case "R": return "#28a745";
-      case "PD": return "#ffc107";
-      case "CD": return "#6f42c1";
-      case "F": return "#dc3545";
-      case "CA": return "#6c757d";
-      case "TO": return "#fd7e14";
-      default: return "#17a2b8";
+      case 'R': return '#10b981';
+      case 'PD': return '#f59e0b';
+      case 'CD': return '#8b5cf6';
+      case 'F': return '#ef4444';
+      case 'CA': return '#6b7280';
+      case 'TO': return '#f97316';
+      default: return '#06b6d4';
     }
   }
 
   function getStateLabel(state: string): string {
-    const labels: Record<string, string> = {
-      'R': 'RUNNING',
-      'PD': 'PENDING',
-      'CD': 'COMPLETED',
-      'F': 'FAILED',
-      'CA': 'CANCELLED',
-      'TO': 'TIMEOUT',
-      'CG': 'COMPLETING',
-      'CF': 'CONFIGURING'
-    };
-    return labels[state] || state;
+    switch (state) {
+      case 'R': return 'RUNNING';
+      case 'PD': return 'PENDING';
+      case 'CD': return 'COMPLETED';
+      case 'F': return 'FAILED';
+      case 'CA': return 'CANCELLED';
+      case 'TO': return 'TIMEOUT';
+      default: return 'UNKNOWN';
+    }
   }
-
-  function parseGPUs(tres: string | null): string {
-    if (!tres) return 'N/A';
-    // Look for gpu or gres/gpu in the TRES string
-    const gpuMatch = tres.match(/(?:gres\/)?gpu(?::[^=]*)?=(\d+)/i);
-    return gpuMatch ? gpuMatch[1] : 'N/A';
-  }
-
-
-  let lastParams = { id: '', host: '' };
 
   onMount(() => {
     mounted = true;
-    // Store initial params
-    lastParams = { id: params.id || '', host: params.host || '' };
     loadJob();
     
-    // Auto-refresh every 10 seconds for active jobs
+    // Auto-refresh running jobs
     refreshInterval = setInterval(() => {
-      if (job && ["R", "PD", "CF", "CG"].includes(job.state)) {
-        loadJob(true);
+      if (job && (job.state === 'R' || job.state === 'PD')) {
+        loadJob();
       }
-    }, 10000);
+    }, 30000);
   });
 
   onDestroy(() => {
@@ -190,20 +190,18 @@
     if (refreshInterval) {
       clearInterval(refreshInterval);
     }
-    // Clear data on unmount
-    job = null;
-    outputData = null;
-    scriptData = null;
   });
 
-  // Only reload if params actually changed
+  // Track params changes
+  let lastParams = { id: params.id, host: params.host };
+  
   $: if (mounted && params.id && params.host && 
       (params.id !== lastParams.id || params.host !== lastParams.host)) {
     lastParams = { id: params.id, host: params.host };
     loadJob();
   }
   
-  $: if (job && (activeTab === 'stdout' || activeTab === 'stderr') && !outputData) {
+  $: if (job && (activeTab === 'output' || activeTab === 'errors') && !outputData) {
     loadOutput();
   }
   
@@ -213,726 +211,672 @@
 </script>
 
 <div class="job-page">
-  <header class="job-header">
-    <div class="header-content">
-      <div class="nav-section">
-        <button class="back-button" on:click={handleClose} aria-label="Back to jobs list">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z" />
-          </svg>
-          <span>Jobs</span>
-        </button>
-        
-        {#if params.id && params.host}
-          <div class="breadcrumb-section">
-            <nav class="breadcrumb" aria-label="Breadcrumb">
-              <span class="separator">/</span>
-              <span class="current">{params.host}</span>
-              <span class="separator">/</span>
-              <span class="current">Job {params.id}</span>
-            </nav>
-          </div>
-        {/if}
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <button class="back-btn" on:click={handleClose} aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
+        </svg>
+        Jobs
+      </button>
+      {#if job}
+      <div class="divider"></div>
+      <div class="job-title">
+        <span class="job-label">{params.host}</span>
+        <span class="separator">/</span>
+        <span class="job-label">Job {job.job_id}</span>
+        <span class="job-name">{job.name}</span>
       </div>
-      
+      {/if}
+    </div>
+    
+    <div class="header-right">
       <button 
-        class="refresh-button" 
+        class="refresh-btn" 
         on:click={handleRefresh} 
         disabled={loading}
-        aria-label="Refresh job data"
       >
-        <svg class="refresh-icon" class:spinning={loading} viewBox="0 0 24 24" fill="currentColor">
+        <svg class:spinning={loading} viewBox="0 0 24 24" fill="currentColor">
           <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
         </svg>
-        <span>{loading ? "Refreshing..." : "Refresh"}</span>
+        {loading ? "Refreshing..." : "Refresh"}
+      </button>
+      
+      {#if job && canCancelJob}
+      <button class="cancel-btn" on:click={cancelJob} disabled={cancellingJob}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+        </svg>
+        Cancel Job
+      </button>
+      {/if}
+      
+      {#if job}
+      <span class="state-badge" style="background-color: {getStateColor(job.state)}">
+        {getStateLabel(job.state)}
+      </span>
+      {/if}
+    </div>
+  </div>
+  
+  {#if error && !job}
+    <div class="error-container">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+      </svg>
+      <h2>Unable to Load Job</h2>
+      <p>{error}</p>
+      <button on:click={handleRefresh}>Try Again</button>
+    </div>
+  {:else if job}
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab" class:active={activeTab === 'info'} on:click={() => activeTab = 'info'}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
+        </svg>
+        Info
+      </button>
+      <button class="tab" class:active={activeTab === 'output'} on:click={() => activeTab = 'output'}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+        </svg>
+        Output
+      </button>
+      <button class="tab" class:active={activeTab === 'errors'} on:click={() => activeTab = 'errors'}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        Errors
+      </button>
+      <button class="tab" class:active={activeTab === 'script'} on:click={() => activeTab = 'script'}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
+        </svg>
+        Script
       </button>
     </div>
-  </header>
-
-  <div class="job-content">
-    {#if error && !job}
-      <div class="error-container">
-        <div class="error-box">
-          <svg class="error-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-          </svg>
-          <h2>Unable to Load Job</h2>
-          <p>{error}</p>
-          <div class="error-actions">
-            <button on:click={handleRefresh} class="retry-button">
-              Try Again
-            </button>
-            <button on:click={handleClose} class="back-button-alt">
-              Back to Jobs
-            </button>
-          </div>
-        </div>
-      </div>
-    {:else if job}
-      <div class="job-detail-container">
-        <div class="job-info-header">
-          <div class="job-title-section">
-            <h1>Job {job.job_id}</h1>
-            <p class="job-name">{job.name}</p>
-          </div>
-          <div class="header-actions">
-            {#if canCancelJob}
-              <button 
-                class="cancel-btn" 
-                on:click={cancelJob}
-                disabled={cancellingJob}
-                aria-label="Cancel job"
-              >
-                {#if cancellingJob}
-                  <span class="spinner"></span>
-                  Cancelling...
-                {:else}
-                  <svg class="cancel-icon" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/>
-                  </svg>
-                  Cancel Job
-                {/if}
-              </button>
-            {/if}
-            <span 
-              class="state-badge" 
-              style="background-color: {getStateColor(job.state)}"
-            >
-              {getStateLabel(job.state)}
-            </span>
-          </div>
-        </div>
-
-        <div class="tabs">
-          <button 
-            class="tab" 
-            class:active={activeTab === 'info'}
-            on:click={() => activeTab = 'info'}
-          >
-            <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z"/>
-            </svg>
-            Info
-          </button>
-          <button 
-            class="tab" 
-            class:active={activeTab === 'stdout'}
-            on:click={() => activeTab = 'stdout'}
-          >
-            <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
-            </svg>
-            Output
-          </button>
-          <button 
-            class="tab" 
-            class:active={activeTab === 'stderr'}
-            on:click={() => activeTab = 'stderr'}
-          >
-            <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M13,9H11V7H13M13,17H11V11H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
-            </svg>
-            Errors
-          </button>
-          <button 
-            class="tab" 
-            class:active={activeTab === 'script'}
-            on:click={() => activeTab = 'script'}
-          >
-            <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M14.6,16.6L19.2,12L14.6,7.4L16,6L22,12L16,18L14.6,16.6M9.4,16.6L4.8,12L9.4,7.4L8,6L2,12L8,18L9.4,16.6Z"/>
-            </svg>
-            Script
-          </button>
-        </div>
-
-        <div class="tab-content">
-          {#if activeTab === 'info'}
-            <div class="info-grid">
-              <div class="info-section">
-                <h3>General</h3>
-                <div class="info-row">
-                  <span class="label">Job ID:</span>
-                  <span class="value">{job.job_id}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Name:</span>
-                  <span class="value">{job.name}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">User:</span>
-                  <span class="value">{job.user || 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Host:</span>
-                  <span class="value">{job.hostname}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Partition:</span>
-                  <span class="value">{job.partition || 'N/A'}</span>
-                </div>
-                {#if job.work_dir}
-                <div class="info-row">
-                  <span class="label">Work Dir:</span>
-                  <span class="value work-dir" title={job.work_dir}>{job.work_dir}</span>
-                </div>
-                {/if}
-                {#if job.reason}
-                <div class="info-row">
-                  <span class="label">Reason:</span>
-                  <span class="value">{job.reason}</span>
-                </div>
-                {/if}
-              </div>
-
-              <div class="info-section">
-                <h3>Resources</h3>
-                <div class="info-row">
-                  <span class="label">Nodes:</span>
-                  <span class="value">{job.nodes || 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">CPUs:</span>
-                  <span class="value">{job.cpus || 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Memory:</span>
-                  <span class="value">{job.memory || 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">GPUs:</span>
-                  <span class="value">{parseGPUs(job.alloc_tres || job.req_tres)}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Time Limit:</span>
-                  <span class="value">{job.time_limit || 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Runtime:</span>
-                  <span class="value">{job.runtime || 'N/A'}</span>
-                </div>
-              </div>
-
-              <div class="info-section">
-                <h3>Timing</h3>
-                <div class="info-row">
-                  <span class="label">Submitted:</span>
-                  <span class="value">{job.submit_time ? new Date(job.submit_time).toLocaleString() : 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Started:</span>
-                  <span class="value">{job.start_time ? new Date(job.start_time).toLocaleString() : 'N/A'}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">Ended:</span>
-                  <span class="value">{job.end_time ? new Date(job.end_time).toLocaleString() : 'N/A'}</span>
-                </div>
-              </div>
-
-              {#if job.node_list}
-              <div class="info-section">
-                <h3>Allocation</h3>
-                <div class="info-row">
-                  <span class="label">Node List:</span>
-                  <span class="value">{job.node_list}</span>
-                </div>
-                {#if job.alloc_tres}
-                <div class="info-row">
-                  <span class="label">Allocated TRES:</span>
-                  <span class="value" title={job.alloc_tres}>{job.alloc_tres}</span>
-                </div>
-                {/if}
-                {#if job.req_tres}
-                <div class="info-row">
-                  <span class="label">Requested TRES:</span>
-                  <span class="value" title={job.req_tres}>{job.req_tres}</span>
-                </div>
-                {/if}
-              </div>
-              {/if}
+    
+    <!-- Content -->
+    <div class="content">
+      {#if activeTab === 'info'}
+        <div class="info-container">
+          <!-- General Information -->
+          <div class="info-card">
+            <h3 class="card-title">General</h3>
+            <div class="info-row">
+              <span class="info-label">Job ID:</span>
+              <span class="info-value">{job.job_id}</span>
             </div>
-          {:else if activeTab === 'stdout'}
-            <OutputViewer
-              content={outputData?.stdout}
-              loading={loadingOutput}
-              error={outputError}
-              emptyMessage="No output available"
-              title="Standard Output"
-              fileSize={outputData?.stdout_metadata?.size_bytes}
-              modifiedDate={outputData?.stdout_metadata?.last_modified}
-              fileName={`job_${params.id}_stdout.txt`}
-              wrapLines={false}
-              maxHeight="600px"
-            />
-          {:else if activeTab === 'stderr'}
-            <OutputViewer
-              content={outputData?.stderr}
-              loading={loadingOutput}
-              error={outputError}
-              emptyMessage="No errors reported"
-              title="Standard Error"
-              fileSize={outputData?.stderr_metadata?.size_bytes}
-              modifiedDate={outputData?.stderr_metadata?.last_modified}
-              fileName={`job_${params.id}_stderr.txt`}
-              wrapLines={false}
-              maxHeight="600px"
-            />
-          {:else if activeTab === 'script'}
-            <OutputViewer
-              content={scriptData?.script_content}
-              loading={loadingScript}
-              error={scriptError}
-              emptyMessage="No script available"
-              title="Job Script"
-              fileSize={scriptData?.content_length}
-              modifiedDate={null}
-              fileName={`job_${params.id}_script.sh`}
-              syntaxHighlight="bash"
-              wrapLines={false}
-              maxHeight="600px"
-            />
+            <div class="info-row">
+              <span class="info-label">Name:</span>
+              <span class="info-value">{job.name}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">User:</span>
+              <span class="info-value">{job.user || 'N/A'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Host:</span>
+              <span class="info-value">{job.hostname}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Partition:</span>
+              <span class="info-value">{job.partition || 'N/A'}</span>
+            </div>
+            {#if job.work_dir && job.work_dir !== 'N/A'}
+            <div class="info-row full-width">
+              <span class="info-label">Work Dir:</span>
+              <span class="info-value mono">{job.work_dir}</span>
+            </div>
+            {/if}
+            {#if job.reason && job.reason !== 'N/A' && job.reason !== 'None'}
+            <div class="info-row full-width">
+              <span class="info-label">Reason:</span>
+              <span class="info-value">{job.reason}</span>
+            </div>
+            {/if}
+          </div>
+          
+          <!-- Resources -->
+          <div class="info-card">
+            <h3 class="card-title">Resources</h3>
+            <div class="info-row">
+              <span class="info-label">Nodes:</span>
+              <span class="info-value">{job.nodes || 'N/A'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">CPUs:</span>
+              <span class="info-value">{job.cpus || 'N/A'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Memory:</span>
+              <span class="info-value">{job.memory || 'N/A'}</span>
+            </div>
+            {#if job.gpus && job.gpus !== 'N/A'}
+            <div class="info-row">
+              <span class="info-label">GPUs:</span>
+              <span class="info-value">{job.gpus}</span>
+            </div>
+            {/if}
+            <div class="info-row">
+              <span class="info-label">Time Limit:</span>
+              <span class="info-value">{job.time_limit || 'N/A'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Runtime:</span>
+              <span class="info-value">{job.runtime || '0:00'}</span>
+            </div>
+          </div>
+          
+          <!-- Timing -->
+          <div class="info-card">
+            <h3 class="card-title">Timing</h3>
+            <div class="info-row full-width">
+              <span class="info-label">Submitted:</span>
+              <span class="info-value">{formatTime(job.submit_time)}</span>
+            </div>
+            <div class="info-row full-width">
+              <span class="info-label">Started:</span>
+              <span class="info-value">{formatTime(job.start_time)}</span>
+            </div>
+            <div class="info-row full-width">
+              <span class="info-label">Ended:</span>
+              <span class="info-value">{formatTime(job.end_time)}</span>
+            </div>
+          </div>
+        </div>
+        
+      {:else if activeTab === 'output'}
+        <div class="output-section">
+          {#if loadingOutput}
+            <div class="loading-state">
+              <div class="spinner"></div>
+              <span>Loading output...</span>
+            </div>
+          {:else if outputError}
+            <div class="error-state">
+              <span>{outputError}</span>
+              <button class="retry-btn" on:click={retryLoadOutput}>Retry</button>
+            </div>
+          {:else if outputData?.stdout}
+            <pre class="output-content">{outputData.stdout}</pre>
+          {:else}
+            <div class="empty-state">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+              </svg>
+              <span>No output available</span>
+            </div>
           {/if}
         </div>
-      </div>
-    {:else}
-      <div class="loading-container">
-        <div class="loading-spinner"></div>
-        <p>Loading job details...</p>
-      </div>
-    {/if}
-  </div>
+        
+      {:else if activeTab === 'errors'}
+        <div class="output-section">
+          {#if loadingOutput}
+            <div class="loading-state">
+              <div class="spinner"></div>
+              <span>Loading errors...</span>
+            </div>
+          {:else if outputError}
+            <div class="error-state">
+              <span>{outputError}</span>
+              <button class="retry-btn" on:click={retryLoadOutput}>Retry</button>
+            </div>
+          {:else if outputData?.stderr}
+            <pre class="output-content error">{outputData.stderr}</pre>
+          {:else}
+            <div class="empty-state">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/>
+              </svg>
+              <span>No errors</span>
+            </div>
+          {/if}
+        </div>
+        
+      {:else if activeTab === 'script'}
+        <div class="output-section">
+          {#if loadingScript}
+            <div class="loading-state">
+              <div class="spinner"></div>
+              <span>Loading script...</span>
+            </div>
+          {:else if scriptError}
+            <div class="error-state">
+              <span>{scriptError}</span>
+              <button class="retry-btn" on:click={retryLoadScript}>Retry</button>
+            </div>
+          {:else if scriptData?.script_content}
+            <pre class="output-content script">{scriptData.script_content}</pre>
+          {:else}
+            <div class="empty-state">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M14.6,16.6L19.2,12L14.6,7.4L16,6L22,12L16,18L14.6,16.6M9.4,16.6L4.8,12L9.4,7.4L8,6L2,12L8,18L9.4,16.6Z"/>
+              </svg>
+              <span>Script not available</span>
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
   .job-page {
-    height: 100vh;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    background: #f9fafb;
+    background: #f8fafc;
   }
 
-  .job-header {
-    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
-    color: white;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  .header-content {
-    padding: 1rem 2rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    max-width: 1600px;
-    margin: 0 auto;
-    width: 100%;
-    gap: 1rem;
-  }
-
-  .nav-section {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex: 1;
-  }
-
-  .breadcrumb-section {
-    display: flex;
-    align-items: center;
-  }
-
-  .back-button {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s;
-    font-size: 0.9rem;
-    font-weight: 500;
-  }
-
-  .back-button:hover {
-    background: rgba(255, 255, 255, 0.2);
-    transform: translateX(-2px);
-  }
-
-  .back-button svg {
-    width: 18px;
-    height: 18px;
-  }
-
-  .breadcrumb {
-    display: flex;
-    align-items: center;
-    font-size: 0.95rem;
-    opacity: 0.95;
-    font-weight: 400;
-  }
-
-  .separator {
-    margin: 0 0.5rem;
-    opacity: 0.5;
-  }
-
-  .current {
-    font-weight: 500;
-  }
-
-  .refresh-button {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-    border: none;
-    color: white;
-    padding: 0.6rem 1.2rem;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s;
-    font-size: 0.9rem;
-    font-weight: 500;
-    box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
-    flex-shrink: 0;
-  }
-
-  .refresh-button:hover:not(:disabled) {
-    background: linear-gradient(135deg, #059669 0%, #047857 100%);
-    transform: translateY(-1px);
-  }
-
-  .refresh-button:disabled {
-    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-    cursor: not-allowed;
-  }
-
-  .refresh-icon {
-    width: 18px;
-    height: 18px;
-  }
-
-  .spinning {
-    animation: spin 1.5s linear infinite;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .job-content {
-    flex: 1;
-    overflow: auto;
-    padding: 2rem;
-  }
-
-  .job-detail-container {
-    max-width: 1200px;
-    margin: 0 auto;
+  /* Header */
+  .header {
     background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  }
-
-  .job-info-header {
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 1rem 1.5rem;
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
+    align-items: center;
   }
 
-  .header-actions {
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-right {
     display: flex;
     align-items: center;
     gap: 0.75rem;
   }
-  
-  .cancel-btn {
-    background: #dc3545;
-    color: white;
-    border: none;
-    padding: 0.4rem 1rem;
-    border-radius: 0.5rem;
-    cursor: pointer;
+
+  .back-btn {
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    color: #64748b;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .back-btn:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    color: #475569;
+  }
+
+  .back-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .divider {
+    width: 1px;
+    height: 24px;
+    background: #e2e8f0;
+  }
+
+  .job-title {
+    display: flex;
+    align-items: center;
     gap: 0.5rem;
-    transition: all 0.2s ease;
-    font-size: 0.9rem;
+    min-width: 0;
+  }
+
+  .job-label {
+    font-size: 1rem;
     font-weight: 600;
-    white-space: nowrap;
+    color: #1e293b;
   }
 
-  .cancel-btn:hover:not(:disabled) {
-    background: #c82333;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
-  }
-
-  .cancel-btn:disabled {
-    background: #6c757d;
-    cursor: not-allowed;
-    opacity: 0.8;
-  }
-
-  .cancel-icon {
-    width: 1.125rem;
-    height: 1.125rem;
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    border-top-color: white;
-    animation: spin 0.6s linear infinite;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-  
-  .job-title-section h1 {
-    margin: 0;
-    font-size: 1.5rem;
-    color: #1f2937;
+  .separator {
+    color: #94a3b8;
+    font-weight: 400;
   }
 
   .job-name {
-    margin: 0.25rem 0 0 0;
-    color: #6b7280;
+    font-size: 0.875rem;
+    color: #64748b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .refresh-btn, .cancel-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .refresh-btn {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .refresh-btn:hover:not(:disabled) {
+    background: #2563eb;
+  }
+
+  .refresh-btn:disabled {
+    background: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  .cancel-btn {
+    background: #ef4444;
+    color: white;
+  }
+
+  .cancel-btn:hover:not(:disabled) {
+    background: #dc2626;
+  }
+
+  .cancel-btn:disabled {
+    background: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  .refresh-btn svg, .cancel-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .spinning {
+    animation: spin 1s linear infinite;
   }
 
   .state-badge {
-    padding: 0.5rem 1rem;
-    border-radius: 2rem;
+    padding: 0.375rem 0.875rem;
+    border-radius: 20px;
     color: white;
+    font-size: 0.75rem;
     font-weight: 600;
-    font-size: 0.875rem;
+    letter-spacing: 0.025em;
   }
 
-  .tabs {
+  /* Error Container */
+  .error-container {
+    flex: 1;
     display: flex;
-    border-bottom: 1px solid #e5e7eb;
-    background: #f9fafb;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    gap: 1rem;
+  }
+
+  .error-container svg {
+    width: 48px;
+    height: 48px;
+    color: #ef4444;
+  }
+
+  .error-container h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: #1e293b;
+  }
+
+  .error-container p {
+    margin: 0;
+    color: #64748b;
+  }
+
+  .error-container button {
+    padding: 0.5rem 1rem;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .error-container button:hover {
+    background: #2563eb;
+  }
+
+  /* Tabs */
+  .tabs {
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    padding: 0 1.5rem;
+    gap: 0.5rem;
   }
 
   .tab {
-    padding: 1rem 1.5rem;
-    background: none;
-    border: none;
-    cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    color: #6b7280;
-    font-size: 0.9rem;
+    gap: 0.375rem;
+    padding: 0.875rem 1rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #64748b;
+    font-size: 0.875rem;
     font-weight: 500;
-    transition: all 0.2s;
-    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
 
   .tab:hover {
-    color: #374151;
-    background: rgba(0, 0, 0, 0.02);
+    color: #475569;
   }
 
   .tab.active {
-    color: #2563eb;
-    border-bottom-color: #2563eb;
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
   }
 
-  .tab-icon {
-    width: 18px;
-    height: 18px;
+  .tab svg {
+    width: 16px;
+    height: 16px;
   }
 
-  .tab-content {
+  /* Content */
+  .content {
+    flex: 1;
+    overflow-y: auto;
     padding: 1.5rem;
-    min-height: 400px;
   }
 
-  .info-grid {
+  /* Info Grid */
+  .info-container {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
   }
 
-  .info-section {
-    background: #f9fafb;
-    padding: 1.5rem;
+  .info-card {
+    background: white;
+    border: 1px solid #e2e8f0;
     border-radius: 8px;
+    padding: 1.25rem;
   }
 
-  .info-section h3 {
+  .card-title {
     margin: 0 0 1rem 0;
-    font-size: 1.1rem;
-    color: #374151;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   .info-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #e5e7eb;
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 1rem;
+    padding: 0.625rem 0;
+    border-bottom: 1px solid #f1f5f9;
   }
 
   .info-row:last-child {
     border-bottom: none;
   }
 
-  .label {
+  .info-row.full-width {
+    grid-column: 1 / -1;
+  }
+
+  .info-label {
+    font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
+    color: #64748b;
   }
 
-  .value {
-    color: #111827;
-    text-align: right;
-    word-break: break-word;
+  .info-value {
+    font-size: 0.875rem;
+    color: #1e293b;
+    word-break: break-all;
   }
 
-  .value.work-dir {
-    font-size: 0.85rem;
-    font-family: monospace;
-    max-width: 300px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .info-value.mono {
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    background: #f1f5f9;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
   }
 
+  /* Output Section */
+  .output-section {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
 
-  .loading-container {
+  .output-content {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 0;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow: auto;
+    flex: 1;
+  }
+
+  .output-content.error {
+    background: #fef2f2;
+    border-color: #fecaca;
+    color: #991b1b;
+  }
+
+  .output-content.script {
+    background: #f0f9ff;
+    border-color: #bae6fd;
+  }
+
+  /* States */
+  .loading-state,
+  .empty-state,
+  .error-state {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    height: 100%;
-  }
-
-  .loading-spinner {
-    border: 4px solid rgba(0, 0, 0, 0.1);
-    border-left-color: #3498db;
-    border-radius: 50%;
-    width: 40px;
-    height: 40px;
-    animation: spin 1s linear infinite;
-    margin-bottom: 1rem;
-  }
-
-  .error-container {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-  }
-
-  .error-box {
-    background: white;
-    border-radius: 12px;
     padding: 3rem;
-    text-align: center;
-    max-width: 500px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  }
-
-  .error-icon {
-    width: 64px;
-    height: 64px;
-    color: #dc3545;
-    margin-bottom: 1.5rem;
-  }
-
-  .error-box h2 {
-    margin: 0 0 1rem 0;
-    color: #1f2937;
-  }
-
-  .error-box p {
-    color: #6b7280;
-    margin-bottom: 2rem;
-  }
-
-  .error-actions {
-    display: flex;
     gap: 1rem;
-    justify-content: center;
   }
 
-  .retry-button {
-    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  .empty-state {
+    color: #94a3b8;
+  }
+
+  .empty-state svg {
+    width: 48px;
+    height: 48px;
+    opacity: 0.3;
+  }
+
+  .error-state {
+    color: #ef4444;
+  }
+
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .retry-btn {
+    padding: 0.375rem 0.875rem;
+    background: #3b82f6;
     color: white;
     border: none;
-    padding: 0.75rem 1.5rem;
     border-radius: 6px;
-    cursor: pointer;
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 500;
-  }
-
-  .retry-button:hover {
-    background: linear-gradient(135deg, #c82333 0%, #a71e2a 100%);
-  }
-
-  .back-button-alt {
-    background: white;
-    color: #6b7280;
-    border: 2px solid #e5e7eb;
-    padding: 0.75rem 1.5rem;
-    border-radius: 6px;
     cursor: pointer;
-    font-size: 1rem;
-    font-weight: 500;
+    transition: all 0.15s ease;
   }
 
-  .back-button-alt:hover {
-    background: #f3f4f6;
+  .retry-btn:hover {
+    background: #2563eb;
   }
 
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* Mobile */
   @media (max-width: 768px) {
-    .header-content {
+    .header {
       padding: 1rem;
       flex-direction: column;
-      gap: 1rem;
-    }
-
-    .nav-section {
-      flex-direction: column;
-      align-items: flex-start;
+      align-items: stretch;
       gap: 0.75rem;
     }
 
-    .job-content {
-      padding: 1rem;
-    }
-
-    .info-grid {
-      grid-template-columns: 1fr;
+    .header-right {
+      justify-content: flex-end;
     }
 
     .tabs {
+      padding: 0 1rem;
       overflow-x: auto;
     }
 
-    .tab {
-      padding: 0.75rem 1rem;
-      font-size: 0.85rem;
+    .content {
+      padding: 1rem;
     }
 
-    .tab-icon {
-      width: 16px;
-      height: 16px;
+    .info-container {
+      grid-template-columns: 1fr;
+    }
+
+    .info-row {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
     }
   }
 </style>

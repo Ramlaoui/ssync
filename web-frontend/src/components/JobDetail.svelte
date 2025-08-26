@@ -14,11 +14,11 @@
   let scriptData: JobScriptResponse | null = null;
   let loadingScript = false;
   let scriptError: string | null = null;
-  let activeTab: 'info' | 'stdout' | 'stderr' | 'script' = 'info';
+  let activeTab: 'info' | 'output' | 'errors' | 'script' = 'info';
   let cancellingJob = false;
   let cancelError: string | null = null;
   
-  $: if (job && (activeTab === 'stdout' || activeTab === 'stderr') && !outputData) {
+  $: if (job && (activeTab === 'output' || activeTab === 'errors') && !outputData) {
     loadOutput();
   }
   
@@ -35,9 +35,7 @@
     try {
       const result = await loadJobOutput(job.job_id, job.hostname);
       
-      // Handle case where output is already loading from another request
       if ('loading' in result && result.loading) {
-        // Poll for output every second
         setTimeout(() => loadOutput(), 1000);
       } else {
         outputData = result as JobOutputResponse;
@@ -90,25 +88,25 @@
   
   function getStateColor(state: string): string {
     switch (state) {
-      case 'R': return '#28a745';
-      case 'PD': return '#ffc107';
-      case 'CD': return '#6f42c1';
-      case 'F': return '#dc3545';
-      case 'CA': return '#6c757d';
-      case 'TO': return '#fd7e14';
-      default: return '#17a2b8';
+      case 'R': return '#10b981';
+      case 'PD': return '#f59e0b';
+      case 'CD': return '#8b5cf6';
+      case 'F': return '#ef4444';
+      case 'CA': return '#6b7280';
+      case 'TO': return '#f97316';
+      default: return '#06b6d4';
     }
   }
   
   function getStateLabel(state: string): string {
     switch (state) {
-      case 'R': return 'Running';
-      case 'PD': return 'Pending';
-      case 'CD': return 'Completed';
-      case 'F': return 'Failed';
-      case 'CA': return 'Cancelled';
-      case 'TO': return 'Timeout';
-      default: return 'Unknown';
+      case 'R': return 'RUNNING';
+      case 'PD': return 'PENDING';
+      case 'CD': return 'COMPLETED';
+      case 'F': return 'FAILED';
+      case 'CA': return 'CANCELLED';
+      case 'TO': return 'TIMEOUT';
+      default: return 'UNKNOWN';
     }
   }
   
@@ -140,9 +138,7 @@
     
     try {
       await api.post(`/api/jobs/${job.job_id}/cancel?host=${encodeURIComponent(job.hostname)}`);
-      // Update job state locally
       job.state = 'CA';
-      // Close the detail view or refresh
       alert(`Job ${job.job_id} has been cancelled successfully.`);
       onClose();
     } catch (error: unknown) {
@@ -155,373 +151,231 @@
   }
 
   $: canCancelJob = job && (job.state === 'R' || job.state === 'PD');
-  $: console.log('JobDetail - job state:', job?.state, 'canCancelJob:', canCancelJob);
 </script>
 
 <div class="job-detail" class:full-page={fullPage}>
+  <!-- Header -->
   <div class="header">
-    <div class="title-row">
-      <div class="job-info">
-        <div class="job-header">
-          {#if !fullPage}
-          <button 
-            class="back-btn" 
-            on:click={onClose}
-            aria-label="Back to job list"
-          >
-            <svg class="back-arrow" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
-            </svg>
-          </button>
-          {/if}
-          <div class="job-details">
-            {#if isLoading}
-              <h2 class="skeleton skeleton-text">Job ...</h2>
-              <div class="job-name skeleton skeleton-text">Loading job name...</div>
-            {:else}
-              <h2>Job {job.job_id}</h2>
-              <div class="job-name">{job.name}</div>
-            {/if}
-          </div>
-        </div>
+    <div class="header-left">
+      {#if !fullPage}
+      <button class="back-btn" on:click={onClose} aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
+        </svg>
+        Jobs
+      </button>
+      <div class="divider"></div>
+      {/if}
+      
+      <div class="job-title">
+        <span class="job-label">Job {job.job_id}</span>
+        <span class="job-name">{job.name}</span>
       </div>
-      <div class="header-actions">
-        {#if canCancelJob && !isLoading}
-          <button 
-            class="cancel-btn" 
-            on:click={cancelJob}
-            disabled={cancellingJob}
-            aria-label="Cancel job"
-          >
-            {#if cancellingJob}
-              <span class="spinner"></span>
-              Cancelling...
-            {:else}
-              <svg class="cancel-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/>
-              </svg>
-              Cancel Job
-            {/if}
-          </button>
-        {/if}
-        {#if isLoading}
-          <span class="state-badge skeleton">...</span>
-        {:else}
-          <span 
-            class="state-badge" 
-            style="background-color: {getStateColor(job.state)}"
-          >
-            {getStateLabel(job.state)}
-          </span>
-        {/if}
-      </div>
+    </div>
+    
+    <div class="header-right">
+      {#if canCancelJob && !isLoading}
+      <button class="cancel-btn" on:click={cancelJob} disabled={cancellingJob}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+        </svg>
+        Cancel Job
+      </button>
+      {/if}
+      
+      <span class="state-badge" style="background-color: {getStateColor(job.state)}">
+        {getStateLabel(job.state)}
+      </span>
     </div>
   </div>
   
+  <!-- Tabs -->
   <div class="tabs">
-    <button 
-      class="tab" 
-      class:active={activeTab === 'info'}
-      on:click={() => activeTab = 'info'}
-    >
-      <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z"/>
+    <button class="tab" class:active={activeTab === 'info'} on:click={() => activeTab = 'info'}>
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
       </svg>
       Info
     </button>
-    <button 
-      class="tab" 
-      class:active={activeTab === 'stdout'}
-      on:click={() => activeTab = 'stdout'}
-    >
-      <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
+    <button class="tab" class:active={activeTab === 'output'} on:click={() => activeTab = 'output'}>
+      <svg viewBox="0 0 24 24" fill="currentColor">
         <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
       </svg>
       Output
     </button>
-    <button 
-      class="tab" 
-      class:active={activeTab === 'stderr'}
-      on:click={() => activeTab = 'stderr'}
-    >
-      <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M13,13H11V7H13M13,17H11V15H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
+    <button class="tab" class:active={activeTab === 'errors'} on:click={() => activeTab = 'errors'}>
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
       </svg>
       Errors
     </button>
-    <button 
-      class="tab" 
-      class:active={activeTab === 'script'}
-      on:click={() => activeTab = 'script'}
-    >
-      <svg class="tab-icon" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M8,3A2,2 0 0,0 6,5V9A2,2 0 0,1 4,11H3V13H4A2,2 0 0,1 6,15V19A2,2 0 0,0 8,21H10V19H8V14A2,2 0 0,0 6,12A2,2 0 0,0 8,10V5H10V3M16,3A2,2 0 0,1 18,5V9A2,2 0 0,0 20,11H21V13H20A2,2 0 0,0 18,15V19A2,2 0 0,1 16,21H14V19H16V14A2,2 0 0,1 18,12A2,2 0 0,1 16,10V5H14V3H16Z"/>
+    <button class="tab" class:active={activeTab === 'script'} on:click={() => activeTab = 'script'}>
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
       </svg>
       Script
     </button>
   </div>
   
+  <!-- Content -->
   <div class="content">
     {#if activeTab === 'info'}
-      <div class="info-grid">
-        <div class="info-section">
-          <h3>General</h3>
-          <div class="info-item">
-            <div class="item-label">Job ID:</div>
-            <span>{job.job_id}</span>
+      <div class="info-container">
+        <!-- General Information -->
+        <div class="info-card">
+          <h3 class="card-title">General</h3>
+          <div class="info-row">
+            <span class="info-label">Job ID:</span>
+            <span class="info-value">{job.job_id}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">Name:</div>
-            <span>{job.name}</span>
+          <div class="info-row">
+            <span class="info-label">Name:</span>
+            <span class="info-value">{job.name}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">User:</div>
-            <span>{job.user || 'N/A'}</span>
+          <div class="info-row">
+            <span class="info-label">User:</span>
+            <span class="info-value">{job.user || 'N/A'}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">Host:</div>
-            <span>{job.hostname}</span>
+          <div class="info-row">
+            <span class="info-label">Host:</span>
+            <span class="info-value">{job.hostname}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">Partition:</div>
-            <span>{job.partition || 'N/A'}</span>
+          <div class="info-row">
+            <span class="info-label">Partition:</span>
+            <span class="info-value">{job.partition || 'N/A'}</span>
           </div>
-        </div>
-        
-        <div class="info-section">
-          <h3>Resources</h3>
-          <div class="info-item">
-            <div class="item-label">Nodes:</div>
-            <span>{job.nodes || 'N/A'}</span>
+          {#if job.work_dir && job.work_dir !== 'N/A'}
+          <div class="info-row full-width">
+            <span class="info-label">Work Dir:</span>
+            <span class="info-value mono">{job.work_dir}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">CPUs:</div>
-            <span>{job.cpus || 'N/A'}</span>
-          </div>
-          <div class="info-item">
-            <div class="item-label">Memory:</div>
-            <span>{job.memory || 'N/A'}</span>
-          </div>
-          <div class="info-item">
-            <div class="item-label">Time Limit:</div>
-            <span>{job.time_limit || 'N/A'}</span>
-          </div>
-          <div class="info-item">
-            <div class="item-label">Runtime:</div>
-            <span>{job.runtime || 'N/A'}</span>
-          </div>
-        </div>
-        
-        <div class="info-section">
-          <h3>Timing</h3>
-          <div class="info-item">
-            <div class="item-label">Submitted:</div>
-            <span>{formatTime(job.submit_time)}</span>
-          </div>
-          <div class="info-item">
-            <div class="item-label">Started:</div>
-            <span>{formatTime(job.start_time)}</span>
-          </div>
-          <div class="info-item">
-            <div class="item-label">Ended:</div>
-            <span>{formatTime(job.end_time)}</span>
-          </div>
+          {/if}
           {#if job.reason && job.reason !== 'N/A' && job.state === 'PD'}
-            <div class="info-item">
-              <div class="item-label">Reason:</div>
-              <span>{job.reason}</span>
-            </div>
+          <div class="info-row full-width">
+            <span class="info-label">Reason:</span>
+            <span class="info-value">{job.reason}</span>
+          </div>
           {/if}
         </div>
         
-        <div class="info-section full-width">
-          <h3>Command & Files</h3>
-          {#if job.submit_line && job.submit_line !== 'N/A'}
-            <div class="info-item">
-              <div class="item-label">Submit Line:</div>
-              <span class="monospace">{job.submit_line}</span>
-            </div>
+        <!-- Resources -->
+        <div class="info-card">
+          <h3 class="card-title">Resources</h3>
+          <div class="info-row">
+            <span class="info-label">Nodes:</span>
+            <span class="info-value">{job.nodes || 'N/A'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">CPUs:</span>
+            <span class="info-value">{job.cpus || 'N/A'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Memory:</span>
+            <span class="info-value">{job.memory || 'N/A'}</span>
+          </div>
+          {#if job.gpus && job.gpus !== 'N/A'}
+          <div class="info-row">
+            <span class="info-label">GPUs:</span>
+            <span class="info-value">{job.gpus}</span>
+          </div>
           {/if}
-          <div class="info-item">
-            <div class="item-label">Work Dir:</div>
-            <span class="monospace">{job.work_dir || 'N/A'}</span>
+          <div class="info-row">
+            <span class="info-label">Time Limit:</span>
+            <span class="info-value">{job.time_limit || 'N/A'}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">Output File:</div>
-            <span class="monospace">{job.stdout_file || 'N/A'}</span>
+          <div class="info-row">
+            <span class="info-label">Runtime:</span>
+            <span class="info-value">{job.runtime || '0:00'}</span>
           </div>
-          <div class="info-item">
-            <div class="item-label">Error File:</div>
-            <span class="monospace">{job.stderr_file || 'N/A'}</span>
-          </div>
-          {#if job.node_list && job.node_list !== 'N/A'}
-            <div class="info-item">
-              <div class="item-label">Node List:</div>
-              <span class="monospace">{job.node_list}</span>
-            </div>
-          {/if}
         </div>
         
-        {#if job.alloc_tres || job.req_tres}
-          <div class="info-section">
-            <h3>Resource Allocation</h3>
-            {#if job.req_tres && job.req_tres !== 'N/A'}
-              <div class="info-item">
-                <div class="item-label">Requested:</div>
-                <span class="monospace">{job.req_tres}</span>
-              </div>
-            {/if}
-            {#if job.alloc_tres && job.alloc_tres !== 'N/A'}
-              <div class="info-item">
-                <div class="item-label">Allocated:</div>
-                <span class="monospace">{job.alloc_tres}</span>
-              </div>
-            {/if}
+        <!-- Timing -->
+        <div class="info-card">
+          <h3 class="card-title">Timing</h3>
+          <div class="info-row full-width">
+            <span class="info-label">Submitted:</span>
+            <span class="info-value">{formatTime(job.submit_time)}</span>
           </div>
-        {/if}
-        
-        {#if job.cpu_time || job.total_cpu || job.max_rss || job.consumed_energy}
-          <div class="info-section">
-            <h3>Performance Metrics</h3>
-            {#if job.cpu_time && job.cpu_time !== 'N/A'}
-              <div class="info-item">
-                <div class="item-label">CPU Time:</div>
-                <span>{job.cpu_time}</span>
-              </div>
-            {/if}
-            {#if job.total_cpu && job.total_cpu !== 'N/A'}
-              <div class="info-item">
-                <div class="item-label">Total CPU:</div>
-                <span>{job.total_cpu}</span>
-              </div>
-            {/if}
-            {#if job.max_rss && job.max_rss !== 'N/A'}
-              <div class="info-item">
-                <div class="item-label">Max Memory:</div>
-                <span>{job.max_rss}</span>
-              </div>
-            {/if}
-            {#if job.consumed_energy && job.consumed_energy !== 'N/A'}
-              <div class="info-item">
-                <div class="item-label">Energy:</div>
-                <span>{job.consumed_energy}</span>
-              </div>
-            {/if}
+          <div class="info-row full-width">
+            <span class="info-label">Started:</span>
+            <span class="info-value">{formatTime(job.start_time)}</span>
           </div>
-        {/if}
+          <div class="info-row full-width">
+            <span class="info-label">Ended:</span>
+            <span class="info-value">{formatTime(job.end_time)}</span>
+          </div>
+        </div>
       </div>
       
-    {:else if activeTab === 'stdout'}
+    {:else if activeTab === 'output'}
       <div class="output-section">
         {#if loadingOutput}
-          <div class="loading">Loading output...</div>
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading output...</span>
+          </div>
         {:else if outputError}
-          <div class="error">
-            Failed to load output: {outputError}
-            <button class="retry-output-btn" on:click={retryLoadOutput}>Retry</button>
+          <div class="error-state">
+            <span>{outputError}</span>
+            <button class="retry-btn" on:click={retryLoadOutput}>Retry</button>
           </div>
         {:else if outputData?.stdout}
-          {#if outputData.stdout_metadata?.exists}
-            <div class="output-controls">
-              <div class="file-info">
-                <span class="file-size">{formatFileSize(outputData.stdout_metadata.size_bytes)}</span>
-                <span class="modified-date">Modified: {formatDate(outputData.stdout_metadata.last_modified)}</span>
-              </div>
-              <div class="actions">
-                <a 
-                  href={outputData.stdout_metadata.access_path} 
-                  class="download-btn" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                >View Full</a>
-                <a 
-                  href={outputData.stdout_metadata.access_path + "&download=true"} 
-                  class="download-btn download" 
-                  download
-                >Download</a>
-              </div>
-            </div>
-          {/if}
           <pre class="output-content">{outputData.stdout}</pre>
         {:else}
-          <div class="no-output">No output available</div>
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+            </svg>
+            <span>No output available</span>
+          </div>
         {/if}
       </div>
       
-    {:else if activeTab === 'stderr'}
+    {:else if activeTab === 'errors'}
       <div class="output-section">
         {#if loadingOutput}
-          <div class="loading">Loading errors...</div>
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading errors...</span>
+          </div>
         {:else if outputError}
-          <div class="error">
-            Failed to load errors: {outputError}
-            <button class="retry-output-btn" on:click={retryLoadOutput}>Retry</button>
+          <div class="error-state">
+            <span>{outputError}</span>
+            <button class="retry-btn" on:click={retryLoadOutput}>Retry</button>
           </div>
         {:else if outputData?.stderr}
-          {#if outputData.stderr_metadata?.exists}
-            <div class="output-controls">
-              <div class="file-info">
-                <span class="file-size">{formatFileSize(outputData.stderr_metadata.size_bytes)}</span>
-                <span class="modified-date">Modified: {formatDate(outputData.stderr_metadata.last_modified)}</span>
-              </div>
-              <div class="actions">
-                <a 
-                  href={outputData.stderr_metadata.access_path} 
-                  class="download-btn" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                >View Full</a>
-                <a 
-                  href={outputData.stderr_metadata.access_path + "&download=true"} 
-                  class="download-btn download" 
-                  download
-                >Download</a>
-              </div>
-            </div>
-          {/if}
-          <pre class="output-content stderr">{outputData.stderr}</pre>
+          <pre class="output-content error">{outputData.stderr}</pre>
         {:else}
-          <div class="no-output">No errors</div>
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/>
+            </svg>
+            <span>No errors</span>
+          </div>
         {/if}
       </div>
       
     {:else if activeTab === 'script'}
       <div class="output-section">
         {#if loadingScript}
-          <div class="loading">Loading batch script...</div>
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading script...</span>
+          </div>
         {:else if scriptError}
-          <div class="error">
-            Failed to load batch script: {scriptError}
-            <button class="retry-output-btn" on:click={retryLoadScript}>Retry</button>
+          <div class="error-state">
+            <span>{scriptError}</span>
+            <button class="retry-btn" on:click={retryLoadScript}>Retry</button>
           </div>
         {:else if scriptData?.script_content}
-          <div class="output-controls">
-            <div class="file-info">
-              <span class="file-size">{scriptData.content_length} characters</span>
-              <span class="modified-date">Job {scriptData.job_id} batch script</span>
-            </div>
-            <div class="actions">
-              <button 
-                class="download-btn" 
-                on:click={() => {
-                  if (scriptData) {
-                    const blob = new Blob([scriptData.script_content], { type: 'text/plain' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `job_${job.job_id}_script.sh`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                  }
-                }}
-              >Download</button>
-            </div>
-          </div>
           <pre class="output-content script">{scriptData.script_content}</pre>
         {:else}
-          <div class="no-output">Batch script not available</div>
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M14.6,16.6L19.2,12L14.6,7.4L16,6L22,12L16,18L14.6,16.6M9.4,16.6L4.8,12L9.4,7.4L8,6L2,12L8,18L9.4,16.6Z"/>
+            </svg>
+            <span>Script not available</span>
+          </div>
         {/if}
       </div>
     {/if}
@@ -530,397 +384,233 @@
 
 <style>
   .job-detail {
-    background: white;
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     height: 100%;
     display: flex;
     flex-direction: column;
+    background: #f8fafc;
   }
 
-  .job-detail.full-page {
-    border-radius: 0;
-    box-shadow: none;
-    height: 100%;
-    width: 100%;
-  }
-
-  @media (max-width: 768px) {
-    .job-detail {
-      border-radius: 0;
-      box-shadow: none;
-      height: 100vh;
-    }
-  }
-
+  /* Header */
   .header {
-    padding: 1.5rem;
-    border-bottom: 1px solid #dee2e6;
-  }
-
-  @media (max-width: 768px) {
-    .header {
-      padding: 1rem;
-      position: sticky;
-      top: 0;
-      background: white;
-      z-index: 10;
-      border-bottom: 2px solid #dee2e6;
-    }
-  }
-
-  .title-row {
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 1rem 1.5rem;
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
+    align-items: center;
   }
 
-  @media (max-width: 768px) {
-    .title-row {
-      flex-direction: column;
-      gap: 0.75rem;
-      align-items: flex-start;
-    }
-  }
-
-  .header-actions {
+  .header-left {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-  }
-
-  @media (max-width: 768px) {
-    .header-actions {
-      align-self: flex-end;
-      margin-top: -0.5rem;
-    }
-  }
-
-  .job-info {
+    gap: 1rem;
     flex: 1;
     min-width: 0;
   }
 
-  .job-header {
+  .header-right {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 0.75rem;
   }
 
-  @media (max-width: 768px) {
-    .job-header {
-      width: 100%;
-      align-items: center;
-    }
-  }
-
-  .job-details {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .job-details h2 {
-    margin: 0;
-    color: #495057;
-    font-size: 1.25rem;
-    line-height: 1.2;
-  }
-
-  @media (max-width: 768px) {
-    .job-details h2 {
-      font-size: 1.1rem;
-    }
-  }
-
-  .job-name {
-    color: #6c757d;
-    font-size: 0.9rem;
-    word-wrap: break-word;
-    line-height: 1.3;
-    margin: 0;
-  }
-
-  @media (max-width: 768px) {
-    .job-name {
-      font-size: 0.85rem;
-      max-width: 280px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  .state-badge {
-    color: white;
-    padding: 0.4rem 1rem;
-    border-radius: 1rem;
-    font-size: 0.8rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    align-self: flex-start;
-    margin-top: 0.2rem;
-  }
-
-  @media (max-width: 768px) {
-    .state-badge {
-      padding: 0.3rem 0.8rem;
-      font-size: 0.75rem;
-      align-self: flex-end;
-      margin-top: -0.5rem;
-    }
-  }
-
   .back-btn {
-    background: rgba(59, 130, 246, 0.1);
-    color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.2);
-    width: 2rem;
-    height: 2rem;
-    border-radius: 0.5rem;
-    cursor: pointer;
     display: flex;
     align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    flex-shrink: 0;
-    margin-right: 0.5rem;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    color: #64748b;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
 
   .back-btn:hover {
-    background: rgba(59, 130, 246, 0.15);
-    border-color: rgba(59, 130, 246, 0.4);
-    color: #2563eb;
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    color: #475569;
   }
 
-  .back-arrow {
-    width: 1.25rem;
-    height: 1.25rem;
-  }
-  
-  .cancel-btn {
-    background: #dc3545;
-    color: white;
-    border: none;
-    padding: 0.4rem 1rem;
-    border-radius: 0.5rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    transition: all 0.2s ease;
-    font-size: 0.9rem;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .cancel-btn:hover:not(:disabled) {
-    background: #c82333;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
-  }
-
-  .cancel-btn:disabled {
-    background: #6c757d;
-    cursor: not-allowed;
-    opacity: 0.8;
-  }
-
-  .cancel-icon {
-    width: 1.125rem;
-    height: 1.125rem;
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    border-top-color: white;
-    animation: spin 0.6s linear infinite;
-  }
-
-  @media (max-width: 768px) {
-    .cancel-btn {
-      padding: 0.35rem 0.75rem;
-      font-size: 0.85rem;
-    }
-
-    .cancel-icon {
-      width: 1rem;
-      height: 1rem;
-    }
-  }
-
-  .tabs {
-    display: flex;
-    border-bottom: 1px solid #dee2e6;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  @media (max-width: 768px) {
-    .tabs {
-      position: sticky;
-      top: 73px;
-      background: white;
-      z-index: 9;
-      border-bottom: 2px solid #dee2e6;
-      padding: 0 1rem;
-      margin: 0 -1rem;
-    }
-  }
-
-  .tab {
-    background: none;
-    border: none;
-    padding: 1rem 1.5rem;
-    cursor: pointer;
-    border-bottom: 3px solid transparent;
-    transition: all 0.2s;
-    color: #6c757d;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
-  @media (max-width: 768px) {
-    .tab {
-      padding: 0.75rem 1rem;
-      font-size: 0.9rem;
-    }
-  }
-
-  @media (max-width: 480px) {
-    .tab {
-      padding: 0.75rem 0.75rem;
-      gap: 0.25rem;
-    }
-
-    .tab-icon {
-      width: 14px;
-      height: 14px;
-    }
-  }
-
-  .tab-icon {
+  .back-btn svg {
     width: 16px;
     height: 16px;
   }
 
+  .divider {
+    width: 1px;
+    height: 24px;
+    background: #e2e8f0;
+  }
+
+  .job-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  .job-label {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #1e293b;
+  }
+
+  .job-name {
+    font-size: 0.875rem;
+    color: #64748b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cancel-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cancel-btn:hover:not(:disabled) {
+    background: #dc2626;
+  }
+
+  .cancel-btn:disabled {
+    background: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  .cancel-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .state-badge {
+    padding: 0.375rem 0.875rem;
+    border-radius: 20px;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.025em;
+  }
+
+  /* Tabs */
+  .tabs {
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    padding: 0 1.5rem;
+    gap: 0.5rem;
+  }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.875rem 1rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #64748b;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    position: relative;
+  }
+
   .tab:hover {
-    background: #f8f9fa;
+    color: #475569;
   }
 
   .tab.active {
-    color: #007bff;
-    border-bottom-color: #007bff;
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
   }
 
+  .tab svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Content */
   .content {
     flex: 1;
     overflow-y: auto;
     padding: 1.5rem;
   }
 
-  @media (max-width: 768px) {
-    .content {
-      padding: 1rem;
-      -webkit-overflow-scrolling: touch;
-    }
-  }
-
-  .info-grid {
+  /* Info Grid */
+  .info-container {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
   }
 
-  @media (max-width: 768px) {
-    .info-grid {
-      grid-template-columns: 1fr;
-      gap: 1rem;
-    }
+  .info-card {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1.25rem;
   }
 
-  .info-section {
-    background: #f8f9fa;
-    padding: 1.5rem;
-    border-radius: 0.5rem;
+  .card-title {
+    margin: 0 0 1rem 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
-  @media (max-width: 768px) {
-    .info-section {
-      padding: 1rem;
-      border-radius: 0.375rem;
-    }
+  .info-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 1rem;
+    padding: 0.625rem 0;
+    border-bottom: 1px solid #f1f5f9;
   }
 
-  .info-section.full-width {
+  .info-row:last-child {
+    border-bottom: none;
+  }
+
+  .info-row.full-width {
     grid-column: 1 / -1;
   }
 
-  .info-section h3 {
-    margin: 0 0 1rem 0;
-    color: #495057;
-    font-size: 1.1rem;
+  .info-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #64748b;
   }
 
-  .info-item {
-    display: flex;
-    margin-bottom: 0.75rem;
-    align-items: flex-start;
-  }
-
-  .info-item .item-label {
-    font-weight: 600;
-    color: #495057;
-    width: 120px;
-    flex-shrink: 0;
-    margin-right: 1rem;
-  }
-
-  @media (max-width: 768px) {
-    .info-item {
-      flex-direction: column;
-      gap: 0.25rem;
-      margin-bottom: 1rem;
-    }
-
-    .info-item .item-label {
-      width: auto;
-      margin-right: 0;
-      font-size: 0.9rem;
-    }
-
-    .info-item span {
-      padding-left: 0.5rem;
-      font-size: 0.95rem;
-    }
-  }
-
-  .info-item span {
-    color: #6c757d;
+  .info-value {
+    font-size: 0.875rem;
+    color: #1e293b;
     word-break: break-all;
   }
 
-  .monospace {
-    font-family: 'Courier New', monospace;
-    background: rgba(0,0,0,0.05);
-    padding: 0.2rem 0.4rem;
-    border-radius: 0.2rem;
+  .info-value.mono {
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    background: #f1f5f9;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
   }
 
+  /* Output Section */
   .output-section {
     height: 100%;
     display: flex;
@@ -928,197 +618,115 @@
   }
 
   .output-content {
-    flex: 1;
-    background: #f8f9fa;
-    padding: 1rem;
-    border-radius: 0.5rem;
-    overflow: auto;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9rem;
-    line-height: 1.4;
-    white-space: pre-wrap;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1.25rem;
     margin: 0;
-    -webkit-overflow-scrolling: touch;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow: auto;
+    flex: 1;
   }
 
-  @media (max-width: 768px) {
-    .output-content {
-      font-size: 0.8rem;
-      padding: 0.75rem;
-      line-height: 1.3;
-    }
-  }
-
-  .output-content.stderr {
-    background: #fff5f5;
-    color: #c53030;
+  .output-content.error {
+    background: #fef2f2;
+    border-color: #fecaca;
+    color: #991b1b;
   }
 
   .output-content.script {
-    background: #f0f8ff;
-    border-left: 4px solid #007bff;
+    background: #f0f9ff;
+    border-color: #bae6fd;
   }
 
-  .loading, .no-output {
-    padding: 2rem;
-    text-align: center;
-    color: #6c757d;
-  }
-  
-  .loading {
+  /* States */
+  .loading-state,
+  .empty-state,
+  .error-state {
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
+    padding: 3rem;
     gap: 1rem;
   }
-  
-  .loading::before {
-    content: "";
-    display: block;
-    width: 30px;
-    height: 30px;
-    border: 3px solid rgba(0,0,0,0.1);
-    border-radius: 50%;
-    border-top-color: #007bff;
-    animation: spin 1s linear infinite;
+
+  .empty-state {
+    color: #94a3b8;
   }
-  
+
+  .empty-state svg {
+    width: 48px;
+    height: 48px;
+    opacity: 0.3;
+  }
+
+  .error-state {
+    color: #ef4444;
+  }
+
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .retry-btn {
+    padding: 0.375rem 0.875rem;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .retry-btn:hover {
+    background: #2563eb;
+  }
+
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
   }
 
-  .error {
-    color: #721c24;
-    background: #f8d7da;
-    border-radius: 0.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem;
-  }
-  
-  .output-controls {
-    background: #f8f9fa;
-    border-radius: 0.5rem 0.5rem 0 0;
-    padding: 0.75rem 1rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #dee2e6;
-    margin-bottom: -1px;
-  }
-
+  /* Mobile */
   @media (max-width: 768px) {
-    .output-controls {
+    .header {
+      padding: 1rem;
       flex-direction: column;
-      align-items: flex-start;
+      align-items: stretch;
       gap: 0.75rem;
-      padding: 0.75rem;
     }
 
-    .file-info {
-      order: 1;
+    .header-right {
+      justify-content: flex-end;
     }
 
-    .actions {
-      order: 2;
-      align-self: flex-end;
+    .tabs {
+      padding: 0 1rem;
+      overflow-x: auto;
     }
-  }
-  
-  .file-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  
-  .file-size {
-    font-weight: 600;
-    color: #495057;
-  }
-  
-  .modified-date {
-    font-size: 0.8rem;
-    color: #6c757d;
-  }
-  
-  .actions {
-    display: flex;
-    gap: 0.5rem;
-  }
-  
-  .download-btn {
-    padding: 0.35rem 0.75rem;
-    border-radius: 0.25rem;
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 600;
-    background: #e9ecef;
-    color: #495057;
-    transition: all 0.2s;
-    border: none;
-    cursor: pointer;
-  }
 
-  @media (max-width: 768px) {
-    .download-btn {
-      font-size: 0.85rem;
-      padding: 0.4rem 0.75rem;
+    .content {
+      padding: 1rem;
     }
-  }
-  
-  .download-btn:hover {
-    background: #dee2e6;
-  }
-  
-  .download-btn.download {
-    background: #007bff;
-    color: white;
-  }
-  
-  .download-btn.download:hover {
-    background: #0069d9;
-  }
-  
-  .retry-output-btn {
-    background: #dc3545;
-    color: white;
-    border: none;
-    padding: 0.25rem 0.75rem;
-    border-radius: 0.25rem;
-    cursor: pointer;
-    margin-left: 1rem;
-    transition: background-color 0.2s;
-    font-size: 0.9rem;
-  }
-  
-  .retry-output-btn:hover {
-    background: #c82333;
-  }
 
-  /* Skeleton loading styles */
-  .skeleton {
-    animation: skeleton-loading 1.5s ease-in-out infinite;
-    position: relative;
-    overflow: hidden;
-    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
-    background-size: 200% 100%;
-  }
-
-  .skeleton-text {
-    border-radius: 4px;
-    display: inline-block;
-    min-width: 100px;
-    color: transparent !important;
-  }
-
-  @keyframes skeleton-loading {
-    0% {
-      background-position: 200% 0;
+    .info-container {
+      grid-template-columns: 1fr;
     }
-    100% {
-      background-position: -200% 0;
+
+    .info-row {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
     }
   }
 </style>

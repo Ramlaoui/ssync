@@ -3,14 +3,30 @@
   import type { JobFilters, HostInfo } from '../types/api';
   
   export let filters: JobFilters;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    export let hosts: HostInfo[]; // Available for future use
+  export let hosts: HostInfo[]; 
   export let loading = false;
   export let search = '';
   
   const dispatch = createEventDispatcher<{
     change: void;
   }>();
+  
+  const timeRangeOptions = [
+    { value: '1h', label: 'Last Hour' },
+    { value: '1d', label: 'Last Day' },
+    { value: '1w', label: 'Last Week' },
+    { value: '1m', label: 'Last Month' },
+  ];
+  
+  const stateOptions = [
+    { value: '', label: 'All States' },
+    { value: 'R', label: 'Running' },
+    { value: 'PD', label: 'Pending' },
+    { value: 'CD', label: 'Completed' },
+    { value: 'F', label: 'Failed' },
+    { value: 'CA', label: 'Cancelled' },
+    { value: 'TO', label: 'Timeout' },
+  ];
   
   function handleChange(): void {
     dispatch('change');
@@ -32,180 +48,271 @@
 </script>
 
 <div class="filter-panel">
-  <div class="filter-header">
-    <h3>Filters</h3>
+  <div class="panel-header">
+    <h3 class="panel-title">Filters</h3>
     <button 
-      class="clear-btn" 
+      class="clear-button" 
       on:click={clearFilters}
       disabled={loading}
       aria-label="Clear all filters"
     >
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />
+      </svg>
       Clear
     </button>
   </div>
   
-  <div class="filter-group">
-    <label for="search">Search:</label>
-    <input 
-      id="search"
-      type="text" 
-      bind:value={search} 
-      on:input={handleChange}
-      placeholder="Job name or ID..."
-      disabled={loading}
-    />
+  <div class="filter-grid">
+    <div class="filter-group">
+      <label for="search">Search</label>
+      <input
+        id="search"
+        type="text"
+        bind:value={search}
+        on:input={handleChange}
+        placeholder="Job name or ID..."
+        disabled={loading}
+      />
+    </div>
+    
+    <div class="filter-group">
+      <label for="user">User</label>
+      <input
+        id="user"
+        type="text"
+        bind:value={filters.user}
+        on:input={handleChange}
+        placeholder="username"
+        disabled={loading}
+      />
+    </div>
+    
+    <div class="filter-row">
+      <div class="filter-group">
+        <label for="since">Time Range</label>
+        <select id="since" bind:value={filters.since} on:change={handleChange} disabled={loading}>
+          {#each timeRangeOptions as option}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+      </div>
+      
+      <div class="filter-group small">
+        <label for="limit">Limit</label>
+        <input
+          id="limit"
+          type="number"
+          bind:value={filters.limit}
+          on:input={handleChange}
+          min={1}
+          max={100}
+          disabled={loading}
+        />
+      </div>
+    </div>
+    
+    <div class="filter-group">
+      <label for="state">State</label>
+      <select id="state" bind:value={filters.state} on:change={handleChange} disabled={loading}>
+        {#each stateOptions as option}
+          <option value={option.value}>{option.label}</option>
+        {/each}
+      </select>
+    </div>
   </div>
   
-  <div class="filter-group">
-    <label for="user">User:</label>
-    <input 
-      id="user"
-      type="text" 
-      bind:value={filters.user} 
-      on:input={handleChange}
-      placeholder="username"
-      disabled={loading}
-    />
-  </div>
-  
-  <div class="filter-group">
-    <label for="since">Time Range:</label>
-    <select id="since" bind:value={filters.since} on:change={handleChange} disabled={loading}>
-      <option value="1h">Last Hour</option>
-      <option value="1d">Last Day</option>
-      <option value="1w">Last Week</option>
-      <option value="1m">Last Month</option>
-    </select>
-  </div>
-  
-  <div class="filter-group">
-    <label for="limit">Limit:</label>
-    <input 
-      id="limit"
-      type="number" 
-      bind:value={filters.limit} 
-      on:input={handleChange}
-      min="1"
-      max="100"
-      disabled={loading}
-    />
-  </div>
-  
-  <div class="filter-group">
-    <label for="state">State:</label>
-    <select id="state" bind:value={filters.state} on:change={handleChange} disabled={loading}>
-      <option value="">All States</option>
-      <option value="R">Running</option>
-      <option value="PD">Pending</option>
-      <option value="CD">Completed</option>
-      <option value="F">Failed</option>
-      <option value="CA">Cancelled</option>
-      <option value="TO">Timeout</option>
-    </select>
-  </div>
-  
-  <div class="filter-group">
-    <label>
-      <input 
-        type="checkbox" 
-        bind:checked={filters.activeOnly} 
+  <div class="checkbox-group">
+    <label class="checkbox-label">
+      <input
+        type="checkbox"
+        bind:checked={filters.activeOnly}
         on:change={handleChange}
         disabled={loading}
       />
-      Active Jobs Only
+      <span>Active Jobs Only</span>
     </label>
-  </div>
-  
-  <div class="filter-group">
-    <label>
-      <input 
-        type="checkbox" 
-        bind:checked={filters.completedOnly} 
+    
+    <label class="checkbox-label">
+      <input
+        type="checkbox"
+        bind:checked={filters.completedOnly}
         on:change={handleChange}
         disabled={loading}
       />
-      Completed Jobs Only
+      <span>Completed Jobs Only</span>
     </label>
   </div>
 </div>
 
 <style>
   .filter-panel {
-    background: #f8f9fa;
-    border-radius: 0.5rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
     padding: 1rem;
-    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 
-  .filter-header {
+  .panel-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
   }
 
-  .filter-header h3 {
+  .panel-title {
     margin: 0;
-    color: #495057;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
-  .clear-btn {
-    background: #6c757d;
-    color: white;
-    border: none;
-    padding: 0.25rem 0.75rem;
-    border-radius: 0.25rem;
-    cursor: pointer;
+  .clear-button {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #64748b;
     font-size: 0.8rem;
-  }
-
-  .clear-btn:hover:not(:disabled) {
-    background: #5a6268;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
   
-  .clear-btn:disabled {
-    background: #adb5bd;
+  .clear-button svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .clear-button:hover:not(:disabled) {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #dc2626;
+  }
+
+  .clear-button:disabled {
+    opacity: 0.5;
     cursor: not-allowed;
   }
 
+  .filter-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+  }
+
+  .filter-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 0.75rem;
+  }
+
   .filter-group {
-    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
   }
 
   .filter-group label {
-    display: block;
-    margin-bottom: 0.25rem;
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: #495057;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
-  .filter-group input[type="text"],
-  .filter-group input[type="number"],
+  .filter-group input,
   .filter-group select {
-    width: 100%;
-    padding: 0.375rem 0.75rem;
-    border: 1px solid #ced4da;
-    border-radius: 0.25rem;
+    padding: 0.5rem 0.75rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
     font-size: 0.9rem;
+    color: #334155;
+    transition: all 0.15s ease;
+    width: 100%;
   }
 
-  .filter-group input[type="text"]:focus,
-  .filter-group input[type="number"]:focus,
+  .filter-group input:hover:not(:disabled),
+  .filter-group select:hover:not(:disabled) {
+    border-color: #cbd5e1;
+  }
+
+  .filter-group input:focus,
   .filter-group select:focus {
     outline: none;
-    border-color: #80bdff;
-    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
-  .filter-group label:has(input[type="checkbox"]) {
+  .filter-group input:disabled,
+  .filter-group select:disabled {
+    background: #f8fafc;
+    color: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  .filter-group input[type="number"] {
+    -moz-appearance: textfield;
+  }
+
+  .filter-group input[type="number"]::-webkit-outer-spin-button,
+  .filter-group input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  select {
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    background-size: 20px;
+    padding-right: 2rem;
+    appearance: none;
+  }
+
+  .checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding-top: 0.25rem;
+  }
+
+  .checkbox-label {
     display: flex;
     align-items: center;
+    gap: 0.5rem;
     cursor: pointer;
+    font-size: 0.9rem;
+    color: #475569;
   }
 
-  .filter-group input[type="checkbox"] {
-    margin-right: 0.5rem;
-    width: auto;
+  .checkbox-label:hover {
+    color: #334155;
+  }
+
+  .checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #3b82f6;
+  }
+
+  .checkbox-label input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .checkbox-label input[type="checkbox"]:disabled ~ span {
+    color: #94a3b8;
+    cursor: not-allowed;
   }
 </style>

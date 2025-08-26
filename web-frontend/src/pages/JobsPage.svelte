@@ -3,6 +3,7 @@
   import { push } from "svelte-spa-router";
   import type { AxiosError } from "axios";
   import FilterPanel from "../components/FilterPanel.svelte";
+  import HostSelector from "../components/HostSelector.svelte";
   import JobList from "../components/JobList.svelte";
   import { api } from "../services/api";
   import { jobsStore } from "../stores/jobs";
@@ -14,6 +15,7 @@
   let hostsLoading = false;
   let error: string | null = null;
   let lastRequestId = 0;
+  let search = '';
   let filters: JobFilters = {
     host: "",
     user: "",
@@ -147,6 +149,19 @@
     }
     return total;
   }
+  
+  function getJobCountMap(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (let [hostname, hostData] of jobsByHost.entries()) {
+      counts.set(hostname, hostData.jobs.length);
+    }
+    return counts;
+  }
+  
+  function handleHostSelect(event: CustomEvent<string>) {
+    filters.host = event.detail;
+    handleFilterChange();
+  }
 
   onMount(() => {
     loadHosts();
@@ -168,34 +183,43 @@
 <div class="jobs-page">
   <div class="page-header">
     <div class="stats">
-      <span class="stat">{hosts.length} Hosts</span>
-      <span class="stat">{getTotalJobs()} Jobs</span>
+      <div class="stat-item">
+        <span class="stat-value">{hosts.length}</span>
+        <span class="stat-label">Hosts</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-item">
+        <span class="stat-value">{getTotalJobs()}</span>
+        <span class="stat-label">Jobs</span>
+      </div>
       {#if dataFromCache}
-        <span class="stat cache-indicator" title="Data served from backend cache">
-          <svg class="cache-icon" viewBox="0 0 24 24" fill="currentColor">
+        <div class="stat-divider"></div>
+        <div class="stat-item cache" title="Data served from backend cache">
+          <svg class="stat-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M16.2,16.2L11,13V7H12.5V12.2L17,14.9L16.2,16.2Z" />
           </svg>
-          Cached
-        </span>
+          <span class="stat-label">Cached</span>
+        </div>
       {/if}
-      <button
-        class="stat refresh-button"
-        class:loading
-        on:click={handleManualRefresh}
-        disabled={loading}
-        aria-label="Refresh data"
-      >
-        {loading ? "Refreshing..." : "Refresh"}
-        <svg
-          class="refresh-icon"
-          class:spinning={loading}
-          viewBox="0 0 24 24"
-          fill="currentColor"
-        >
-          <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
-        </svg>
-      </button>
     </div>
+    
+    <button
+      class="refresh-button"
+      class:loading
+      on:click={handleManualRefresh}
+      disabled={loading}
+      aria-label="Refresh data"
+    >
+      <svg
+        class="refresh-icon"
+        class:spinning={loading}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
+      </svg>
+      {loading ? "Refreshing..." : "Refresh"}
+    </button>
 
     {#if isMobile}
       <button
@@ -238,71 +262,33 @@
             </button>
           </div>
 
-          <FilterPanel bind:filters {hosts} on:change={handleFilterChange} />
-
-          <div class="hosts-section">
-            <h3>Hosts</h3>
-            {#if hostsLoading && hosts.length === 0}
-              <div class="loading-placeholder">Loading hosts...</div>
-            {:else}
-              {#each hosts as host}
-                <div class="host-item" class:active={filters.host === host.hostname}>
-                  <button
-                    class="host-name"
-                    on:click={() => {
-                      filters.host = filters.host === host.hostname ? "" : host.hostname;
-                      handleFilterChange();
-                      if (isMobile) showMobileFilters = false;
-                    }}
-                    disabled={loading}
-                    aria-pressed={filters.host === host.hostname}
-                  >
-                    {host.hostname}
-                    {#if jobsByHost.has(host.hostname)}
-                      <span class="job-count">
-                        {jobsByHost.get(host.hostname)?.jobs.length ?? 0}
-                      </span>
-                    {/if}
-                  </button>
-                </div>
-              {/each}
-            {/if}
-          </div>
+          <FilterPanel bind:filters {hosts} bind:search={search} on:change={handleFilterChange} {loading} />
+          
+          <HostSelector 
+            {hosts}
+            selectedHost={filters.host}
+            jobCounts={getJobCountMap()}
+            on:select={(e) => {
+              handleHostSelect(e);
+              if (isMobile) showMobileFilters = false;
+            }}
+            {loading}
+          />
         </div>
       </div>
     {/if}
 
     <!-- Desktop Sidebar -->
     <div class="sidebar" class:mobile-hidden={isMobile}>
-      <FilterPanel bind:filters {hosts} on:change={handleFilterChange} />
-
-      <div class="hosts-section">
-        <h3>Hosts</h3>
-        {#if hostsLoading && hosts.length === 0}
-          <div class="loading-placeholder">Loading hosts...</div>
-        {:else}
-          {#each hosts as host}
-            <div class="host-item" class:active={filters.host === host.hostname}>
-              <button
-                class="host-name"
-                on:click={() => {
-                  filters.host = filters.host === host.hostname ? "" : host.hostname;
-                  handleFilterChange();
-                }}
-                disabled={loading}
-                aria-pressed={filters.host === host.hostname}
-              >
-                {host.hostname}
-                {#if jobsByHost.has(host.hostname)}
-                  <span class="job-count">
-                    {jobsByHost.get(host.hostname)?.jobs.length ?? 0}
-                  </span>
-                {/if}
-              </button>
-            </div>
-          {/each}
-        {/if}
-      </div>
+      <FilterPanel bind:filters {hosts} bind:search={search} on:change={handleFilterChange} {loading} />
+      
+      <HostSelector 
+        {hosts} 
+        selectedHost={filters.host}
+        jobCounts={getJobCountMap()}
+        on:select={handleHostSelect}
+        {loading}
+      />
     </div>
 
     <div class="content">
@@ -338,73 +324,92 @@
   }
 
   .page-header {
-    padding: 1rem;
+    padding: 1rem 1.25rem;
     background: white;
-    border-bottom: 1px solid #dee2e6;
+    border-bottom: 1px solid #e2e8f0;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 1rem;
   }
 
   .stats {
     display: flex;
-    gap: 0.75rem;
     align-items: center;
+    gap: 0.75rem;
   }
-
-  .stat {
-    background: rgba(0, 0, 0, 0.05);
-    padding: 0.25rem 0.75rem;
-    border-radius: 1rem;
-    font-size: 0.9rem;
-    white-space: nowrap;
-  }
-
-  .stat.refresh-button {
+  
+  .stat-item {
     display: flex;
     align-items: center;
     gap: 0.375rem;
-    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  }
+  
+  .stat-item.cache {
+    color: #10b981;
+  }
+  
+  .stat-value {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #1e293b;
+  }
+  
+  .stat-label {
+    font-size: 0.85rem;
+    color: #64748b;
+    font-weight: 500;
+  }
+  
+  .stat-icon {
+    width: 16px;
+    height: 16px;
+  }
+  
+  .stat-divider {
+    width: 1px;
+    height: 20px;
+    background: #e2e8f0;
+  }
+
+  .refresh-button {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    background: #3b82f6;
     color: white;
-    cursor: pointer;
-    user-select: none;
-    transition: all 0.2s ease;
     border: none;
-    box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
 
-  .stat.refresh-button:hover:not(.loading) {
-    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  .refresh-button:hover:not(:disabled) {
+    background: #2563eb;
     transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+  }
+  
+  .refresh-button:active:not(:disabled) {
+    transform: translateY(0);
   }
 
-  .stat.refresh-button.loading {
-    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  .refresh-button:disabled {
+    background: #cbd5e1;
     cursor: not-allowed;
   }
 
   .refresh-icon {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
   }
 
   .spinning {
     animation: spin 1.5s linear infinite;
   }
   
-  .cache-indicator {
-    background: #e8f5e9;
-    color: #2e7d32;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-  
-  .cache-icon {
-    width: 14px;
-    height: 14px;
-  }
 
   @keyframes spin {
     from { transform: rotate(0deg); }
@@ -456,10 +461,13 @@
   .sidebar {
     width: 300px;
     min-width: 300px;
-    background: white;
-    border-right: 1px solid #dee2e6;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
     padding: 1rem;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 
   .content {
@@ -472,52 +480,6 @@
     height: 100%;
   }
 
-  .hosts-section h3 {
-    margin: 1.5rem 0 0.5rem 0;
-    color: #495057;
-  }
-
-  .host-item {
-    margin-bottom: 0.25rem;
-  }
-
-  .host-name {
-    width: 100%;
-    padding: 0.5rem;
-    border-radius: 0.25rem;
-    cursor: pointer;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    transition: background-color 0.2s;
-    background: none;
-    border: none;
-    text-align: left;
-    color: inherit;
-    font: inherit;
-  }
-
-  .host-name:hover:not(:disabled) {
-    background: #f8f9fa;
-  }
-
-  .host-name:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-
-  .host-item.active .host-name {
-    background: #e3f2fd;
-    color: #1976d2;
-  }
-
-  .job-count {
-    background: #6c757d;
-    color: white;
-    padding: 0.125rem 0.5rem;
-    border-radius: 1rem;
-    font-size: 0.75rem;
-  }
 
   .job-lists {
     display: flex;
@@ -600,29 +562,37 @@
 
   .mobile-filter-panel {
     background: white;
-    border-radius: 12px;
-    max-width: 400px;
+    border-radius: 16px;
+    max-width: 480px;
     width: 100%;
-    max-height: 80vh;
+    max-height: 85vh;
     overflow-y: auto;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    margin-top: 2rem;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+    margin-top: 1rem;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
   }
 
   .mobile-filter-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid #e5e7eb;
+    margin: -1.25rem -1.25rem 0;
+    padding: 1.25rem;
+    border-bottom: 1px solid #e2e8f0;
     background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-    border-radius: 12px 12px 0 0;
+    border-radius: 16px 16px 0 0;
   }
 
   .mobile-filter-header h3 {
     margin: 0;
-    color: #374151;
-    font-size: 1.1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
   }
 
   .close-filters {
