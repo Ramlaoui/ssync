@@ -10,7 +10,7 @@ class CacheSettings:
     """Cache configuration settings."""
 
     enabled: bool = True
-    cache_dir: Optional[str] = None  # If None, use default ~/.ssync/cache
+    cache_dir: Optional[str] = None  # If None, use default ~/.cache/ssync
     max_age_days: int = 365  # How long to keep cache entries
     script_max_age_days: int = 0  # 0 means never expire scripts
     cleanup_interval_hours: int = 168  # How often to run cleanup (weekly)

@@ -52,7 +52,6 @@ class CacheMiddleware:
             response_hostname = response.hostname
             current_jobs = []
 
-            # Cache current jobs
             current_job_ids[response_hostname] = []
             job_ids_for_range = []
 
@@ -61,18 +60,16 @@ class CacheMiddleware:
                 current_job_ids[response_hostname].append(job_info.job_id)
                 job_ids_for_range.append(job_info.job_id)
 
-                # Cache the job data
                 self.cache.cache_job(job_info)
                 current_jobs.append(job_web)
 
-            # Cache date range query if applicable
             if hostname and filters and since and response_hostname == hostname:
                 self.cache.cache_date_range_query(
                     hostname=hostname,
                     filters=filters,
                     since=since,
                     job_ids=job_ids_for_range,
-                    ttl_seconds=60,  # 60 second TTL for date range cache
+                    ttl_seconds=60,
                 )
                 logger.info(
                     f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs"
@@ -87,7 +84,6 @@ class CacheMiddleware:
                 )
             )
 
-        # Verify cached jobs and mark completed ones
         await self._verify_and_update_cache(current_job_ids)
 
         return enhanced_responses
@@ -111,7 +107,6 @@ class CacheMiddleware:
         if cached_job_ids is None:
             return None
 
-        # Retrieve full job info for cached IDs
         cached_jobs = []
         for job_id in cached_job_ids:
             cached_job = self.cache.get_cached_job(job_id, hostname)
@@ -139,7 +134,6 @@ class CacheMiddleware:
         Returns:
             JobInfoWeb if found (from SLURM or cache), None otherwise
         """
-        # First check cache
         cached_job = self.cache.get_cached_job(job_id, hostname)
 
         if cached_job:
@@ -249,7 +243,7 @@ class CacheMiddleware:
 
         # Get recently cached jobs that aren't in current results
         cached_jobs = self.cache.get_cached_jobs(
-            hostname=hostname, active_only=False, limit=50
+            hostname=hostname, active_only=False, limit=100
         )
 
         enhanced_jobs = list(current_jobs)
@@ -325,13 +319,37 @@ class CacheMiddleware:
 
                     # Try to get script from SLURM before it's completely gone
                     try:
-                        # We'd need access to the manager here, but to avoid circular dependencies,
-                        # we'll let the get_job_script endpoint handle this case
-                        logger.debug(
-                            f"Script preservation for job {job_id} will be handled on-demand"
-                        )
+                        # Import here to avoid circular imports
+                        from .app import get_slurm_manager
+
+                        manager = get_slurm_manager()
+                        if manager:
+                            slurm_host = manager.get_host_by_name(hostname)
+                            conn = manager._get_connection(slurm_host.host)
+
+                            script_content = manager.slurm_client.get_job_batch_script(
+                                conn, job_id, hostname
+                            )
+                            if script_content:
+                                self.cache.update_job_script(
+                                    job_id, hostname, script_content
+                                )
+                                logger.info(
+                                    f"Preserved script for completing job {job_id}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"No script content found for job {job_id} in SLURM"
+                                )
+                        else:
+                            logger.debug(
+                                f"No manager available for script preservation of job {job_id}"
+                            )
+
                     except Exception as e:
-                        logger.debug(f"Could not preserve script for job {job_id}: {e}")
+                        logger.warning(
+                            f"Failed to preserve script for job {job_id}: {e}"
+                        )
 
         except Exception as e:
             logger.warning(f"Error preserving scripts for completing jobs: {e}")

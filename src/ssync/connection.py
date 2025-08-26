@@ -13,26 +13,25 @@ logger = setup_logger(__name__, "DEBUG")
 class ConnectionManager:
     """Manages SSH connections with caching and health checks."""
 
-    def __init__(self, use_ssh_config: bool = True):
+    def __init__(self, use_ssh_config: bool = True, connection_timeout: int = 30):
         self.use_ssh_config = use_ssh_config
+        self.connection_timeout = connection_timeout
         self._connections: Dict[str, Connection] = {}
-        # Configure Fabric for better session persistence
+
+        self.default_timeouts = {
+            "timeout": connection_timeout,
+            "banner_timeout": connection_timeout,
+            "auth_timeout": connection_timeout,
+        }
+
         if use_ssh_config:
             self._fabric_config = Config()
-            # Set timeouts for better connection handling
-            self._fabric_config.connect_kwargs.update(
-                {
-                    "timeout": 30,
-                    "banner_timeout": 30,
-                    "auth_timeout": 30,
-                }
-            )
+            self._fabric_config.connect_kwargs.update(self.default_timeouts)
         else:
             self._fabric_config = None
 
     def get_connection(self, host: Host) -> Connection:
         """Get or create a fabric connection with caching."""
-        # Build host string in format: [user@]hostname[:port]
         host_string = host.hostname
         if host.username:
             host_string = f"{host.username}@{host_string}"
@@ -43,7 +42,6 @@ class ConnectionManager:
 
         if host_string in self._connections:
             try:
-                # Test if connection is still alive
                 result = self._connections[host_string].run(
                     "echo 1", hide=True, timeout=3
                 )
@@ -51,7 +49,6 @@ class ConnectionManager:
                     logger.debug(f"✓ Reused EXISTING connection to {host_string}")
                     return self._connections[host_string]
             except Exception as e:
-                # Connection is dead, remove it
                 logger.debug(f"✗ Connection health check failed for {host_string}: {e}")
                 try:
                     self._connections[host_string].close()
@@ -59,27 +56,32 @@ class ConnectionManager:
                     pass
                 del self._connections[host_string]
 
-        # Create new connection
-        connect_kwargs = {}
+        connect_kwargs = self.default_timeouts.copy()
 
-        if host.username:  # Manual config - doesn't use SSH config
+        if host.username:
             if host.key_file:
                 connect_kwargs["key_filename"] = host.key_file
             if host.password:
                 connect_kwargs["password"] = host.password
 
+            logger.debug(
+                f"Attempting connection to {host_string} (timeout: {self.connection_timeout}s)"
+            )
             connection = Connection(
                 host=host.hostname,
                 user=host.username,
                 port=host.port,
                 connect_kwargs=connect_kwargs,
             )
-        else:  # Use SSH config
+        else:
             if host.key_file:
                 connect_kwargs["key_filename"] = host.key_file
             if host.password:
                 connect_kwargs["password"] = host.password
 
+            logger.debug(
+                f"Attempting connection to {host_string} (timeout: {self.connection_timeout}s)"
+            )
             connection = Connection(
                 host=host.hostname,
                 connect_kwargs=connect_kwargs,
@@ -91,15 +93,22 @@ class ConnectionManager:
 
         return connection
 
+    def _get_host_string(self, host: Host) -> str:
+        """Build host string in format: [user@]hostname[:port]."""
+        host_string = host.hostname
+        if host.username:
+            host_string = f"{host.username}@{host_string}"
+        if host.port and host.port != 22:
+            host_string = f"{host_string}:{host.port}"
+        return host_string
+
     def run_command(self, host: Host, command: str, **kwargs):
         """Run a command on a host with automatic retry on connection failure."""
         connection = self.get_connection(host)
 
         try:
             result = connection.run(command, **kwargs)
-            # Check if command actually produced output or succeeded
             if hasattr(result, "ok") and not result.ok:
-                # Command failed, but connection might still be good
                 return result
             return result
         except Exception as e:
@@ -107,7 +116,6 @@ class ConnectionManager:
                 f"Command failed on {host.hostname}, retrying with new connection: {e}"
             )
 
-            # Remove the problematic connection and try with a fresh one
             host_string = self._get_host_string(host)
             if host_string in self._connections:
                 try:
@@ -117,7 +125,6 @@ class ConnectionManager:
                 del self._connections[host_string]
                 logger.debug(f"Removed stale connection to {host_string}")
 
-            # Get a fresh connection and retry
             fresh_connection = self.get_connection(host)
             return fresh_connection.run(command, **kwargs)
 
@@ -131,7 +138,6 @@ class ConnectionManager:
 
         for host_string, conn in self._connections.items():
             try:
-                # More thorough health check
                 result = conn.run("echo 'test' && pwd", hide=True, timeout=5)
                 if not result.ok or not result.stdout.strip():
                     logger.debug(
@@ -142,7 +148,6 @@ class ConnectionManager:
                 logger.debug(f"✗ Connection health check failed for {host_string}: {e}")
                 unhealthy_connections.append(host_string)
 
-        # Remove unhealthy connections
         for host_string in unhealthy_connections:
             try:
                 self._connections[host_string].close()
@@ -163,14 +168,10 @@ class ConnectionManager:
     def close_connections(self):
         """Close all SSH connections and cache."""
         logger.debug(f"Closing {len(self._connections)} cached connections...")
-
-        # Close all connections manually
         for host_string, conn in self._connections.items():
             try:
                 logger.debug(f"Closing connection to {host_string}")
                 conn.close()
             except Exception as e:
                 logger.debug(f"Error closing connection to {host_string}: {e}")
-
-        # Clear the cache
         self._connections.clear()

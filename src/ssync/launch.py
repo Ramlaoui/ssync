@@ -57,17 +57,13 @@ class LaunchManager:
                 in_login_setup = False
                 continue
             elif in_login_setup:
-                # Remove the line from login setup section
                 login_setup_lines.append(line)
             else:
-                # Keep all other lines in the compute script
                 compute_script_lines.append(line)
 
-        # Join the lines back together
         login_setup_commands = "\n".join(login_setup_lines).strip()
         clean_compute_script = "\n".join(compute_script_lines)
 
-        # If no login setup section found, return empty setup and full script
         if not login_setup_found:
             return "", script_content
 
@@ -77,7 +73,7 @@ class LaunchManager:
 
         return login_setup_commands, clean_compute_script
 
-    def launch_job(
+    async def launch_job(
         self,
         script_path: str | Path,
         source_dir: Optional[str | Path],
@@ -105,14 +101,12 @@ class LaunchManager:
         Returns:
             Job object if successful, None otherwise
         """
-        # Validate inputs
         script_path = Path(script_path)
 
         if not script_path.exists():
             logger.error(f"Script not found: {script_path}")
             return None
 
-        # Validate source_dir only if sync is enabled
         if sync_enabled:
             if source_dir is None:
                 logger.error("Source directory is required when sync is enabled")
@@ -122,11 +116,9 @@ class LaunchManager:
                 logger.error(f"Source directory not found: {source_dir}")
                 return None
         else:
-            # Convert to Path for consistency, but it might be None
             if source_dir is not None:
                 source_dir = Path(source_dir)
 
-        # Get target host
         try:
             slurm_host = self.slurm_manager.get_host_by_name(host)
         except ValueError as e:
@@ -136,9 +128,7 @@ class LaunchManager:
         logger.info(f"Launching job on {slurm_host.host.hostname}")
 
         try:
-            # Determine working directory
             if sync_enabled and source_dir:
-                # Step 1: Sync source directory to remote
                 logger.info("Syncing source directory to remote host...")
                 sync_manager = SyncManager(
                     self.slurm_manager, source_dir, use_gitignore=not no_gitignore
@@ -153,18 +143,13 @@ class LaunchManager:
                     return None
 
                 logger.info("Sync completed successfully")
-
-                # Use synced directory as working directory
                 remote_work_dir = Path(slurm_host.work_dir) / source_dir.name
             else:
-                # No sync - use host's work directory directly
                 logger.info("Skipping sync - submitting job in host work directory")
                 remote_work_dir = Path(slurm_host.work_dir)
 
-            # Step 2: Parse structured script format
             logger.info("Parsing script for login node setup and compute commands...")
 
-            # Read and parse the script content
             with open(script_path, "r") as f:
                 original_script_content = f.read()
 
@@ -172,7 +157,6 @@ class LaunchManager:
                 original_script_content
             )
 
-            # Combine with legacy python_env parameter if provided
             if python_env:
                 if login_setup_commands:
                     logger.info(
@@ -182,13 +166,8 @@ class LaunchManager:
                 else:
                     login_setup_commands = python_env
 
-            # Step 3: Prepare clean compute script for submission
             logger.info("Preparing clean compute script for SLURM submission...")
-
-            # Create remote script directory
             remote_script_dir = remote_work_dir / "scripts"
-
-            # Create temporary clean script file for processing
             temp_dir = Path("/tmp/slurm_launch")
             temp_dir.mkdir(exist_ok=True)
             clean_script_path = temp_dir / f"clean_{script_path.name}"
@@ -196,18 +175,12 @@ class LaunchManager:
             with open(clean_script_path, "w") as f:
                 f.write(clean_compute_script)
 
-            # Process the clean compute script
             prepared_script = ScriptProcessor.prepare_script(
                 clean_script_path, temp_dir, params=slurm_params
             )
 
-            # Upload prepared script to remote
             conn = self.slurm_manager._get_connection(slurm_host.host)
-
-            # Create remote script directory
             conn.run(f"mkdir -p {remote_script_dir}")
-
-            # Upload the prepared script
             remote_script_path = send_file(
                 conn,
                 local_path=str(prepared_script),
@@ -218,14 +191,11 @@ class LaunchManager:
 
             logger.info(f"Script uploaded to {remote_script_path}")
 
-            # Step 4: Execute login node setup commands if specified
             if login_setup_commands:
                 logger.info("Executing login node setup commands...")
                 logger.debug(f"Login setup commands:\n{login_setup_commands}")
                 try:
-                    # Change to the target work directory first to ensure proper context
                     with conn.cd(remote_work_dir):
-                        # Execute login node setup commands
                         setup_result = conn.run(login_setup_commands, warn=True)
 
                         if setup_result.ok:
@@ -237,23 +207,29 @@ class LaunchManager:
 
                 except Exception as e:
                     logger.error(f"Login node setup failed: {e}")
-                    # Continue with job submission even if setup fails
-                    # The user can troubleshoot this based on the error message
 
-            # Step 5: Submit job to SLURM
             logger.info("Submitting job to SLURM...")
-
-            # Change to the correct working directory before submitting
             logger.info(f"Changing to working directory: {remote_work_dir}")
             conn.run(f"cd {remote_work_dir}")
-
-            # Submit the job from the correct working directory
             job = self._submit_script_in_workdir(
                 slurm_host, slurm_params, remote_script_path, remote_work_dir
             )
 
             if job:
                 logger.info(f"Job submitted successfully with ID: {job.job_id}")
+                try:
+                    from .job_data_manager import get_job_data_manager
+
+                    job_data_manager = get_job_data_manager()
+                    await job_data_manager.capture_job_submission(
+                        job.job_id, slurm_host.host.hostname, clean_compute_script
+                    )
+                    logger.debug(f"Captured submission data for job {job.job_id}")
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to capture submission data for job {job.job_id}: {e}"
+                    )
+
                 return job
             else:
                 logger.error("Failed to submit job")
@@ -263,7 +239,6 @@ class LaunchManager:
             logger.error(f"Error during job launch: {e}")
             return None
         finally:
-            # Clean up temporary files
             try:
                 if "clean_script_path" in locals() and clean_script_path.exists():
                     clean_script_path.unlink()
@@ -303,7 +278,6 @@ class LaunchManager:
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
         try:
-            # Build sbatch command (similar to SlurmManager.submit_script)
             cmd = ["sbatch"]
 
             if slurm_params.job_name:
@@ -334,14 +308,10 @@ class LaunchManager:
                 cmd.append(f"--gres={slurm_params.gres}")
 
             cmd.append(remote_script_path)
-
-            # Run sbatch from the specific working directory
             full_cmd = f"cd {work_dir} && {' '.join(cmd)}"
             logger.info(f"Running: {full_cmd}")
 
             result = conn.run(full_cmd, hide=False)
-
-            # Parse job ID from output (same as SlurmManager.submit_script)
             job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
             if job_id_match:
                 job_id = job_id_match.group(1)

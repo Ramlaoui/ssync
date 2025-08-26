@@ -60,7 +60,7 @@ class JobDataCache:
         Initialize the job data cache.
 
         Args:
-            cache_dir: Directory to store cache files. Defaults to ~/.ssync/cache
+            cache_dir: Directory to store cache files. Defaults to ~/.cache/ssync
             max_age_days: Maximum age of cached data in days before cleanup (0 = never expire)
         """
         if cache_dir is None:
@@ -71,11 +71,7 @@ class JobDataCache:
 
         self.db_path = self.cache_dir / "jobs.db"
         self.max_age_days = max_age_days
-
-        # Thread safety
         self._lock = threading.RLock()
-
-        # Initialize database
         self._init_database()
 
         logger.info(f"Initialized job cache at {self.cache_dir}")
@@ -117,7 +113,6 @@ class JobDataCache:
                 )
             """)
 
-            # Create table for date range caching
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cached_job_ranges (
                     cache_key TEXT PRIMARY KEY,
@@ -132,7 +127,17 @@ class JobDataCache:
                 )
             """)
 
-            # Create indexes for common queries
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS host_fetch_state (
+                    hostname TEXT PRIMARY KEY,
+                    last_fetch_time TEXT NOT NULL,
+                    last_fetch_time_utc TEXT NOT NULL,
+                    cluster_timezone TEXT,
+                    fetch_count INTEGER DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hostname ON cached_jobs(hostname)"
             )
@@ -143,7 +148,6 @@ class JobDataCache:
                 "CREATE INDEX IF NOT EXISTS idx_is_active ON cached_jobs(is_active)"
             )
 
-            # Indexes for date range cache
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_range_hostname ON cached_job_ranges(hostname)"
             )
@@ -180,7 +184,6 @@ class JobDataCache:
             new_val = getattr(new_job, field.name)
             existing_val = getattr(existing_job, field.name)
 
-            # Special handling for critical fields that should never be lost
             critical_fields = [
                 "stdout_file",
                 "stderr_file",
@@ -192,7 +195,6 @@ class JobDataCache:
             ]
 
             if field.name in critical_fields:
-                # For critical fields, prefer existing value if new is None/empty
                 if existing_val and not new_val:
                     merged_data[field.name] = existing_val
                     logger.debug(
@@ -201,7 +203,6 @@ class JobDataCache:
                 else:
                     merged_data[field.name] = new_val if new_val else existing_val
             else:
-                # For other fields, prefer new value if it exists
                 merged_data[field.name] = (
                     new_val if new_val is not None else existing_val
                 )
@@ -228,12 +229,10 @@ class JobDataCache:
             stderr_content: Optional stderr content (if None, preserves existing)
         """
         now = datetime.now()
-        is_active = job_info.state in ["PD", "R"]  # Pending or Running
+        is_active = job_info.state in ["PD", "R"]
 
-        # Check if we have existing cached data to preserve
         existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
 
-        # Preserve existing content if new content not provided
         if existing_cached:
             if script_content is None and existing_cached.script_content:
                 script_content = existing_cached.script_content
@@ -251,11 +250,9 @@ class JobDataCache:
                     f"Preserving existing stderr content for job {job_info.job_id}"
                 )
 
-            # Intelligently merge JobInfo, preserving critical fields
             if existing_cached.job_info:
                 job_info = self._merge_job_info(job_info, existing_cached.job_info)
 
-            # Use original cached_at time if updating existing entry
             cached_at = existing_cached.cached_at
         else:
             cached_at = now
@@ -273,7 +270,6 @@ class JobDataCache:
         )
 
         self._store_cached_data(cached_data)
-        logger.debug(f"Cached job {job_info.job_id} on {job_info.hostname}")
 
     def _store_cached_data(self, cached_data: CachedJobData):
         """Store cached data in database."""
@@ -441,8 +437,6 @@ class JobDataCache:
                 conn.execute(query, params)
                 conn.commit()
 
-                logger.debug(f"Updated outputs for job {job_id} on {hostname}")
-
     def update_job_script(
         self,
         job_id: str,
@@ -459,7 +453,6 @@ class JobDataCache:
             script_content: Script content to cache
         """
         with self._get_connection() as conn:
-            # Check if job exists in cache
             cursor = conn.execute(
                 "SELECT COUNT(*) as count FROM cached_jobs WHERE job_id = ? AND hostname = ?",
                 (job_id, hostname),
@@ -467,7 +460,6 @@ class JobDataCache:
             exists = cursor.fetchone()["count"] > 0
 
             if exists:
-                # Update existing entry
                 conn.execute(
                     """
                     UPDATE cached_jobs 
@@ -476,9 +468,7 @@ class JobDataCache:
                     """,
                     (script_content, datetime.now().isoformat(), job_id, hostname),
                 )
-                logger.debug(f"Updated script for existing cached job {job_id}")
             else:
-                # Create minimal entry with script
                 from .models.job import JobInfo, JobState
 
                 minimal_job_info = JobInfo(
@@ -497,7 +487,6 @@ class JobDataCache:
                 )
 
                 self._store_cached_data(cached_data)
-                logger.debug(f"Created new cache entry with script for job {job_id}")
 
             conn.commit()
 
@@ -513,8 +502,6 @@ class JobDataCache:
                 (datetime.now().isoformat(), job_id, hostname),
             )
             conn.commit()
-
-            logger.debug(f"Marked job {job_id} on {hostname} as completed")
 
     def cleanup_old_entries(
         self,
@@ -533,7 +520,6 @@ class JobDataCache:
         Returns:
             Number of entries cleaned up
         """
-        # Import config to check script preservation settings
         from .utils.config import config as app_config
 
         cache_settings = app_config.cache_settings
@@ -541,7 +527,6 @@ class JobDataCache:
         if max_age_days is None:
             max_age_days = self.max_age_days
 
-        # If max_age_days is 0, never expire unless forced
         if max_age_days == 0 and not force_cleanup:
             logger.info("Cache cleanup skipped (max_age_days=0, preservation mode)")
             return 0
@@ -549,11 +534,9 @@ class JobDataCache:
         cutoff_date = datetime.now() - timedelta(days=max_age_days)
 
         with self._get_connection() as conn:
-            # Build cleanup query with preservation logic
             query = "DELETE FROM cached_jobs WHERE cached_at < ?"
             params = [cutoff_date.isoformat()]
 
-            # Always preserve scripts if configured (unless forced)
             script_preservation = (
                 cache_settings.script_max_age_days == 0 or preserve_scripts
             ) and not force_cleanup
@@ -577,7 +560,6 @@ class JobDataCache:
 
     def _generate_cache_key(self, hostname: str, filters: Dict[str, Any]) -> str:
         """Generate a unique cache key for a query."""
-        # Create a deterministic string from filters
         filter_str = json.dumps(filters, sort_keys=True)
         key_source = f"{hostname}:{filter_str}"
         return hashlib.sha256(key_source.encode()).hexdigest()[:16]
@@ -585,13 +567,10 @@ class JobDataCache:
     def _parse_since_to_dates(self, since: str) -> Tuple[datetime, datetime]:
         """Parse 'since' parameter to date range."""
         end_date = datetime.now()
-
-        # Parse the since format (e.g., "1d", "1w", "1m")
         import re
 
         match = re.match(r"^(\d+)([hdwm])$", since)
         if not match:
-            # Default to 1 day if invalid format
             start_date = end_date - timedelta(days=1)
         else:
             value = int(match.group(1))
@@ -625,7 +604,6 @@ class JobDataCache:
         requested_start, requested_end = self._parse_since_to_dates(since)
 
         with self._get_connection() as conn:
-            # Look for cached ranges that cover the requested range
             cursor = conn.execute(
                 """
                 SELECT job_ids_json, cached_at, hit_count
@@ -649,7 +627,6 @@ class JobDataCache:
 
             row = cursor.fetchone()
             if row:
-                # Update hit count
                 conn.execute(
                     """
                     UPDATE cached_job_ranges
@@ -667,7 +644,6 @@ class JobDataCache:
                 )
                 return job_ids
 
-        logger.debug(f"Date range cache MISS for {hostname} with filters: {filters}")
         return None
 
     def cache_date_range_query(
@@ -736,17 +712,12 @@ class JobDataCache:
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         with self._get_connection() as conn:
-            # Total jobs
             cursor = conn.execute("SELECT COUNT(*) as total FROM cached_jobs")
             total = cursor.fetchone()["total"]
-
-            # Active jobs
             cursor = conn.execute(
                 "SELECT COUNT(*) as active FROM cached_jobs WHERE is_active = 1"
             )
             active = cursor.fetchone()["active"]
-
-            # Jobs by hostname
             cursor = conn.execute("""
                 SELECT hostname, COUNT(*) as count 
                 FROM cached_jobs 
@@ -754,8 +725,6 @@ class JobDataCache:
                 ORDER BY count DESC
             """)
             by_hostname = {row["hostname"]: row["count"] for row in cursor.fetchall()}
-
-            # Jobs with scripts/outputs
             cursor = conn.execute(
                 "SELECT COUNT(*) as with_scripts FROM cached_jobs WHERE script_content IS NOT NULL"
             )
@@ -765,8 +734,6 @@ class JobDataCache:
                 "SELECT COUNT(*) as with_stdout FROM cached_jobs WHERE stdout_content IS NOT NULL"
             )
             with_stdout = cursor.fetchone()["with_stdout"]
-
-            # Date range cache stats
             cursor = conn.execute(
                 """
                 SELECT 
@@ -779,8 +746,6 @@ class JobDataCache:
                 (datetime.now().isoformat(),),
             )
             range_stats = cursor.fetchone()
-
-            # Get top cached ranges by hit count
             cursor = conn.execute(
                 """
                 SELECT hostname, filters_json, hit_count, cached_at
@@ -873,7 +838,6 @@ class JobDataCache:
 
         deleted_count = 0
         with self._get_connection() as conn:
-            # Remove oldest entries without scripts first
             cursor = conn.execute("""
                 DELETE FROM cached_jobs 
                 WHERE (script_content IS NULL OR script_content = "")
@@ -886,8 +850,6 @@ class JobDataCache:
             """)
             deleted_count = cursor.rowcount
             conn.commit()
-
-        # Check if we need more aggressive cleanup
         current_size_mb = self.db_path.stat().st_size / (1024 * 1024)
         if current_size_mb > max_size_mb:
             logger.warning(
@@ -932,12 +894,163 @@ class JobDataCache:
             logger.info(f"Exported {len(export_data)} jobs to {output_file}")
             return len(export_data)
 
+    def get_host_fetch_state(self, hostname: str) -> Optional[Dict[str, Any]]:
+        """Get the last fetch state for a host.
+
+        Args:
+            hostname: The hostname to get fetch state for
+
+        Returns:
+            Dictionary with fetch state or None if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT last_fetch_time, last_fetch_time_utc, 
+                       cluster_timezone, fetch_count, updated_at
+                FROM host_fetch_state
+                WHERE hostname = ?
+                """,
+                (hostname,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "last_fetch_time": row["last_fetch_time"],
+                    "last_fetch_time_utc": row["last_fetch_time_utc"],
+                    "cluster_timezone": row["cluster_timezone"],
+                    "fetch_count": row["fetch_count"],
+                    "updated_at": row["updated_at"],
+                }
+            return None
+
+    def update_host_fetch_state(
+        self,
+        hostname: str,
+        fetch_time: datetime,
+        fetch_time_utc: datetime,
+        cluster_timezone: Optional[str] = None,
+    ):
+        """Update the last fetch state for a host.
+
+        Args:
+            hostname: The hostname to update
+            fetch_time: The fetch time in cluster's local timezone
+            fetch_time_utc: The fetch time in UTC for consistency
+            cluster_timezone: The cluster's timezone (e.g., 'America/New_York')
+        """
+        with self._get_connection() as conn:
+            # Get existing fetch count
+            cursor = conn.execute(
+                "SELECT fetch_count FROM host_fetch_state WHERE hostname = ?",
+                (hostname,),
+            )
+            row = cursor.fetchone()
+            fetch_count = (row["fetch_count"] + 1) if row else 1
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO host_fetch_state
+                (hostname, last_fetch_time, last_fetch_time_utc, 
+                 cluster_timezone, fetch_count, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    hostname,
+                    fetch_time.isoformat(),
+                    fetch_time_utc.isoformat(),
+                    cluster_timezone,
+                    fetch_count,
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+            logger.debug(
+                f"Updated fetch state for {hostname}: "
+                f"last_fetch={fetch_time_utc.isoformat()} (UTC), count={fetch_count}"
+            )
+
+    def get_cached_completed_jobs(
+        self, hostname: str, since: Optional[datetime] = None
+    ) -> List[JobInfo]:
+        """Get cached completed jobs for a host.
+
+        Args:
+            hostname: The hostname to get jobs for
+            since: Optional datetime to filter jobs submitted after this time (assumed UTC)
+
+        Returns:
+            List of cached completed jobs
+        """
+        jobs = []
+        with self._get_connection() as conn:
+            query = """
+                SELECT job_info_json 
+                FROM cached_jobs 
+                WHERE hostname = ? AND is_active = 0
+            """
+            params = [hostname]
+
+            if since:
+                # Get cluster timezone info for this host
+                host_fetch_state = self.get_host_fetch_state(hostname)
+                cluster_timezone = (
+                    host_fetch_state.get("cluster_timezone")
+                    if host_fetch_state
+                    else None
+                )
+
+                # Convert UTC 'since' time to cluster's local timezone
+                if cluster_timezone and since.tzinfo:
+                    try:
+                        import zoneinfo
+
+                        cluster_tz = zoneinfo.ZoneInfo(cluster_timezone)
+                        since_local = since.astimezone(cluster_tz)
+                        # Strip timezone info for comparison with stored times (which have no timezone)
+                        since_for_comparison = since_local.replace(tzinfo=None)
+                    except (ImportError, Exception) as e:
+                        logger.warning(
+                            f"Failed to convert timezone for {hostname}: {e}, using UTC time"
+                        )
+                        since_for_comparison = since.replace(tzinfo=None)
+                else:
+                    # No timezone info available, strip timezone from since parameter
+                    since_for_comparison = (
+                        since.replace(tzinfo=None) if since.tzinfo else since
+                    )
+
+                # Filter by submit time if available in the JSON
+                query += " AND datetime(json_extract(job_info_json, '$.submit_time')) > datetime(?)"
+                params.append(since_for_comparison.isoformat())
+
+            query += " ORDER BY json_extract(job_info_json, '$.submit_time') DESC"
+
+            cursor = conn.execute(query, params)
+            for row in cursor.fetchall():
+                try:
+                    job_dict = json.loads(row["job_info_json"])
+                    # Convert state string back to JobState enum if needed
+                    if "state" in job_dict and isinstance(job_dict["state"], str):
+                        from .models.job import JobState
+
+                        try:
+                            job_dict["state"] = JobState(job_dict["state"])
+                        except ValueError:
+                            # Fallback for unknown states
+                            job_dict["state"] = JobState.UNKNOWN
+                    job_info = JobInfo(**job_dict)
+                    jobs.append(job_info)
+                except Exception as e:
+                    logger.warning(f"Failed to parse cached job: {e}")
+
+        return jobs
+
     def close(self):
         """Clean up resources. Does NOT perform cleanup to preserve data."""
         logger.info("Job cache closed (data preserved)")
 
 
-# Global cache instance
 _cache_instance: Optional[JobDataCache] = None
 _cache_lock = threading.Lock()
 
@@ -948,14 +1061,14 @@ def get_cache() -> JobDataCache:
 
     with _cache_lock:
         if _cache_instance is None:
-            # Use the centralized cache configuration
             from .utils.config import config as app_config
 
             cache_settings = app_config.cache_settings
 
-            # Use cache_dir from settings or default
             cache_dir = (
-                Path(cache_settings.cache_dir) if cache_settings.cache_dir else None
+                Path(cache_settings.cache_dir).expanduser()
+                if cache_settings.cache_dir
+                else None
             )
 
             _cache_instance = JobDataCache(

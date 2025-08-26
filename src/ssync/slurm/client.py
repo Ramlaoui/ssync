@@ -1,6 +1,6 @@
 """SLURM command execution utilities."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fabric import Connection
@@ -18,7 +18,6 @@ class SlurmClient:
 
     def __init__(self):
         self.parser = SlurmParser()
-        # Cache of available sacct fields per hostname
         self._available_fields_cache = {}
 
     def get_available_sacct_fields(self, conn: Connection, hostname: str) -> List[str]:
@@ -39,7 +38,6 @@ class SlurmClient:
                 logger.debug(
                     f"sacct --helpformat failed for {hostname}, using basic fields"
                 )
-                # Fall back to basic compatible fields
                 basic_fields = [
                     "JobID",
                     "JobName",
@@ -55,8 +53,6 @@ class SlurmClient:
                 self._available_fields_cache[hostname] = basic_fields
                 return basic_fields
 
-            # Parse the helpformat output - it's in columnar format
-            # Fields are separated by whitespace and arranged in columns
             available_fields = []
 
             # Split the output and extract all field names
@@ -164,7 +160,6 @@ class SlurmClient:
             format_str = "|".join(SQUEUE_FIELDS)
             cmd = f"squeue --format='{format_str}' --noheader"
 
-            # Default to current user if no user specified (unless explicitly skipping)
             query_user = self.get_username(conn) if not skip_user_detection else user
 
             if query_user:
@@ -196,16 +191,10 @@ class SlurmClient:
                     try:
                         job_info = self.parser.from_squeue_fields(fields, hostname)
 
-                        # For running jobs, enrich with actual stdout/stderr paths from scontrol
-                        # since squeue doesn't provide the correct output file paths
-                        if job_info.state in [JobState.RUNNING, JobState.PENDING]:
-                            stdout_path, stderr_path = self.get_job_output_files(
-                                conn, job_info.job_id, hostname
-                            )
-                            if stdout_path:
-                                job_info.stdout_file = stdout_path
-                            if stderr_path:
-                                job_info.stderr_file = stderr_path
+                        # OPTIMIZED: Skip expensive output file detection for now
+                        # This was causing major performance issues by doing scontrol for every job
+                        # Output files will be retrieved on-demand when actually needed
+                        # The performance gain from skipping this is massive
 
                         jobs.append(job_info)
                     except Exception as e:
@@ -231,7 +220,9 @@ class SlurmClient:
         """Get completed jobs using sacct."""
         # Check if we need chunking for large time ranges
         if since:
-            time_range_days = (datetime.now() - since).days
+            # Handle both timezone-aware and naive datetimes
+            now = datetime.now() if since.tzinfo is None else datetime.now(since.tzinfo)
+            time_range_days = (now - since).days
             if time_range_days > 60:  # Only chunk for very large ranges (2+ months)
                 logger.debug(f"Using chunked query for {time_range_days} days")
                 return self._get_completed_jobs_chunked(
@@ -282,10 +273,34 @@ class SlurmClient:
 
             # Time filter
             if since:
-                since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-                cmd += f" --starttime={since_str}"
+                # Check if we can use relative time format (more reliable across timezones)
+                now = datetime.now(timezone.utc) if since.tzinfo else datetime.now()
+                time_diff = now - since
 
-            # Default to current user if no user specified (unless explicitly skipping)
+                # If the time difference is less than 7 days, use relative format
+                if time_diff.total_seconds() > 0 and time_diff.days < 7:
+                    hours_ago = int(time_diff.total_seconds() / 3600)
+                    if hours_ago > 0:
+                        # Use relative time format which is timezone-agnostic
+                        cmd += f" --starttime=now-{hours_ago}hours"
+                        logger.debug(
+                            f"Using relative starttime=now-{hours_ago}hours for sacct on {hostname}"
+                        )
+                    else:
+                        # Very recent, use absolute time
+                        since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
+                        cmd += f" --starttime={since_str}"
+                        logger.debug(
+                            f"Using starttime={since_str} for sacct on {hostname} (input was {since})"
+                        )
+                else:
+                    # Use absolute time for older queries or future times
+                    since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
+                    cmd += f" --starttime={since_str}"
+                    logger.debug(
+                        f"Using starttime={since_str} for sacct on {hostname} (input was {since})"
+                    )
+
             query_user = self.get_username(conn) if not skip_user_detection else user
 
             if query_user:
@@ -297,7 +312,15 @@ class SlurmClient:
 
             # For large time ranges (>2 weeks), consider chunking the query
             # to avoid SLURM timeouts with massive datasets
-            time_range_days = (datetime.now() - since).days if since else 0
+            if since:
+                now = (
+                    datetime.now()
+                    if since.tzinfo is None
+                    else datetime.now(since.tzinfo)
+                )
+                time_range_days = (now - since).days
+            else:
+                time_range_days = 0
             if time_range_days > 14:
                 logger.debug(
                     f"Large time range detected ({time_range_days} days), may need chunking if query fails"
@@ -318,6 +341,32 @@ class SlurmClient:
                 )
             elif len(result.stdout) == 0:
                 logger.debug(f"No jobs found for {hostname} since {since}")
+                # Get cluster's current time for debugging
+                try:
+                    cluster_time_result = conn.run(
+                        "date '+%Y-%m-%dT%H:%M:%S%z'", hide=True
+                    )
+                    logger.debug(
+                        f"Cluster {hostname} current time: {cluster_time_result.stdout.strip()}"
+                    )
+                    logger.debug(f"Query was for jobs since: {since}")
+
+                    # Also check if there are ANY recent jobs to understand the issue
+                    test_result = conn.run(
+                        f"sacct -X --format=JobID,Submit --parsable2 --noheader "
+                        f"--starttime=now-7days --user={query_user} | head -5",
+                        hide=True,
+                    )
+                    if test_result.stdout.strip():
+                        logger.debug(
+                            f"Recent jobs found on {hostname}: {test_result.stdout.strip()[:200]}"
+                        )
+                    else:
+                        logger.debug(
+                            f"No recent jobs found on {hostname} in last 7 days"
+                        )
+                except Exception as e:
+                    logger.debug(f"Debug query failed: {e}")
             else:
                 logger.debug(
                     f"sacct found {len(result.stdout.strip().split(chr(10)))} lines for {hostname}"
@@ -375,7 +424,10 @@ class SlurmClient:
 
         all_jobs = []
         chunk_size_days = 7  # Query 1 week at a time
-        current_end = datetime.now()
+        # Handle timezone-aware datetime
+        current_end = (
+            datetime.now() if since.tzinfo is None else datetime.now(since.tzinfo)
+        )
         current_start = max(since, current_end - timedelta(days=chunk_size_days))
 
         while current_start >= since and (not limit or len(all_jobs) < limit):
@@ -411,9 +463,7 @@ class SlurmClient:
                 logger.debug(
                     f"Chunk query failed for {current_start.date()}-{current_end.date()}: {e}"
                 )
-                # Continue with next chunk even if this one fails
 
-            # Move to previous chunk
             current_end = current_start
             current_start = max(since, current_end - timedelta(days=chunk_size_days))
 

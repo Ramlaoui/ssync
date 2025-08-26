@@ -1,8 +1,10 @@
 """Secure version of the SLURM Manager API with enhanced security measures."""
 
+import asyncio
 import os
 import threading
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,12 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import config
+from ..cache import get_cache
 from ..manager import SlurmManager
 from ..utils.logging import setup_logger
 from ..utils.slurm_params import SlurmParams
 from .cache_middleware import get_cache_middleware
 from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
 from .models import (
+    CompleteJobDataResponse,
     FileMetadata,
     HostInfoWeb,
     JobInfoWeb,
@@ -47,6 +51,73 @@ app = FastAPI(
     docs_url=None,  # Disable interactive docs in production
     redoc_url=None,  # Disable ReDoc in production
 )
+
+# Thread pool for blocking SSH operations
+# Number of workers = number of CPU cores + 4 (good for I/O bound tasks)
+# Can be overridden by environment variable
+THREAD_POOL_SIZE = int(os.getenv("SSYNC_THREAD_POOL_SIZE", str(os.cpu_count() + 4)))
+executor = ThreadPoolExecutor(
+    max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-worker"
+)
+logger.info(f"Initialized thread pool with {THREAD_POOL_SIZE} workers")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize resources on startup."""
+    logger.info(f"Starting SLURM Manager API with {THREAD_POOL_SIZE} worker threads")
+
+    # Initialize manager
+    _ = get_slurm_manager()
+    logger.info("Secure API started, manager initialized")
+
+    # Start cache scheduler
+    try:
+        await start_cache_scheduler()
+        logger.info("Cache scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start cache scheduler: {e}")
+
+    # Output harvesting is now done on-demand when jobs complete or outputs are requested
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources on shutdown."""
+    global _slurm_manager
+
+    logger.info("Shutting down SLURM Manager API...")
+
+    # Signal shutdown to background tasks
+    _shutdown_event.set()
+
+    # Stop cache scheduler
+    try:
+        await stop_cache_scheduler()
+        logger.info("Cache scheduler stopped")
+    except Exception:
+        pass
+
+    # No output harvester to stop - output fetching is now on-demand
+
+    # Shutdown thread pool executor
+    executor.shutdown(wait=True, cancel_futures=True)
+    logger.info("Thread pool shutdown complete")
+
+    # Close SSH connections
+    if _slurm_manager:
+        _slurm_manager.close_connections()
+        logger.info("Closed all SSH connections")
+
+    # Cleanup cache
+    try:
+        _cache_middleware.cache.close()
+        logger.info("Closed job cache")
+    except Exception:
+        pass
+
+    logger.info("Shutdown complete")
+
 
 # Security Configuration
 ENABLE_DOCS = os.getenv("SSYNC_ENABLE_DOCS", "false").lower() == "true"
@@ -195,9 +266,17 @@ def get_slurm_manager() -> SlurmManager:
 
         # Load config and create new manager
         slurm_hosts = config.load_config()
-        _slurm_manager = SlurmManager(slurm_hosts)
+
+        # Get connection timeout from environment or use default
+        connection_timeout = int(os.environ.get("SSYNC_CONNECTION_TIMEOUT", "30"))
+
+        _slurm_manager = SlurmManager(
+            slurm_hosts, connection_timeout=connection_timeout
+        )
         _config_last_modified = current_mtime
-        logger.debug(f"Created new SlurmManager with {len(slurm_hosts)} hosts")
+        logger.debug(
+            f"Created new SlurmManager with {len(slurm_hosts)} hosts (timeout: {connection_timeout}s)"
+        )
     else:
         logger.debug("Reusing existing SlurmManager")
 
@@ -221,6 +300,130 @@ async def api_info(authenticated: bool = Depends(verify_api_key)):
     }
 
 
+@app.get("/api/jobs/{job_id}/data", response_model=CompleteJobDataResponse)
+async def get_complete_job_data(
+    job_id: str,
+    host: Optional[str] = Query(None, description="Specific host to search"),
+    include_outputs: bool = Query(True, description="Include stdout/stderr content"),
+    lines: Optional[int] = Query(
+        None, description="Number of output lines to return (tail)"
+    ),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get complete job data (info + script + outputs) in a single request."""
+    try:
+        # Sanitize inputs
+        job_id = InputSanitizer.sanitize_job_id(job_id)
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
+
+        # Import here to avoid circular imports
+        from ..job_data_manager import get_job_data_manager
+
+        job_data_manager = get_job_data_manager()
+
+        # Try to get from specific host if provided
+        if host:
+            complete_data = await job_data_manager.get_job_data(job_id, host)
+        else:
+            # Search all hosts
+            manager = get_slurm_manager()
+            complete_data = None
+
+            for slurm_host in manager.slurm_hosts:
+                complete_data = await job_data_manager.get_job_data(
+                    job_id, slurm_host.host.hostname
+                )
+                if complete_data:
+                    break
+
+        if not complete_data:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        # Convert JobInfo to JobInfoWeb
+        job_info_web = JobInfoWeb(
+            job_id=complete_data.job_info.job_id,
+            name=complete_data.job_info.name,
+            state=complete_data.job_info.state,
+            user=complete_data.job_info.user,
+            partition=complete_data.job_info.partition,
+            submit_time=complete_data.job_info.submit_time,
+            start_time=complete_data.job_info.start_time,
+            end_time=complete_data.job_info.end_time,
+            runtime=complete_data.job_info.runtime,
+            time_limit=complete_data.job_info.time_limit,
+            nodes=complete_data.job_info.nodes,
+            cpus=complete_data.job_info.cpus,
+            memory=complete_data.job_info.memory,
+            reason=complete_data.job_info.reason,
+            hostname=complete_data.job_info.hostname,
+            stdout_file=complete_data.job_info.stdout_file,
+            stderr_file=complete_data.job_info.stderr_file,
+            work_dir=complete_data.job_info.work_dir,
+        )
+
+        # Prepare response
+        response = CompleteJobDataResponse(
+            job_id=job_id,
+            hostname=complete_data.job_info.hostname,
+            job_info=job_info_web,
+            script_content=complete_data.script_content,
+            script_length=len(complete_data.script_content)
+            if complete_data.script_content
+            else None,
+            data_completeness={
+                "job_info": True,
+                "script": complete_data.script_content is not None,
+                "outputs": (complete_data.stdout_content is not None)
+                or (complete_data.stderr_content is not None),
+            },
+        )
+
+        # Add outputs if requested
+        if include_outputs:
+            stdout_content = complete_data.stdout_content
+            stderr_content = complete_data.stderr_content
+
+            # Apply line limit if specified
+            if lines and stdout_content:
+                stdout_lines = stdout_content.split("\n")
+                if len(stdout_lines) > lines:
+                    stdout_content = "\n".join(stdout_lines[-lines:])
+
+            if lines and stderr_content:
+                stderr_lines = stderr_content.split("\n")
+                if len(stderr_lines) > lines:
+                    stderr_content = "\n".join(stderr_lines[-lines:])
+
+            response.stdout = stdout_content
+            response.stderr = stderr_content
+
+            # Basic metadata
+            if stdout_content:
+                response.stdout_metadata = FileMetadata(
+                    size=len(stdout_content),
+                    line_count=len(stdout_content.split("\n")),
+                    last_modified=None,
+                    access_path=complete_data.job_info.stdout_file,
+                )
+
+            if stderr_content:
+                response.stderr_metadata = FileMetadata(
+                    size=len(stderr_content),
+                    line_count=len(stderr_content.split("\n")),
+                    last_modified=None,
+                    access_path=complete_data.job_info.stderr_file,
+                )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_complete_job_data: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
+
+
 @app.get("/api/cache/stats")
 async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
     """Get cache statistics including date range cache information."""
@@ -240,6 +443,85 @@ async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
         raise HTTPException(
             status_code=500, detail="Failed to retrieve cache statistics"
         )
+
+
+@app.get("/api/cache/fetch-state")
+async def get_fetch_state(
+    host: Optional[str] = Query(None, description="Specific host to check"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get the incremental fetch state for hosts."""
+    try:
+        cache = get_cache()
+        manager = get_slurm_manager()
+
+        fetch_states = {}
+
+        # Get states for requested hosts
+        hosts_to_check = []
+        if host:
+            # Sanitize host
+            host = InputSanitizer.sanitize_hostname(host)
+            hosts_to_check = [h for h in manager.slurm_hosts if h.host.hostname == host]
+            if not hosts_to_check:
+                raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+        else:
+            hosts_to_check = manager.slurm_hosts
+
+        for slurm_host in hosts_to_check:
+            hostname = slurm_host.host.hostname
+            state = cache.get_host_fetch_state(hostname)
+
+            if state:
+                # Parse the times for better display
+                last_fetch_utc = datetime.fromisoformat(state["last_fetch_time_utc"])
+                time_since_fetch = datetime.now(timezone.utc) - last_fetch_utc.replace(
+                    tzinfo=timezone.utc
+                )
+
+                fetch_states[hostname] = {
+                    "last_fetch_time": state["last_fetch_time"],
+                    "last_fetch_time_utc": state["last_fetch_time_utc"],
+                    "cluster_timezone": state["cluster_timezone"],
+                    "fetch_count": state["fetch_count"],
+                    "updated_at": state["updated_at"],
+                    "time_since_fetch_seconds": int(time_since_fetch.total_seconds()),
+                    "time_since_fetch_human": _format_time_delta(time_since_fetch),
+                }
+            else:
+                fetch_states[hostname] = {
+                    "status": "never_fetched",
+                    "message": "No incremental fetch performed yet for this host",
+                }
+
+        return {
+            "status": "success",
+            "fetch_states": fetch_states,
+            "incremental_fetch_enabled": True,
+            "message": "Fetch state retrieved successfully",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fetch state: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve fetch state")
+
+
+def _format_time_delta(delta: timedelta) -> str:
+    """Format a timedelta into a human-readable string."""
+    total_seconds = int(delta.total_seconds())
+
+    if total_seconds < 60:
+        return f"{total_seconds} seconds"
+    elif total_seconds < 3600:
+        minutes = total_seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    elif total_seconds < 86400:
+        hours = total_seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    else:
+        days = total_seconds // 86400
+        return f"{days} day{'s' if days != 1 else ''}"
 
 
 @app.get("/api/hosts", response_model=List[HostInfoWeb])
@@ -326,9 +608,89 @@ async def get_job_status(
         # Get cache middleware
         cache_middleware = get_cache_middleware()
 
-        results = []
+        # OPTIMIZATION: For multi-host queries, use JobDataManager directly for true concurrency
+        if len(slurm_hosts) > 1 and not job_id_list:
+            # Import here to avoid circular imports
+            from ..job_data_manager import get_job_data_manager
 
-        for slurm_host in slurm_hosts:
+            logger.info(
+                f"Using optimized concurrent fetching for {len(slurm_hosts)} hosts"
+            )
+            job_data_manager = get_job_data_manager()
+
+            # Let JobDataManager handle all hosts concurrently in one call
+            try:
+                all_jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=None,  # Fetch from all hosts
+                    user=user,
+                    since=since,
+                    limit=limit,
+                    job_ids=job_id_list,
+                    state_filter=state,
+                    active_only=active_only,
+                    completed_only=completed_only,
+                    skip_user_detection=False,
+                )
+
+                # Group jobs by hostname and create responses
+                jobs_by_host = {}
+                for job in all_jobs:
+                    hostname = job.hostname
+                    if hostname not in jobs_by_host:
+                        jobs_by_host[hostname] = []
+                    jobs_by_host[hostname].append(job)
+
+                # Apply search filter if provided
+                if search:
+                    search_lower = search.lower()
+                    for hostname in jobs_by_host:
+                        filtered_jobs = []
+                        for job in jobs_by_host[hostname]:
+                            web_job = JobInfoWeb.from_job_info(job)
+                            if search_lower in job.job_id.lower() or (
+                                job.name and search_lower in job.name.lower()
+                            ):
+                                filtered_jobs.append(web_job)
+                        jobs_by_host[hostname] = filtered_jobs
+                else:
+                    # Convert to JobInfoWeb
+                    for hostname in jobs_by_host:
+                        jobs_by_host[hostname] = [
+                            JobInfoWeb.from_job_info(job)
+                            for job in jobs_by_host[hostname]
+                        ]
+
+                # Create responses for each host
+                results = []
+                for slurm_host in slurm_hosts:
+                    hostname = slurm_host.host.hostname
+                    host_jobs = jobs_by_host.get(hostname, [])
+
+                    response = JobStatusResponse(
+                        hostname=hostname,
+                        jobs=host_jobs,
+                        total_jobs=len(host_jobs),
+                        query_time=datetime.now(),
+                    )
+                    results.append(response)
+
+                logger.info(
+                    f"Concurrent fetch completed: {sum(len(r.jobs) for r in results)} total jobs from {len(slurm_hosts)} hosts"
+                )
+
+                # Cache results and return
+                cached_results = await cache_middleware.cache_job_status_response(
+                    results
+                )
+                return cached_results
+
+            except Exception as e:
+                logger.error(f"Error in optimized concurrent fetch: {e}")
+                # Fall back to per-host fetching
+                logger.info("Falling back to per-host fetching")
+
+        # Define async function to fetch jobs from a single host
+        async def fetch_host_jobs(slurm_host):
             hostname = slurm_host.host.hostname
 
             # Check date range cache first if we have a single host and since parameter
@@ -361,34 +723,29 @@ async def get_job_status(
                                 filtered_jobs.append(job)
                         web_jobs = filtered_jobs
 
-                    # Apply limit if specified
-                    if limit:
-                        web_jobs = web_jobs[:limit]
-
                     response = JobStatusResponse(
-                        hostname=hostname,
+                        hostname=slurm_host.host.hostname,
                         jobs=web_jobs,
                         total_jobs=len(web_jobs),
                         query_time=datetime.now(),
-                        cached=True,  # Mark as cached
                     )
-                    results.append(response)
                     logger.info(
                         f"Served {len(web_jobs)} jobs from date range cache for {hostname}"
                     )
-                    continue
+                    return response
 
-            # Cache miss or not a cacheable query - fetch from SLURM
+            # Cache miss or not a cacheable query - fetch from SLURM via JobDataManager
             try:
-                jobs = manager.get_all_jobs(
-                    slurm_host=slurm_host,
-                    user=user,
-                    since=since,
-                    limit=limit,
-                    job_ids=job_id_list,
-                    state_filter=state,
-                    active_only=active_only,
-                    completed_only=completed_only,
+                # Use the async JobDataManager directly
+                jobs = await manager.get_all_jobs(
+                    slurm_host,
+                    user,
+                    since,
+                    limit,
+                    job_id_list,
+                    state,
+                    active_only,
+                    completed_only,
                 )
 
                 web_jobs = [JobInfoWeb.from_job_info(job) for job in jobs]
@@ -411,19 +768,22 @@ async def get_job_status(
                     total_jobs=len(web_jobs),
                     query_time=datetime.now(),
                 )
-                results.append(response)
+                return response
 
             except Exception as e:
                 logger.error(f"Error querying {slurm_host.host.hostname}: {e}")
                 # Don't expose internal errors
-                results.append(
-                    JobStatusResponse(
-                        hostname=slurm_host.host.hostname,
-                        jobs=[],
-                        total_jobs=0,
-                        query_time=datetime.now(),
-                    )
+                return JobStatusResponse(
+                    hostname=slurm_host.host.hostname,
+                    jobs=[],
+                    total_jobs=0,
+                    query_time=datetime.now(),
                 )
+
+        # Fetch from all hosts concurrently
+        results = await asyncio.gather(
+            *[fetch_host_jobs(slurm_host) for slurm_host in slurm_hosts]
+        )
 
         # Cache the results with date range info if applicable
         if host and since and not job_id_list:
@@ -574,6 +934,53 @@ async def get_job_output(
         if host:
             host = InputSanitizer.sanitize_hostname(host)
 
+        # First check cache for outputs
+        cache_middleware = get_cache_middleware()
+        cached_job = (
+            cache_middleware.cache.get_cached_job(job_id, host) if host else None
+        )
+
+        # If not in cache with specific host, search all hosts
+        if not cached_job and not host:
+            manager = get_slurm_manager()
+            for slurm_host in manager.slurm_hosts:
+                cached_job = cache_middleware.cache.get_cached_job(
+                    job_id, slurm_host.host.hostname
+                )
+                if cached_job:
+                    host = slurm_host.host.hostname
+                    break
+
+        # If we have cached outputs, return them directly
+        if cached_job and (cached_job.stdout_content or cached_job.stderr_content):
+            return JobOutputResponse(
+                job_id=job_id,
+                hostname=host,
+                stdout=cached_job.stdout_content if not metadata_only else None,
+                stderr=cached_job.stderr_content if not metadata_only else None,
+                stdout_metadata=FileMetadata(
+                    path=cached_job.job_info.stdout_file,
+                    size=len(cached_job.stdout_content)
+                    if cached_job.stdout_content
+                    else 0,
+                    modified=None,
+                    exists=bool(cached_job.stdout_content),
+                )
+                if cached_job.job_info.stdout_file
+                else None,
+                stderr_metadata=FileMetadata(
+                    path=cached_job.job_info.stderr_file,
+                    size=len(cached_job.stderr_content)
+                    if cached_job.stderr_content
+                    else 0,
+                    modified=None,
+                    exists=bool(cached_job.stderr_content),
+                )
+                if cached_job.job_info.stderr_file
+                else None,
+            )
+
+        # Fall back to original logic if not in cache
         manager = get_slurm_manager()
 
         # Get job info
@@ -985,49 +1392,6 @@ async def list_local_path(
         raise HTTPException(
             status_code=500, detail=f"Failed to read directory: {str(e)}"
         )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize resources on startup."""
-    # Initialize manager
-    _ = get_slurm_manager()
-    logger.info("Secure API started, manager initialized")
-
-    # Start cache scheduler
-    try:
-        await start_cache_scheduler()
-        logger.info("Cache scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start cache scheduler: {e}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up connections and background tasks on shutdown."""
-    global _slurm_manager
-
-    # Signal shutdown to background tasks
-    _shutdown_event.set()
-
-    # Stop cache scheduler
-    try:
-        await stop_cache_scheduler()
-        logger.info("Cache scheduler stopped")
-    except Exception:
-        pass
-
-    # Close connections
-    if _slurm_manager:
-        _slurm_manager.close_connections()
-        logger.info("Closed all SSH connections")
-
-    # Cleanup cache
-    try:
-        _cache_middleware.cache.close()
-        logger.info("Closed job cache")
-    except Exception:
-        pass
 
 
 def main():

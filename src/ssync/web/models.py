@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -236,6 +236,26 @@ class JobOutputResponse(BaseModel):
     stderr: Optional[str] = None
     stdout_metadata: Optional[FileMetadata] = None
     stderr_metadata: Optional[FileMetadata] = None
+
+
+class CompleteJobDataResponse(BaseModel):
+    """Response model for unified job data endpoint."""
+
+    job_id: str
+    hostname: str
+    job_info: JobInfoWeb
+    script_content: Optional[str] = None
+    script_length: Optional[int] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    stdout_metadata: Optional[FileMetadata] = None
+    stderr_metadata: Optional[FileMetadata] = None
+    cached_at: Optional[str] = None
+    data_completeness: Dict[str, bool] = {
+        "job_info": True,
+        "script": False,
+        "outputs": False,
+    }
 
 
 class StatusQueryParams(BaseModel):
