@@ -15,6 +15,7 @@
   export let maxHeight = "600px";
   
   let outputElement: HTMLElement;
+  let viewerContentElement: HTMLElement;
   let searchTerm = "";
   let showSearch = false;
   let currentMatch = 0;
@@ -23,6 +24,9 @@
   let copySuccess = false;
   let autoScroll = true;
   let fontSize = 14;
+  let hasScrollableContent = false;
+  let isAtTop = true;
+  let isAtBottom = false;
   
   // Format file size
   function formatBytes(bytes: number): string {
@@ -116,16 +120,49 @@
   
   // Auto-scroll to bottom for live logs
   function scrollToBottom() {
-    if (outputElement && autoScroll) {
-      outputElement.scrollTop = outputElement.scrollHeight;
+    if (viewerContentElement && autoScroll) {
+      viewerContentElement.scrollTop = viewerContentElement.scrollHeight;
+    }
+  }
+  
+  // Manual scroll to bottom
+  function scrollToBottomManual() {
+    if (viewerContentElement) {
+      viewerContentElement.scrollTop = viewerContentElement.scrollHeight;
+      autoScroll = true;
+    }
+  }
+  
+  // Scroll to top
+  function scrollToTop() {
+    if (viewerContentElement) {
+      viewerContentElement.scrollTop = 0;
+      autoScroll = false;
     }
   }
   
   // Detect if user manually scrolled
   function handleScroll() {
-    if (outputElement) {
-      const isAtBottom = outputElement.scrollHeight - outputElement.scrollTop === outputElement.clientHeight;
+    if (viewerContentElement) {
+      const scrollTop = viewerContentElement.scrollTop;
+      const scrollHeight = viewerContentElement.scrollHeight;
+      const clientHeight = viewerContentElement.clientHeight;
+      
+      // Use small threshold for better detection
+      isAtTop = scrollTop <= 1;
+      isAtBottom = scrollHeight - scrollTop - clientHeight <= 1;
       autoScroll = isAtBottom;
+      hasScrollableContent = scrollHeight > clientHeight + 10; // Add buffer to avoid edge cases
+    }
+  }
+  
+  // Check scrollable content on mount and content change
+  function checkScrollable() {
+    if (viewerContentElement) {
+      const scrollHeight = viewerContentElement.scrollHeight;
+      const clientHeight = viewerContentElement.clientHeight;
+      hasScrollableContent = scrollHeight > clientHeight + 10;
+      handleScroll();
     }
   }
   
@@ -160,10 +197,18 @@
   // Watch for content changes
   $: if (content) {
     scrollToBottom();
+    // Check scrollable after DOM update
+    setTimeout(() => {
+      checkScrollable();
+    }, 100);
   }
   
   onMount(() => {
     window.addEventListener('keydown', handleKeydown);
+    // Check scrollable state after mount
+    setTimeout(() => {
+      checkScrollable();
+    }, 100);
   });
   
   onDestroy(() => {
@@ -241,6 +286,26 @@
         </button>
       </div>
       
+      <!-- Scroll buttons -->
+      <button
+        class="toolbar-btn scroll-btn"
+        on:click={scrollToTop}
+        title="Scroll to top"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M13,20H11V8L5.5,13.5L4.08,12.08L12,4.16L19.92,12.08L18.5,13.5L13,8V20Z"/>
+        </svg>
+      </button>
+      <button
+        class="toolbar-btn scroll-btn"
+        on:click={scrollToBottomManual}
+        title="Scroll to bottom"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M11,4H13V16L18.5,10.5L19.92,11.92L12,19.84L4.08,11.92L5.5,10.5L11,16V4Z"/>
+        </svg>
+      </button>
+      
       <!-- Action buttons -->
       <button
         class="toolbar-btn"
@@ -298,7 +363,7 @@
   </div>
   
   <!-- Content area -->
-  <div class="viewer-content" style="max-height: {maxHeight}; font-size: {fontSize}px;">
+  <div class="viewer-content" style="max-height: {maxHeight}; font-size: {fontSize}px;" bind:this={viewerContentElement} on:scroll={handleScroll}>
     {#if loading}
       <div class="loading-state">
         <div class="loading-spinner"></div>
@@ -316,7 +381,6 @@
         class="output-content line-numbers"
         class:wrap={wrapLines}
         bind:this={outputElement}
-        on:scroll={handleScroll}
       >{@html processContent(content)}</pre>
     {:else}
       <div class="empty-state">
@@ -449,6 +513,30 @@
     background: #f3f4f6;
     border-color: #9ca3af;
     color: #374151;
+  }
+  
+  .toolbar-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  
+  .toolbar-btn:disabled:hover {
+    background: transparent;
+    border-color: #e5e7eb;
+    color: #6b7280;
+  }
+  
+  /* Highlight scroll buttons when useful */
+  .scroll-btn.highlight {
+    background: #dbeafe;
+    border-color: #3b82f6;
+    color: #1d4ed8;
+  }
+  
+  .scroll-btn.highlight:hover {
+    background: #bfdbfe;
+    border-color: #2563eb;
+    color: #1e40af;
   }
   
   .toolbar-btn.active {

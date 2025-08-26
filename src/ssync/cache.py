@@ -64,7 +64,7 @@ class JobDataCache:
             max_age_days: Maximum age of cached data in days before cleanup (0 = never expire)
         """
         if cache_dir is None:
-            cache_dir = Path.home() / ".ssync" / "cache"
+            cache_dir = Path.home() / ".cache" / "ssync"
 
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +164,50 @@ class JobDataCache:
             finally:
                 conn.close()
 
+    def _merge_job_info(self, new_job: JobInfo, existing_job: JobInfo) -> JobInfo:
+        """
+        Intelligently merge job info, preserving non-None values from existing job.
+
+        Priority order:
+        1. New non-None/non-empty values (updates)
+        2. Existing non-None/non-empty values (preservation)
+        3. New None/empty values (fallback)
+        """
+        from dataclasses import fields
+
+        merged_data = {}
+        for field in fields(JobInfo):
+            new_val = getattr(new_job, field.name)
+            existing_val = getattr(existing_job, field.name)
+
+            # Special handling for critical fields that should never be lost
+            critical_fields = [
+                "stdout_file",
+                "stderr_file",
+                "work_dir",
+                "submit_line",
+                "req_tres",
+                "alloc_tres",
+                "node_list",
+            ]
+
+            if field.name in critical_fields:
+                # For critical fields, prefer existing value if new is None/empty
+                if existing_val and not new_val:
+                    merged_data[field.name] = existing_val
+                    logger.debug(
+                        f"Preserving critical field {field.name} for job {new_job.job_id}"
+                    )
+                else:
+                    merged_data[field.name] = new_val if new_val else existing_val
+            else:
+                # For other fields, prefer new value if it exists
+                merged_data[field.name] = (
+                    new_val if new_val is not None else existing_val
+                )
+
+        return JobInfo(**merged_data)
+
     def cache_job(
         self,
         job_info: JobInfo,
@@ -193,11 +237,24 @@ class JobDataCache:
         if existing_cached:
             if script_content is None and existing_cached.script_content:
                 script_content = existing_cached.script_content
-                logger.debug(f"Preserving existing script for job {job_info.job_id}")
+                logger.debug(
+                    f"Preserving existing script content for job {job_info.job_id}"
+                )
             if stdout_content is None and existing_cached.stdout_content:
                 stdout_content = existing_cached.stdout_content
+                logger.debug(
+                    f"Preserving existing stdout content for job {job_info.job_id}"
+                )
             if stderr_content is None and existing_cached.stderr_content:
                 stderr_content = existing_cached.stderr_content
+                logger.debug(
+                    f"Preserving existing stderr content for job {job_info.job_id}"
+                )
+
+            # Intelligently merge JobInfo, preserving critical fields
+            if existing_cached.job_info:
+                job_info = self._merge_job_info(job_info, existing_cached.job_info)
+
             # Use original cached_at time if updating existing entry
             cached_at = existing_cached.cached_at
         else:
@@ -477,9 +534,9 @@ class JobDataCache:
             Number of entries cleaned up
         """
         # Import config to check script preservation settings
-        from .cache_config import get_cache_config
+        from .utils.config import config as app_config
 
-        config = get_cache_config()
+        cache_settings = app_config.cache_settings
 
         if max_age_days is None:
             max_age_days = self.max_age_days
@@ -498,7 +555,7 @@ class JobDataCache:
 
             # Always preserve scripts if configured (unless forced)
             script_preservation = (
-                config.script_max_age_days == 0 or preserve_scripts
+                cache_settings.script_max_age_days == 0 or preserve_scripts
             ) and not force_cleanup
 
             if script_preservation:
@@ -892,23 +949,28 @@ def get_cache() -> JobDataCache:
     with _cache_lock:
         if _cache_instance is None:
             # Use the centralized cache configuration
-            from .cache_config import get_cache_config
+            from .utils.config import config as app_config
 
-            config = get_cache_config()
+            cache_settings = app_config.cache_settings
+
+            # Use cache_dir from settings or default
+            cache_dir = (
+                Path(cache_settings.cache_dir) if cache_settings.cache_dir else None
+            )
 
             _cache_instance = JobDataCache(
-                cache_dir=config.cache_dir, max_age_days=config.max_age_days
+                cache_dir=cache_dir, max_age_days=cache_settings.max_age_days
             )
 
             # Log cache strategy
-            if config.is_preservation_mode():
+            if cache_settings.max_age_days == 0:
                 logger.info("Cache initialized in PRESERVATION mode (never expires)")
             else:
                 logger.info(
-                    f"Cache initialized with {config.max_age_days} day retention policy"
+                    f"Cache initialized with {cache_settings.max_age_days} day retention policy"
                 )
 
-            if config.script_max_age_days == 0:
+            if cache_settings.script_max_age_days == 0:
                 logger.info("Scripts will be preserved indefinitely")
 
         return _cache_instance

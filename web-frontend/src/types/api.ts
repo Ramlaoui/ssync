@@ -60,6 +60,15 @@ export interface SlurmDefaults {
   constraint?: string;
   cpus?: number;
   time?: string;
+  mem?: number;
+  nodes?: number;
+  gpus_per_node?: number;
+  ntasks_per_node?: number;
+  gres?: string;
+  job_name_prefix?: string;
+  output_pattern?: string;
+  error_pattern?: string;
+  python_env?: string;
 }
 
 export interface HostInfo {

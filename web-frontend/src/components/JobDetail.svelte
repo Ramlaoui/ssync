@@ -15,6 +15,8 @@
   let loadingScript = false;
   let scriptError: string | null = null;
   let activeTab: 'info' | 'stdout' | 'stderr' | 'script' = 'info';
+  let cancellingJob = false;
+  let cancelError: string | null = null;
   
   $: if (job && (activeTab === 'stdout' || activeTab === 'stderr') && !outputData) {
     loadOutput();
@@ -126,6 +128,34 @@
       return dateStr;
     }
   }
+
+  async function cancelJob(): Promise<void> {
+    if (!job || cancellingJob) return;
+    
+    const confirmed = confirm(`Are you sure you want to cancel job ${job.job_id}?`);
+    if (!confirmed) return;
+    
+    cancellingJob = true;
+    cancelError = null;
+    
+    try {
+      await api.post(`/api/jobs/${job.job_id}/cancel?host=${encodeURIComponent(job.hostname)}`);
+      // Update job state locally
+      job.state = 'CA';
+      // Close the detail view or refresh
+      alert(`Job ${job.job_id} has been cancelled successfully.`);
+      onClose();
+    } catch (error: unknown) {
+      console.error('Error cancelling job:', error);
+      cancelError = (error as Error).message || 'Failed to cancel job';
+      alert(`Failed to cancel job: ${cancelError}`);
+    } finally {
+      cancellingJob = false;
+    }
+  }
+
+  $: canCancelJob = job && (job.state === 'R' || job.state === 'PD');
+  $: console.log('JobDetail - job state:', job?.state, 'canCancelJob:', canCancelJob);
 </script>
 
 <div class="job-detail" class:full-page={fullPage}>
@@ -155,16 +185,36 @@
           </div>
         </div>
       </div>
-      {#if isLoading}
-        <span class="state-badge skeleton">...</span>
-      {:else}
-        <span 
-          class="state-badge" 
-          style="background-color: {getStateColor(job.state)}"
-        >
-          {getStateLabel(job.state)}
-        </span>
-      {/if}
+      <div class="header-actions">
+        {#if canCancelJob && !isLoading}
+          <button 
+            class="cancel-btn" 
+            on:click={cancelJob}
+            disabled={cancellingJob}
+            aria-label="Cancel job"
+          >
+            {#if cancellingJob}
+              <span class="spinner"></span>
+              Cancelling...
+            {:else}
+              <svg class="cancel-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/>
+              </svg>
+              Cancel Job
+            {/if}
+          </button>
+        {/if}
+        {#if isLoading}
+          <span class="state-badge skeleton">...</span>
+        {:else}
+          <span 
+            class="state-badge" 
+            style="background-color: {getStateColor(job.state)}"
+          >
+            {getStateLabel(job.state)}
+          </span>
+        {/if}
+      </div>
     </div>
   </div>
   
@@ -534,6 +584,19 @@
     }
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  @media (max-width: 768px) {
+    .header-actions {
+      align-self: flex-end;
+      margin-top: -0.5rem;
+    }
+  }
+
   .job-info {
     flex: 1;
     min-width: 0;
@@ -636,7 +699,61 @@
     height: 1.25rem;
   }
   
-  
+  .cancel-btn {
+    background: #dc3545;
+    color: white;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .cancel-btn:hover:not(:disabled) {
+    background: #c82333;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
+  }
+
+  .cancel-btn:disabled {
+    background: #6c757d;
+    cursor: not-allowed;
+    opacity: 0.8;
+  }
+
+  .cancel-icon {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 0.6s linear infinite;
+  }
+
+  @media (max-width: 768px) {
+    .cancel-btn {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.85rem;
+    }
+
+    .cancel-icon {
+      width: 1rem;
+      height: 1rem;
+    }
+  }
 
   .tabs {
     display: flex;

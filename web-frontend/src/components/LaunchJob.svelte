@@ -10,6 +10,7 @@
   import ScriptPreview from "./ScriptPreview.svelte";
   import SyncSettings from "./SyncSettings.svelte";
   import ConfirmationDialog from "./ConfirmationDialog.svelte";
+  import ParameterSyncStatus from "./ParameterSyncStatus.svelte";
   // Import store and actions
   import {
     config,
@@ -23,6 +24,12 @@
     success,
     validationDetails,
   } from "../stores/jobLaunch";
+  // Import jobParameters store for sync functionality
+  import { 
+    jobParameters, 
+    hasParameterConflicts,
+    parametersValid
+  } from "../stores/jobParameters";
 
   // Accept hosts as prop
   export let hosts: HostInfo[] = [];
@@ -61,12 +68,28 @@
       if (!$config.selectedHost) {
         jobLaunchActions.setSelectedHost(hosts[0].hostname);
         jobLaunchActions.applyHostDefaults(hosts[0].hostname);
+        // Also apply to jobParameters store
+        const selectedHost = hosts.find(h => h.hostname === hosts[0].hostname);
+        if (selectedHost) {
+          jobParameters.applyHostDefaults(selectedHost);
+        }
       }
     } else {
       await loadHosts();
     }
+    
+    // Always initialize with the generated script template
+    jobParameters.setScriptContent($generatedScript);
   });
 
+  // Only use generated script when sync is off and there's no existing script content
+  // This prevents overwriting user edits
+  let scriptInitialized = false;
+  $: if (!scriptInitialized && $jobParameters.syncMode === 'off' && !$jobParameters.scriptContent) {
+    jobParameters.setScriptContent($generatedScript, true);
+    scriptInitialized = true;
+  }
+  
   // debug: trace $launching changes
   let _prevLaunchingVal: boolean | null = null;
   $: if ($launching !== _prevLaunchingVal) {
@@ -207,22 +230,14 @@
   }
 
   function handleScriptChange(event: CustomEvent) {
-    // Handle different types of script changes
-    // Clean the saved script: remove shebang, generated header, host/source comments and any SBATCH directives
+    // Handle script changes with jobParameters sync
     const raw = event.detail.content as string;
-    const withoutShebang = raw.replace(/^#![^\n]*\n?/, "");
-    const lines = withoutShebang.split("\n");
-    const cleanedLines = lines.filter((l) => {
-      const t = l.trim();
-      if (!t) return true; // keep blank lines
-      if (t.startsWith("#SBATCH")) return false;
-      if (t.startsWith("# Generated")) return false;
-      if (t.startsWith("# Host:")) return false;
-      if (t.startsWith("# Source:")) return false;
-      return true;
-    });
-    const cleaned = cleanedLines.join("\n").trim();
-    jobLaunchActions.setScriptContent(cleaned);
+    
+    // Update jobParameters store for real-time sync
+    jobParameters.handleScriptEdit(raw);
+    
+    // Store the full script content including #SBATCH directives
+    jobLaunchActions.setScriptContent(raw);
   }
 
   function handleSyncSettingsChange(event: CustomEvent) {
@@ -251,6 +266,37 @@
     pendingLaunchRequest = null;
     directoryStats = null;
     jobLaunchActions.setLaunching(false);
+  }
+  
+  // Handlers for parameter sync
+  function handleSyncModeChange(event: CustomEvent) {
+    jobParameters.setSyncMode(event.detail.mode);
+  }
+  
+  function handleConflictResolution(event: CustomEvent) {
+    jobParameters.setConflictResolution(event.detail.strategy);
+  }
+  
+  // Sync config changes to jobParameters
+  function handleConfigChangeWithSync(event: CustomEvent) {
+    const detail = event.detail;
+    jobLaunchActions.updateJobConfig(detail);
+    
+    // Always sync form changes to jobParameters (bidirectional)
+    // Sync specific parameters to jobParameters store
+    if ('cpus' in detail) jobParameters.updateParameter('cpus', detail.cpus, !!detail.cpus);
+    if ('memory' in detail) jobParameters.updateParameter('mem', detail.memory, detail.useMemory);
+    if ('timeLimit' in detail) jobParameters.updateParameter('time', detail.timeLimit, !!detail.timeLimit);
+    if ('partition' in detail) jobParameters.updateParameter('partition', detail.partition, !!detail.partition);
+    if ('jobName' in detail) jobParameters.updateParameter('job_name', detail.jobName, !!detail.jobName);
+    if ('nodes' in detail) jobParameters.updateParameter('nodes', detail.nodes, !!detail.nodes);
+    if ('gpusPerNode' in detail) jobParameters.updateParameter('gpus_per_node', detail.gpusPerNode, !!detail.gpusPerNode);
+    if ('ntasksPerNode' in detail) jobParameters.updateParameter('ntasks_per_node', detail.ntasksPerNode, !!detail.ntasksPerNode);
+    if ('account' in detail) jobParameters.updateParameter('account', detail.account, !!detail.account);
+    if ('constraint' in detail) jobParameters.updateParameter('constraint', detail.constraint, !!detail.constraint);
+    if ('gres' in detail) jobParameters.updateParameter('gres', detail.gres, !!detail.gres);
+    if ('outputFile' in detail) jobParameters.updateParameter('output', detail.outputFile, !!detail.outputFile);
+    if ('errorFile' in detail) jobParameters.updateParameter('error', detail.errorFile, !!detail.errorFile);
   }
 </script>
 
@@ -348,7 +394,7 @@
           outputFile={$config.outputFile}
           errorFile={$config.errorFile}
           loading={$loading}
-          on:configChanged={handleConfigChange}
+          on:configChanged={handleConfigChangeWithSync}
         />
 
         <!-- Source Directory Browser -->
@@ -376,9 +422,15 @@
 
     <!-- Right Column: Script Editor Only -->
     <div class="right-column">
+      <!-- Parameter Sync Status -->
+      <ParameterSyncStatus
+        parameters={$jobParameters.parameters}
+        scriptHasSbatch={$jobParameters.scriptHasSbatch}
+      />
+      
       <!-- Script Preview -->
       <ScriptPreview
-        generatedScript={$generatedScript}
+        generatedScript={$jobParameters.scriptContent || $generatedScript}
         selectedHost={$config.selectedHost}
         sourceDir={$config.sourceDir}
         launching={$launching}
@@ -412,7 +464,7 @@
               outputFile={$config.outputFile}
               errorFile={$config.errorFile}
               loading={$loading}
-              on:configChanged={handleConfigChange}
+              on:configChanged={handleConfigChangeWithSync}
             />
           </div>
         {:else if activeTab === 'browser'}
@@ -440,8 +492,12 @@
           </div>
         {:else if activeTab === 'script'}
           <div class="mobile-tab-content script-tab">
+            <ParameterSyncStatus
+              parameters={$jobParameters.parameters}
+              scriptHasSbatch={$jobParameters.scriptHasSbatch}
+            />
             <ScriptPreview
-              generatedScript={$generatedScript}
+              generatedScript={$jobParameters.scriptContent || $generatedScript}
               selectedHost={$config.selectedHost}
               sourceDir={$config.sourceDir}
               launching={$launching}

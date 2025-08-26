@@ -5,6 +5,30 @@ from pathlib import Path
 from typing import Optional
 
 
+@dataclass
+class CacheSettings:
+    """Cache configuration settings."""
+
+    enabled: bool = True
+    cache_dir: Optional[str] = None  # If None, use default ~/.ssync/cache
+    max_age_days: int = 365  # How long to keep cache entries
+    script_max_age_days: int = 0  # 0 means never expire scripts
+    cleanup_interval_hours: int = 168  # How often to run cleanup (weekly)
+    max_size_mb: int = 1024  # Maximum cache size in MB
+    auto_cleanup: bool = False  # Whether to automatically cleanup old entries
+
+    def __post_init__(self):
+        # Validate settings
+        if self.max_age_days < 0:
+            self.max_age_days = 0
+        if self.script_max_age_days < 0:
+            self.script_max_age_days = 0
+        if self.cleanup_interval_hours < 1:
+            self.cleanup_interval_hours = 1
+        if self.max_size_mb < 10:
+            self.max_size_mb = 10
+
+
 @dataclass(frozen=True)
 class SlurmDefaults:
     # Basic job parameters

@@ -59,3 +59,16 @@ hosts:
     use_ssh_config: false
     work_dir: /home/myuser/projects
     scratch_dir: /tmp/scratch
+
+# Cache configuration
+cache:
+  enabled: true
+  cache_dir: ~/.ssync/cache  # Or use ${SSYNC_CACHE_DIR} for env var
+  max_age_days: 365  # How long to keep cache entries (0 = never expire)
+  script_max_age_days: 0  # Never expire scripts (important for reproducibility)
+  cleanup_interval_hours: 168  # Run cleanup weekly
+  max_size_mb: 1024  # Maximum cache size in MB
+  auto_cleanup: false  # Whether to automatically cleanup old entries
+
+# API configuration (optional)
+api_key: ${SSYNC_API_KEY}  # Or set directly: "your-secret-key-here"

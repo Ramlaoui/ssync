@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from fabric import Connection
 
-from ..models.job import JobInfo
+from ..models.job import JobInfo, JobState
 from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .parser import SlurmParser
@@ -195,6 +195,18 @@ class SlurmClient:
                 if len(fields) >= len(SQUEUE_FIELDS):
                     try:
                         job_info = self.parser.from_squeue_fields(fields, hostname)
+
+                        # For running jobs, enrich with actual stdout/stderr paths from scontrol
+                        # since squeue doesn't provide the correct output file paths
+                        if job_info.state in [JobState.RUNNING, JobState.PENDING]:
+                            stdout_path, stderr_path = self.get_job_output_files(
+                                conn, job_info.job_id, hostname
+                            )
+                            if stdout_path:
+                                job_info.stdout_file = stdout_path
+                            if stderr_path:
+                                job_info.stderr_file = stderr_path
+
                         jobs.append(job_info)
                     except Exception as e:
                         logger.debug(f"Failed to parse squeue line: {line}, error: {e}")
@@ -473,8 +485,18 @@ class SlurmClient:
                             )
                             break
 
-            # If we found job info but don't have stdout/stderr paths, try scontrol
-            if job_info and not (job_info.stdout_file or job_info.stderr_file):
+            # For active jobs (running/pending), always get actual output paths from scontrol
+            # since squeue provides incorrect values (script path instead of output path)
+            if job_info and job_info.state in [JobState.RUNNING, JobState.PENDING]:
+                stdout_path, stderr_path = self.get_job_output_files(
+                    conn, job_id, hostname
+                )
+                if stdout_path:
+                    job_info.stdout_file = stdout_path
+                if stderr_path:
+                    job_info.stderr_file = stderr_path
+            # Also try scontrol if we don't have output paths at all
+            elif job_info and not (job_info.stdout_file or job_info.stderr_file):
                 stdout_path, stderr_path = self.get_job_output_files(
                     conn, job_id, hostname
                 )

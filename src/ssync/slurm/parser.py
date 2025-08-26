@@ -31,11 +31,26 @@ class SlurmParser:
             else:
                 return JobState.UNKNOWN
         else:
-            # Handle squeue states
-            try:
-                return JobState(state_str)
-            except ValueError:
-                return JobState.UNKNOWN
+            # Handle squeue states - map full state names to short codes
+            state_upper = state_str.upper().strip()
+            if state_upper == "PENDING":
+                return JobState.PENDING
+            elif state_upper == "RUNNING":
+                return JobState.RUNNING
+            elif state_upper == "COMPLETED":
+                return JobState.COMPLETED
+            elif state_upper in ["FAILED", "BOOT_FAIL", "NODE_FAIL", "OUT_OF_MEMORY"]:
+                return JobState.FAILED
+            elif state_upper in ["CANCELLED", "CANCELED"]:
+                return JobState.CANCELLED
+            elif state_upper == "TIMEOUT":
+                return JobState.TIMEOUT
+            else:
+                # Try to match the short code directly (for backwards compatibility)
+                try:
+                    return JobState(state_str)
+                except ValueError:
+                    return JobState.UNKNOWN
 
     @staticmethod
     def create_var_dict(fields: list[str]) -> dict:

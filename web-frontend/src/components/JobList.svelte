@@ -138,19 +138,19 @@
             {#if job.cpus || job.memory || job.nodes}
               <div class="resource-grid">
                 {#if job.nodes && job.nodes !== 'N/A'}
-                  <div class="resource-item">
+                  <div class="resource-item" title="Nodes: {job.nodes}">
                     <span class="resource-label">Nodes</span>
                     <span class="resource-value">{job.nodes}</span>
                   </div>
                 {/if}
                 {#if job.cpus && job.cpus !== 'N/A'}
-                  <div class="resource-item">
+                  <div class="resource-item" title="CPUs: {job.cpus}">
                     <span class="resource-label">CPUs</span>
                     <span class="resource-value">{job.cpus}</span>
                   </div>
                 {/if}
                 {#if job.memory && job.memory !== 'N/A'}
-                  <div class="resource-item">
+                  <div class="resource-item" title="Memory: {job.memory}">
                     <span class="resource-label">Memory</span>
                     <span class="resource-value">{job.memory}</span>
                   </div>
@@ -312,7 +312,8 @@
   .col.resources {
     align-items: flex-start;
     padding-top: 0.2rem;
-    overflow: visible;
+    overflow: hidden;
+    min-width: 0;
   }
 
   .job-name {
@@ -344,6 +345,7 @@
     flex-direction: column;
     gap: 0.15rem;
     align-items: flex-start;
+    width: 100%;
   }
 
   .resource-item {
@@ -353,7 +355,9 @@
     font-size: 0.75rem;
     line-height: 1.2;
     white-space: nowrap;
-    overflow: visible;
+    overflow: hidden;
+    width: 100%;
+    max-width: 100%;
   }
 
   .resource-label {
@@ -361,6 +365,7 @@
     font-weight: 500;
     min-width: 45px;
     font-size: 0.7rem;
+    flex-shrink: 0;
   }
 
   .resource-value {
@@ -368,8 +373,10 @@
     font-weight: 600;
     font-size: 0.75rem;
     white-space: nowrap;
-    overflow: visible;
+    overflow: hidden;
+    text-overflow: ellipsis;
     min-width: 0;
+    flex: 1;
   }
 
   .no-resources {

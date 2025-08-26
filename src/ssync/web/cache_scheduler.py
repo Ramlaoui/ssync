@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 
-from ..cache_config import get_cache_config
+from ..utils.config import config as app_config
 from ..utils.logging import setup_logger
 from .cache_middleware import get_cache_middleware
 
@@ -32,13 +32,13 @@ class CacheScheduler:
         Args:
             cleanup_interval_hours: Hours between cache cleanup runs
         """
-        config = get_cache_config()
+        cache_settings = app_config.cache_settings
         if cleanup_interval_hours is None:
-            cleanup_interval_hours = config.cleanup_interval_hours
+            cleanup_interval_hours = cache_settings.cleanup_interval_hours
 
         self.cleanup_interval = timedelta(hours=cleanup_interval_hours)
         self.cache_middleware = get_cache_middleware()
-        self.config = config
+        self.cache_settings = cache_settings
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
@@ -102,22 +102,22 @@ class CacheScheduler:
         """Perform cache cleanup operations."""
         try:
             # Skip cleanup if disabled
-            if not self.config.auto_cleanup_enabled:
+            if not self.cache_settings.auto_cleanup:
                 logger.debug("Scheduled cleanup skipped (auto_cleanup_enabled=false)")
                 return
 
             logger.info("Starting scheduled cache maintenance")
 
             # Size-based cleanup first (if configured)
-            if self.config.max_cache_size_mb > 0:
+            if self.cache_settings.max_size_mb > 0:
                 size_cleaned = self.cache_middleware.cache.cleanup_by_size(
-                    self.config.max_cache_size_mb
+                    self.cache_settings.max_size_mb
                 )
                 if size_cleaned > 0:
                     logger.info(f"Size-based cleanup: removed {size_cleaned} entries")
 
             # Age-based cleanup (if configured and enabled)
-            if self.config.max_age_days > 0:
+            if self.cache_settings.max_age_days > 0:
                 age_cleaned = await self.cache_middleware.cleanup_cache()
                 if age_cleaned > 0:
                     logger.info(f"Age-based cleanup: removed {age_cleaned} entries")
@@ -147,9 +147,9 @@ class CacheScheduler:
                 )
 
             # Size-based cleanup
-            if self.config.max_cache_size_mb > 0:
+            if self.cache_settings.max_size_mb > 0:
                 size_cleaned = self.cache_middleware.cache.cleanup_by_size(
-                    self.config.max_cache_size_mb
+                    self.cache_settings.max_size_mb
                 )
                 cleaned_count += size_cleaned
 

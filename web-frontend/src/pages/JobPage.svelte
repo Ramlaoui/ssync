@@ -26,6 +26,13 @@
   let scriptData: JobScriptResponse | null = null;
   let loadingScript = false;
   let scriptError: string | null = null;
+  
+  // Cancel job state
+  let cancellingJob = false;
+  let cancelError: string | null = null;
+
+  $: canCancelJob = job && (job.state === 'R' || job.state === 'PD');
+  $: console.log('JobPage - job state:', job?.state, 'canCancelJob:', canCancelJob);
 
   async function loadJob(forceRefresh = false) {
     if (!params.id || !params.host) {
@@ -97,6 +104,31 @@
 
   function handleClose() {
     push("/");
+  }
+  
+  async function cancelJob(): Promise<void> {
+    if (!job || cancellingJob) return;
+    
+    const confirmed = confirm(`Are you sure you want to cancel job ${job.job_id}?`);
+    if (!confirmed) return;
+    
+    cancellingJob = true;
+    cancelError = null;
+    
+    try {
+      await api.post(`/api/jobs/${job.job_id}/cancel?host=${encodeURIComponent(job.hostname)}`);
+      // Update job state locally
+      job.state = 'CA';
+      // Show success message and redirect
+      alert(`Job ${job.job_id} has been cancelled successfully.`);
+      push("/");
+    } catch (error: unknown) {
+      console.error('Error cancelling job:', error);
+      cancelError = (error as Error).message || 'Failed to cancel job';
+      alert(`Failed to cancel job: ${cancelError}`);
+    } finally {
+      cancellingJob = false;
+    }
   }
 
   function handleRefresh() {
@@ -243,12 +275,32 @@
             <h1>Job {job.job_id}</h1>
             <p class="job-name">{job.name}</p>
           </div>
-          <span 
-            class="state-badge" 
-            style="background-color: {getStateColor(job.state)}"
-          >
-            {getStateLabel(job.state)}
-          </span>
+          <div class="header-actions">
+            {#if canCancelJob}
+              <button 
+                class="cancel-btn" 
+                on:click={cancelJob}
+                disabled={cancellingJob}
+                aria-label="Cancel job"
+              >
+                {#if cancellingJob}
+                  <span class="spinner"></span>
+                  Cancelling...
+                {:else}
+                  <svg class="cancel-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/>
+                  </svg>
+                  Cancel Job
+                {/if}
+              </button>
+            {/if}
+            <span 
+              class="state-badge" 
+              style="background-color: {getStateColor(job.state)}"
+            >
+              {getStateLabel(job.state)}
+            </span>
+          </div>
         </div>
 
         <div class="tabs">
@@ -596,6 +648,61 @@
     align-items: flex-start;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  
+  .cancel-btn {
+    background: #dc3545;
+    color: white;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .cancel-btn:hover:not(:disabled) {
+    background: #c82333;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
+  }
+
+  .cancel-btn:disabled {
+    background: #6c757d;
+    cursor: not-allowed;
+    opacity: 0.8;
+  }
+
+  .cancel-icon {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 0.6s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  
   .job-title-section h1 {
     margin: 0;
     font-size: 1.5rem;
