@@ -52,9 +52,6 @@ app = FastAPI(
     redoc_url=None,  # Disable ReDoc in production
 )
 
-# Thread pool for blocking SSH operations
-# Number of workers = number of CPU cores + 4 (good for I/O bound tasks)
-# Can be overridden by environment variable
 THREAD_POOL_SIZE = int(os.getenv("SSYNC_THREAD_POOL_SIZE", str(os.cpu_count() + 4)))
 executor = ThreadPoolExecutor(
     max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-worker"
@@ -78,7 +75,9 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start cache scheduler: {e}")
 
-    # Output harvesting is now done on-demand when jobs complete or outputs are requested
+    # Start periodic connection health check
+    asyncio.create_task(periodic_connection_health_check())
+    logger.info("Started periodic connection health check")
 
 
 @app.on_event("shutdown")
@@ -97,8 +96,6 @@ async def shutdown_event():
         logger.info("Cache scheduler stopped")
     except Exception:
         pass
-
-    # No output harvester to stop - output fetching is now on-demand
 
     # Shutdown thread pool executor
     executor.shutdown(wait=True, cancel_futures=True)
@@ -119,17 +116,14 @@ async def shutdown_event():
     logger.info("Shutdown complete")
 
 
-# Security Configuration
 ENABLE_DOCS = os.getenv("SSYNC_ENABLE_DOCS", "false").lower() == "true"
 if ENABLE_DOCS:
     app.docs_url = "/docs"
     app.redoc_url = "/redoc"
 
-# Trusted hosts middleware (prevent host header injection)
 TRUSTED_HOSTS = os.getenv("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1").split(",")
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 
-# Configure CORS with strict settings
 ALLOWED_ORIGINS = os.getenv("SSYNC_ALLOWED_ORIGINS", "").split(",")
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
 
@@ -137,13 +131,12 @@ if ALLOWED_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
-        allow_credentials=False,  # Disable credentials by default
-        allow_methods=["GET", "POST"],  # Only allow necessary methods
-        allow_headers=["X-API-Key", "Content-Type"],  # Restrict headers
-        max_age=3600,  # Cache preflight requests
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["X-API-Key", "Content-Type"],
+        max_age=3600,
     )
 
-# Initialize security components
 rate_limiter = RateLimiter(
     requests_per_minute=int(os.getenv("SSYNC_RATE_LIMIT_PER_MINUTE", "60")),
     requests_per_hour=int(os.getenv("SSYNC_RATE_LIMIT_PER_HOUR", "1000")),
@@ -153,10 +146,8 @@ rate_limiter = RateLimiter(
 api_key_manager = APIKeyManager()
 
 
-# Rate limiting middleware
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health checks
         if request.url.path == "/health":
             return await call_next(request)
 
@@ -172,8 +163,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RateLimitMiddleware)
 
-# API Key Authentication - Optional by default for personal use
-# Set SSYNC_REQUIRE_API_KEY=true for production/shared deployments
 REQUIRE_API_KEY = os.getenv("SSYNC_REQUIRE_API_KEY", "false").lower() == "true"
 
 
@@ -182,7 +171,6 @@ async def verify_api_key(request: Request):
     if not REQUIRE_API_KEY:
         return True
 
-    # Allow health endpoint without auth
     if request.url.path == "/health":
         return True
 
@@ -198,23 +186,52 @@ async def verify_api_key(request: Request):
     return True
 
 
-# Global manager instance with connection pooling
 _slurm_manager: Optional[SlurmManager] = None
 _config_last_modified: Optional[float] = None
 _shutdown_event = threading.Event()
 
-# Global cache middleware
+
+async def periodic_connection_health_check():
+    """Periodically check and clean up stale SSH connections."""
+    check_interval = 300  # Check every 5 minutes
+
+    while not _shutdown_event.is_set():
+        try:
+            await asyncio.sleep(check_interval)
+
+            if _shutdown_event.is_set():
+                break
+
+            try:
+                manager = get_slurm_manager()
+                unhealthy_count = manager.check_connection_health()
+
+                if unhealthy_count > 0:
+                    logger.info(
+                        f"Periodic health check: Removed {unhealthy_count} unhealthy connections"
+                    )
+                else:
+                    pass
+            except Exception as e:
+                logger.error(f"Error during periodic connection health check: {e}")
+
+        except asyncio.CancelledError:
+            logger.info("Periodic connection health check cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Unexpected error in periodic health check: {e}")
+
+    logger.info("Periodic connection health check stopped")
+
+
 _cache_middleware = get_cache_middleware()
 
-# Serve static frontend files if they exist
 frontend_dist = Path(__file__).parent.parent.parent.parent / "web-frontend" / "dist"
 if frontend_dist.exists():
-    # Mount static files for assets
     app.mount(
         "/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets"
     )
 
-    # Serve index.html for root and any unmatched routes (for client-side routing)
     @app.get("/", response_class=FileResponse)
     async def serve_frontend():
         """Serve the frontend application."""
@@ -231,7 +248,7 @@ if frontend_dist.exists():
         """Serve SVG favicon."""
         return FileResponse(str(frontend_dist / "favicon.svg"))
 else:
-    # If no frontend built, just return API info
+
     @app.get("/")
     async def root(authenticated: bool = Depends(verify_api_key)):
         """API root endpoint."""
@@ -249,7 +266,6 @@ def get_slurm_manager() -> SlurmManager:
     global _slurm_manager, _config_last_modified
 
     config_path = config.config_path
-    logger.debug(f"Using ssync config file: {config_path}")
 
     # Check if config file has been modified
     current_mtime = config_path.stat().st_mtime if config_path.exists() else 0
@@ -261,7 +277,6 @@ def get_slurm_manager() -> SlurmManager:
     if _slurm_manager is None or config_changed:
         # Close existing manager if it exists
         if _slurm_manager:
-            logger.debug("Closing existing SlurmManager due to config change")
             _slurm_manager.close_connections()
 
         # Load config and create new manager
@@ -274,12 +289,8 @@ def get_slurm_manager() -> SlurmManager:
             slurm_hosts, connection_timeout=connection_timeout
         )
         _config_last_modified = current_mtime
-        logger.debug(
-            f"Created new SlurmManager with {len(slurm_hosts)} hosts (timeout: {connection_timeout}s)"
-        )
     else:
-        logger.debug("Reusing existing SlurmManager")
-
+        pass
     return _slurm_manager
 
 
@@ -298,6 +309,43 @@ async def api_info(authenticated: bool = Depends(verify_api_key)):
         "security": "enhanced",
         "documentation": "/docs" if ENABLE_DOCS else "disabled",
     }
+
+
+@app.get("/api/connections/stats")
+async def get_connection_stats(authenticated: bool = Depends(verify_api_key)):
+    """Get current SSH connection statistics."""
+    try:
+        manager = get_slurm_manager()
+        stats = manager.get_connection_stats()
+        health_check_count = manager.check_connection_health()
+
+        return {
+            "stats": stats,
+            "unhealthy_removed": health_check_count,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error getting connection stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get connection stats")
+
+
+@app.post("/api/connections/refresh")
+async def refresh_connections(authenticated: bool = Depends(verify_api_key)):
+    """Refresh all SSH connections by closing and recreating them."""
+    try:
+        manager = get_slurm_manager()
+        refreshed_count = manager.refresh_connections()
+
+        logger.info(f"Manually refreshed {refreshed_count} SSH connections")
+
+        return {
+            "message": f"Refreshed {refreshed_count} connections",
+            "refreshed_count": refreshed_count,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error refreshing connections: {e}")
+        raise HTTPException(status_code=500, detail="Failed to refresh connections")
 
 
 @app.get("/api/jobs/{job_id}/data", response_model=CompleteJobDataResponse)
@@ -556,7 +604,9 @@ async def get_hosts(authenticated: bool = Depends(verify_api_key)):
 async def get_job_status(
     request: Request,
     host: Optional[str] = Query(None, description="Specific host to query"),
-    user: Optional[str] = Query(None, description="User to filter jobs for"),
+    user: Optional[str] = Query(
+        None, description="User to filter jobs for (use '*' or 'all' for all users)"
+    ),
     since: Optional[str] = Query(
         None,
         description="Time range for completed jobs",
@@ -584,8 +634,21 @@ async def get_job_status(
         # Sanitize inputs
         if host:
             host = InputSanitizer.sanitize_hostname(host)
-        if user:
+
+        # Check for special "all users" values
+        skip_user_detection = False
+        if user and user.lower() in ["*", "all"]:
+            logger.info(
+                f"Special user value '{user}' detected - fetching all users' jobs"
+            )
+            user = None  # Don't filter by user
+            skip_user_detection = True  # Skip auto-detection of current user
+        elif user:
+            logger.info(f"Filtering for specific user: {user}")
             user = InputSanitizer.sanitize_username(user)
+        else:
+            logger.info("No user specified - will use current user")
+
         if search:
             search = InputSanitizer.sanitize_text(search)
         if job_ids:
@@ -616,6 +679,9 @@ async def get_job_status(
             logger.info(
                 f"Using optimized concurrent fetching for {len(slurm_hosts)} hosts"
             )
+            logger.info(
+                f"Parameters: user={user}, skip_user_detection={skip_user_detection}"
+            )
             job_data_manager = get_job_data_manager()
 
             # Let JobDataManager handle all hosts concurrently in one call
@@ -629,7 +695,7 @@ async def get_job_status(
                     state_filter=state,
                     active_only=active_only,
                     completed_only=completed_only,
-                    skip_user_detection=False,
+                    skip_user_detection=skip_user_detection,
                 )
 
                 # Group jobs by hostname and create responses
@@ -746,6 +812,7 @@ async def get_job_status(
                     state,
                     active_only,
                     completed_only,
+                    skip_user_detection,
                 )
 
                 web_jobs = [JobInfoWeb.from_job_info(job) for job in jobs]
@@ -925,6 +992,9 @@ async def get_job_output(
     metadata_only: bool = Query(
         False, description="Return only metadata about output files, not content"
     ),
+    force_refresh: bool = Query(
+        False, description="Force refresh from SSH even if cached"
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get output files content for a specific job."""
@@ -934,7 +1004,73 @@ async def get_job_output(
         if host:
             host = InputSanitizer.sanitize_hostname(host)
 
-        # First check cache for outputs
+        # If force_refresh is True, skip cache and fetch directly
+        if force_refresh:
+            logger.info(f"Force refresh requested for job {job_id} outputs")
+            # Import here to avoid circular imports
+            from ..job_data_manager import get_job_data_manager
+
+            job_data_manager = get_job_data_manager()
+
+            # Find the job
+            manager = get_slurm_manager()
+            job_data = None
+
+            if host:
+                job_data = await job_data_manager.get_job_data(job_id, host)
+            else:
+                # Search all hosts
+                for slurm_host in manager.slurm_hosts:
+                    job_data = await job_data_manager.get_job_data(
+                        job_id, slurm_host.host.hostname
+                    )
+                    if job_data:
+                        host = slurm_host.host.hostname
+                        break
+
+            if job_data and job_data.job_info:
+                # Force fetch outputs from SSH
+                (
+                    stdout_content,
+                    stderr_content,
+                ) = await job_data_manager._fetch_outputs_from_cached_paths(
+                    job_data.job_info, force_fetch=True
+                )
+
+                # Update cache with fresh content (but don't mark as final for running jobs)
+                is_running = job_data.job_info.state in ["R"]
+                cache_middleware.cache.update_job_outputs(
+                    job_id=job_id,
+                    hostname=host,
+                    stdout_content=stdout_content,
+                    stderr_content=stderr_content,
+                    mark_fetched_after_completion=not is_running,  # Only mark as final if job is not running
+                )
+
+                return JobOutputResponse(
+                    job_id=job_id,
+                    hostname=host,
+                    stdout=stdout_content if not metadata_only else None,
+                    stderr=stderr_content if not metadata_only else None,
+                    stdout_metadata=FileMetadata(
+                        path=job_data.job_info.stdout_file,
+                        size=len(stdout_content) if stdout_content else 0,
+                        modified=None,
+                        exists=bool(stdout_content),
+                    )
+                    if job_data.job_info.stdout_file
+                    else None,
+                    stderr_metadata=FileMetadata(
+                        path=job_data.job_info.stderr_file,
+                        size=len(stderr_content) if stderr_content else 0,
+                        modified=None,
+                        exists=bool(stderr_content),
+                    )
+                    if job_data.job_info.stderr_file
+                    else None,
+                )
+
+        # Normal cache check flow
         cache_middleware = get_cache_middleware()
         cached_job = (
             cache_middleware.cache.get_cached_job(job_id, host) if host else None
@@ -951,7 +1087,70 @@ async def get_job_output(
                     host = slurm_host.host.hostname
                     break
 
-        # If we have cached outputs, return them directly
+        # Check if we should fetch from SSH
+        if cached_job and cached_job.job_info:
+            is_running = cached_job.job_info.state in ["R"]  # Running jobs
+            is_completed = cached_job.job_info.state not in ["PD", "R"]
+
+            # For RUNNING jobs, ALWAYS fetch fresh output
+            if is_running:
+                logger.info(f"Job {job_id} is running, fetching fresh output")
+                from ..job_data_manager import get_job_data_manager
+
+                job_data_manager = get_job_data_manager()
+                (
+                    stdout_content,
+                    stderr_content,
+                ) = await job_data_manager._fetch_outputs_from_cached_paths(
+                    cached_job.job_info,
+                    force_fetch=True,  # Force fetch for running jobs
+                )
+
+                # Update cached_job with fresh content
+                if stdout_content is not None:
+                    cached_job.stdout_content = stdout_content
+                if stderr_content is not None:
+                    cached_job.stderr_content = stderr_content
+
+                # Also update the cache for running jobs (but don't mark as fetched after completion)
+                cache_middleware.cache.update_job_outputs(
+                    job_id=job_id,
+                    hostname=host,
+                    stdout_content=stdout_content,
+                    stderr_content=stderr_content,
+                    mark_fetched_after_completion=False,  # Don't mark as final fetch since job is still running
+                )
+
+            elif is_completed:
+                # Check if outputs were already fetched after completion
+                stdout_fetched_after, stderr_fetched_after = (
+                    cache_middleware.cache.check_outputs_fetched_after_completion(
+                        job_id, host
+                    )
+                )
+
+                # If job is completed but we haven't fetched outputs after completion, fetch now
+                if not stdout_fetched_after or not stderr_fetched_after:
+                    logger.info(
+                        f"Job {job_id} is completed but outputs not fetched after completion, fetching now"
+                    )
+                    from ..job_data_manager import get_job_data_manager
+
+                    job_data_manager = get_job_data_manager()
+                    (
+                        stdout_content,
+                        stderr_content,
+                    ) = await job_data_manager._fetch_outputs_from_cached_paths(
+                        cached_job.job_info
+                    )
+
+                    # Update cached_job with new content
+                    if stdout_content is not None:
+                        cached_job.stdout_content = stdout_content
+                    if stderr_content is not None:
+                        cached_job.stderr_content = stderr_content
+
+        # Return outputs (either freshly fetched or cached)
         if cached_job and (cached_job.stdout_content or cached_job.stderr_content):
             return JobOutputResponse(
                 job_id=job_id,
@@ -1206,8 +1405,8 @@ async def launch_job(
             script_path = Path(tmp_script.name)
 
         try:
-            # Initialize launch manager
-            launch_manager = LaunchManager(manager)
+            # Initialize launch manager with thread pool executor
+            launch_manager = LaunchManager(manager, executor=executor)
 
             # Validate SLURM parameters
             slurm_params = SlurmParams(
@@ -1233,7 +1432,7 @@ async def launch_job(
             )
 
             # Launch the job
-            job = launch_manager.launch_job(
+            job = await launch_manager.launch_job(
                 script_path=script_path,
                 source_dir=source_dir,
                 host=request.host,

@@ -1,5 +1,6 @@
 """Integrated job launch manager that handles sync and submission."""
 
+import asyncio
 from pathlib import Path
 from typing import List, Optional
 
@@ -16,8 +17,9 @@ logger = setup_logger(__name__, "DEBUG")
 class LaunchManager:
     """Manages the complete job launch workflow: sync + submit."""
 
-    def __init__(self, slurm_manager: SlurmManager):
+    def __init__(self, slurm_manager: SlurmManager, executor=None):
         self.slurm_manager = slurm_manager
+        self.executor = executor
 
     def _parse_structured_script(self, script_content: str) -> tuple[str, str]:
         """
@@ -66,10 +68,6 @@ class LaunchManager:
 
         if not login_setup_found:
             return "", script_content
-
-        logger.debug(
-            f"Parsed structured script: {len(login_setup_lines)} login setup lines, {len(compute_script_lines)} compute script lines"
-        )
 
         return login_setup_commands, clean_compute_script
 
@@ -128,14 +126,17 @@ class LaunchManager:
         logger.info(f"Launching job on {slurm_host.host.hostname}")
 
         try:
+            loop = asyncio.get_event_loop()
+            executor = self.executor
+
             if sync_enabled and source_dir:
                 logger.info("Syncing source directory to remote host...")
                 sync_manager = SyncManager(
                     self.slurm_manager, source_dir, use_gitignore=not no_gitignore
                 )
 
-                sync_success = sync_manager.sync_to_host(
-                    slurm_host, exclude=exclude, include_patterns=include
+                sync_success = await loop.run_in_executor(
+                    executor, sync_manager.sync_to_host, slurm_host, exclude, include
                 )
 
                 if not sync_success:
@@ -180,39 +181,57 @@ class LaunchManager:
             )
 
             conn = self.slurm_manager._get_connection(slurm_host.host)
-            conn.run(f"mkdir -p {remote_script_dir}")
-            remote_script_path = send_file(
-                conn,
-                local_path=str(prepared_script),
-                remote_path=str(remote_script_dir / prepared_script.name),
-                is_remote_dir=False,
+
+            await loop.run_in_executor(
+                executor, conn.run, f"mkdir -p {remote_script_dir}"
             )
-            conn.run(f"chmod +x {remote_script_path}")
+
+            remote_script_path = await loop.run_in_executor(
+                executor,
+                send_file,
+                conn,
+                str(prepared_script),
+                str(remote_script_dir / prepared_script.name),
+                False,
+            )
+
+            await loop.run_in_executor(
+                executor, conn.run, f"chmod +x {remote_script_path}"
+            )
 
             logger.info(f"Script uploaded to {remote_script_path}")
 
             if login_setup_commands:
                 logger.info("Executing login node setup commands...")
-                logger.debug(f"Login setup commands:\n{login_setup_commands}")
                 try:
-                    with conn.cd(remote_work_dir):
-                        setup_result = conn.run(login_setup_commands, warn=True)
 
-                        if setup_result.ok:
-                            logger.info("Login node setup completed successfully")
-                            logger.debug(f"Setup output: {setup_result.stdout}")
-                        else:
-                            logger.warning("Login node setup completed with warnings")
-                            logger.warning(f"Setup stderr: {setup_result.stderr}")
+                    def run_setup():
+                        with conn.cd(remote_work_dir):
+                            return conn.run(login_setup_commands, warn=True)
+
+                    setup_result = await loop.run_in_executor(executor, run_setup)
+
+                    if setup_result.ok:
+                        logger.info("Login node setup completed successfully")
+                    else:
+                        logger.warning("Login node setup completed with warnings")
+                        logger.warning(f"Setup stderr: {setup_result.stderr}")
 
                 except Exception as e:
                     logger.error(f"Login node setup failed: {e}")
 
             logger.info("Submitting job to SLURM...")
             logger.info(f"Changing to working directory: {remote_work_dir}")
-            conn.run(f"cd {remote_work_dir}")
-            job = self._submit_script_in_workdir(
-                slurm_host, slurm_params, remote_script_path, remote_work_dir
+
+            await loop.run_in_executor(executor, conn.run, f"cd {remote_work_dir}")
+
+            job = await loop.run_in_executor(
+                executor,
+                self._submit_script_in_workdir,
+                slurm_host,
+                slurm_params,
+                remote_script_path,
+                remote_work_dir,
             )
 
             if job:
@@ -224,7 +243,6 @@ class LaunchManager:
                     await job_data_manager.capture_job_submission(
                         job.job_id, slurm_host.host.hostname, clean_compute_script
                     )
-                    logger.debug(f"Captured submission data for job {job.job_id}")
                 except Exception as e:
                     logger.warning(
                         f"Failed to capture submission data for job {job.job_id}: {e}"
@@ -242,18 +260,16 @@ class LaunchManager:
             try:
                 if "clean_script_path" in locals() and clean_script_path.exists():
                     clean_script_path.unlink()
-                    logger.debug("Cleaned up temporary clean script file")
-            except Exception as e:
-                logger.debug(f"Could not clean up temporary file: {e}")
+            except Exception:
+                pass
 
             try:
                 if "temp_dir" in locals() and temp_dir.exists():
                     import shutil
 
                     shutil.rmtree(temp_dir, ignore_errors=True)
-                    logger.debug("Cleaned up temporary directory")
-            except Exception as e:
-                logger.debug(f"Could not clean up temporary directory: {e}")
+            except Exception:
+                pass
 
     def _submit_script_in_workdir(
         self,

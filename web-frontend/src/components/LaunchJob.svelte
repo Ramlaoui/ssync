@@ -91,12 +91,6 @@
   }
   
   // debug: trace $launching changes
-  let _prevLaunchingVal: boolean | null = null;
-  $: if ($launching !== _prevLaunchingVal) {
-    _prevLaunchingVal = $launching;
-    // eslint-disable-next-line no-console
-    console.debug('[debug] $launching ->', $launching);
-  }
 
   async function loadHosts(): Promise<void> {
     jobLaunchActions.setLoading(true);
@@ -125,9 +119,6 @@
     }
 
     jobLaunchActions.setLaunching(true);
-    // debug
-    // eslint-disable-next-line no-console
-    console.debug('[debug] launchJob started, setLaunching(true)');
     jobLaunchActions.resetMessages();
 
     try {
@@ -218,9 +209,6 @@
       }
     } finally {
       jobLaunchActions.setLaunching(false);
-  // debug
-  // eslint-disable-next-line no-console
-  console.debug('[debug] launchJob finished, setLaunching(false)');
     }
   }
 
@@ -431,8 +419,6 @@
       <!-- Script Preview -->
       <ScriptPreview
         generatedScript={$jobParameters.scriptContent || $generatedScript}
-        selectedHost={$config.selectedHost}
-        sourceDir={$config.sourceDir}
         launching={$launching}
         loading={$loading}
         validationDetails={$validationDetails}
@@ -498,8 +484,6 @@
             />
             <ScriptPreview
               generatedScript={$jobParameters.scriptContent || $generatedScript}
-              selectedHost={$config.selectedHost}
-              sourceDir={$config.sourceDir}
               launching={$launching}
               loading={$loading}
               validationDetails={$validationDetails}

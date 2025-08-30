@@ -68,11 +68,11 @@
     }
   }
 
-  async function loadOutput(): Promise<void> {
+  async function loadOutput(forceRefresh = false): Promise<void> {
     if (!job || loadingOutput) return;
     
-    // Don't reload if we already have data for this job
-    if (outputData && outputData.job_id === job.job_id) {
+    // Don't reload if we already have data for this job (unless force refresh)
+    if (!forceRefresh && outputData && outputData.job_id === job.job_id) {
       return;
     }
     
@@ -80,7 +80,7 @@
     outputError = null;
     
     try {
-      outputData = await jobsStore.fetchJobOutput(job.job_id, job.hostname);
+      outputData = await jobsStore.fetchJobOutput(job.job_id, job.hostname, forceRefresh);
       if (!outputData) {
         outputError = 'No output data available';
       }
@@ -117,7 +117,7 @@
   function retryLoadOutput(): void {
     outputData = null;
     outputError = null;
-    loadOutput();
+    loadOutput(true); // Force refresh on retry
   }
 
   function retryLoadScript(): void {
@@ -141,6 +141,16 @@
 
   function handleRefresh() {
     loadJob(true);
+    // Also refresh output if it's currently displayed
+    if (activeTab === 'output' || activeTab === 'errors') {
+      outputData = null; // Clear cached data
+      loadOutput(true);
+    }
+    // Also refresh script if it's currently displayed
+    if (activeTab === 'script') {
+      scriptData = null; // Clear cached data
+      loadScript();
+    }
   }
 
   async function cancelJob(): Promise<void> {
@@ -216,6 +226,10 @@
     refreshInterval = setInterval(() => {
       if (job && (job.state === 'R' || job.state === 'PD')) {
         loadJob();
+        // Also refresh output if it's being displayed and job is running
+        if ((activeTab === 'output' || activeTab === 'errors') && job.state === 'R') {
+          loadOutput(true);
+        }
       }
     }, 30000);
   });
@@ -458,10 +472,10 @@
               <span class="info-label">Memory:</span>
               <span class="info-value">{job.memory || 'N/A'}</span>
             </div>
-            {#if job.gpus && job.gpus !== 'N/A'}
+            {#if job.alloc_tres && job.alloc_tres.includes('gpu')}
             <div class="info-row">
               <span class="info-label">GPUs:</span>
-              <span class="info-value">{job.gpus}</span>
+              <span class="info-value">{job.alloc_tres.split(',').find(t => t.includes('gpu')) || 'N/A'}</span>
             </div>
             {/if}
             <div class="info-row">
@@ -494,6 +508,15 @@
         
       {:else if activeTab === 'output'}
         <div class="output-section">
+          {#if outputData && !loadingOutput}
+            <div class="output-header">
+              <button class="refresh-output-btn" on:click={() => loadOutput(true)} title="Refresh output">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
+                </svg>
+              </button>
+            </div>
+          {/if}
           {#if loadingOutput}
             <div class="loading-state">
               <div class="spinner"></div>
@@ -518,6 +541,15 @@
         
       {:else if activeTab === 'errors'}
         <div class="output-section">
+          {#if outputData && !loadingOutput}
+            <div class="output-header">
+              <button class="refresh-output-btn" on:click={() => loadOutput(true)} title="Refresh errors">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
+                </svg>
+              </button>
+            </div>
+          {/if}
           {#if loadingOutput}
             <div class="loading-state">
               <div class="spinner"></div>
@@ -839,12 +871,10 @@
     border-radius: 12px;
     padding: 1.5rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-    transition: all 0.2s ease;
   }
   
   .info-card:hover {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    transform: translateY(-2px);
   }
 
   .card-title {
@@ -873,7 +903,6 @@
     gap: 1rem;
     padding: 0.875rem 0.5rem;
     border-bottom: 1px solid #f8fafc;
-    transition: background 0.15s ease;
   }
   
   .info-row:hover {
@@ -923,6 +952,45 @@
     height: 100%;
     display: flex;
     flex-direction: column;
+  }
+  
+  .output-header {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.5rem 0;
+    margin-bottom: 0.5rem;
+  }
+  
+  .refresh-output-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    outline: none !important;
+  }
+  
+  .refresh-output-btn:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  
+  .refresh-output-btn:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    color: #3b82f6;
+  }
+  
+  .refresh-output-btn svg {
+    width: 16px;
+    height: 16px;
   }
 
   .output-content {

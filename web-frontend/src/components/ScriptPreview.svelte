@@ -7,15 +7,13 @@
   }>();
 
   export let generatedScript = "";
-  export let selectedHost = "";
-  export let sourceDir = "";
   export let launching = false;
   export let loading = false;
   export let validationDetails: { isValid: boolean; missing: string[]; missingText: string } = { isValid: false, missing: [], missingText: 'Missing configuration' };
 
   let editableScript = "";
   let scriptTextarea: HTMLTextAreaElement;
-  let lineNumbersDiv: HTMLDivElement;
+  let lineNumbersDiv: HTMLPreElement;
   let hasUnsavedChanges = false;
   let autoSaveTimeout: number | null = null;
   let lastSavedScript = "";
@@ -128,10 +126,9 @@
       .writeText(generatedScript)
       .then(() => {
         // Could add a toast notification here
-        console.log("Script copied to clipboard");
       })
       .catch((err) => {
-        console.error("Failed to copy script:", err);
+        // Failed to copy script
       });
   }
 
@@ -170,13 +167,6 @@
 
   $: stats = getScriptStats();
 
-  // Debug: trace launching changes (temporary)
-  let _prevLaunching: boolean | null = null;
-  $: if (launching !== _prevLaunching) {
-    _prevLaunching = launching;
-    // eslint-disable-next-line no-console
-    console.debug('[debug] ScriptPreview launching ->', launching, { selectedHost, sourceDir, loading, isValid: validationDetails.isValid, missing: validationDetails.missing });
-  }
 </script>
 
 <div class="script-preview">
@@ -596,10 +586,6 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
   }
 
   /* Line numbers are now handled by the pre element with inline styles */
-
-  .enhanced-script-editor:focus ~ .line-numbers {
-    color: rgba(255, 255, 255, 0.6);
-  }
 
   .empty-preview {
     display: flex;

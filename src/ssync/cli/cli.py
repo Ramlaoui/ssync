@@ -6,7 +6,7 @@ import click
 
 from ..utils.config import ConfigError, config
 from .auth import auth
-from .commands import LaunchCommand, StatusCommand, SubmitCommand, SyncCommand
+from .commands import LaunchCommand, StatusCommand, SyncCommand
 
 
 @click.group()
@@ -127,64 +127,8 @@ def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_di
         ctx.exit(1)
 
 
-@cli.command(name="submit")
-@click.option("--host", help="Submit to specific host only")
-@click.option("--job-name", help="SLURM job name")
-@click.option("--cpus", type=int, help="Number of CPUs per task")
-@click.option("--mem", type=int, help="Memory in GB")
-@click.option("--time", type=int, help="Time limit in minutes")
-@click.option("--partition", help="SLURM partition")
-@click.option("--output", help="Output file path")
-@click.option("--error", help="Error file path")
-@click.option("--python-env", help="Python environment setup command")
-@click.argument("script_or_function")
-@click.argument("args", nargs=-1)
-@click.pass_context
-def submit_command(
-    ctx,
-    host,
-    job_name,
-    cpus,
-    mem,
-    time,
-    partition,
-    output,
-    error,
-    python_env,
-    script_or_function,
-    args,
-):
-    """Submit a job to SLURM hosts.
-
-    SCRIPT_OR_FUNCTION can be:
-    - A shell script path (e.g., my_script.sh)
-    - A Python function in format module.py:function_name
-    - A Python script (e.g., my_script.py)
-
-    ARGS are passed to the script/function.
-    """
-    command = SubmitCommand(
-        config_path=config.config_path,
-        slurm_hosts=ctx.obj["slurm_hosts"],
-        verbose=ctx.obj["verbose"],
-    )
-
-    success = command.execute(
-        script_or_function=script_or_function,
-        args=list(args),
-        host=host,
-        job_name=job_name,
-        cpus=cpus,
-        mem=mem,
-        time=time,
-        partition=partition,
-        output=output,
-        error=error,
-        python_env=python_env,
-    )
-
-    if not success:
-        ctx.exit(1)
+# Submit command removed - functionality is covered by launch command
+# Users should use 'launch' which combines sync + submit
 
 
 @cli.command(name="launch")

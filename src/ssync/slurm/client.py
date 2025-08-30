@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from fabric import Connection
 
-from ..models.job import JobInfo, JobState
+from ..models.job import JobInfo
 from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .parser import SlurmParser
@@ -160,7 +160,19 @@ class SlurmClient:
             format_str = "|".join(SQUEUE_FIELDS)
             cmd = f"squeue --format='{format_str}' --noheader"
 
-            query_user = self.get_username(conn) if not skip_user_detection else user
+            # Use the provided user filter if given, otherwise detect current user
+            if user:
+                # User explicitly provided - use it
+                query_user = user
+                logger.debug(f"Using provided user filter: {user}")
+            elif not skip_user_detection:
+                # No user provided and detection not skipped - detect current user
+                query_user = self.get_username(conn)
+                logger.debug(f"Auto-detected current user: {query_user}")
+            else:
+                # No user and detection skipped - query all users
+                query_user = None
+                logger.debug("Querying all users (no user filter)")
 
             if query_user:
                 cmd += f" --user={query_user}"
@@ -301,7 +313,19 @@ class SlurmClient:
                         f"Using starttime={since_str} for sacct on {hostname} (input was {since})"
                     )
 
-            query_user = self.get_username(conn) if not skip_user_detection else user
+            # Use the provided user filter if given, otherwise detect current user
+            if user:
+                # User explicitly provided - use it
+                query_user = user
+                logger.debug(f"Using provided user filter: {user}")
+            elif not skip_user_detection:
+                # No user provided and detection not skipped - detect current user
+                query_user = self.get_username(conn)
+                logger.debug(f"Auto-detected current user: {query_user}")
+            else:
+                # No user and detection skipped - query all users
+                query_user = None
+                logger.debug("Querying all users (no user filter)")
 
             if query_user:
                 cmd += f" --user={query_user}"
@@ -535,25 +559,24 @@ class SlurmClient:
                             )
                             break
 
-            # For active jobs (running/pending), always get actual output paths from scontrol
-            # since squeue provides incorrect values (script path instead of output path)
-            if job_info and job_info.state in [JobState.RUNNING, JobState.PENDING]:
-                stdout_path, stderr_path = self.get_job_output_files(
-                    conn, job_id, hostname
-                )
-                if stdout_path:
-                    job_info.stdout_file = stdout_path
-                if stderr_path:
-                    job_info.stderr_file = stderr_path
-            # Also try scontrol if we don't have output paths at all
-            elif job_info and not (job_info.stdout_file or job_info.stderr_file):
-                stdout_path, stderr_path = self.get_job_output_files(
-                    conn, job_id, hostname
-                )
-                if stdout_path:
-                    job_info.stdout_file = stdout_path
-                if stderr_path:
-                    job_info.stderr_file = stderr_path
+            # IMPORTANT: squeue often returns the script path instead of actual output paths
+            # This happens for all job states, not just running/pending
+            # Always try to get the correct output paths from scontrol when possible
+            if job_info:
+                # Try to get actual output paths from scontrol
+                # This is especially important for completed jobs where squeue returns wrong paths
+                try:
+                    stdout_path, stderr_path = self.get_job_output_files(
+                        conn, job_id, hostname
+                    )
+                    if stdout_path:
+                        job_info.stdout_file = stdout_path
+                    if stderr_path:
+                        job_info.stderr_file = stderr_path
+                except Exception:
+                    # If scontrol fails (e.g., job too old), keep the paths from squeue
+                    # They might be wrong, but it's better than nothing
+                    pass
 
             return job_info
 

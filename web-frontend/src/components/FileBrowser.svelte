@@ -19,15 +19,11 @@
   let loading = false;
   let error: string | null = null;
 
-
-  console.log(localEntries, initialPath);
-
   // Load directory browser in background on mount
   setTimeout(() => {
     loadLocalPath(initialPath).catch(() => {
       // Fallback to root if initialPath doesn't exist
       loadLocalPath("/").catch(() => {
-        console.warn("Could not load directory browser");
       });
     });
   }, 100);
@@ -49,10 +45,6 @@
       localEntries = response.data.entries;
       currentLocalPath = response.data.path;
 
-      // Show warning if we hit the limit (as info, not error)
-      if (localEntries.length >= maxEntries) {
-        console.log(`Directory listing limited to ${maxEntries} entries.`);
-      }
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
       error = `Failed to list local path: ${axiosError.message}`;

@@ -1,5 +1,5 @@
 from .cli import main
-from .commands import StatusCommand, SubmitCommand, SyncCommand
+from .commands import LaunchCommand, StatusCommand, SyncCommand
 from .display import JobDisplay
 
-__all__ = ["JobDisplay", "StatusCommand", "SyncCommand", "SubmitCommand", "main"]
+__all__ = ["JobDisplay", "StatusCommand", "SyncCommand", "LaunchCommand", "main"]

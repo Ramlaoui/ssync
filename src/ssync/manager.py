@@ -49,9 +49,25 @@ class SlurmManager:
         )
         self.slurm_client = SlurmClient()
 
-    def _get_connection(self, host: Host):
-        """Get SSH connection for a host."""
-        return self.connection_manager.get_connection(host)
+    def _get_connection(self, host: Host, force_refresh: bool = False):
+        """Get SSH connection for a host.
+
+        Args:
+            host: Host configuration
+            force_refresh: Force refresh the connection
+
+        Returns:
+            Connection object
+        """
+        return self.connection_manager.get_connection(host, force_refresh=force_refresh)
+
+    def refresh_connections(self):
+        """Refresh all SSH connections.
+
+        Returns:
+            Number of connections refreshed
+        """
+        return self.connection_manager.refresh_all_connections()
 
     async def get_all_jobs(
         self,

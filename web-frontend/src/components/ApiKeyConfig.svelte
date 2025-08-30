@@ -101,7 +101,7 @@
   {:else}
     <div class="configured">
       <div class="key-display">
-        <label>Current API Key:</label>
+        <span>Current API Key:</span>
         <code>{$apiConfig.apiKey.substring(0, 8)}...{$apiConfig.apiKey.substring($apiConfig.apiKey.length - 4)}</code>
       </div>
       

@@ -94,7 +94,6 @@ export const success = derived({ subscribe }, $state => $state.success);
 
 // Derived store for generated SLURM script
 export const generatedScript = derived(config, $config => generateSlurmScript($config));
-console.log(generatedScript);
 
 // Helper function to get validation details
 function getValidationDetails(config: JobLaunchConfig) {

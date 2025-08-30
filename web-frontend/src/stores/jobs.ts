@@ -126,7 +126,12 @@ function createJobsStore() {
       });
       
       try {
-        const response = await api.get<JobOutputResponse>(`/api/jobs/${jobId}/output?host=${hostname}`);
+        const params = new URLSearchParams();
+        params.append('host', hostname);
+        if (forceRefresh) {
+          params.append('force_refresh', 'true');
+        }
+        const response = await api.get<JobOutputResponse>(`/api/jobs/${jobId}/output?${params}`);
         const output = response.data;
         
         update(s => {
@@ -313,6 +318,8 @@ function createJobsStore() {
         errors: new Map(),
         hostJobs: new Map(),
         lastFetch: new Map(),
+        sidebarJobs: [],
+        sidebarLastLoad: 0,
       });
     },
     

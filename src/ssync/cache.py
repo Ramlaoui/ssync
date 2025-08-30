@@ -109,9 +109,25 @@ class JobDataCache:
                     cached_at TEXT NOT NULL,
                     last_updated TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
+                    stdout_fetched_after_completion BOOLEAN DEFAULT 0,
+                    stderr_fetched_after_completion BOOLEAN DEFAULT 0,
                     PRIMARY KEY (job_id, hostname)
                 )
             """)
+
+            # Add columns if they don't exist (for migration)
+            try:
+                conn.execute(
+                    "ALTER TABLE cached_jobs ADD COLUMN stdout_fetched_after_completion BOOLEAN DEFAULT 0"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE cached_jobs ADD COLUMN stderr_fetched_after_completion BOOLEAN DEFAULT 0"
+                )
+            except:
+                pass  # Column already exists
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cached_job_ranges (
@@ -401,6 +417,7 @@ class JobDataCache:
         hostname: str,
         stdout_content: Optional[str] = None,
         stderr_content: Optional[str] = None,
+        mark_fetched_after_completion: bool = False,
     ):
         """
         Update cached job outputs without replacing the entire entry.
@@ -410,6 +427,7 @@ class JobDataCache:
             hostname: Hostname
             stdout_content: Updated stdout content
             stderr_content: Updated stderr content
+            mark_fetched_after_completion: If True, mark outputs as fetched after job completion
         """
         with self._get_connection() as conn:
             updates = []
@@ -418,10 +436,14 @@ class JobDataCache:
             if stdout_content is not None:
                 updates.append("stdout_content = ?")
                 params.append(stdout_content)
+                if mark_fetched_after_completion:
+                    updates.append("stdout_fetched_after_completion = 1")
 
             if stderr_content is not None:
                 updates.append("stderr_content = ?")
                 params.append(stderr_content)
+                if mark_fetched_after_completion:
+                    updates.append("stderr_fetched_after_completion = 1")
 
             if updates:
                 updates.append("last_updated = ?")
@@ -502,6 +524,37 @@ class JobDataCache:
                 (datetime.now().isoformat(), job_id, hostname),
             )
             conn.commit()
+
+    def check_outputs_fetched_after_completion(
+        self, job_id: str, hostname: str
+    ) -> tuple[bool, bool]:
+        """
+        Check if outputs were already fetched after job completion.
+
+        Returns:
+            Tuple of (stdout_fetched_after_completion, stderr_fetched_after_completion)
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT stdout_fetched_after_completion, stderr_fetched_after_completion
+                FROM cached_jobs
+                WHERE job_id = ? AND hostname = ?
+            """,
+                (job_id, hostname),
+            )
+            row = cursor.fetchone()
+            if row:
+                try:
+                    stdout_fetched = bool(row["stdout_fetched_after_completion"])
+                except (KeyError, TypeError):
+                    stdout_fetched = False
+                try:
+                    stderr_fetched = bool(row["stderr_fetched_after_completion"])
+                except (KeyError, TypeError):
+                    stderr_fetched = False
+                return stdout_fetched, stderr_fetched
+            return False, False
 
     def cleanup_old_entries(
         self,

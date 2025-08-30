@@ -1,13 +1,18 @@
 """API client for communicating with ssync web API."""
 
+import warnings
 from pathlib import Path
 from typing import List, Optional
 
 import requests
+from urllib3.exceptions import InsecureRequestWarning
 
 from ..models.job import JobInfo, JobState
 from ..utils.logging import setup_logger
 from .server import ServerManager
+
+# Suppress SSL warnings for self-signed certificates
+warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
 logger = setup_logger(__name__, "DEBUG")
 
@@ -54,7 +59,9 @@ class ApiClient:
         if completed_only:
             params["completed_only"] = "true"
 
-        response = requests.get(f"{self.base_url}/status", params=params, timeout=30)
+        response = requests.get(
+            f"{self.base_url}/api/status", params=params, timeout=30, verify=False
+        )
         response.raise_for_status()
 
         data = response.json()
@@ -115,3 +122,97 @@ class ApiClient:
                 all_jobs.append(job)
 
         return all_jobs
+
+    def launch_job(
+        self,
+        script_content: str,
+        source_dir: Optional[str],
+        host: str,
+        job_name: Optional[str] = None,
+        cpus: Optional[int] = None,
+        mem: Optional[int] = None,
+        time: Optional[int] = None,
+        partition: Optional[str] = None,
+        output: Optional[str] = None,
+        error: Optional[str] = None,
+        constraint: Optional[str] = None,
+        account: Optional[str] = None,
+        nodes: Optional[int] = None,
+        ntasks_per_node: Optional[int] = None,
+        gpus_per_node: Optional[int] = None,
+        gres: Optional[str] = None,
+        python_env: Optional[str] = None,
+        exclude: Optional[List[str]] = None,
+        include: Optional[List[str]] = None,
+        no_gitignore: bool = False,
+    ) -> tuple[bool, Optional[str], str]:
+        """Launch a job via the API.
+
+        Returns:
+            tuple of (success, job_id, message)
+        """
+        request_data = {
+            "script_content": script_content,
+            "host": host,
+        }
+
+        # Add optional parameters
+        if source_dir:
+            request_data["source_dir"] = source_dir
+        if job_name:
+            request_data["job_name"] = job_name
+        if cpus is not None:
+            request_data["cpus"] = cpus
+        if mem is not None:
+            request_data["mem"] = mem
+        if time is not None:
+            request_data["time"] = time
+        if partition:
+            request_data["partition"] = partition
+        if output:
+            request_data["output"] = output
+        if error:
+            request_data["error"] = error
+        if constraint:
+            request_data["constraint"] = constraint
+        if account:
+            request_data["account"] = account
+        if nodes is not None:
+            request_data["nodes"] = nodes
+        if ntasks_per_node is not None:
+            request_data["n_tasks_per_node"] = ntasks_per_node
+        if gpus_per_node is not None:
+            request_data["gpus_per_node"] = gpus_per_node
+        if gres:
+            request_data["gres"] = gres
+        if python_env:
+            request_data["python_env"] = python_env
+        if exclude:
+            request_data["exclude"] = exclude
+        if include:
+            request_data["include"] = include
+        if no_gitignore:
+            request_data["no_gitignore"] = no_gitignore
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/jobs/launch",
+                json=request_data,
+                timeout=120,  # Longer timeout for launch operations
+                verify=False,
+            )
+
+            if not response.ok:
+                # Try to get error details from response
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("detail", str(response.text))
+                except:
+                    error_msg = f"{response.status_code} {response.reason}"
+                return False, None, f"API error: {error_msg}"
+
+            data = response.json()
+            return data["success"], data.get("job_id"), data["message"]
+
+        except requests.exceptions.RequestException as e:
+            return False, None, f"API request failed: {str(e)}"

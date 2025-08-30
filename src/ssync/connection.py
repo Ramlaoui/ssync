@@ -30,8 +30,16 @@ class ConnectionManager:
         else:
             self._fabric_config = None
 
-    def get_connection(self, host: Host) -> Connection:
-        """Get or create a fabric connection with caching."""
+    def get_connection(self, host: Host, force_refresh: bool = False) -> Connection:
+        """Get or create a fabric connection with caching.
+
+        Args:
+            host: Host configuration
+            force_refresh: If True, close existing connection and create new one
+
+        Returns:
+            Connection object
+        """
         host_string = host.hostname
         if host.username:
             host_string = f"{host.username}@{host_string}"
@@ -39,6 +47,15 @@ class ConnectionManager:
             host_string = f"{host_string}:{host.port}"
 
         logger.debug(f"Requesting connection to: {host_string}")
+
+        # Force refresh if requested
+        if force_refresh and host_string in self._connections:
+            logger.debug(f"Force refreshing connection to {host_string}")
+            try:
+                self._connections[host_string].close()
+            except Exception:
+                pass
+            del self._connections[host_string]
 
         if host_string in self._connections:
             try:
@@ -164,6 +181,23 @@ class ConnectionManager:
             "total_connections": len(self._connections),
             "active_hosts": list(self._connections.keys()),
         }
+
+    def refresh_all_connections(self):
+        """Close and refresh all SSH connections.
+
+        Returns:
+            Number of connections refreshed
+        """
+        logger.info(f"Refreshing all {len(self._connections)} cached connections...")
+        count = len(self._connections)
+        for host_string, conn in list(self._connections.items()):
+            try:
+                conn.close()
+            except Exception as e:
+                logger.debug(f"Error closing connection to {host_string}: {e}")
+        self._connections.clear()
+        logger.info(f"Refreshed {count} connections")
+        return count
 
     def close_connections(self):
         """Close all SSH connections and cache."""

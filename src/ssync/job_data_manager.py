@@ -197,7 +197,23 @@ class JobDataManager:
         logger.info(f"_fetch_host_jobs called for {hostname} with limit={limit}")
 
         try:
-            conn = manager._get_connection(slurm_host.host)
+            # Get connection with timeout - if it takes too long, try force refresh
+            try:
+                conn = await asyncio.wait_for(
+                    self._run_in_executor(manager._get_connection, slurm_host.host),
+                    timeout=10.0,  # 10 second timeout for getting connection
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Connection to {hostname} timed out after 10s, forcing refresh..."
+                )
+                # Force refresh the connection and try again
+                conn = await asyncio.wait_for(
+                    self._run_in_executor(
+                        manager._get_connection, slurm_host.host, True
+                    ),
+                    timeout=30.0,  # Give more time for fresh connection
+                )
 
             # Check SLURM availability - run in thread pool
             slurm_available = await self._run_in_executor(
@@ -210,13 +226,15 @@ class JobDataManager:
             # Parse since parameter - each host gets its own parsing to ensure proper timezone handling
             since_dt = self._parse_since_to_datetime(since) if since else None
 
-            # Determine effective user - ALWAYS ensure we have a user to avoid fetching all jobs
+            # Determine effective user based on skip_user_detection flag
             effective_user = user
-            if not effective_user:
+            if not skip_user_detection and not effective_user:
+                # Auto-detect current user only if not skipping detection
                 try:
                     effective_user = await self._run_in_executor(
                         manager.slurm_client.get_username, conn
                     )
+                    logger.debug(f"Auto-detected user on {hostname}: {effective_user}")
                 except Exception as e:
                     logger.error(
                         f"CRITICAL: Could not detect current user on {hostname}: {e}"
@@ -225,6 +243,14 @@ class JobDataManager:
                         "Refusing to fetch jobs without user filter to prevent performance issues"
                     )
                     return []  # Fail safe: don't fetch anything if we can't determine user
+            elif skip_user_detection and not effective_user:
+                # Explicitly requested to skip user detection and query all users
+                logger.info(
+                    f"Fetching jobs for ALL users on {hostname} (skip_user_detection=True)"
+                )
+                effective_user = (
+                    None  # None means all users in get_active_jobs/get_completed_jobs
+                )
 
             # 1. GET ACTIVE JOBS (unless completed_only) - OPTIMIZED with thread pool
             if not completed_only:
@@ -305,17 +331,28 @@ class JobDataManager:
                 # UPDATE FETCH STATE
                 await self._update_fetch_state(hostname, conn)
 
-            # 3. ENHANCE WITH CACHED JOBS (filtered by user)
-            cached_jobs = self.cache.get_cached_completed_jobs(hostname, since=since_dt)
+            # 3. ENHANCE WITH CACHED JOBS (filtered by user and respecting active_only/completed_only)
+            # Only merge cached jobs if we're not filtering to active_only
+            if not active_only:
+                cached_jobs = self.cache.get_cached_completed_jobs(
+                    hostname, since=since_dt
+                )
 
-            # CRITICAL: Filter cached jobs by current user
-            user_cached_jobs = []
-            if cached_jobs:
-                for cached_job in cached_jobs:
-                    if cached_job.user == effective_user:
-                        user_cached_jobs.append(cached_job)
+                # CRITICAL: Filter cached jobs by current user
+                user_cached_jobs = []
+                if cached_jobs:
+                    for cached_job in cached_jobs:
+                        if cached_job.user == effective_user:
+                            # Also respect completed_only flag
+                            if not completed_only or cached_job.state in [
+                                JobState.COMPLETED,
+                                JobState.FAILED,
+                                JobState.CANCELLED,
+                                JobState.TIMEOUT,
+                            ]:
+                                user_cached_jobs.append(cached_job)
 
-            jobs = self._merge_with_cached_jobs(jobs, user_cached_jobs)
+                jobs = self._merge_with_cached_jobs(jobs, user_cached_jobs)
 
             # Apply per-host limit if specified
             if limit:
@@ -385,7 +422,7 @@ class JobDataManager:
             # This is CRITICAL - get ALL info including output file paths NOW
             try:
                 complete_job_info = await self._run_in_executor(
-                    manager.slurm_client.get_job_info, conn, job_id, hostname
+                    manager.get_job_info, slurm_host, job_id, None
                 )
 
                 if complete_job_info:
@@ -410,7 +447,10 @@ class JobDataManager:
                     )
 
             except Exception as e:
+                import traceback
+
                 logger.warning(f"Could not get complete job info for {job_id}: {e}")
+                logger.debug(f"Traceback: {traceback.format_exc()}")
                 # Create minimal record as fallback
                 minimal_job_info = JobInfo(
                     job_id=job_id,
@@ -494,11 +534,17 @@ class JobDataManager:
             logger.error(f"Failed to update job status for {job_info.job_id}: {e}")
 
     async def _fetch_outputs_from_cached_paths(
-        self, job_info: JobInfo
+        self, job_info: JobInfo, force_fetch: bool = False
     ) -> tuple[Optional[str], Optional[str]]:
         """
-        Simple method to read output files using cached paths.
-        This replaces all the complex output harvesting logic.
+        Fetch output files from remote filesystem.
+
+        For completed jobs: Always tries to fetch from SSH unless already fetched after completion.
+        For running jobs: Always fetches latest output.
+
+        Args:
+            job_info: Job information including output file paths
+            force_fetch: If True, always fetch from SSH regardless of cache state
         """
         try:
             from .web.app import get_slurm_manager
@@ -507,52 +553,199 @@ class JobDataManager:
             if not manager:
                 return None, None
 
+            # Check if job is completed
+            is_completed = job_info.state in [
+                JobState.COMPLETED,
+                JobState.FAILED,
+                JobState.CANCELLED,
+                JobState.TIMEOUT,
+            ]
+
+            # Check if we've already fetched outputs after completion
+            stdout_fetched_after, stderr_fetched_after = (
+                self.cache.check_outputs_fetched_after_completion(
+                    job_info.job_id, job_info.hostname
+                )
+            )
+
+            # Determine what to fetch
+            should_fetch_stdout = (
+                force_fetch
+                or not is_completed  # Always fetch for running jobs
+                or (
+                    is_completed and not stdout_fetched_after
+                )  # Fetch if not fetched after completion
+            ) and job_info.stdout_file
+
+            should_fetch_stderr = (
+                force_fetch
+                or not is_completed  # Always fetch for running jobs
+                or (
+                    is_completed and not stderr_fetched_after
+                )  # Fetch if not fetched after completion
+            ) and job_info.stderr_file
+
+            # If nothing to fetch, return existing cached content
+            if not should_fetch_stdout and not should_fetch_stderr:
+                cached_job = self.cache.get_cached_job(
+                    job_info.job_id, job_info.hostname
+                )
+                if cached_job:
+                    logger.debug(
+                        f"Job {job_info.job_id} outputs already fetched after completion, using cache"
+                    )
+                    return cached_job.stdout_content, cached_job.stderr_content
+                return None, None
+
             slurm_host = manager.get_host_by_name(job_info.hostname)
             conn = manager._get_connection(slurm_host.host)
 
             stdout_content = None
             stderr_content = None
 
-            # Read stdout if we have the path
-            if job_info.stdout_file:
+            # Try to fetch stdout if needed
+            if should_fetch_stdout:
                 try:
-                    result = await self._run_in_executor(
-                        conn.run,
-                        f"cat '{job_info.stdout_file}' 2>/dev/null || echo ''",
-                        hide=True,
-                    )
-                    if result.ok and result.stdout.strip():
-                        stdout_content = result.stdout.strip()
-                except Exception:
-                    pass
+                    # Check if the path looks like a script file (common SLURM bug)
+                    if job_info.stdout_file and (
+                        job_info.stdout_file.endswith(".sh")
+                        or job_info.stdout_file.endswith(".sbatch")
+                        or job_info.stdout_file.endswith(".bash")
+                    ):
+                        logger.warning(
+                            f"Stdout path for job {job_info.job_id} looks like a script file: {job_info.stdout_file}. "
+                            "This is likely a SLURM bug. Skipping fetch to avoid caching script as output."
+                        )
+                        stdout_content = None
+                    else:
+                        # First check if file exists
+                        check_result = await self._run_in_executor(
+                            conn.run,
+                            f"test -f '{job_info.stdout_file}' && echo 'exists' || echo 'notfound'",
+                            hide=True,
+                        )
 
-            # Read stderr if we have the path
-            if job_info.stderr_file:
+                        if "exists" in check_result.stdout:
+                            result = await self._run_in_executor(
+                                conn.run,
+                                f"cat '{job_info.stdout_file}'",
+                                hide=True,
+                            )
+                            if result.ok:
+                                stdout_content = result.stdout
+                                logger.debug(
+                                    f"Fetched stdout for job {job_info.job_id} from SSH"
+                                )
+                        else:
+                            logger.debug(
+                                f"Stdout file not found for job {job_info.job_id}"
+                            )
+                            # Keep existing cached content if file not found
+                            cached_job = self.cache.get_cached_job(
+                                job_info.job_id, job_info.hostname
+                            )
+                            if cached_job and cached_job.stdout_content:
+                                stdout_content = cached_job.stdout_content
+                except Exception as e:
+                    logger.warning(
+                        f"Error fetching stdout for job {job_info.job_id}: {e}"
+                    )
+                    # Keep existing cached content on error
+                    cached_job = self.cache.get_cached_job(
+                        job_info.job_id, job_info.hostname
+                    )
+                    if cached_job and cached_job.stdout_content:
+                        stdout_content = cached_job.stdout_content
+            else:
+                # Use cached content
+                cached_job = self.cache.get_cached_job(
+                    job_info.job_id, job_info.hostname
+                )
+                if cached_job:
+                    stdout_content = cached_job.stdout_content
+
+            # Try to fetch stderr if needed
+            if should_fetch_stderr:
                 try:
-                    result = await self._run_in_executor(
-                        conn.run,
-                        f"cat '{job_info.stderr_file}' 2>/dev/null || echo ''",
-                        hide=True,
-                    )
-                    if result.ok and result.stdout.strip():
-                        stderr_content = result.stdout.strip()
-                except Exception:
-                    pass
+                    # Check if the path looks like a script file (common SLURM bug)
+                    if job_info.stderr_file and (
+                        job_info.stderr_file.endswith(".sh")
+                        or job_info.stderr_file.endswith(".sbatch")
+                        or job_info.stderr_file.endswith(".bash")
+                    ):
+                        logger.warning(
+                            f"Stderr path for job {job_info.job_id} looks like a script file: {job_info.stderr_file}. "
+                            "This is likely a SLURM bug. Skipping fetch to avoid caching script as error output."
+                        )
+                        stderr_content = None
+                    else:
+                        # First check if file exists
+                        check_result = await self._run_in_executor(
+                            conn.run,
+                            f"test -f '{job_info.stderr_file}' && echo 'exists' || echo 'notfound'",
+                            hide=True,
+                        )
 
-            # Cache the outputs we found
-            if stdout_content or stderr_content:
+                        if "exists" in check_result.stdout:
+                            result = await self._run_in_executor(
+                                conn.run,
+                                f"cat '{job_info.stderr_file}'",
+                                hide=True,
+                            )
+                            if result.ok:
+                                stderr_content = result.stdout
+                                logger.debug(
+                                    f"Fetched stderr for job {job_info.job_id} from SSH"
+                                )
+                        else:
+                            logger.debug(
+                                f"Stderr file not found for job {job_info.job_id}"
+                            )
+                            # Keep existing cached content if file not found
+                            cached_job = self.cache.get_cached_job(
+                                job_info.job_id, job_info.hostname
+                            )
+                            if cached_job and cached_job.stderr_content:
+                                stderr_content = cached_job.stderr_content
+                except Exception as e:
+                    logger.warning(
+                        f"Error fetching stderr for job {job_info.job_id}: {e}"
+                    )
+                    # Keep existing cached content on error
+                    cached_job = self.cache.get_cached_job(
+                        job_info.job_id, job_info.hostname
+                    )
+                    if cached_job and cached_job.stderr_content:
+                        stderr_content = cached_job.stderr_content
+            else:
+                # Use cached content
+                cached_job = self.cache.get_cached_job(
+                    job_info.job_id, job_info.hostname
+                )
+                if cached_job:
+                    stderr_content = cached_job.stderr_content
+
+            # Update cache with fetched outputs
+            if should_fetch_stdout or should_fetch_stderr:
                 self.cache.update_job_outputs(
                     job_info.job_id,
                     job_info.hostname,
-                    stdout_content=stdout_content,
-                    stderr_content=stderr_content,
+                    stdout_content=stdout_content if should_fetch_stdout else None,
+                    stderr_content=stderr_content if should_fetch_stderr else None,
+                    mark_fetched_after_completion=is_completed,  # Mark as fetched after completion if job is completed
                 )
-                logger.info(f"Cached outputs for completed job {job_info.job_id}")
+                logger.info(
+                    f"Updated outputs for job {job_info.job_id} (completed={is_completed})"
+                )
 
             return stdout_content, stderr_content
 
         except Exception as e:
-            logger.warning(f"Error fetching outputs for job {job_info.job_id}: {e}")
+            logger.error(f"Error fetching outputs for job {job_info.job_id}: {e}")
+            # Return cached content on error
+            cached_job = self.cache.get_cached_job(job_info.job_id, job_info.hostname)
+            if cached_job:
+                return cached_job.stdout_content, cached_job.stderr_content
             return None, None
 
     async def get_job_data(

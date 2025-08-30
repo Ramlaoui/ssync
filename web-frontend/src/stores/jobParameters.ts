@@ -436,7 +436,6 @@ function createJobParametersStore() {
         for (const [key, { value, line }] of directives) {
           if (!state.parameters.has(key)) {
             // Could add as a custom parameter in the future
-            console.log(`Unknown SBATCH parameter in script: ${key}=${value}`);
           }
         }
 

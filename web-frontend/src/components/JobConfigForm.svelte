@@ -512,6 +512,7 @@
     border-radius: 4px;
     background: linear-gradient(90deg, #e5e7eb 0%, #f3f4f6 100%);
     outline: none;
+    appearance: none;
     -webkit-appearance: none;
     transition: all 0.2s ease;
     cursor: pointer;
