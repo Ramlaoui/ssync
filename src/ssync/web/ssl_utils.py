@@ -12,6 +12,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from ..utils.logging import setup_logger
+
+logger = setup_logger(__name__)
+
 
 def get_cert_dir() -> Path:
     """Get the directory for storing SSL certificates."""
@@ -42,7 +46,7 @@ def generate_self_signed_cert(hostname: str = "localhost") -> tuple[Path, Path]:
         except Exception:
             pass
 
-    print("Generating self-signed SSL certificate...")
+    logger.info("Generating self-signed SSL certificate...")
 
     # Generate private key
     private_key = rsa.generate_private_key(
@@ -96,9 +100,13 @@ def generate_self_signed_cert(hostname: str = "localhost") -> tuple[Path, Path]:
     with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
 
-    print(f"✓ SSL certificate generated at {cert_path}")
-    print("  Note: You'll see a browser warning about the self-signed certificate.")
-    print("  This is normal for local development. Accept the certificate to proceed.")
+    logger.info(f"✓ SSL certificate generated at {cert_path}")
+    logger.info(
+        "  Note: You'll see a browser warning about the self-signed certificate."
+    )
+    logger.info(
+        "  This is normal for local development. Accept the certificate to proceed."
+    )
 
     return cert_path, key_path
 
@@ -126,7 +134,7 @@ def install_cert_to_system(cert_path: Path) -> bool:
                 check=True,
                 capture_output=True,
             )
-            print("✓ Certificate added to macOS keychain")
+            logger.info("✓ Certificate added to macOS keychain")
             return True
         elif system == "linux":
             # Different Linux distros have different methods
@@ -134,10 +142,12 @@ def install_cert_to_system(cert_path: Path) -> bool:
             cert_dest = Path("/usr/local/share/ca-certificates/ssync.crt")
             subprocess.run(["sudo", "cp", str(cert_path), str(cert_dest)], check=True)
             subprocess.run(["sudo", "update-ca-certificates"], check=True)
-            print("✓ Certificate added to Linux trust store")
+            logger.info("✓ Certificate added to Linux trust store")
             return True
     except subprocess.CalledProcessError:
-        print("ℹ Could not add certificate to system trust store (requires admin)")
+        logger.info(
+            "ℹ Could not add certificate to system trust store (requires admin)"
+        )
     except Exception:
         pass
 

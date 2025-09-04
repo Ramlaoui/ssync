@@ -1,6 +1,8 @@
 """Integrated job launch manager that handles sync and submission."""
 
 import asyncio
+import re
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,7 +13,7 @@ from .utils.logging import setup_logger
 from .utils.slurm_params import SlurmParams
 from .utils.ssh import send_file
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
 class LaunchManager:
@@ -82,6 +84,7 @@ class LaunchManager:
         include: List[str] = None,
         no_gitignore: bool = False,
         sync_enabled: bool = True,
+        abort_on_setup_failure: bool = True,
     ) -> Optional[Job]:
         """Launch a job with optional sync and submission.
 
@@ -95,6 +98,7 @@ class LaunchManager:
             include: Patterns to include in sync
             no_gitignore: Disable .gitignore usage
             sync_enabled: Whether to sync source directory (default: True)
+            abort_on_setup_failure: Whether to abort job submission if login setup fails (default: True)
 
         Returns:
             Job object if successful, None otherwise
@@ -102,17 +106,20 @@ class LaunchManager:
         script_path = Path(script_path)
 
         if not script_path.exists():
-            logger.error(f"Script not found: {script_path}")
-            return None
+            error_msg = f"Script not found: {script_path}"
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
 
         if sync_enabled:
             if source_dir is None:
-                logger.error("Source directory is required when sync is enabled")
-                return None
+                error_msg = "Source directory is required when sync is enabled"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
             source_dir = Path(source_dir)
             if not source_dir.exists():
-                logger.error(f"Source directory not found: {source_dir}")
-                return None
+                error_msg = f"Source directory not found: {source_dir}"
+                logger.error(error_msg)
+                raise FileNotFoundError(error_msg)
         else:
             if source_dir is not None:
                 source_dir = Path(source_dir)
@@ -121,7 +128,7 @@ class LaunchManager:
             slurm_host = self.slurm_manager.get_host_by_name(host)
         except ValueError as e:
             logger.error(str(e))
-            return None
+            raise
 
         logger.info(f"Launching job on {slurm_host.host.hostname}")
 
@@ -140,8 +147,9 @@ class LaunchManager:
                 )
 
                 if not sync_success:
-                    logger.error("Failed to sync source directory")
-                    return None
+                    error_msg = f"Failed to sync source directory {source_dir} to {slurm_host.host.hostname}"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
 
                 logger.info("Sync completed successfully")
                 remote_work_dir = Path(slurm_host.work_dir) / source_dir.name
@@ -157,6 +165,13 @@ class LaunchManager:
             login_setup_commands, clean_compute_script = self._parse_structured_script(
                 original_script_content
             )
+
+            # Log what was extracted for debugging
+            if login_setup_commands:
+                logger.info(
+                    f"Extracted login setup commands ({len(login_setup_commands)} chars)"
+                )
+                logger.debug(f"Login setup commands:\n{login_setup_commands}")
 
             if python_env:
                 if login_setup_commands:
@@ -203,22 +218,92 @@ class LaunchManager:
 
             if login_setup_commands:
                 logger.info("Executing login node setup commands...")
+                logger.debug(
+                    f"Setup commands: {login_setup_commands[:500]}..."
+                )  # Log first 500 chars
+                setup_result = None
                 try:
 
                     def run_setup():
                         with conn.cd(remote_work_dir):
-                            return conn.run(login_setup_commands, warn=True)
+                            # Use pty=False to ensure we capture all output
+                            # Don't hide output to see what's happening
+                            result = conn.run(
+                                login_setup_commands, warn=True, hide=False, pty=False
+                            )
+                            # Log the result immediately for debugging
+                            logger.debug(
+                                f"Setup command exit code: {result.return_code}"
+                            )
+                            logger.debug(f"Setup stdout: {result.stdout}")
+                            logger.debug(f"Setup stderr: {result.stderr}")
+                            return result
 
                     setup_result = await loop.run_in_executor(executor, run_setup)
 
                     if setup_result.ok:
                         logger.info("Login node setup completed successfully")
                     else:
-                        logger.warning("Login node setup completed with warnings")
-                        logger.warning(f"Setup stderr: {setup_result.stderr}")
+                        stderr_output = (
+                            setup_result.stderr.strip()
+                            if setup_result.stderr
+                            else "No stderr captured"
+                        )
+                        stdout_output = (
+                            setup_result.stdout.strip()
+                            if setup_result.stdout
+                            else "No stdout captured"
+                        )
+
+                        if abort_on_setup_failure and setup_result.return_code != 0:
+                            error_msg = (
+                                f"Login node setup failed with exit code {setup_result.return_code}\n"
+                                f"Setup stdout:\n{stdout_output}\n"
+                                f"Setup stderr:\n{stderr_output}"
+                            )
+                            logger.error(error_msg)
+                            logger.error("Aborting job submission due to setup failure")
+                            raise RuntimeError(error_msg)
+                        else:
+                            logger.warning("Login node setup completed with warnings")
+                            logger.warning(f"Setup stdout: {stdout_output}")
+                            logger.warning(f"Setup stderr: {stderr_output}")
 
                 except Exception as e:
-                    logger.error(f"Login node setup failed: {e}")
+                    # Try to extract more details from the exception
+                    error_details = str(e)
+
+                    # If we have a setup_result, include its output
+                    if setup_result:
+                        stderr_output = (
+                            setup_result.stderr.strip()
+                            if setup_result.stderr
+                            else "No stderr captured"
+                        )
+                        stdout_output = (
+                            setup_result.stdout.strip()
+                            if setup_result.stdout
+                            else "No stdout captured"
+                        )
+                        error_msg = (
+                            f"Login node setup failed with exception: {error_details}\n"
+                            f"Setup stdout:\n{stdout_output}\n"
+                            f"Setup stderr:\n{stderr_output}"
+                        )
+                    else:
+                        # No setup_result means the exception happened before the command ran
+                        error_msg = (
+                            f"Login node setup failed with exception: {error_details}"
+                        )
+
+                    logger.error(error_msg)
+                    if abort_on_setup_failure:
+                        logger.error("Aborting job submission due to setup failure")
+                        raise RuntimeError(error_msg)
+                    else:
+                        logger.warning(
+                            "Continuing despite setup failure (abort_on_setup_failure=False)"
+                        )
 
             logger.info("Submitting job to SLURM...")
             logger.info(f"Changing to working directory: {remote_work_dir}")
@@ -250,12 +335,13 @@ class LaunchManager:
 
                 return job
             else:
-                logger.error("Failed to submit job")
-                return None
+                error_msg = f"Failed to submit job to {slurm_host.host.hostname}. Check SLURM configuration and script syntax."
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
 
         except Exception as e:
             logger.error(f"Error during job launch: {e}")
-            return None
+            raise
         finally:
             try:
                 if "clean_script_path" in locals() and clean_script_path.exists():
@@ -265,8 +351,6 @@ class LaunchManager:
 
             try:
                 if "temp_dir" in locals() and temp_dir.exists():
-                    import shutil
-
                     shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception:
                 pass
@@ -289,8 +373,6 @@ class LaunchManager:
         Returns:
             Job object if successful, None otherwise
         """
-        import re
-
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
         try:

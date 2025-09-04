@@ -286,6 +286,18 @@ class JobDataManager:
                     hostname, since_dt
                 )
 
+                # NEW: Get cached completed job IDs to skip re-querying
+                cached_completed_ids = set()
+                if not force_refresh:  # Only use cache if not forcing refresh
+                    cached_completed_ids = self.cache.get_cached_completed_job_ids(
+                        hostname, effective_since
+                    )
+                    if cached_completed_ids:
+                        logger.info(
+                            f"Found {len(cached_completed_ids)} completed jobs in cache for {hostname}, "
+                            f"will skip re-querying these from SLURM"
+                        )
+
                 completed_jobs = await self._run_in_executor(
                     manager.slurm_client.get_completed_jobs,
                     conn,
@@ -297,6 +309,7 @@ class JobDataManager:
                     active_job_ids,
                     skip_user_detection,
                     None,
+                    cached_completed_ids,  # NEW: Pass cached IDs to skip
                 )
 
                 # CACHE COMPLETED JOBS AND FETCH OUTPUTS

@@ -64,15 +64,30 @@ class CacheMiddleware:
                 current_jobs.append(job_web)
 
             if hostname and filters and since and response_hostname == hostname:
+                # Determine TTL based on job states
+                # Check if all jobs in this response are completed
+                all_completed = all(
+                    job_web.state in ["CD", "F", "CA", "TO"]  # Completed states
+                    for job_web in current_jobs
+                )
+
+                if all_completed:
+                    # All jobs are completed - cache for a long time
+                    ttl_seconds = 86400  # 24 hours
+                else:
+                    # Has active/pending jobs - short cache
+                    ttl_seconds = 60  # 1 minute
+
                 self.cache.cache_date_range_query(
                     hostname=hostname,
                     filters=filters,
                     since=since,
                     job_ids=job_ids_for_range,
-                    ttl_seconds=60,
+                    ttl_seconds=ttl_seconds,
                 )
                 logger.info(
-                    f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs"
+                    f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs, "
+                    f"TTL={ttl_seconds}s (all_completed={all_completed})"
                 )
 
             enhanced_responses.append(

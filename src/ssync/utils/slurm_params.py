@@ -138,7 +138,6 @@ def to_directives(kwargs: Dict[str, Any]) -> List[str]:
 
     Example output: ["#SBATCH --cpus-per-task=4", "#SBATCH --mem=16G"]
     """
-    print(kwargs)
     params = normalize_kwargs(kwargs)
     directives: List[str] = []
 

@@ -10,7 +10,7 @@ from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .parser import SlurmParser
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
 class SlurmClient:
@@ -228,6 +228,7 @@ class SlurmClient:
         exclude_job_ids: Optional[List[str]] = None,
         skip_user_detection: bool = False,
         limit: Optional[int] = None,
+        cached_completed_ids: Optional[set] = None,  # NEW: IDs to skip
     ) -> List[JobInfo]:
         """Get completed jobs using sacct."""
         # Check if we need chunking for large time ranges
@@ -247,6 +248,7 @@ class SlurmClient:
                     exclude_job_ids,
                     skip_user_detection,
                     limit,
+                    cached_completed_ids,
                 )
 
         # Normal single query for small time ranges
@@ -259,6 +261,7 @@ class SlurmClient:
             state_filter,
             exclude_job_ids,
             skip_user_detection,
+            cached_completed_ids,
         )
 
     def _get_completed_jobs_single(
@@ -271,6 +274,7 @@ class SlurmClient:
         state_filter: Optional[str] = None,
         exclude_job_ids: Optional[List[str]] = None,
         skip_user_detection: bool = False,
+        cached_completed_ids: Optional[set] = None,
     ) -> List[JobInfo]:
         """Single sacct query without chunking."""
         jobs = []
@@ -396,6 +400,7 @@ class SlurmClient:
                     f"sacct found {len(result.stdout.strip().split(chr(10)))} lines for {hostname}"
                 )
 
+            skipped_cached = 0  # Track how many cached jobs we skip
             for line in result.stdout.strip().split("\n"):
                 if not line.strip():
                     continue
@@ -406,6 +411,11 @@ class SlurmClient:
 
                     # Skip if we should exclude this job
                     if exclude_job_ids and job_id in exclude_job_ids:
+                        continue
+
+                    # Skip if this job is already cached (NEW)
+                    if cached_completed_ids and job_id in cached_completed_ids:
+                        skipped_cached += 1
                         continue
 
                     try:
@@ -427,6 +437,12 @@ class SlurmClient:
                     except Exception as e:
                         logger.debug(f"Failed to parse sacct line: {line}, error: {e}")
 
+            # Log how many cached jobs we skipped
+            if skipped_cached > 0:
+                logger.info(
+                    f"Skipped {skipped_cached} already-cached completed jobs from sacct query on {hostname}"
+                )
+
         except Exception as e:
             logger.debug(f"Error fetching completed jobs: {e}")
 
@@ -443,6 +459,7 @@ class SlurmClient:
         exclude_job_ids: Optional[List[str]] = None,
         skip_user_detection: bool = False,
         limit: Optional[int] = None,
+        cached_completed_ids: Optional[set] = None,
     ) -> List[JobInfo]:
         """Get completed jobs using chunked queries to avoid timeouts."""
 
@@ -470,6 +487,7 @@ class SlurmClient:
                     state_filter,
                     exclude_job_ids,
                     skip_user_detection,
+                    cached_completed_ids,  # Pass through to single query
                 )
 
                 # Add to results

@@ -155,6 +155,11 @@ def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_di
 )
 @click.option("--no-gitignore", is_flag=True, help="Disable .gitignore usage")
 @click.option("--no-defaults", is_flag=True, help="Ignore per-host SLURM defaults")
+@click.option(
+    "--no-abort-on-setup-failure",
+    is_flag=True,
+    help="Continue job submission even if login setup fails",
+)
 @click.argument("script_path", type=click.Path(exists=True, path_type=Path))
 @click.argument("source_dir", type=click.Path(exists=True, path_type=Path))
 @click.pass_context
@@ -179,6 +184,7 @@ def launch_command(
     include,
     no_gitignore,
     no_defaults,
+    no_abort_on_setup_failure,
     script_path,
     source_dir,
 ):
@@ -215,6 +221,7 @@ def launch_command(
         include=list(include),
         no_gitignore=no_gitignore,
         no_defaults=no_defaults,
+        abort_on_setup_failure=not no_abort_on_setup_failure,
     )
 
     if not success:
@@ -226,19 +233,55 @@ cli.add_command(auth)
 
 @cli.command(name="api")
 @click.option("--port", default=8042, help="Port to run the API on")
+@click.option("--host", default="127.0.0.1", help="Host to bind the API to")
+@click.option("--no-https", is_flag=True, help="Disable HTTPS (use HTTP instead)")
+@click.option("--stop", is_flag=True, help="Stop the running API server")
+@click.option("--logs", is_flag=True, help="Show API server logs")
 @click.pass_context
-def api(ctx, port):
+def api(ctx, port, host, no_https, stop, logs):
     """Start the API server only (no UI)."""
-    import os
+    from ..api.server import ServerManager
+    from ..utils.config import config
 
-    from ..web.app import main as api_main
+    # Build base URL based on options
+    protocol = "http" if no_https else "https"
+    base_url = f"{protocol}://{host}:{port}"
 
-    # Set port environment variable if different from default
-    if port != 8000:
-        os.environ["SSYNC_PORT"] = str(port)
+    # Create server manager
+    server = ServerManager(base_url)
 
-    # Run the API
-    api_main()
+    # Handle stop command
+    if stop:
+        if server.stop():
+            click.echo("✓ API server stopped")
+        else:
+            click.echo("No running API server found")
+        return
+
+    # Handle logs command
+    if logs:
+        log_content = server.get_logs()
+        if log_content:
+            click.echo(log_content)
+        else:
+            click.echo("No logs available")
+        return
+
+    # Start the server
+    click.echo(f"Starting API server on {base_url}...")
+    if server.start(config.config_path):
+        click.echo(f"✓ API server started on {base_url}")
+        click.echo(f"  Logs: {server.log_file}")
+        click.echo(f"  PID file: {server.pid_file}")
+        click.echo("\nUse 'ssync api --stop' to stop the server")
+    else:
+        click.echo("✗ Failed to start API server", err=True)
+        # Show recent logs if available
+        log_content = server.get_logs(20)
+        if log_content:
+            click.echo("\nRecent logs:", err=True)
+            click.echo(log_content, err=True)
+        ctx.exit(1)
 
 
 @cli.command(name="web")

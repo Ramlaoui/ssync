@@ -13,6 +13,10 @@ import click
 import requests
 from urllib3.exceptions import InsecureRequestWarning
 
+from ..utils.logging import setup_logger
+
+logger = setup_logger(__name__)
+
 
 def is_api_running(port: int = 8042, use_https: bool = True) -> bool:
     """Check if API is already running."""
@@ -69,11 +73,11 @@ def stop_server():
     if pid and is_process_running(pid):
         try:
             os.kill(pid, signal.SIGTERM)
-            print(f"✓ Stopped server (PID: {pid})")
+            logger.info(f"✓ Stopped server (PID: {pid})")
             get_pid_file().unlink(missing_ok=True)
             return True
         except Exception:
-            print(f"❌ Could not stop server (PID: {pid})")
+            logger.error(f"❌ Could not stop server (PID: {pid})")
             return False
     else:
         get_pid_file().unlink(missing_ok=True)
@@ -94,19 +98,19 @@ def build_frontend() -> bool:
     try:
         subprocess.run(["npm", "--version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ npm is not installed. Please install Node.js and npm first.")
+        logger.error("❌ npm is not installed. Please install Node.js and npm first.")
         return False
 
-    print("Building frontend...")
+    logger.info("Building frontend...")
 
     # Install dependencies if needed
     if not (frontend_dir / "node_modules").exists():
-        print("Installing frontend dependencies...")
+        logger.info("Installing frontend dependencies...")
         result = subprocess.run(
             ["npm", "install"], cwd=frontend_dir, capture_output=True, text=True
         )
         if result.returncode != 0:
-            print(f"Failed to install dependencies: {result.stderr}")
+            logger.error(f"Failed to install dependencies: {result.stderr}")
             return False
 
     # Build frontend
@@ -115,10 +119,10 @@ def build_frontend() -> bool:
     )
 
     if result.returncode == 0:
-        print("✓ Frontend built successfully")
+        logger.info("✓ Frontend built successfully")
         return True
     else:
-        print(f"Failed to build frontend: {result.stderr}")
+        logger.error(f"Failed to build frontend: {result.stderr}")
         return False
 
 
@@ -208,7 +212,7 @@ def start_server_background(port: int, use_https: bool = True):
         save_pid(process.pid)
         return True
     except Exception as e:
-        print(f"Failed to start server: {e}")
+        logger.error(f"Failed to start server: {e}")
         return False
 
 
@@ -234,18 +238,18 @@ def main(
     # Handle stop command
     if stop:
         if stop_server():
-            print("Server stopped.")
+            logger.info("Server stopped.")
         else:
-            print("No server running.")
+            logger.info("No server running.")
         return
 
     # Handle status command
     if status:
         if is_api_running(port):
             pid = get_saved_pid()
-            print(f"✓ ssync is running on port {port} (PID: {pid})")
+            logger.info(f"✓ ssync is running on port {port} (PID: {pid})")
         else:
-            print(f"✗ ssync is not running on port {port}")
+            logger.info(f"✗ ssync is not running on port {port}")
         return
 
     use_https = not no_https
@@ -254,28 +258,30 @@ def main(
 
     # Check if already running
     if is_api_running(port, use_https):
-        print(f"✓ ssync is already running at {url}")
+        logger.info(f"✓ ssync is already running at {url}")
         pid = get_saved_pid()
         if pid:
-            print(f"  PID: {pid}")
-        print("\nTo stop the server: ssync web --stop")
+            logger.info(f"  PID: {pid}")
+        logger.info("\nTo stop the server: ssync web --stop")
         if not no_browser:
             webbrowser.open(url)
         return
 
     # Check if frontend is built
     if not skip_build and not check_frontend_built():
-        print("Frontend not built. Building now...")
+        logger.info("Frontend not built. Building now...")
         if not build_frontend():
-            print("\n⚠️  Could not build frontend. API will run without UI.")
-            print("To build manually: cd web-frontend && npm install && npm run build")
+            logger.warning("\n⚠️  Could not build frontend. API will run without UI.")
+            logger.warning(
+                "To build manually: cd web-frontend && npm install && npm run build"
+            )
 
     # Start API server
-    print(f"Starting ssync on port {port}...")
+    logger.info(f"Starting ssync on port {port}...")
 
     if foreground:
         # Run in foreground (useful for debugging)
-        print("Running in foreground mode. Press Ctrl+C to stop.")
+        logger.info("Running in foreground mode. Press Ctrl+C to stop.")
         cmd_args = [
             sys.executable,
             "-m",
@@ -297,7 +303,7 @@ def main(
         try:
             subprocess.run(cmd_args)
         except KeyboardInterrupt:
-            print("\nServer stopped.")
+            logger.info("\nServer stopped.")
     else:
         # Run in background (default)
         if start_server_background(port, use_https):
@@ -311,21 +317,21 @@ def main(
 
             if started:
                 pid = get_saved_pid()
-                print(f"✓ ssync is running at {url}")
+                logger.info(f"✓ ssync is running at {url}")
                 if pid:
-                    print(f"  PID: {pid}")
-                print("\nThe server is running in the background.")
-                print("To stop it: ssync web --stop")
-                print("To check status: ssync web --status")
+                    logger.info(f"  PID: {pid}")
+                logger.info("\nThe server is running in the background.")
+                logger.info("To stop it: ssync web --stop")
+                logger.info("To check status: ssync web --status")
 
                 # Open browser
                 if not no_browser:
                     webbrowser.open(url)
             else:
-                print("❌ Failed to start server")
+                logger.error("❌ Failed to start server")
                 stop_server()
         else:
-            print("❌ Failed to launch server process")
+            logger.error("❌ Failed to launch server process")
 
 
 if __name__ == "__main__":

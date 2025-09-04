@@ -14,19 +14,43 @@ from .server import ServerManager
 # Suppress SSL warnings for self-signed certificates
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
 class ApiClient:
     """Client for communicating with ssync web API."""
 
-    def __init__(self, base_url: str = "https://localhost:8042"):
+    def __init__(self, base_url: str = "https://localhost:8042", verbose: bool = False):
         self.base_url = base_url
         self.server_manager = ServerManager(base_url)
+        self.verbose = verbose
 
-    def ensure_server_running(self, config_path: Path) -> bool:
-        """Ensure API server is running, start if needed."""
-        return self.server_manager.start(config_path)
+    def ensure_server_running(self, config_path: Path) -> tuple[bool, Optional[str]]:
+        """Ensure API server is running, start if needed.
+
+        Returns:
+            tuple of (success, error_message)
+        """
+        try:
+            if self.server_manager.is_running():
+                if self.verbose:
+                    logger.info("API server already running")
+                return True, None
+
+            if self.verbose:
+                logger.info("Starting API server...")
+
+            if self.server_manager.start(config_path):
+                return True, None
+            else:
+                # Get logs for debugging
+                logs = self.server_manager.get_logs(30)
+                if logs:
+                    return False, f"Failed to start API server. Recent logs:\n{logs}"
+                else:
+                    return False, "Failed to start API server (no logs available)"
+        except Exception as e:
+            return False, f"Failed to start API server: {str(e)}"
 
     def get_jobs(
         self,
@@ -145,6 +169,7 @@ class ApiClient:
         exclude: Optional[List[str]] = None,
         include: Optional[List[str]] = None,
         no_gitignore: bool = False,
+        abort_on_setup_failure: bool = True,
     ) -> tuple[bool, Optional[str], str]:
         """Launch a job via the API.
 
@@ -193,6 +218,8 @@ class ApiClient:
             request_data["include"] = include
         if no_gitignore:
             request_data["no_gitignore"] = no_gitignore
+        if not abort_on_setup_failure:
+            request_data["abort_on_setup_failure"] = False
 
         try:
             response = requests.post(
@@ -207,12 +234,25 @@ class ApiClient:
                 try:
                     error_data = response.json()
                     error_msg = error_data.get("detail", str(response.text))
-                except:
-                    error_msg = f"{response.status_code} {response.reason}"
-                return False, None, f"API error: {error_msg}"
+                except Exception:
+                    error_msg = f"HTTP {response.status_code}: {response.reason}"
+                    if response.text:
+                        error_msg += f" - {response.text[:200]}"
+                # Don't log here to avoid duplication - let the caller handle display
+                logger.debug(f"API request failed: {error_msg}")
+                return False, None, error_msg
 
             data = response.json()
             return data["success"], data.get("job_id"), data["message"]
 
+        except requests.exceptions.Timeout:
+            return False, None, "API request timed out (server may be overloaded)"
+        except requests.exceptions.ConnectionError:
+            return (
+                False,
+                None,
+                f"Could not connect to API server at {self.base_url}. Is it running?",
+            )
         except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed: {str(e)}")
             return False, None, f"API request failed: {str(e)}"

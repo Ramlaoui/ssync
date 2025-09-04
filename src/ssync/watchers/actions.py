@@ -1,0 +1,406 @@
+"""Action executor for watchers."""
+
+import json
+import os
+import re
+import tempfile
+from datetime import datetime
+from typing import Any, Dict, Tuple
+
+from ..models.watcher import ActionType
+from ..utils.logging import setup_logger
+
+logger = setup_logger(__name__)
+
+
+class ActionExecutor:
+    """Executes watcher actions."""
+
+    async def execute(
+        self,
+        action_type: ActionType,
+        params: Dict[str, Any],
+        job_id: str,
+        hostname: str,
+        variables: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """
+        Execute an action.
+
+        Returns:
+            Tuple of (success, result_message)
+        """
+        try:
+            # Substitute variables in parameters
+            params = self._substitute_variables(params, variables, job_id, hostname)
+
+            # Route to appropriate handler
+            if action_type == ActionType.CANCEL_JOB:
+                return await self._cancel_job(job_id, hostname, params)
+
+            elif action_type == ActionType.RESUBMIT:
+                return await self._resubmit_job(job_id, hostname, params)
+
+            elif action_type == ActionType.NOTIFY_EMAIL:
+                return await self._notify_email(job_id, hostname, params, variables)
+
+            elif action_type == ActionType.NOTIFY_SLACK:
+                return await self._notify_slack(job_id, hostname, params, variables)
+
+            elif action_type == ActionType.RUN_COMMAND:
+                return await self._run_command(job_id, hostname, params, variables)
+
+            elif action_type == ActionType.STORE_METRIC:
+                return await self._store_metric(job_id, hostname, params, variables)
+
+            elif action_type == ActionType.LOG_EVENT:
+                return await self._log_event(job_id, hostname, params, variables)
+
+            else:
+                return False, f"Unknown action type: {action_type}"
+
+        except Exception as e:
+            logger.error(f"Failed to execute action {action_type}: {e}")
+            return False, str(e)
+
+    def _substitute_variables(
+        self,
+        params: Dict[str, Any],
+        variables: Dict[str, Any],
+        job_id: str,
+        hostname: str,
+    ) -> Dict[str, Any]:
+        """Substitute ${var} placeholders in parameters."""
+        # Add built-in variables
+        all_vars = {
+            "JOB_ID": job_id,
+            "HOSTNAME": hostname,
+            **variables,
+        }
+
+        result = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                # Replace ${var} patterns
+                for var_name, var_value in all_vars.items():
+                    value = value.replace(f"${{{var_name}}}", str(var_value))
+                    value = value.replace(
+                        f"${var_name}", str(var_value)
+                    )  # Also support $var
+            result[key] = value
+
+        return result
+
+    async def _cancel_job(
+        self, job_id: str, hostname: str, params: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """Cancel a SLURM job."""
+        try:
+            from ..web.app import get_slurm_manager
+
+            manager = get_slurm_manager()
+            if not manager:
+                return False, "No SLURM manager available"
+
+            slurm_host = manager.get_host_by_name(hostname)
+            conn = manager._get_connection(slurm_host.host)
+
+            # Cancel the job
+            result = conn.run(f"scancel {job_id}", hide=True, warn=True)
+
+            if result.ok:
+                reason = params.get("reason", "Triggered by watcher")
+                logger.info(f"Cancelled job {job_id}: {reason}")
+                return True, f"Job {job_id} cancelled: {reason}"
+            else:
+                return False, f"Failed to cancel job: {result.stderr}"
+
+        except Exception as e:
+            logger.error(f"Failed to cancel job {job_id}: {e}")
+            return False, str(e)
+
+    async def _resubmit_job(
+        self, job_id: str, hostname: str, params: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """Resubmit a job with modified parameters."""
+        try:
+            from ..cache import get_cache
+            from ..web.app import get_slurm_manager
+
+            manager = get_slurm_manager()
+            if not manager:
+                return False, "No SLURM manager available"
+
+            # Get original script
+            cache = get_cache()
+            cached_job = cache.get_cached_job(job_id, hostname)
+            if not cached_job or not cached_job.script_content:
+                return False, "Original script not found in cache"
+
+            script_content = cached_job.script_content
+
+            # Modify script with new parameters
+            modifications = params.get("modifications", {})
+            for key, value in modifications.items():
+                # Simple replacement of SBATCH directives
+                pattern = f"#SBATCH --{key}=.*"
+                replacement = f"#SBATCH --{key}={value}"
+                script_content = re.sub(pattern, replacement, script_content)
+
+            # Cancel previous job first if requested
+            if params.get("cancel_previous", True):
+                await self._cancel_job(job_id, hostname, {"reason": "Resubmitting"})
+
+            # Submit new job
+            slurm_host = manager.get_host_by_name(hostname)
+            conn = manager._get_connection(slurm_host.host)
+
+            # Write script to temp file and submit
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+                f.write(script_content)
+                temp_path = f.name
+
+            try:
+                # Transfer script
+                conn.put(temp_path, f"/tmp/resubmit_{job_id}.sh")
+
+                # Submit
+                result = conn.run(
+                    f"sbatch /tmp/resubmit_{job_id}.sh", hide=True, warn=True
+                )
+
+                if result.ok:
+                    # Extract new job ID
+                    match = re.search(r"Submitted batch job (\d+)", result.stdout)
+                    new_job_id = match.group(1) if match else "unknown"
+
+                    logger.info(f"Resubmitted job {job_id} as {new_job_id}")
+                    return True, f"Resubmitted as job {new_job_id}"
+                else:
+                    return False, f"Failed to resubmit: {result.stderr}"
+
+            finally:
+                # Clean up temp file
+                os.unlink(temp_path)
+                conn.run(f"rm -f /tmp/resubmit_{job_id}.sh", warn=True)
+
+        except Exception as e:
+            logger.error(f"Failed to resubmit job {job_id}: {e}")
+            return False, str(e)
+
+    async def _notify_email(
+        self,
+        job_id: str,
+        hostname: str,
+        params: Dict[str, Any],
+        variables: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """Send email notification."""
+        try:
+            recipient = params.get("to", os.environ.get("SSYNC_EMAIL"))
+            if not recipient:
+                return False, "No email recipient configured"
+
+            subject = params.get("subject", f"Watcher alert for job {job_id}")
+            message = params.get("message", f"Watcher triggered for job {job_id}")
+
+            # Add variables to message
+            if variables:
+                message += "\n\nCaptured variables:\n"
+                for key, value in variables.items():
+                    message += f"  {key}: {value}\n"
+
+            # Use mail command if available
+            from ..web.app import get_slurm_manager
+
+            manager = get_slurm_manager()
+            if manager:
+                slurm_host = manager.get_host_by_name(hostname)
+                conn = manager._get_connection(slurm_host.host)
+
+                # Send email via mail command
+                result = conn.run(
+                    f'echo "{message}" | mail -s "{subject}" {recipient}',
+                    hide=True,
+                    warn=True,
+                )
+
+                if result.ok:
+                    logger.info(
+                        f"Sent email notification for job {job_id} to {recipient}"
+                    )
+                    return True, f"Email sent to {recipient}"
+
+            # Log as fallback
+            logger.warning(f"Email notification (no mail command): {subject}")
+            return True, "Email logged (mail command not available)"
+
+        except Exception as e:
+            logger.error(f"Failed to send email notification: {e}")
+            return False, str(e)
+
+    async def _notify_slack(
+        self,
+        job_id: str,
+        hostname: str,
+        params: Dict[str, Any],
+        variables: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """Send Slack notification."""
+        try:
+            webhook_url = params.get("webhook", os.environ.get("SSYNC_SLACK_WEBHOOK"))
+            if not webhook_url:
+                return False, "No Slack webhook configured"
+
+            channel = params.get("channel", "#alerts")
+            message = params.get("message", f"Watcher triggered for job {job_id}")
+
+            # Build Slack payload
+            payload = {
+                "channel": channel,
+                "text": message,
+                "attachments": [
+                    {
+                        "color": params.get("color", "warning"),
+                        "fields": [
+                            {"title": "Job ID", "value": job_id, "short": True},
+                            {"title": "Host", "value": hostname, "short": True},
+                        ],
+                    }
+                ],
+            }
+
+            # Add captured variables as fields
+            if variables:
+                for key, value in variables.items():
+                    payload["attachments"][0]["fields"].append(
+                        {
+                            "title": key,
+                            "value": str(value),
+                            "short": True,
+                        }
+                    )
+
+            # Send to Slack (would need actual implementation with requests/aiohttp)
+            logger.info(f"Slack notification for job {job_id}: {message}")
+
+            # For now, just log it
+            return True, "Slack notification logged (implementation pending)"
+
+        except Exception as e:
+            logger.error(f"Failed to send Slack notification: {e}")
+            return False, str(e)
+
+    async def _run_command(
+        self,
+        job_id: str,
+        hostname: str,
+        params: Dict[str, Any],
+        variables: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """Run a custom command."""
+        try:
+            command = params.get("command")
+            if not command:
+                return False, "No command specified"
+
+            # Security check - only allow certain commands
+            allowed_prefixes = ["echo", "logger", "date", "ls", "cat"]
+            if not any(command.startswith(prefix) for prefix in allowed_prefixes):
+                return False, f"Command not allowed: {command}"
+
+            from ..web.app import get_slurm_manager
+
+            manager = get_slurm_manager()
+            if not manager:
+                return False, "No SLURM manager available"
+
+            slurm_host = manager.get_host_by_name(hostname)
+            conn = manager._get_connection(slurm_host.host)
+
+            # Run command
+            result = conn.run(command, hide=True, warn=True)
+
+            if result.ok:
+                output = result.stdout.strip()[:500]  # Limit output size
+                logger.info(f"Ran command for job {job_id}: {command}")
+                return True, f"Command output: {output}"
+            else:
+                return False, f"Command failed: {result.stderr}"
+
+        except Exception as e:
+            logger.error(f"Failed to run command: {e}")
+            return False, str(e)
+
+    async def _store_metric(
+        self,
+        job_id: str,
+        hostname: str,
+        params: Dict[str, Any],
+        variables: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """Store a metric value."""
+        try:
+            metric_name = params.get("name", "metric")
+            metric_value = params.get("value")
+
+            if metric_value is None:
+                # Try to get from variables
+                metric_value = variables.get(params.get("variable"))
+
+            if metric_value is None:
+                return False, "No metric value specified"
+
+            # Store in cache/database
+            from ..cache import get_cache
+
+            cache = get_cache()
+
+            # Store as watcher variable for now
+            with cache._get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO watcher_variables
+                    (watcher_id, variable_name, variable_value, updated_at)
+                    VALUES (0, ?, ?, ?)
+                    """,
+                    (
+                        f"{job_id}_{metric_name}",
+                        str(metric_value),
+                        datetime.now().isoformat(),
+                    ),
+                )
+                conn.commit()
+
+            logger.info(f"Stored metric {metric_name}={metric_value} for job {job_id}")
+            return True, f"Stored {metric_name}={metric_value}"
+
+        except Exception as e:
+            logger.error(f"Failed to store metric: {e}")
+            return False, str(e)
+
+    async def _log_event(
+        self,
+        job_id: str,
+        hostname: str,
+        params: Dict[str, Any],
+        variables: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """Log an event."""
+        try:
+            message = params.get("message", "Watcher event")
+            level = params.get("level", "INFO")
+
+            # Add variables to message
+            if variables:
+                message += f" | vars: {json.dumps(variables)}"
+
+            # Log at appropriate level
+            log_func = getattr(logger, level.lower(), logger.info)
+            log_func(f"Job {job_id}: {message}")
+
+            return True, f"Logged: {message}"
+
+        except Exception as e:
+            logger.error(f"Failed to log event: {e}")
+            return False, str(e)

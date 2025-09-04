@@ -1090,6 +1090,7 @@ async def get_job_output(
         # Check if we should fetch from SSH
         if cached_job and cached_job.job_info:
             is_running = cached_job.job_info.state in ["R"]  # Running jobs
+            is_pending = cached_job.job_info.state in ["PD"]  # Pending jobs
             is_completed = cached_job.job_info.state not in ["PD", "R"]
 
             # For RUNNING jobs, ALWAYS fetch fresh output
@@ -1150,8 +1151,35 @@ async def get_job_output(
                     if stderr_content is not None:
                         cached_job.stderr_content = stderr_content
 
+            elif is_pending:
+                # For PENDING jobs, return empty outputs (they haven't started yet)
+                logger.debug(f"Job {job_id} is pending, no outputs available yet")
+                return JobOutputResponse(
+                    job_id=job_id,
+                    hostname=host,
+                    stdout=None,
+                    stderr=None,
+                    stdout_metadata=FileMetadata(
+                        path=cached_job.job_info.stdout_file,
+                        size=0,
+                        modified=None,
+                        exists=False,
+                    )
+                    if cached_job.job_info.stdout_file
+                    else None,
+                    stderr_metadata=FileMetadata(
+                        path=cached_job.job_info.stderr_file,
+                        size=0,
+                        modified=None,
+                        exists=False,
+                    )
+                    if cached_job.job_info.stderr_file
+                    else None,
+                )
+
         # Return outputs (either freshly fetched or cached)
-        if cached_job and (cached_job.stdout_content or cached_job.stderr_content):
+        if cached_job:
+            # Always return a response if we have a cached job, even if outputs are empty
             return JobOutputResponse(
                 job_id=job_id,
                 hostname=host,
@@ -1442,6 +1470,7 @@ async def launch_job(
                 include=request.include,
                 no_gitignore=request.no_gitignore,
                 sync_enabled=source_dir is not None,
+                abort_on_setup_failure=request.abort_on_setup_failure,
             )
 
             if job:
@@ -1475,7 +1504,23 @@ async def launch_job(
         raise
     except Exception as e:
         logger.error(f"Error launching job: {e}")
-        raise HTTPException(status_code=500, detail="Failed to launch job")
+        # Include the actual error message for better debugging
+        error_message = str(e)
+        if "Connection" in error_message:
+            raise HTTPException(
+                status_code=503, detail=f"Connection error: {error_message}"
+            )
+        elif "Permission" in error_message:
+            raise HTTPException(
+                status_code=403, detail=f"Permission denied: {error_message}"
+            )
+        elif "not found" in error_message.lower():
+            raise HTTPException(
+                status_code=404, detail=f"Resource not found: {error_message}"
+            )
+        else:
+            # Don't add "Failed to launch job:" prefix - the error message is already descriptive
+            raise HTTPException(status_code=500, detail=error_message)
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -1599,14 +1644,14 @@ def main():
 
     # Show authentication status
     if REQUIRE_API_KEY:
-        print("🔐 Starting SLURM Manager API with authentication enabled")
-        print("   API key required for all requests")
+        logger.info("🔐 Starting SLURM Manager API with authentication enabled")
+        logger.info("   API key required for all requests")
     else:
-        print("🚀 Starting SLURM Manager API in open mode (no authentication)")
-        print("   To enable authentication: export SSYNC_REQUIRE_API_KEY=true")
-        print("   To generate API key: ssync auth setup")
+        logger.info("🚀 Starting SLURM Manager API in open mode (no authentication)")
+        logger.info("   To enable authentication: export SSYNC_REQUIRE_API_KEY=true")
+        logger.info("   To generate API key: ssync auth setup")
 
-    print("📡 Server starting at http://127.0.0.1:8042")
+    logger.info("📡 Server starting at http://127.0.0.1:8042")
 
     # Production settings
     uvicorn.run(

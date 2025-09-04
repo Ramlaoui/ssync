@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import click
+import requests
 
 from ..api import ApiClient
 from ..manager import SlurmManager
@@ -58,11 +59,12 @@ class StatusCommand(BaseCommand):
 
         try:
             # Initialize API client
-            api_client = ApiClient()
+            api_client = ApiClient(verbose=self.verbose)
 
             # Start API server
-            if not api_client.ensure_server_running(self.config_path):
-                click.echo("Failed to start API server", err=True)
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
                 return False
 
             # Get jobs via API
@@ -94,8 +96,18 @@ class StatusCommand(BaseCommand):
             JobDisplay.display_jobs_by_host(jobs_by_host, simple)
             return True
 
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
         except Exception as e:
-            click.echo(f"Error getting jobs via API: {e}", err=True)
+            click.echo(f"Error getting jobs: {str(e)}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
             return False
 
 
@@ -211,6 +223,7 @@ class LaunchCommand(BaseCommand):
         include: List[str] = None,
         no_gitignore: bool = False,
         no_defaults: bool = False,
+        abort_on_setup_failure: bool = True,
     ):
         """Execute launch command via API."""
         try:
@@ -223,11 +236,12 @@ class LaunchCommand(BaseCommand):
                 script_content = f.read()
 
             # Initialize API client
-            api_client = ApiClient()
+            api_client = ApiClient(verbose=self.verbose)
 
             # Start API server if not running
-            if not api_client.ensure_server_running(self.config_path):
-                click.echo("Failed to start API server", err=True)
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
                 return False
 
             # Convert source_dir to absolute path string if provided
@@ -259,13 +273,15 @@ class LaunchCommand(BaseCommand):
                 exclude=exclude,
                 include=include,
                 no_gitignore=no_gitignore,
+                abort_on_setup_failure=abort_on_setup_failure,
             )
 
             if success:
                 click.echo(f"Job launched successfully with ID: {job_id}")
                 return True
             else:
-                click.echo(f"Failed to launch job: {message}", err=True)
+                # Message already contains error details, don't add prefix
+                click.echo(message, err=True)
                 return False
 
         except Exception as e:

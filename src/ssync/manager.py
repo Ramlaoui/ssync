@@ -13,7 +13,7 @@ from .utils.logging import setup_logger
 from .utils.slurm_params import SlurmParams
 from .utils.ssh import send_file
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
 @dataclass
@@ -107,6 +107,7 @@ class SlurmManager:
         params: SlurmParams | None = None,
         local_script_path: str | None = None,
         remote_script_path: str | None = None,
+        enable_watchers: bool = True,
     ) -> Optional[Job]:
         """Submit a script to SLURM."""
 
@@ -157,11 +158,75 @@ class SlurmManager:
                     is_remote_dir=True,
                 )
 
+            # Extract watchers from script if enabled
+            watchers = []
+            script_content = None
+            if enable_watchers and local_script_path:
+                try:
+                    from pathlib import Path
+
+                    from .script_processor import ScriptProcessor
+
+                    script_content = Path(local_script_path).read_text()
+                    watchers, _ = ScriptProcessor.extract_watchers(script_content)
+
+                    if watchers:
+                        logger.info(f"Found {len(watchers)} watchers in script")
+                except Exception as e:
+                    logger.warning(f"Failed to extract watchers: {e}")
+
             cmd.append(remote_script_path)
             result = conn.run(" ".join(cmd), hide=False)
             job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
             if job_id_match:
                 job_id = job_id_match.group(1)
+
+                # Start watchers if any were found
+                if watchers and enable_watchers:
+                    try:
+                        import asyncio
+
+                        from .watchers import get_watcher_engine
+
+                        engine = get_watcher_engine()
+                        # Run async function in sync context
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            watcher_ids = loop.run_until_complete(
+                                engine.start_watchers_for_job(
+                                    job_id,
+                                    slurm_host.host.hostname
+                                    if isinstance(slurm_host, SlurmHost)
+                                    else slurm_host,
+                                    watchers,
+                                )
+                            )
+                            if watcher_ids:
+                                logger.info(
+                                    f"Started {len(watcher_ids)} watchers for job {job_id}"
+                                )
+                        finally:
+                            loop.close()
+                    except Exception as e:
+                        logger.error(f"Failed to start watchers for job {job_id}: {e}")
+
+                # Cache script content if available
+                if script_content:
+                    try:
+                        from .cache import get_cache
+
+                        cache = get_cache()
+                        cache.update_job_script(
+                            job_id,
+                            slurm_host.host.hostname
+                            if isinstance(slurm_host, SlurmHost)
+                            else slurm_host,
+                            script_content,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to cache script for job {job_id}: {e}")
+
                 return Job(job_id, slurm_host, self)
             else:
                 return None

@@ -5,7 +5,7 @@ from fabric import Connection
 from .config import config
 from .logging import setup_logger
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
 def get_file(

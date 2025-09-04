@@ -302,6 +302,9 @@ class LaunchJobRequest(BaseModel):
     no_gitignore: bool = False
     force_sync: bool = False  # Override directory size validation
 
+    # Job execution parameters
+    abort_on_setup_failure: bool = True  # Whether to abort job if login setup fails
+
 
 class LaunchJobResponse(BaseModel):
     """Response model for job launch endpoint."""

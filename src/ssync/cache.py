@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .models.job import JobInfo
 from .utils.logging import setup_logger
@@ -163,12 +163,78 @@ class JobDataCache:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_is_active ON cached_jobs(is_active)"
             )
+            # Add composite index for faster completed job lookups
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_completed_jobs ON cached_jobs(hostname, is_active)"
+            )
 
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_range_hostname ON cached_job_ranges(hostname)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_range_expires ON cached_job_ranges(expires_at)"
+            )
+
+            # Watcher tables for job monitoring
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_watchers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    hostname TEXT NOT NULL,
+                    name TEXT,
+                    pattern TEXT NOT NULL,
+                    interval_seconds INTEGER NOT NULL DEFAULT 60,
+                    captures_json TEXT,
+                    condition TEXT,
+                    actions_json TEXT NOT NULL,
+                    last_check TEXT,
+                    last_position INTEGER DEFAULT 0,
+                    trigger_count INTEGER DEFAULT 0,
+                    state TEXT DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (job_id, hostname) REFERENCES cached_jobs(job_id, hostname)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS watcher_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    watcher_id INTEGER NOT NULL,
+                    job_id TEXT NOT NULL,
+                    hostname TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    matched_text TEXT,
+                    captured_vars_json TEXT,
+                    action_type TEXT NOT NULL,
+                    action_result TEXT,
+                    success BOOLEAN NOT NULL,
+                    FOREIGN KEY (watcher_id) REFERENCES job_watchers(id)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS watcher_variables (
+                    watcher_id INTEGER NOT NULL,
+                    variable_name TEXT NOT NULL,
+                    variable_value TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (watcher_id, variable_name),
+                    FOREIGN KEY (watcher_id) REFERENCES job_watchers(id)
+                )
+            """)
+
+            # Create indices for watchers
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_watchers_job ON job_watchers(job_id, hostname)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_watchers_state ON job_watchers(state)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_watcher ON watcher_events(watcher_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON watcher_events(timestamp)"
             )
 
             conn.commit()
@@ -555,6 +621,38 @@ class JobDataCache:
                     stderr_fetched = False
                 return stdout_fetched, stderr_fetched
             return False, False
+
+    def mark_outputs_fetched_after_completion(
+        self, job_id: str, hostname: str, stdout: bool = True, stderr: bool = True
+    ):
+        """Mark that outputs were fetched after job completion.
+
+        This prevents re-fetching outputs for completed jobs since they won't change.
+
+        Args:
+            job_id: Job ID
+            hostname: Hostname where the job ran
+            stdout: Mark stdout as fetched
+            stderr: Mark stderr as fetched
+        """
+        with self._get_connection() as conn:
+            updates = []
+            if stdout:
+                updates.append("stdout_fetched_after_completion = 1")
+            if stderr:
+                updates.append("stderr_fetched_after_completion = 1")
+
+            if updates:
+                query = f"""
+                    UPDATE cached_jobs 
+                    SET {", ".join(updates)}, last_updated = ?
+                    WHERE job_id = ? AND hostname = ? AND is_active = 0
+                """
+                conn.execute(query, (datetime.now().isoformat(), job_id, hostname))
+                conn.commit()
+                logger.debug(
+                    f"Marked outputs as fetched after completion for job {job_id} on {hostname}"
+                )
 
     def cleanup_old_entries(
         self,
@@ -1022,6 +1120,38 @@ class JobDataCache:
                 f"Updated fetch state for {hostname}: "
                 f"last_fetch={fetch_time_utc.isoformat()} (UTC), count={fetch_count}"
             )
+
+    def get_cached_completed_job_ids(
+        self, hostname: str, since: Optional[datetime] = None
+    ) -> Set[str]:
+        """Get IDs of all cached completed jobs for a host - FAST lookup.
+
+        This is used to avoid re-querying SLURM for jobs we already have cached.
+        Much faster than fetching full job data.
+
+        Args:
+            hostname: The hostname to get job IDs for
+            since: Optional datetime to filter jobs submitted after this time
+
+        Returns:
+            Set of job IDs that are completed (is_active = 0) in cache
+        """
+        with self._get_connection() as conn:
+            query = """
+                SELECT job_id 
+                FROM cached_jobs 
+                WHERE hostname = ? AND is_active = 0
+            """
+            params = [hostname]
+
+            if since:
+                # Filter by submit time in the JSON data
+                # Note: This assumes submit_time is stored in ISO format in JSON
+                query += """ AND json_extract(job_info_json, '$.submit_time') >= ?"""
+                params.append(since.isoformat())
+
+            cursor = conn.execute(query, params)
+            return {row["job_id"] for row in cursor.fetchall()}
 
     def get_cached_completed_jobs(
         self, hostname: str, since: Optional[datetime] = None

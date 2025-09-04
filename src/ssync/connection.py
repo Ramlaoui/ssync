@@ -7,7 +7,7 @@ from fabric import Config, Connection
 from .models.cluster import Host
 from .utils.logging import setup_logger
 
-logger = setup_logger(__name__, "DEBUG")
+logger = setup_logger(__name__, "INFO")
 
 
 class ConnectionManager:
@@ -27,6 +27,9 @@ class ConnectionManager:
         if use_ssh_config:
             self._fabric_config = Config()
             self._fabric_config.connect_kwargs.update(self.default_timeouts)
+            # Disable PTY allocation to avoid TTY issues in background processes
+            self._fabric_config.run.pty = False
+            self._fabric_config.run.in_stream = False
         else:
             self._fabric_config = None
 
@@ -60,7 +63,7 @@ class ConnectionManager:
         if host_string in self._connections:
             try:
                 result = self._connections[host_string].run(
-                    "echo 1", hide=True, timeout=3
+                    "echo 1", hide=True, timeout=3, pty=False, in_stream=False
                 )
                 if result.ok:
                     logger.debug(f"✓ Reused EXISTING connection to {host_string}")
@@ -122,6 +125,12 @@ class ConnectionManager:
     def run_command(self, host: Host, command: str, **kwargs):
         """Run a command on a host with automatic retry on connection failure."""
         connection = self.get_connection(host)
+
+        # Force pty=False to avoid TTY issues in background processes
+        if "pty" not in kwargs:
+            kwargs["pty"] = False
+        if "in_stream" not in kwargs:
+            kwargs["in_stream"] = False
 
         try:
             result = connection.run(command, **kwargs)
