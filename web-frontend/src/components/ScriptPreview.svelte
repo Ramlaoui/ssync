@@ -427,6 +427,10 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     display: flex;
     align-items: center;
     gap: 1rem;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
 
   .preview-header h3 {
@@ -434,6 +438,10 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     font-size: 1rem;
     font-weight: 600;
     color: #f7fafc;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
 
   .editor-status {

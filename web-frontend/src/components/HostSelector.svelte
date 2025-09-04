@@ -95,6 +95,10 @@
     color: #94a3b8;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   
   .host-count {

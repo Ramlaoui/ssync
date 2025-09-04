@@ -678,6 +678,10 @@
     align-items: center;
     gap: 0.5rem;
     min-width: 0;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
 
   .job-label {
@@ -887,6 +891,10 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   
   .card-title::before {

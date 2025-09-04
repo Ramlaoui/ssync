@@ -177,6 +177,10 @@
     color: inherit;
     font: inherit;
     font-weight: 600;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
 
   .app-title:hover {

@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
-import type { JobInfo, JobStatusResponse, JobOutputResponse } from '../types/api';
+import type { JobInfo, JobStatusResponse, JobOutputResponse, HostInfo } from '../types/api';
 import { api } from '../services/api';
 
 interface JobCache {
@@ -11,14 +11,22 @@ interface JobCache {
   };
 }
 
+interface HostLoadingState {
+  loading: boolean;
+  error?: string;
+  lastFetch: number;
+}
+
 interface JobsState {
   cache: JobCache;
   loading: Set<string>;
   errors: Map<string, string>;
   hostJobs: Map<string, JobStatusResponse>;
+  hostLoadingStates: Map<string, HostLoadingState>;
   lastFetch: Map<string, number>;
   sidebarLastLoad: number;
   sidebarJobs: JobInfo[];
+  availableHosts: HostInfo[];
 }
 
 const CACHE_DURATION = 30000; // 30 seconds cache for individual jobs
@@ -30,9 +38,11 @@ function createJobsStore() {
     loading: new Set(),
     errors: new Map(),
     hostJobs: new Map(),
+    hostLoadingStates: new Map(),
     lastFetch: new Map(),
     sidebarLastLoad: 0,
     sidebarJobs: [],
+    availableHosts: [],
   });
 
   return {
@@ -157,74 +167,142 @@ function createJobsStore() {
       }
     },
     
-    async fetchAllJobs(forceRefresh = false): Promise<JobInfo[]> {
-      const state = get({ subscribe });
-      const cacheKey = 'allJobs';
-      const lastFetch = state.lastFetch.get(cacheKey) || 0;
-      
-      // Don't fetch if recently fetched (within 15 seconds) unless forcing refresh
-      if (!forceRefresh && Date.now() - lastFetch < 15000) {
-        const allJobs: JobInfo[] = [];
-        state.hostJobs.forEach(hostData => {
-          hostData.jobs.forEach(job => {
-            // Ensure hostname is set
-            if (!job.hostname) {
-              job.hostname = hostData.hostname;
-            }
-            allJobs.push(job);
-          });
+    async fetchAvailableHosts(): Promise<HostInfo[]> {
+      try {
+        const response = await api.get<HostInfo[]>('/api/hosts');
+        update(s => {
+          s.availableHosts = response.data;
+          return s;
         });
-        return allJobs;
+        return response.data;
+      } catch (error: any) {
+        console.error('Failed to fetch hosts:', error);
+        const state = get({ subscribe });
+        return state.availableHosts;
+      }
+    },
+    
+    async fetchAllJobsProgressive(forceRefresh = false, filters?: any): Promise<void> {
+      const state = get({ subscribe });
+      
+      // First, get the list of available hosts if we don't have it
+      if (state.availableHosts.length === 0) {
+        await this.fetchAvailableHosts();
       }
       
-      try {
-        const response = await api.get<JobStatusResponse[]>('/api/status');
-        const allJobs: JobInfo[] = [];
-        
-        update(s => {
-          // Update host jobs cache
-          response.data.forEach(hostData => {
-            s.hostJobs.set(hostData.hostname, hostData);
-            
-            // Collect all jobs and update individual cache
-            hostData.jobs.forEach(job => {
-              // Ensure hostname is set
-              if (!job.hostname) {
-                job.hostname = hostData.hostname;
-              }
-              allJobs.push(job);
-              
-              const jobCacheKey = `${hostData.hostname}:${job.job_id}`;
-              if (!s.cache[jobCacheKey] || s.cache[jobCacheKey].timestamp < Date.now() - CACHE_DURATION) {
-                s.cache[jobCacheKey] = {
-                  job,
-                  timestamp: Date.now(),
-                  output: s.cache[jobCacheKey]?.output,
-                  outputTimestamp: s.cache[jobCacheKey]?.outputTimestamp,
-                };
-              }
-            });
+      const hosts = get({ subscribe }).availableHosts;
+      if (hosts.length === 0) {
+        return;
+      }
+      
+      // Check if we need to refresh based on cache
+      const hostsNeedingRefresh = forceRefresh 
+        ? hosts 
+        : hosts.filter(host => {
+            const hostState = state.hostLoadingStates.get(host.hostname);
+            return !hostState || Date.now() - hostState.lastFetch > 15000;
           });
-          
-          s.lastFetch.set(cacheKey, Date.now());
+      
+      if (hostsNeedingRefresh.length === 0) {
+        return; // All hosts have fresh data
+      }
+      
+      // Build query parameters from filters
+      const params = new URLSearchParams();
+      if (filters) {
+        Object.entries(filters).forEach(([key, value]) => {
+          if (value !== null && value !== undefined && value !== '') {
+            params.append(key, String(value));
+          }
+        });
+      }
+      
+      // Start fetching from each host WITHOUT awaiting
+      // This allows the UI to update progressively as each host responds
+      hostsNeedingRefresh.forEach(host => {
+        // Mark host as loading immediately
+        update(s => {
+          s.hostLoadingStates.set(host.hostname, {
+            loading: true,
+            lastFetch: s.hostLoadingStates.get(host.hostname)?.lastFetch || 0
+          });
           return s;
         });
         
-        return allJobs;
-      } catch (error: any) {
-        console.error('Failed to fetch all jobs:', error);
-        // Return cached data on error
-        const allJobs: JobInfo[] = [];
-        state.hostJobs.forEach(hostData => {
-          hostData.jobs.forEach(job => {
-            if (!job.hostname) {
-              job.hostname = hostData.hostname;
-            }
-            allJobs.push(job);
+        // Build URL with host and other params
+        const hostParams = new URLSearchParams(params);
+        hostParams.append('host', host.hostname);
+        
+        // Fire the request without awaiting - let it update the store when ready
+        api.get<JobStatusResponse[]>(`/api/status?${hostParams}`)
+          .then(response => {
+            const hostData = response.data[0]; // Should return single host data
+            
+            update(s => {
+              if (hostData) {
+                s.hostJobs.set(hostData.hostname, hostData);
+                
+                // Update individual job cache
+                hostData.jobs.forEach(job => {
+                  if (!job.hostname) {
+                    job.hostname = hostData.hostname;
+                  }
+                  
+                  const jobCacheKey = `${hostData.hostname}:${job.job_id}`;
+                  if (!s.cache[jobCacheKey] || s.cache[jobCacheKey].timestamp < Date.now() - CACHE_DURATION) {
+                    s.cache[jobCacheKey] = {
+                      job,
+                      timestamp: Date.now(),
+                      output: s.cache[jobCacheKey]?.output,
+                      outputTimestamp: s.cache[jobCacheKey]?.outputTimestamp,
+                    };
+                  }
+                });
+              }
+              
+              // Update host loading state
+              s.hostLoadingStates.set(host.hostname, {
+                loading: false,
+                lastFetch: Date.now()
+              });
+              return s;
+            });
+          })
+          .catch(error => {
+            // Mark host as errored but don't fail the whole operation
+            update(s => {
+              s.hostLoadingStates.set(host.hostname, {
+                loading: false,
+                error: error.message || 'Failed to fetch jobs',
+                lastFetch: s.hostLoadingStates.get(host.hostname)?.lastFetch || 0
+              });
+              return s;
+            });
           });
+      });
+    },
+    
+    getCurrentJobs(): JobInfo[] {
+      // Helper method to get current jobs from the store
+      const state = get({ subscribe });
+      const allJobs: JobInfo[] = [];
+      state.hostJobs.forEach(hostData => {
+        hostData.jobs.forEach(job => {
+          if (!job.hostname) {
+            job.hostname = hostData.hostname;
+          }
+          allJobs.push(job);
         });
-        return allJobs;
-      }
+      });
+      return allJobs;
+    },
+    
+    // Keep old method for backward compatibility
+    async fetchAllJobs(forceRefresh = false, filters?: any): Promise<JobInfo[]> {
+      // Start progressive fetching with filters
+      await this.fetchAllJobsProgressive(forceRefresh, filters);
+      // Return current jobs immediately (may be partial)
+      return this.getCurrentJobs();
     },
     
     async fetchHostJobs(hostname?: string, filters?: any): Promise<JobStatusResponse[]> {
@@ -317,10 +395,22 @@ function createJobsStore() {
         loading: new Set(),
         errors: new Map(),
         hostJobs: new Map(),
+        hostLoadingStates: new Map(),
         lastFetch: new Map(),
         sidebarJobs: [],
         sidebarLastLoad: 0,
+        availableHosts: [],
       });
+    },
+    
+    getHostLoadingState(hostname: string): HostLoadingState | undefined {
+      const state = get({ subscribe });
+      return state.hostLoadingStates.get(hostname);
+    },
+    
+    getAvailableHosts(): HostInfo[] {
+      const state = get({ subscribe });
+      return state.availableHosts;
     },
     
     isLoading(jobId: string, hostname: string): boolean {
@@ -351,11 +441,14 @@ function createJobsStore() {
       }
       
       try {
-        // Fetch all jobs with force refresh
-        const allJobs = await this.fetchAllJobs(forceRefresh || Date.now() - state.sidebarLastLoad > 15000);
+        // Start progressive fetching (non-blocking)
+        this.fetchAllJobsProgressive(forceRefresh || Date.now() - state.sidebarLastLoad > 15000);
+        
+        // Immediately update sidebar with current jobs (may be partial)
+        const currentJobs = this.getCurrentJobs();
         
         // Sort by submit time (newest first)
-        const sortedJobs = allJobs.sort((a, b) => {
+        const sortedJobs = currentJobs.sort((a, b) => {
           const timeA = new Date(a.submit_time || 0).getTime();
           const timeB = new Date(b.submit_time || 0).getTime();
           return timeB - timeA;
@@ -381,13 +474,33 @@ function createJobsStore() {
 
 export const jobsStore = createJobsStore();
 
-// Derived store for sidebar jobs
-export const sidebarJobs = derived(jobsStore, $state => {
+// Derived store for all current jobs (updates automatically as hosts respond)
+export const allCurrentJobs = derived(jobsStore, $state => {
+  const allJobs: JobInfo[] = [];
+  $state.hostJobs.forEach(hostData => {
+    hostData.jobs.forEach(job => {
+      if (!job.hostname) {
+        job.hostname = hostData.hostname;
+      }
+      allJobs.push(job);
+    });
+  });
+  
+  // Sort by submit time (newest first)
+  return allJobs.sort((a, b) => {
+    const timeA = new Date(a.submit_time || 0).getTime();
+    const timeB = new Date(b.submit_time || 0).getTime();
+    return timeB - timeA;
+  });
+});
+
+// Derived store for sidebar jobs (uses live current jobs)
+export const sidebarJobs = derived(allCurrentJobs, $allJobs => {
   return {
-    jobs: $state.sidebarJobs,
-    runningJobs: $state.sidebarJobs.filter(j => j.state === 'R'),
-    pendingJobs: $state.sidebarJobs.filter(j => j.state === 'PD'),
-    recentJobs: $state.sidebarJobs.filter(j => j.state !== 'R' && j.state !== 'PD').slice(0, 50)
+    jobs: $allJobs,
+    runningJobs: $allJobs.filter(j => j.state === 'R'),
+    pendingJobs: $allJobs.filter(j => j.state === 'PD'),
+    recentJobs: $allJobs.filter(j => j.state !== 'R' && j.state !== 'PD').slice(0, 50)
   };
 });
 
@@ -404,5 +517,33 @@ export function isJobLoading(jobId: string, hostname: string) {
   return derived(jobsStore, $state => {
     const cacheKey = `${hostname}:${jobId}`;
     return $state.loading.has(cacheKey);
+  });
+}
+
+// Derived store for host loading states
+export const hostLoadingStates = derived(jobsStore, $state => $state.hostLoadingStates);
+
+// Derived store for available hosts
+export const availableHosts = derived(jobsStore, $state => $state.availableHosts);
+
+// Derived store to check if any host is still loading
+export const isAnyHostLoading = derived(jobsStore, $state => {
+  for (const [_, hostState] of $state.hostLoadingStates) {
+    if (hostState.loading) return true;
+  }
+  return false;
+});
+
+// Derived store for host-specific jobs with loading state
+export function getHostJobs(hostname: string) {
+  return derived(jobsStore, $state => {
+    const hostData = $state.hostJobs.get(hostname);
+    const loadingState = $state.hostLoadingStates.get(hostname);
+    return {
+      jobs: hostData?.jobs || [],
+      loading: loadingState?.loading || false,
+      error: loadingState?.error,
+      total: hostData?.total_jobs || 0
+    };
   });
 }

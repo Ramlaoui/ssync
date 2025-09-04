@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { push } from 'svelte-spa-router';
   import type { JobInfo } from '../types/api';
-  import { jobsStore, sidebarJobs } from '../stores/jobs';
+  import { jobsStore, sidebarJobs, hostLoadingStates, isAnyHostLoading } from '../stores/jobs';
   
   export let currentJobId: string = '';
   export let currentHost: string = '';
@@ -11,6 +11,10 @@
   
   let loading = false;
   let refreshInterval: ReturnType<typeof setInterval>;
+  
+  // Track which hosts are loading
+  $: hostsLoading = $isAnyHostLoading;
+  $: hostStates = $hostLoadingStates;
   
   // Subscribe to the derived store - these will automatically update when the global store changes
   $: jobs = $sidebarJobs.jobs;
@@ -23,10 +27,12 @@
     
     try {
       loading = true;
-      await jobsStore.loadSidebarJobs(forceRefresh);
+      // Start progressive loading - this won't block
+      jobsStore.fetchAllJobsProgressive(forceRefresh);
+      // Loading indicator will be handled by hostsLoading
+      setTimeout(() => loading = false, 500); // Brief loading state
     } catch (error) {
       console.error('Error loading jobs for sidebar:', error);
-    } finally {
       loading = false;
     }
   }
@@ -113,8 +119,8 @@
   <div class="sidebar-header">
     {#if !collapsed || isMobile}
     <h3>Jobs</h3>
-    <button class="refresh-btn" on:click={() => loadJobs(true)} disabled={loading} aria-label="Refresh jobs">
-      <svg viewBox="0 0 24 24" fill="currentColor" class:spinning={loading}>
+    <button class="refresh-btn" on:click={() => loadJobs(true)} disabled={loading || hostsLoading} aria-label="Refresh jobs">
+      <svg viewBox="0 0 24 24" fill="currentColor" class:spinning={loading || hostsLoading}>
         <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
       </svg>
     </button>
@@ -123,6 +129,26 @@
   
   {#if !collapsed || isMobile}
   <div class="sidebar-content">
+    <!-- Show host loading indicators if any are loading -->
+    {#if hostsLoading && jobs.length > 0}
+      <div class="host-loading-bar">
+        <div class="host-loading-content">
+          <span class="host-loading-text">Loading from hosts...</span>
+          <div class="host-loading-dots">
+            {#each Array.from(hostStates.entries()) as [hostname, state]}
+              {#if state.loading}
+                <span class="host-dot loading" title="Loading from {hostname}"></span>
+              {:else if state.error}
+                <span class="host-dot error" title="Failed: {hostname}"></span>
+              {:else}
+                <span class="host-dot success" title="Loaded: {hostname}"></span>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
+    
     {#if loading && jobs.length === 0}
       <div class="loading-state">
         <div class="spinner"></div>
@@ -410,6 +436,10 @@
     color: #94a3b8;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   
   .section-title svg {
@@ -577,6 +607,66 @@
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
+  }
+  
+  /* Host loading indicators */
+  .host-loading-bar {
+    margin: 0.5rem;
+    padding: 0.625rem;
+    background: linear-gradient(to right, #f0f9ff, #eff6ff);
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    animation: slideIn 0.3s ease;
+  }
+  
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .host-loading-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  
+  .host-loading-text {
+    font-size: 0.75rem;
+    color: #1e40af;
+    font-weight: 500;
+  }
+  
+  .host-loading-dots {
+    display: flex;
+    gap: 0.375rem;
+    align-items: center;
+  }
+  
+  .host-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+  }
+  
+  .host-dot.loading {
+    background: #3b82f6;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  
+  .host-dot.success {
+    background: #10b981;
+  }
+  
+  .host-dot.error {
+    background: #ef4444;
   }
   
   /* Mobile styles */

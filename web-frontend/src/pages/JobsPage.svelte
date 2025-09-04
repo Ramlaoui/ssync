@@ -6,7 +6,7 @@
   import HostSelector from "../components/HostSelector.svelte";
   import JobList from "../components/JobList.svelte";
   import { api } from "../services/api";
-  import { jobsStore } from "../stores/jobs";
+  import { jobsStore, hostLoadingStates, isAnyHostLoading } from "../stores/jobs";
   import type { HostInfo, JobFilters, JobInfo, JobStatusResponse } from "../types/api";
 
   let hosts: HostInfo[] = [];
@@ -25,6 +25,10 @@
     activeOnly: false,
     completedOnly: false,
   };
+  
+  // Subscribe to reactive host loading states
+  let unsubscribeHostStates: () => void;
+  let progressiveLoading = false;
 
   // Mobile UI state
   let showMobileFilters = false;
@@ -57,12 +61,66 @@
 
   async function loadJobs(forceRefresh = false): Promise<void> {
     const requestId = ++lastRequestId;
-    loading = true;
     error = null;
 
-    try {
-      // Use the jobs store with caching
-      const response = await jobsStore.fetchHostJobs(filters.host || undefined, {
+    // If a specific host is selected, use the old method
+    if (filters.host) {
+      loading = true;
+      try {
+        const response = await jobsStore.fetchHostJobs(filters.host, {
+          user: filters.user,
+          since: filters.since,
+          limit: filters.limit,
+          state: filters.state,
+          active_only: filters.activeOnly,
+          completed_only: filters.completedOnly,
+        });
+
+        if (requestId === lastRequestId) {
+          jobsByHost = new Map<string, JobStatusResponse>();
+          dataFromCache = false;
+          response.forEach((hostData: JobStatusResponse) => {
+            jobsByHost.set(hostData.hostname, hostData);
+            if (hostData.cached) {
+              dataFromCache = true;
+            }
+          });
+          jobsByHost = new Map(jobsByHost); // Trigger reactivity
+        }
+      } catch (err: unknown) {
+        if (requestId === lastRequestId) {
+          const axiosError = err as AxiosError;
+          error = `Failed to load jobs: ${axiosError.message}`;
+        }
+      } finally {
+        if (requestId === lastRequestId) {
+          loading = false;
+        }
+      }
+    } else {
+      // For "All Hosts", use progressive loading
+      progressiveLoading = true;
+      
+      // Subscribe to store updates to get jobs as they come in
+      if (!unsubscribeHostStates) {
+        unsubscribeHostStates = jobsStore.subscribe(state => {
+          if (requestId === lastRequestId) {
+            // Update jobsByHost as hosts respond
+            jobsByHost = new Map(state.hostJobs);
+            
+            // Check if any host is still loading
+            let anyLoading = false;
+            state.hostLoadingStates.forEach(hostState => {
+              if (hostState.loading) anyLoading = true;
+            });
+            progressiveLoading = anyLoading;
+            loading = anyLoading && jobsByHost.size === 0; // Only show main loading if no data yet
+          }
+        });
+      }
+      
+      // Start progressive fetching with filters (non-blocking)
+      jobsStore.fetchAllJobsProgressive(forceRefresh, {
         user: filters.user,
         since: filters.since,
         limit: filters.limit,
@@ -70,30 +128,6 @@
         active_only: filters.activeOnly,
         completed_only: filters.completedOnly,
       });
-
-      if (requestId === lastRequestId) {
-        jobsByHost = new Map<string, JobStatusResponse>();
-        
-        // Check if data came from cache (backend sends this flag)
-        dataFromCache = false;
-        response.forEach((hostData: JobStatusResponse) => {
-          jobsByHost.set(hostData.hostname, hostData);
-          if (hostData.cached) {
-            dataFromCache = true;
-          }
-        });
-        
-        jobsByHost = new Map(jobsByHost); // Trigger reactivity
-      }
-    } catch (err: unknown) {
-      if (requestId === lastRequestId) {
-        const axiosError = err as AxiosError;
-        error = `Failed to load jobs: ${axiosError.message}`;
-      }
-    } finally {
-      if (requestId === lastRequestId) {
-        loading = false;
-      }
     }
   }
 
@@ -176,6 +210,7 @@
 
   onDestroy(() => {
     if (refreshInterval) clearInterval(refreshInterval);
+    if (unsubscribeHostStates) unsubscribeHostStates();
     window.removeEventListener("resize", checkMobile);
   });
 </script>
@@ -192,6 +227,15 @@
         <span class="stat-value">{totalJobs}</span>
         <span class="stat-label">Jobs</span>
       </div>
+      {#if progressiveLoading}
+        <div class="stat-divider"></div>
+        <div class="stat-item loading-hosts" title="Loading from hosts...">
+          <svg class="stat-icon spinning" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z" />
+          </svg>
+          <span class="stat-label">Loading...</span>
+        </div>
+      {/if}
       {#if dataFromCache}
         <div class="stat-divider"></div>
         <div class="stat-item cache" title="Data served from backend cache">
@@ -642,5 +686,19 @@
     .content {
       padding: 1rem;
     }
+  }
+  
+  /* Spinning animation for progressive loading */
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  
+  .spinning {
+    animation: spin 1s linear infinite;
+  }
+  
+  .stat-item.loading-hosts .stat-icon {
+    color: #007bff;
   }
 </style>

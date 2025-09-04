@@ -119,15 +119,20 @@ button:active::after {
     transition: 0s;
 }
 
-/* Focus styles for better accessibility */
+/* Remove focus outlines globally */
 a:focus,
 button:focus,
 input:focus,
 select:focus,
 textarea:focus,
-[tabindex]:focus {
-    outline: 3px solid rgba(52, 152, 219, 0.5);
-    outline-offset: 2px;
+[tabindex]:focus,
+*:focus {
+    outline: none !important;
+}
+
+/* Optional: Use focus-visible for keyboard navigation only */
+*:focus-visible {
+    outline: none !important;
 }
 
 /* Prevent content jumping during loads */
