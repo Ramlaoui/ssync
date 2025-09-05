@@ -117,7 +117,9 @@ class ServerManager:
                 )
                 # It's our API but we don't have the PID
                 if response.status_code == 200:
-                    logger.warning("API server running but PID unknown")
+                    # Server is running, but we lost track of the PID
+                    # This is fine - just log at debug level instead of warning
+                    logger.debug("API server already running (PID tracking lost)")
                     return True
             except requests.exceptions.RequestException:
                 pass

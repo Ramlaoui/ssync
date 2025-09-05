@@ -1004,6 +1004,9 @@ async def get_job_output(
         if host:
             host = InputSanitizer.sanitize_hostname(host)
 
+        # Get cache middleware early as it's used in multiple branches
+        cache_middleware = get_cache_middleware()
+
         # If force_refresh is True, skip cache and fetch directly
         if force_refresh:
             logger.info(f"Force refresh requested for job {job_id} outputs")
@@ -1071,7 +1074,6 @@ async def get_job_output(
                 )
 
         # Normal cache check flow
-        cache_middleware = get_cache_middleware()
         cached_job = (
             cache_middleware.cache.get_cached_job(job_id, host) if host else None
         )
@@ -1286,18 +1288,29 @@ async def get_job_output(
     except HTTPException:
         raise
     except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error in get_job_output for job {job_id} on {host}: {error_msg}")
+
         # Try cache fallback for output
         cached_output = await _cache_middleware.get_cached_job_output(job_id, host)
         if cached_output:
+            # Include the error in the log message so we know why it fell back to cache
             logger.info(
-                f"Returning cached output for job {job_id} (SLURM query failed)"
+                f"Returning cached output for job {job_id} (fetch failed: {error_msg[:200]})"
             )
             return cached_output
 
-        logger.error(f"Error in get_job_output: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to read job output: {str(e)}"
-        )
+        # Provide more specific error messages
+        if "connection" in error_msg.lower() or "ssh" in error_msg.lower():
+            detail = f"SSH connection failed to {host}: {error_msg}"
+        elif "timeout" in error_msg.lower():
+            detail = f"Operation timed out while fetching output: {error_msg}"
+        elif "not found" in error_msg.lower() or "no such file" in error_msg.lower():
+            detail = f"Output file not found: {error_msg}"
+        else:
+            detail = f"Failed to read job output: {error_msg}"
+
+        raise HTTPException(status_code=500, detail=detail)
 
 
 @app.get("/api/jobs/{job_id}/script")
@@ -1564,6 +1577,292 @@ async def cancel_job(
     except Exception as e:
         logger.error(f"Error cancelling job: {e}")
         raise HTTPException(status_code=500, detail="Internal server error occurred")
+
+
+@app.get("/api/jobs/{job_id}/watchers")
+async def get_job_watchers(
+    job_id: str,
+    host: Optional[str] = Query(None, description="Filter by hostname"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get watchers for a specific job."""
+    try:
+        # Sanitize inputs
+        job_id = InputSanitizer.sanitize_job_id(job_id)
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
+
+        cache = get_cache()
+        watchers = []
+
+        with cache._get_connection() as conn:
+            query = """
+                SELECT id, job_id, hostname, name, pattern, interval_seconds,
+                       captures_json, condition, actions_json, state, 
+                       trigger_count, last_check, last_position, created_at
+                FROM job_watchers
+                WHERE job_id = ?
+            """
+            params = [job_id]
+
+            if host:
+                query += " AND hostname = ?"
+                params.append(host)
+
+            cursor = conn.execute(query, params)
+
+            for row in cursor.fetchall():
+                watcher = {
+                    "id": row["id"],
+                    "job_id": row["job_id"],
+                    "hostname": row["hostname"],
+                    "name": row["name"] or f"watcher_{row['id']}",
+                    "pattern": row["pattern"],
+                    "interval_seconds": row["interval_seconds"],
+                    "captures": json.loads(row["captures_json"] or "[]"),
+                    "condition": row["condition"],
+                    "actions": json.loads(row["actions_json"] or "[]"),
+                    "state": row["state"],
+                    "trigger_count": row["trigger_count"],
+                    "last_check": row["last_check"],
+                    "last_position": row["last_position"],
+                    "created_at": row["created_at"],
+                }
+                watchers.append(watcher)
+
+        return {"job_id": job_id, "watchers": watchers, "count": len(watchers)}
+
+    except Exception as e:
+        logger.error(f"Error getting watchers for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get watchers")
+
+
+@app.get("/api/watchers/events")
+async def get_watcher_events(
+    job_id: Optional[str] = Query(None, description="Filter by job ID"),
+    watcher_id: Optional[int] = Query(None, description="Filter by watcher ID"),
+    limit: int = Query(50, description="Maximum number of events to return"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get recent watcher events."""
+    try:
+        # Sanitize inputs
+        if job_id:
+            job_id = InputSanitizer.sanitize_job_id(job_id)
+
+        cache = get_cache()
+        events = []
+
+        with cache._get_connection() as conn:
+            query = """
+                SELECT e.*, w.name as watcher_name, w.pattern
+                FROM watcher_events e
+                LEFT JOIN job_watchers w ON e.watcher_id = w.id
+                WHERE 1=1
+            """
+            params = []
+
+            if job_id:
+                query += " AND e.job_id = ?"
+                params.append(job_id)
+
+            if watcher_id:
+                query += " AND e.watcher_id = ?"
+                params.append(watcher_id)
+
+            query += f" ORDER BY e.timestamp DESC LIMIT {min(limit, 500)}"
+
+            cursor = conn.execute(query, params)
+
+            for row in cursor.fetchall():
+                event = {
+                    "id": row["id"],
+                    "watcher_id": row["watcher_id"],
+                    "watcher_name": row["watcher_name"]
+                    or f"watcher_{row['watcher_id']}",
+                    "job_id": row["job_id"],
+                    "hostname": row["hostname"],
+                    "timestamp": row["timestamp"],
+                    "matched_text": row["matched_text"],
+                    "captured_vars": json.loads(row["captured_vars_json"] or "{}"),
+                    "action_type": row["action_type"],
+                    "action_result": row["action_result"],
+                    "success": bool(row["success"]),
+                }
+                events.append(event)
+
+        return {"events": events, "count": len(events)}
+
+    except Exception as e:
+        logger.error(f"Error getting watcher events: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get watcher events")
+
+
+@app.get("/api/watchers/stats")
+async def get_watcher_stats(
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get watcher statistics."""
+    try:
+        cache = get_cache()
+
+        with cache._get_connection() as conn:
+            # Total watchers
+            cursor = conn.execute("SELECT COUNT(*) as count FROM job_watchers")
+            total_watchers = cursor.fetchone()["count"]
+
+            # Watchers by state
+            cursor = conn.execute("""
+                SELECT state, COUNT(*) as count 
+                FROM job_watchers 
+                GROUP BY state
+            """)
+            watchers_by_state = {
+                row["state"]: row["count"] for row in cursor.fetchall()
+            }
+
+            # Total events
+            cursor = conn.execute("SELECT COUNT(*) as count FROM watcher_events")
+            total_events = cursor.fetchone()["count"]
+
+            # Events by action type
+            cursor = conn.execute("""
+                SELECT action_type, COUNT(*) as count, 
+                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count
+                FROM watcher_events 
+                GROUP BY action_type
+            """)
+            events_by_action = {}
+            for row in cursor.fetchall():
+                events_by_action[row["action_type"]] = {
+                    "total": row["count"],
+                    "success": row["success_count"],
+                    "failed": row["count"] - row["success_count"],
+                }
+
+            # Recent activity
+            one_hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) as count 
+                FROM watcher_events 
+                WHERE timestamp > ?
+            """,
+                (one_hour_ago,),
+            )
+            events_last_hour = cursor.fetchone()["count"]
+
+            # Most triggered watchers
+            cursor = conn.execute("""
+                SELECT w.id, w.job_id, w.name, COUNT(e.id) as event_count
+                FROM job_watchers w
+                LEFT JOIN watcher_events e ON w.id = e.watcher_id
+                GROUP BY w.id
+                HAVING event_count > 0
+                ORDER BY event_count DESC
+                LIMIT 10
+            """)
+            top_watchers = []
+            for row in cursor.fetchall():
+                top_watchers.append(
+                    {
+                        "watcher_id": row["id"],
+                        "job_id": row["job_id"],
+                        "name": row["name"] or f"watcher_{row['id']}",
+                        "event_count": row["event_count"],
+                    }
+                )
+
+        return {
+            "total_watchers": total_watchers,
+            "watchers_by_state": watchers_by_state,
+            "total_events": total_events,
+            "events_by_action": events_by_action,
+            "events_last_hour": events_last_hour,
+            "top_watchers": top_watchers,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting watcher stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get watcher statistics")
+
+
+@app.post("/api/watchers/{watcher_id}/pause")
+async def pause_watcher(
+    watcher_id: int,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Pause a watcher."""
+    try:
+        cache = get_cache()
+
+        with cache._get_connection() as conn:
+            conn.execute(
+                "UPDATE job_watchers SET state = 'paused' WHERE id = ?", (watcher_id,)
+            )
+            conn.commit()
+
+        # Also cancel the async task if running
+        from ..watchers import get_watcher_engine
+
+        engine = get_watcher_engine()
+
+        if watcher_id in engine.active_tasks:
+            engine.active_tasks[watcher_id].cancel()
+            del engine.active_tasks[watcher_id]
+
+        return {"message": f"Watcher {watcher_id} paused"}
+
+    except Exception as e:
+        logger.error(f"Error pausing watcher {watcher_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to pause watcher")
+
+
+@app.post("/api/watchers/{watcher_id}/resume")
+async def resume_watcher(
+    watcher_id: int,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Resume a paused watcher."""
+    try:
+        cache = get_cache()
+
+        # Get watcher details
+        with cache._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT job_id, hostname FROM job_watchers WHERE id = ?", (watcher_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Watcher not found")
+
+            job_id = row["job_id"]
+            hostname = row["hostname"]
+
+            # Update state
+            conn.execute(
+                "UPDATE job_watchers SET state = 'active' WHERE id = ?", (watcher_id,)
+            )
+            conn.commit()
+
+        # Restart the monitoring task
+        from ..watchers import get_watcher_engine
+
+        engine = get_watcher_engine()
+
+        task = asyncio.create_task(
+            engine._monitor_watcher(watcher_id, job_id, hostname)
+        )
+        engine.active_tasks[watcher_id] = task
+
+        return {"message": f"Watcher {watcher_id} resumed"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resuming watcher {watcher_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to resume watcher")
 
 
 @app.get("/api/local/list")

@@ -610,8 +610,24 @@ class JobDataManager:
                     return cached_job.stdout_content, cached_job.stderr_content
                 return None, None
 
-            slurm_host = manager.get_host_by_name(job_info.hostname)
-            conn = manager._get_connection(slurm_host.host)
+            try:
+                slurm_host = manager.get_host_by_name(job_info.hostname)
+                conn = manager._get_connection(slurm_host.host)
+            except Exception as e:
+                error_msg = f"Failed to connect to {job_info.hostname}: {e}"
+                logger.error(error_msg)
+                if force_fetch:
+                    raise RuntimeError(error_msg)
+                # Return cached content if available
+                cached_job = self.cache.get_cached_job(
+                    job_info.job_id, job_info.hostname
+                )
+                if cached_job:
+                    logger.info(
+                        f"Using cached content for job {job_info.job_id} after connection error"
+                    )
+                    return cached_job.stdout_content, cached_job.stderr_content
+                return None, None
 
             stdout_content = None
             stderr_content = None
@@ -660,14 +676,21 @@ class JobDataManager:
                             if cached_job and cached_job.stdout_content:
                                 stdout_content = cached_job.stdout_content
                 except Exception as e:
-                    logger.warning(
-                        f"Error fetching stdout for job {job_info.job_id}: {e}"
+                    logger.error(
+                        f"Error fetching stdout for job {job_info.job_id} from {job_info.hostname}: {e}"
                     )
-                    # Keep existing cached content on error
+                    # If force_fetch was requested, don't fall back to cache - raise the error
+                    if force_fetch:
+                        raise RuntimeError(f"Failed to fetch stdout from SSH: {e}")
+
+                    # Otherwise, keep existing cached content on error
                     cached_job = self.cache.get_cached_job(
                         job_info.job_id, job_info.hostname
                     )
                     if cached_job and cached_job.stdout_content:
+                        logger.info(
+                            f"Using cached stdout for job {job_info.job_id} after fetch error"
+                        )
                         stdout_content = cached_job.stdout_content
             else:
                 # Use cached content
@@ -721,14 +744,21 @@ class JobDataManager:
                             if cached_job and cached_job.stderr_content:
                                 stderr_content = cached_job.stderr_content
                 except Exception as e:
-                    logger.warning(
-                        f"Error fetching stderr for job {job_info.job_id}: {e}"
+                    logger.error(
+                        f"Error fetching stderr for job {job_info.job_id} from {job_info.hostname}: {e}"
                     )
-                    # Keep existing cached content on error
+                    # If force_fetch was requested, don't fall back to cache - raise the error
+                    if force_fetch:
+                        raise RuntimeError(f"Failed to fetch stderr from SSH: {e}")
+
+                    # Otherwise, keep existing cached content on error
                     cached_job = self.cache.get_cached_job(
                         job_info.job_id, job_info.hostname
                     )
                     if cached_job and cached_job.stderr_content:
+                        logger.info(
+                            f"Using cached stderr for job {job_info.job_id} after fetch error"
+                        )
                         stderr_content = cached_job.stderr_content
             else:
                 # Use cached content

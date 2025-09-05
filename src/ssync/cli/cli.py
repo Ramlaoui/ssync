@@ -7,6 +7,7 @@ import click
 from ..utils.config import ConfigError, config
 from .auth import auth
 from .commands import LaunchCommand, StatusCommand, SyncCommand
+from .watchers import watchers
 
 
 @click.group()
@@ -229,6 +230,7 @@ def launch_command(
 
 
 cli.add_command(auth)
+cli.add_command(watchers)
 
 
 @cli.command(name="api")

@@ -268,8 +268,11 @@ class ScriptProcessor:
         """Parse an inline watcher directive."""
         watcher = WatcherDefinition()
 
-        # Parse key=value pairs
-        parts = re.findall(r'(\w+)=("[^"]*"|\'[^\']*\'|[^\s]+)', line)
+        # Improved regex to handle quoted strings, function calls, and arrays
+        # This regex matches: key="value" or key='value' or key=func(params) or key=[array] or key=value
+        parts = re.findall(
+            r'(\w+)=("[^"]*"|\'[^\']*\'|\[[^\]]*\]|\w+\([^)]*\)|[^\s]+)', line
+        )
 
         for key, value in parts:
             # Remove quotes if present
@@ -287,6 +290,12 @@ class ScriptProcessor:
                     watcher.interval_seconds = int(value)
                 except ValueError:
                     pass
+            elif key == "captures":
+                # Parse array syntax [item1, item2]
+                if value.startswith("[") and value.endswith("]"):
+                    watcher.captures = [
+                        v.strip() for v in value[1:-1].split(",") if v.strip()
+                    ]
             elif key == "action":
                 action_type, params = ScriptProcessor._parse_action_string(value)
                 if action_type:
