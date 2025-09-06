@@ -126,8 +126,14 @@ def build_frontend() -> bool:
         return False
 
 
-def start_server_background(port: int, use_https: bool = True):
+def start_server_background(port: int, host: str = "127.0.0.1", use_https: bool = True):
     """Start the server in the background using nohup or direct detachment."""
+    # Set up environment with proper trusted hosts for 0.0.0.0 binding
+    env = os.environ.copy()
+    if host == "0.0.0.0":
+        current_trusted = env.get("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1")
+        env["SSYNC_TRUSTED_HOSTS"] = f"{current_trusted},0.0.0.0"
+    
     # Generate SSL certificates if using HTTPS
     ssl_args = ""
     if use_https:
@@ -143,9 +149,9 @@ def start_server_background(port: int, use_https: bool = True):
         log_file = Path.home() / ".config" / "ssync" / "ssync-web.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd = f"nohup {sys.executable} -m uvicorn ssync.web.app:app --host 127.0.0.1 --port {port} {ssl_args} > {log_file} 2>&1 &"
+        cmd = f"nohup {sys.executable} -m uvicorn ssync.web.app:app --host {host} --port {port} {ssl_args} > {log_file} 2>&1 &"
         process = subprocess.Popen(
-            cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
         )
 
         # Get the actual uvicorn PID (not the shell PID)
@@ -173,7 +179,7 @@ def start_server_background(port: int, use_https: bool = True):
             "uvicorn",
             "ssync.web.app:app",
             "--host",
-            "127.0.0.1",
+            host,
             "--port",
             str(port),
         ]
@@ -197,6 +203,7 @@ def start_server_background(port: int, use_https: bool = True):
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                env=env,
             )
         else:
             # Unix/Linux/Mac
@@ -207,6 +214,7 @@ def start_server_background(port: int, use_https: bool = True):
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
                 preexec_fn=os.setpgrp,  # Fully detach from parent process group
+                env=env,
             )
 
         save_pid(process.pid)
@@ -218,6 +226,7 @@ def start_server_background(port: int, use_https: bool = True):
 
 @click.command()
 @click.option("--port", default=8042, help="Port to run on")
+@click.option("--host", default="127.0.0.1", help="Host to bind the server to")
 @click.option("--stop", is_flag=True, help="Stop the running server")
 @click.option("--status", is_flag=True, help="Check server status")
 @click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
@@ -226,6 +235,7 @@ def start_server_background(port: int, use_https: bool = True):
 @click.option("--no-https", is_flag=True, help="Disable HTTPS (use HTTP instead)")
 def main(
     port: int,
+    host: str,
     stop: bool,
     status: bool,
     foreground: bool,
@@ -282,13 +292,20 @@ def main(
     if foreground:
         # Run in foreground (useful for debugging)
         logger.info("Running in foreground mode. Press Ctrl+C to stop.")
+        
+        # Set up environment with proper trusted hosts for 0.0.0.0 binding
+        env = os.environ.copy()
+        if host == "0.0.0.0":
+            current_trusted = env.get("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1")
+            env["SSYNC_TRUSTED_HOSTS"] = f"{current_trusted},0.0.0.0"
+        
         cmd_args = [
             sys.executable,
             "-m",
             "uvicorn",
             "ssync.web.app:app",
             "--host",
-            "127.0.0.1",
+            host,
             "--port",
             str(port),
         ]
@@ -301,12 +318,12 @@ def main(
             cmd_args.extend(["--ssl-certfile", str(cert_path)])
 
         try:
-            subprocess.run(cmd_args)
+            subprocess.run(cmd_args, env=env)
         except KeyboardInterrupt:
             logger.info("\nServer stopped.")
     else:
         # Run in background (default)
-        if start_server_background(port, use_https):
+        if start_server_background(port, host, use_https):
             # Wait for server to start
             started = False
             for _ in range(20):

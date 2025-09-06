@@ -27,9 +27,9 @@ class Config:
 
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
-        if not XDG_CONFIG:
-            home = Path.home()
+        home = Path.home()
 
+        if not XDG_CONFIG:
             # Check XDG config directory first
             xdg_config = Path(home / ".config")
         else:

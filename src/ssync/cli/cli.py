@@ -288,6 +288,7 @@ def api(ctx, port, host, no_https, stop, logs):
 
 @cli.command(name="web")
 @click.option("--port", default=8042, help="Port to run on")
+@click.option("--host", default="127.0.0.1", help="Host to bind the server to")
 @click.option("--stop", is_flag=True, help="Stop the running server")
 @click.option("--status", is_flag=True, help="Check server status")
 @click.option("--foreground", is_flag=True, help="Run in foreground (don't detach)")
@@ -295,7 +296,7 @@ def api(ctx, port, host, no_https, stop, logs):
 @click.option("--skip-build", is_flag=True, help="Skip frontend build check")
 @click.option("--no-https", is_flag=True, help="Disable HTTPS (use HTTP instead)")
 @click.pass_context
-def web(ctx, port, stop, status, foreground, no_browser, skip_build, no_https):
+def web(ctx, port, host, stop, status, foreground, no_browser, skip_build, no_https):
     """Launch the web interface (API + UI)."""
     # Call the web launcher directly
     # Create a mock context for the launcher since it expects click options
@@ -309,6 +310,8 @@ def web(ctx, port, stop, status, foreground, no_browser, skip_build, no_https):
         args = []
         if port != 8042:
             args.extend(["--port", str(port)])
+        if host != "127.0.0.1":
+            args.extend(["--host", str(host)])
         if stop:
             args.append("--stop")
         if status:

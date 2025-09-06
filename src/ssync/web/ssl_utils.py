@@ -3,7 +3,7 @@
 import ipaddress
 import os
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography import x509
@@ -41,7 +41,7 @@ def generate_self_signed_cert(hostname: str = "localhost") -> tuple[Path, Path]:
         try:
             with open(cert_path, "rb") as f:
                 cert = x509.load_pem_x509_certificate(f.read(), default_backend())
-                if cert.not_valid_after > datetime.utcnow():
+                if cert.not_valid_after_utc > datetime.now(timezone.utc):
                     return cert_path, key_path
         except Exception:
             pass
@@ -70,8 +70,8 @@ def generate_self_signed_cert(hostname: str = "localhost") -> tuple[Path, Path]:
         .issuer_name(issuer)
         .public_key(private_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.utcnow())
-        .not_valid_after(datetime.utcnow() + timedelta(days=365))
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
         .add_extension(
             x509.SubjectAlternativeName(
                 [
