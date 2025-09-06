@@ -383,7 +383,7 @@ class JobDataCache:
             conn.commit()
 
     def get_cached_job(
-        self, job_id: str, hostname: Optional[str] = None
+        self, job_id: str, hostname: Optional[str] = None, max_age_days: int = 30
     ) -> Optional[CachedJobData]:
         """
         Retrieve cached job data.
@@ -391,9 +391,11 @@ class JobDataCache:
         Args:
             job_id: Job ID to look up
             hostname: Optional hostname filter
+            max_age_days: Maximum age in days for cached job to be considered valid.
+                         Jobs older than this are likely recycled IDs. Default 30 days.
 
         Returns:
-            CachedJobData if found, None otherwise
+            CachedJobData if found and not too old, None otherwise
         """
         with self._get_connection() as conn:
             if hostname:
@@ -408,7 +410,39 @@ class JobDataCache:
 
             row = cursor.fetchone()
             if row:
-                return self._row_to_cached_data(row)
+                cached_data = self._row_to_cached_data(row)
+
+                # Validate that the cached job isn't too old (likely a recycled ID)
+                if cached_data.job_info and cached_data.job_info.submit_time:
+                    from datetime import datetime, timezone
+
+                    # Handle both timezone-aware and naive datetimes
+                    now = datetime.now(timezone.utc)
+                    submit_time = cached_data.job_info.submit_time
+
+                    # Convert string to datetime if needed
+                    if isinstance(submit_time, str):
+                        # Parse ISO format datetime string
+                        submit_time = datetime.fromisoformat(
+                            submit_time.replace("Z", "+00:00")
+                        )
+
+                    # Convert to timezone-aware if needed
+                    if submit_time.tzinfo is None:
+                        submit_time = submit_time.replace(tzinfo=timezone.utc)
+                    if now.tzinfo is None:
+                        now = now.replace(tzinfo=timezone.utc)
+
+                    age_days = (now - submit_time).days
+
+                    if age_days > max_age_days:
+                        logger.info(
+                            f"Cached job {job_id} on {hostname} is {age_days} days old "
+                            f"(> {max_age_days} days), likely a recycled ID - ignoring cache"
+                        )
+                        return None
+
+                return cached_data
 
             return None
 
@@ -1122,7 +1156,7 @@ class JobDataCache:
             )
 
     def get_cached_completed_job_ids(
-        self, hostname: str, since: Optional[datetime] = None
+        self, hostname: str, since: Optional[datetime] = None, max_age_days: int = 30
     ) -> Set[str]:
         """Get IDs of all cached completed jobs for a host - FAST lookup.
 
@@ -1132,26 +1166,45 @@ class JobDataCache:
         Args:
             hostname: The hostname to get job IDs for
             since: Optional datetime to filter jobs submitted after this time
+            max_age_days: Maximum age in days for cached jobs to be considered valid.
+                         Jobs older than this are likely recycled IDs. Default 30 days.
 
         Returns:
-            Set of job IDs that are completed (is_active = 0) in cache
+            Set of job IDs that are completed (is_active = 0) in cache and not too old
         """
         with self._get_connection() as conn:
+            from datetime import timezone
+
+            # Calculate cutoff date for old jobs
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
             query = """
                 SELECT job_id 
                 FROM cached_jobs 
                 WHERE hostname = ? AND is_active = 0
+                  AND json_extract(job_info_json, '$.submit_time') >= ?
             """
-            params = [hostname]
+            params = [hostname, cutoff_date.isoformat()]
 
             if since:
-                # Filter by submit time in the JSON data
-                # Note: This assumes submit_time is stored in ISO format in JSON
-                query += """ AND json_extract(job_info_json, '$.submit_time') >= ?"""
-                params.append(since.isoformat())
+                # Also filter by the provided since date (use the more recent of the two)
+                effective_since = (
+                    max(since, cutoff_date)
+                    if since.tzinfo
+                    else max(since.replace(tzinfo=timezone.utc), cutoff_date)
+                )
+                params[1] = effective_since.isoformat()
 
             cursor = conn.execute(query, params)
-            return {row["job_id"] for row in cursor.fetchall()}
+            job_ids = {row["job_id"] for row in cursor.fetchall()}
+
+            if job_ids:
+                logger.debug(
+                    f"Found {len(job_ids)} completed jobs in cache for {hostname} "
+                    f"(excluding jobs older than {max_age_days} days)"
+                )
+
+            return job_ids
 
     def get_cached_completed_jobs(
         self, hostname: str, since: Optional[datetime] = None

@@ -83,6 +83,10 @@ class ConnectionManager:
                 connect_kwargs["key_filename"] = host.key_file
             if host.password:
                 connect_kwargs["password"] = host.password
+                # Disable SSH agent when using password to avoid "too many auth failures"
+                connect_kwargs["allow_agent"] = False
+                # Also disable looking for keys in ~/.ssh/
+                connect_kwargs["look_for_keys"] = False
 
             logger.debug(
                 f"Attempting connection to {host_string} (timeout: {self.connection_timeout}s)"
@@ -98,6 +102,10 @@ class ConnectionManager:
                 connect_kwargs["key_filename"] = host.key_file
             if host.password:
                 connect_kwargs["password"] = host.password
+                # Disable SSH agent when using password to avoid "too many auth failures"
+                connect_kwargs["allow_agent"] = False
+                # Also disable looking for keys in ~/.ssh/
+                connect_kwargs["look_for_keys"] = False
 
             logger.debug(
                 f"Attempting connection to {host_string} (timeout: {self.connection_timeout}s)"
