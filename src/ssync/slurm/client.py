@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from fabric import Connection
 
-from ..models.job import JobInfo
+from ..models.job import JobInfo, JobState
 from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .parser import SlurmParser
@@ -203,10 +203,40 @@ class SlurmClient:
                     try:
                         job_info = self.parser.from_squeue_fields(fields, hostname)
 
-                        # OPTIMIZED: Skip expensive output file detection for now
-                        # This was causing major performance issues by doing scontrol for every job
-                        # Output files will be retrieved on-demand when actually needed
-                        # The performance gain from skipping this is massive
+                        # For RUNNING jobs, proactively get correct output paths from scontrol
+                        # This avoids the script-as-output bug that affects some SLURM clusters
+                        if job_info.state == JobState.RUNNING:
+                            try:
+                                stdout_path, stderr_path = self.get_job_output_files(
+                                    conn, job_info.job_id, hostname
+                                )
+                                if stdout_path:
+                                    job_info.stdout_file = stdout_path
+                                if stderr_path:
+                                    job_info.stderr_file = stderr_path
+                                logger.debug(
+                                    f"Got output paths from scontrol for running job {job_info.job_id}"
+                                )
+                            except Exception as e:
+                                # If scontrol fails, keep the paths from squeue
+                                logger.debug(
+                                    f"Could not get output paths from scontrol for {job_info.job_id}: {e}"
+                                )
+
+                                # Log if paths look suspicious
+                                if job_info.stdout_file and (
+                                    job_info.stdout_file.endswith(
+                                        (".sh", ".sbatch", ".bash", ".slurm")
+                                    )
+                                    or "/submit/" in job_info.stdout_file
+                                    or "/scripts/" in job_info.stdout_file
+                                ):
+                                    logger.warning(
+                                        f"Running job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}"
+                                    )
+
+                        # For PENDING jobs, paths may not be set yet, so skip the check
+                        # For other states, we rely on cached data
 
                         jobs.append(job_info)
                     except Exception as e:
@@ -434,6 +464,46 @@ class SlurmClient:
                             f"Parsed sacct job {fields[0]} on {hostname}: state={state.value}, user={fields[3] if len(fields) > 3 else 'unknown'}"
                         )  # Debug
 
+                        # For recently completed jobs, try to get correct output paths from scontrol
+                        # This might work if the job recently completed and is still in SLURM's memory
+                        if job_info and (
+                            (
+                                job_info.stdout_file
+                                and (
+                                    job_info.stdout_file.endswith(
+                                        (".sh", ".sbatch", ".bash", ".slurm")
+                                    )
+                                    or "/submit/" in job_info.stdout_file
+                                    or "/scripts/" in job_info.stdout_file
+                                )
+                            )
+                            or (
+                                job_info.stderr_file
+                                and (
+                                    job_info.stderr_file.endswith(
+                                        (".sh", ".sbatch", ".bash", ".slurm")
+                                    )
+                                    or "/submit/" in job_info.stderr_file
+                                    or "/scripts/" in job_info.stderr_file
+                                )
+                            )
+                        ):
+                            try:
+                                stdout_path, stderr_path = self.get_job_output_files(
+                                    conn, job_info.job_id, hostname
+                                )
+                                if stdout_path and stdout_path != job_info.stdout_file:
+                                    job_info.stdout_file = stdout_path
+                                if stderr_path and stderr_path != job_info.stderr_file:
+                                    job_info.stderr_file = stderr_path
+                                logger.debug(
+                                    f"Corrected output paths for completed job {job_info.job_id}"
+                                )
+                            except Exception:
+                                # scontrol likely failed because job is too old
+                                logger.debug(
+                                    f"Could not correct paths for completed job {job_info.job_id} (job may be too old)"
+                                )
                     except Exception as e:
                         logger.debug(f"Failed to parse sacct line: {line}, error: {e}")
 

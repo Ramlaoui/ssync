@@ -18,6 +18,10 @@ SQUEUE_FIELDS = [
     "%e",  # StdErr
     "%V",  # SubmitTime
     "%S",  # StartTime
+    "%a",  # Account
+    "%q",  # QoS
+    "%Q",  # Priority
+    "%R",  # NodeList
 ]
 
 # SLURM sacct command field definitions - core fields for maximum compatibility
@@ -38,6 +42,10 @@ SACCT_FIELDS = [
     "WorkDir",  # 13
     "NodeList",  # 14
     "Reason",  # 15
+    "ExitCode",  # 16
+    "Account",  # 17
+    "QOS",  # 18
+    "Priority",  # 19
 ]
 
 # Extended fields for hosts that support them

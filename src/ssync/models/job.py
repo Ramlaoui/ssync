@@ -40,6 +40,14 @@ class JobInfo:
     end_time: Optional[str] = None
     node_list: Optional[str] = None
 
+    # Additional job metadata
+    exit_code: Optional[str] = None
+    account: Optional[str] = None
+    qos: Optional[str] = None
+    priority: Optional[str] = None
+    array_job_id: Optional[str] = None
+    array_task_id: Optional[str] = None
+
     # Resource allocation
     alloc_tres: Optional[str] = None
     req_tres: Optional[str] = None

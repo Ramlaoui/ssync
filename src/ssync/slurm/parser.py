@@ -107,8 +107,18 @@ class SlurmParser:
             else None
         )
 
+        # Parse array job info from job_id if present
+        job_id_str = get_field("%i") or ""
+        array_job_id = None
+        array_task_id = None
+        if "_" in job_id_str:
+            array_job_id, array_task_id = job_id_str.split("_", 1)
+        elif "[" in job_id_str and "]" in job_id_str:
+            array_job_id = job_id_str.split("[")[0]
+            array_task_id = job_id_str.split("[")[1].rstrip("]")
+
         return JobInfo(
-            job_id=get_field("%i") or "",
+            job_id=job_id_str,
             name=get_field("%j") or "",
             state=state,
             hostname=hostname,
@@ -125,6 +135,12 @@ class SlurmParser:
             stderr_file=stderr_file,
             submit_time=get_field("%V"),
             start_time=get_field("%S"),
+            account=get_field("%a"),
+            qos=get_field("%q"),
+            priority=get_field("%Q"),
+            node_list=get_field("%R"),
+            array_job_id=array_job_id,
+            array_task_id=array_task_id,
         )
 
     @classmethod
@@ -151,8 +167,18 @@ class SlurmParser:
         stdout_file = cls.expand_slurm_path_vars(get_field("StdOut") or "", var_dict)
         stderr_file = cls.expand_slurm_path_vars(get_field("StdErr") or "", var_dict)
 
+        # Parse array job info from job_id if present
+        job_id_str = get_field("JobID") or ""
+        array_job_id = None
+        array_task_id = None
+        if "_" in job_id_str:
+            array_job_id, array_task_id = job_id_str.split("_", 1)
+        elif "[" in job_id_str and "]" in job_id_str:
+            array_job_id = job_id_str.split("[")[0]
+            array_task_id = job_id_str.split("[")[1].rstrip("]")
+
         return JobInfo(
-            job_id=get_field("JobID") or "",
+            job_id=job_id_str,
             name=get_field("JobName") or "",
             state=state,
             hostname=hostname,
@@ -172,6 +198,12 @@ class SlurmParser:
             start_time=get_field("Start"),
             end_time=get_field("End"),
             node_list=get_field("NodeList"),
+            exit_code=get_field("ExitCode"),
+            account=get_field("Account"),
+            qos=get_field("QOS"),
+            priority=get_field("Priority"),
+            array_job_id=array_job_id,
+            array_task_id=array_task_id,
             # Resource allocation
             alloc_tres=get_field("AllocTRES"),
             req_tres=get_field("ReqTRES"),

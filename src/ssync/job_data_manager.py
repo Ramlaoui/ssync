@@ -635,18 +635,29 @@ class JobDataManager:
             # Try to fetch stdout if needed
             if should_fetch_stdout:
                 try:
-                    # Check if the path looks like a script file (common SLURM bug)
-                    if job_info.stdout_file and (
-                        job_info.stdout_file.endswith(".sh")
-                        or job_info.stdout_file.endswith(".sbatch")
-                        or job_info.stdout_file.endswith(".bash")
+                    # For completed jobs, check if the path looks like a script file (common SLURM bug)
+                    # For running jobs, we've already corrected this in get_active_jobs
+                    if (
+                        is_completed
+                        and job_info.stdout_file
+                        and (
+                            job_info.stdout_file.endswith(".sh")
+                            or job_info.stdout_file.endswith(".sbatch")
+                            or job_info.stdout_file.endswith(".bash")
+                            or job_info.stdout_file.endswith(".slurm")
+                            or "/submit/"
+                            in job_info.stdout_file  # Common pattern for script directories
+                            or "/scripts/" in job_info.stdout_file
+                        )
                     ):
                         logger.warning(
-                            f"Stdout path for job {job_info.job_id} looks like a script file: {job_info.stdout_file}. "
-                            "This is likely a SLURM bug. Skipping fetch to avoid caching script as output."
+                            f"Completed job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
+                            "This is likely a SLURM bug. scontrol may not work for completed jobs, skipping fetch."
                         )
                         stdout_content = None
-                    else:
+                        should_fetch_stdout = False
+
+                    if should_fetch_stdout and job_info.stdout_file:
                         # First check if file exists
                         check_result = await self._run_in_executor(
                             conn.run,
@@ -703,18 +714,29 @@ class JobDataManager:
             # Try to fetch stderr if needed
             if should_fetch_stderr:
                 try:
-                    # Check if the path looks like a script file (common SLURM bug)
-                    if job_info.stderr_file and (
-                        job_info.stderr_file.endswith(".sh")
-                        or job_info.stderr_file.endswith(".sbatch")
-                        or job_info.stderr_file.endswith(".bash")
+                    # For completed jobs, check if the path looks like a script file (common SLURM bug)
+                    # For running jobs, we've already corrected this in get_active_jobs
+                    if (
+                        is_completed
+                        and job_info.stderr_file
+                        and (
+                            job_info.stderr_file.endswith(".sh")
+                            or job_info.stderr_file.endswith(".sbatch")
+                            or job_info.stderr_file.endswith(".bash")
+                            or job_info.stderr_file.endswith(".slurm")
+                            or "/submit/"
+                            in job_info.stderr_file  # Common pattern for script directories
+                            or "/scripts/" in job_info.stderr_file
+                        )
                     ):
                         logger.warning(
-                            f"Stderr path for job {job_info.job_id} looks like a script file: {job_info.stderr_file}. "
-                            "This is likely a SLURM bug. Skipping fetch to avoid caching script as error output."
+                            f"Completed job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
+                            "This is likely a SLURM bug. scontrol may not work for completed jobs, skipping fetch."
                         )
                         stderr_content = None
-                    else:
+                        should_fetch_stderr = False
+
+                    if should_fetch_stderr and job_info.stderr_file:
                         # First check if file exists
                         check_result = await self._run_in_executor(
                             conn.run,
