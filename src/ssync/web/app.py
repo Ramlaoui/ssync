@@ -1,23 +1,36 @@
 """Secure version of the SLURM Manager API with enhanced security measures."""
 
 import asyncio
+import fnmatch
+import ipaddress
+import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from .. import config
 from ..cache import get_cache
 from ..manager import SlurmManager
+from ..models.job import JobState
 from ..utils.logging import setup_logger
 from ..utils.slurm_params import SlurmParams
 from .cache_middleware import get_cache_middleware
@@ -64,18 +77,24 @@ async def startup_event():
     """Initialize resources on startup."""
     logger.info(f"Starting SLURM Manager API with {THREAD_POOL_SIZE} worker threads")
 
-    # Initialize manager
     _ = get_slurm_manager()
     logger.info("Secure API started, manager initialized")
 
-    # Start cache scheduler
+    # Start the watcher service
+    try:
+        from ..watchers.service import start_watcher_service
+
+        await start_watcher_service()
+        logger.info("Watcher service started")
+    except Exception as e:
+        logger.warning(f"Failed to start watcher service: {e}")
+
     try:
         await start_cache_scheduler()
         logger.info("Cache scheduler started")
     except Exception as e:
         logger.error(f"Failed to start cache scheduler: {e}")
 
-    # Start periodic connection health check
     asyncio.create_task(periodic_connection_health_check())
     logger.info("Started periodic connection health check")
 
@@ -87,21 +106,26 @@ async def shutdown_event():
 
     logger.info("Shutting down SLURM Manager API...")
 
-    # Signal shutdown to background tasks
     _shutdown_event.set()
 
-    # Stop cache scheduler
+    # Stop the watcher service
+    try:
+        from ..watchers.service import stop_watcher_service
+
+        await stop_watcher_service()
+        logger.info("Watcher service stopped")
+    except Exception:
+        pass
+
     try:
         await stop_cache_scheduler()
         logger.info("Cache scheduler stopped")
     except Exception:
         pass
 
-    # Shutdown thread pool executor
     executor.shutdown(wait=True, cancel_futures=True)
     logger.info("Thread pool shutdown complete")
 
-    # Close SSH connections
     if _slurm_manager:
         _slurm_manager.close_connections()
         logger.info("Closed all SSH connections")
@@ -121,8 +145,87 @@ if ENABLE_DOCS:
     app.docs_url = "/docs"
     app.redoc_url = "/redoc"
 
-TRUSTED_HOSTS = os.getenv("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1").split(",")
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
+# Handle trusted hosts - support both domain wildcards and IP ranges
+trusted_hosts_env = os.getenv("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1")
+trusted_hosts_list = [h.strip() for h in trusted_hosts_env.split(",") if h.strip()]
+
+
+# Custom trusted host middleware that supports IP ranges
+class CustomTrustedHostMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, allowed_hosts=None, allowed_ip_patterns=None):
+        super().__init__(app)
+        self.allowed_hosts = allowed_hosts or []
+        self.allowed_ip_patterns = allowed_ip_patterns or []
+
+    def is_ip_allowed(self, ip: str) -> bool:
+        """Check if IP matches any allowed patterns."""
+        for pattern in self.allowed_ip_patterns:
+            if fnmatch.fnmatch(ip, pattern):
+                return True
+        return False
+
+    async def dispatch(self, request, call_next):
+        host_header = request.headers.get("host", "")
+
+        # Extract hostname/IP from host header (remove port if present)
+        if ":" in host_header:
+            host_part = host_header.split(":")[0]
+        else:
+            host_part = host_header
+
+        # Check if host is allowed
+        allowed = False
+
+        # Check domain patterns
+        for allowed_host in self.allowed_hosts:
+            if allowed_host == "*":
+                allowed = True
+                break
+            elif allowed_host.startswith("*."):
+                if host_part.endswith(allowed_host[1:]):
+                    allowed = True
+                    break
+            elif host_part == allowed_host:
+                allowed = True
+                break
+
+        # Check IP patterns
+        if not allowed and self.allowed_ip_patterns:
+            try:
+                # Try to parse as IP to handle both hostname and IP
+                ipaddress.ip_address(host_part)
+                allowed = self.is_ip_allowed(host_part)
+            except ValueError:
+                # Not an IP, could be hostname - check patterns anyway
+                allowed = self.is_ip_allowed(host_part)
+
+        if not allowed:
+            logger.warning(
+                f"Rejected host header: {host}, allowed_hosts: {self.allowed_hosts}, allowed_ip_patterns: {self.allowed_ip_patterns}"
+            )
+            return Response(f"Invalid host header: {host}", status_code=400)
+
+        return await call_next(request)
+
+
+# Parse trusted hosts into domain patterns and IP patterns
+valid_patterns = []
+ip_patterns = []
+
+for host in trusted_hosts_list:
+    if "*" in host and not host.startswith("*."):
+        # This is an IP wildcard pattern
+        ip_patterns.append(host)
+    else:
+        # Valid domain pattern or exact match
+        valid_patterns.append(host)
+
+# Use custom middleware that supports IP patterns
+app.add_middleware(
+    CustomTrustedHostMiddleware,
+    allowed_hosts=valid_patterns,
+    allowed_ip_patterns=ip_patterns,
+)
 
 ALLOWED_ORIGINS = os.getenv("SSYNC_ALLOWED_ORIGINS", "").split(",")
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
@@ -138,9 +241,9 @@ if ALLOWED_ORIGINS:
     )
 
 rate_limiter = RateLimiter(
-    requests_per_minute=int(os.getenv("SSYNC_RATE_LIMIT_PER_MINUTE", "60")),
-    requests_per_hour=int(os.getenv("SSYNC_RATE_LIMIT_PER_HOUR", "1000")),
-    burst_size=int(os.getenv("SSYNC_BURST_SIZE", "10")),
+    requests_per_minute=int(os.getenv("SSYNC_RATE_LIMIT_PER_MINUTE", "120")),
+    requests_per_hour=int(os.getenv("SSYNC_RATE_LIMIT_PER_HOUR", "2000")),
+    burst_size=int(os.getenv("SSYNC_BURST_SIZE", "50")),
 )
 
 api_key_manager = APIKeyManager()
@@ -186,6 +289,35 @@ async def verify_api_key(request: Request):
     return True
 
 
+async def verify_api_key_flexible(
+    request: Request, api_key_query: Optional[str] = Query(None, alias="api_key")
+):
+    """Verify API key from headers or query params (for EventSource endpoints)."""
+    if not REQUIRE_API_KEY:
+        return True
+
+    if request.url.path == "/health":
+        return True
+
+    # Check header first
+    api_key = request.headers.get("x-api-key")
+
+    # Fall back to query parameter (for EventSource which can't send headers)
+    if not api_key:
+        api_key = api_key_query
+
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="API key required. Please provide X-API-Key header or api_key query parameter.",
+        )
+
+    if not api_key_manager.validate_key(api_key):
+        raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+    return True
+
+
 _slurm_manager: Optional[SlurmManager] = None
 _config_last_modified: Optional[float] = None
 _shutdown_event = threading.Event()
@@ -193,7 +325,7 @@ _shutdown_event = threading.Event()
 
 async def periodic_connection_health_check():
     """Periodically check and clean up stale SSH connections."""
-    check_interval = 300  # Check every 5 minutes
+    check_interval = 600  # Check every 10 minutes (reduced frequency)
 
     while not _shutdown_event.is_set():
         try:
@@ -360,7 +492,6 @@ async def get_complete_job_data(
 ):
     """Get complete job data (info + script + outputs) in a single request."""
     try:
-        # Sanitize inputs
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
@@ -631,7 +762,6 @@ async def get_job_status(
 ):
     """Get job status across hosts."""
     try:
-        # Sanitize inputs
         if host:
             host = InputSanitizer.sanitize_hostname(host)
 
@@ -871,7 +1001,10 @@ async def get_job_status(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+
         logger.error(f"Error in get_job_status: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 
@@ -883,7 +1016,6 @@ async def get_job_details(
 ):
     """Get detailed information for a specific job."""
     try:
-        # Sanitize inputs
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
@@ -984,6 +1116,256 @@ def _get_file_metadata_and_content(
         return f"[Error reading {file_type} file: {str(e)}]", None
 
 
+@app.get("/api/jobs/{job_id}/output/stream")
+async def stream_job_output(
+    request: Request,
+    job_id: str,
+    host: str = Query(..., description="Host where job is running"),
+    output_type: str = Query("stdout", regex="^(stdout|stderr)$"),
+    chunk_size: int = Query(default=8192, ge=1024, le=1048576),
+    api_key: Optional[str] = Query(None, description="API key for EventSource"),
+    authenticated: bool = Depends(verify_api_key_flexible),
+):
+    """Stream compressed job output efficiently."""
+    import base64
+
+    job_id = InputSanitizer.sanitize_job_id(job_id)
+    host = InputSanitizer.sanitize_hostname(host)
+
+    manager = get_slurm_manager()
+
+    async def generate():
+        """Generate Server-Sent Events stream."""
+        import json
+
+        # First check cache
+        cache = get_cache()
+        cached_job = cache.get_cached_job(job_id, host)
+
+        # Send initial metadata event
+        metadata = {
+            "type": "metadata",
+            "output_type": output_type,
+            "job_id": job_id,
+            "host": host,
+        }
+
+        if cached_job:
+            # Stream from cache
+            if output_type == "stdout":
+                compressed_data = cached_job.stdout_compressed
+                compression = cached_job.stdout_compression
+                original_size = cached_job.stdout_size
+            else:
+                compressed_data = cached_job.stderr_compressed
+                compression = cached_job.stderr_compression
+                original_size = cached_job.stderr_size
+
+            if compressed_data:
+                # Send metadata
+                metadata.update(
+                    {
+                        "original_size": original_size,
+                        "compression": compression,
+                        "source": "cache",
+                    }
+                )
+                yield f"data: {json.dumps(metadata)}\n\n"
+
+                if compression == "gzip":
+                    # Return compressed data as base64 in chunks
+                    # Frontend will decompress
+                    chunk_index = 0
+                    encoded_data = base64.b64encode(compressed_data).decode("utf-8")
+
+                    # Send in chunks
+                    for i in range(0, len(encoded_data), chunk_size):
+                        chunk_data = {
+                            "type": "chunk",
+                            "index": chunk_index,
+                            "data": encoded_data[i : i + chunk_size],
+                            "compressed": True,
+                        }
+                        yield f"data: {json.dumps(chunk_data)}\n\n"
+                        chunk_index += 1
+                        await asyncio.sleep(0)  # Allow other tasks to run
+                else:
+                    # Uncompressed - send as text chunks
+                    chunk_index = 0
+                    text_data = compressed_data.decode("utf-8", errors="replace")
+
+                    for i in range(0, len(text_data), chunk_size):
+                        chunk_data = {
+                            "type": "chunk",
+                            "index": chunk_index,
+                            "data": text_data[i : i + chunk_size],
+                            "compressed": False,
+                        }
+                        yield f"data: {json.dumps(chunk_data)}\n\n"
+                        chunk_index += 1
+                        await asyncio.sleep(0)
+
+                # Send completion event
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+            else:
+                # No cached output
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No cached output available'})}\n\n"
+        else:
+            # Fetch fresh with compression
+            try:
+                # Get connection through thread pool
+                result = await asyncio.to_thread(
+                    lambda: manager.fetch_job_output_compressed(
+                        job_id, host, output_type
+                    )
+                )
+
+                if result:
+                    # Cache the compressed data
+                    cache.update_job_outputs_compressed(
+                        job_id,
+                        host,
+                        stdout_data=result if output_type == "stdout" else None,
+                        stderr_data=result if output_type == "stderr" else None,
+                    )
+
+                    # Send metadata
+                    metadata.update(
+                        {
+                            "original_size": result.get("original_size", 0),
+                            "compression": "gzip"
+                            if result.get("compressed")
+                            else "none",
+                            "truncated": result.get("truncated", False),
+                            "source": "fresh",
+                        }
+                    )
+                    yield f"data: {json.dumps(metadata)}\n\n"
+
+                    # Send compressed data as base64 chunks
+                    chunk_index = 0
+                    data = result["data"]  # Already base64 encoded
+
+                    for i in range(0, len(data), chunk_size):
+                        chunk_data = {
+                            "type": "chunk",
+                            "index": chunk_index,
+                            "data": data[i : i + chunk_size],
+                            "compressed": result.get("compressed", False),
+                        }
+                        yield f"data: {json.dumps(chunk_data)}\n\n"
+                        chunk_index += 1
+                        await asyncio.sleep(0)
+
+                    if result.get("truncated"):
+                        yield f"data: {json.dumps({'type': 'truncation_notice', 'original_size': result['original_size']})}\n\n"
+
+                    # Send completion
+                    yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Output not found or not accessible'})}\n\n"
+
+            except Exception as e:
+                logger.error(f"Error streaming output for job {job_id}: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "Connection": "keep-alive",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/api/jobs/{job_id}/output/download")
+async def download_job_output(
+    job_id: str,
+    host: str = Query(..., description="Host where job is running"),
+    output_type: str = Query("stdout", regex="^(stdout|stderr)$"),
+    compressed: bool = Query(default=False, description="Download as gzip"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Download job output file, optionally compressed."""
+    import base64
+    import gzip
+    import io
+
+    job_id = InputSanitizer.sanitize_job_id(job_id)
+    host = InputSanitizer.sanitize_hostname(host)
+
+    cache = get_cache()
+    manager = get_slurm_manager()
+
+    # Try cache first
+    cached_job = cache.get_cached_job(job_id, host)
+
+    content = None
+    compression = "none"
+    original_size = 0
+
+    if cached_job:
+        if output_type == "stdout":
+            content = cached_job.stdout_compressed
+            compression = cached_job.stdout_compression
+            original_size = cached_job.stdout_size
+        else:
+            content = cached_job.stderr_compressed
+            compression = cached_job.stderr_compression
+            original_size = cached_job.stderr_size
+
+    # If not in cache, fetch
+    if content is None:
+        result = await asyncio.to_thread(
+            lambda: manager.fetch_job_output_compressed(job_id, host, output_type)
+        )
+
+        if result:
+            content = base64.b64decode(result["data"])
+            compression = result.get("compression", "none")
+            original_size = result.get("original_size", 0)
+
+            # Cache it
+            cache.update_job_outputs_compressed(
+                job_id,
+                host,
+                stdout_data=result if output_type == "stdout" else None,
+                stderr_data=result if output_type == "stderr" else None,
+            )
+
+    if content is None:
+        raise HTTPException(status_code=404, detail="Output not found")
+
+    # Prepare content for download
+    if compressed:
+        # User wants compressed
+        if compression != "gzip":
+            # Compress if not already
+            content = gzip.compress(content)
+        filename = f"job_{job_id}_{output_type}.log.gz"
+        media_type = "application/gzip"
+    else:
+        # User wants uncompressed
+        if compression == "gzip":
+            # Decompress
+            content = gzip.decompress(content)
+        filename = f"job_{job_id}_{output_type}.log"
+        media_type = "text/plain"
+
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Length": str(len(content)),
+            "X-Original-Size": str(original_size),
+        },
+    )
+
+
 @app.get("/api/jobs/{job_id}/output", response_model=JobOutputResponse)
 async def get_job_output(
     job_id: str,
@@ -999,7 +1381,6 @@ async def get_job_output(
 ):
     """Get output files content for a specific job."""
     try:
-        # Sanitize inputs
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
@@ -1095,6 +1476,37 @@ async def get_job_output(
             is_pending = cached_job.job_info.state in ["PD"]  # Pending jobs
             is_completed = cached_job.job_info.state not in ["PD", "R"]
 
+            # Initialize output variables - will be set based on job state
+            stdout_content = None
+            stderr_content = None
+
+            # Decompress cached outputs if available
+            if cached_job.stdout_compressed:
+                import gzip
+
+                try:
+                    if cached_job.stdout_compression == "gzip":
+                        stdout_content = gzip.decompress(
+                            cached_job.stdout_compressed
+                        ).decode("utf-8")
+                    else:
+                        stdout_content = cached_job.stdout_compressed.decode("utf-8")
+                except Exception as e:
+                    logger.error(f"Failed to decompress cached stdout: {e}")
+
+            if cached_job.stderr_compressed:
+                import gzip
+
+                try:
+                    if cached_job.stderr_compression == "gzip":
+                        stderr_content = gzip.decompress(
+                            cached_job.stderr_compressed
+                        ).decode("utf-8")
+                    else:
+                        stderr_content = cached_job.stderr_compressed.decode("utf-8")
+                except Exception as e:
+                    logger.error(f"Failed to decompress cached stderr: {e}")
+
             # For RUNNING jobs, ALWAYS fetch fresh output
             if is_running:
                 logger.info(f"Job {job_id} is running, fetching fresh output")
@@ -1109,11 +1521,8 @@ async def get_job_output(
                     force_fetch=True,  # Force fetch for running jobs
                 )
 
-                # Update cached_job with fresh content
-                if stdout_content is not None:
-                    cached_job.stdout_content = stdout_content
-                if stderr_content is not None:
-                    cached_job.stderr_content = stderr_content
+                # Fresh content is already in stdout_content and stderr_content variables
+                # They will be used in the response below
 
                 # Also update the cache for running jobs (but don't mark as fetched after completion)
                 cache_middleware.cache.update_job_outputs(
@@ -1147,11 +1556,8 @@ async def get_job_output(
                         cached_job.job_info
                     )
 
-                    # Update cached_job with new content
-                    if stdout_content is not None:
-                        cached_job.stdout_content = stdout_content
-                    if stderr_content is not None:
-                        cached_job.stderr_content = stderr_content
+                    # Fresh content is already in stdout_content and stderr_content variables
+                    # They will be used in the response below
 
             elif is_pending:
                 # For PENDING jobs, return empty outputs (they haven't started yet)
@@ -1185,25 +1591,21 @@ async def get_job_output(
             return JobOutputResponse(
                 job_id=job_id,
                 hostname=host,
-                stdout=cached_job.stdout_content if not metadata_only else None,
-                stderr=cached_job.stderr_content if not metadata_only else None,
+                stdout=stdout_content if not metadata_only else None,
+                stderr=stderr_content if not metadata_only else None,
                 stdout_metadata=FileMetadata(
                     path=cached_job.job_info.stdout_file,
-                    size=len(cached_job.stdout_content)
-                    if cached_job.stdout_content
-                    else 0,
+                    size=len(stdout_content) if stdout_content else 0,
                     modified=None,
-                    exists=bool(cached_job.stdout_content),
+                    exists=bool(stdout_content),
                 )
                 if cached_job.job_info.stdout_file
                 else None,
                 stderr_metadata=FileMetadata(
                     path=cached_job.job_info.stderr_file,
-                    size=len(cached_job.stderr_content)
-                    if cached_job.stderr_content
-                    else 0,
+                    size=len(stderr_content) if stderr_content else 0,
                     modified=None,
-                    exists=bool(cached_job.stderr_content),
+                    exists=bool(stderr_content),
                 )
                 if cached_job.job_info.stderr_file
                 else None,
@@ -1321,7 +1723,6 @@ async def get_job_script(
 ):
     """Get the batch script content for a specific job."""
     try:
-        # Sanitize inputs
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
@@ -1544,7 +1945,6 @@ async def cancel_job(
 ):
     """Cancel a running job."""
     try:
-        # Sanitize inputs
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
@@ -1587,7 +1987,8 @@ async def get_job_watchers(
 ):
     """Get watchers for a specific job."""
     try:
-        # Sanitize inputs
+        import json
+
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
@@ -1637,6 +2038,67 @@ async def get_job_watchers(
         raise HTTPException(status_code=500, detail="Failed to get watchers")
 
 
+@app.get("/api/watchers")
+async def get_all_watchers(
+    state: Optional[str] = Query(
+        None, description="Filter by state (active, paused, completed, failed)"
+    ),
+    limit: int = Query(100, description="Maximum number of watchers to return"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get all watchers across all jobs."""
+    try:
+        cache = get_cache()
+
+        with cache._get_connection() as conn:
+            query = """
+                SELECT w.*, j.hostname
+                FROM job_watchers w
+                LEFT JOIN cached_jobs j ON w.job_id = j.job_id
+                WHERE 1=1
+            """
+            params = []
+
+            if state:
+                query += " AND w.state = ?"
+                params.append(state)
+
+            query += " ORDER BY w.created_at DESC LIMIT ?"
+            params.append(limit)
+
+            cursor = conn.execute(query, params)
+            columns = [desc[0] for desc in cursor.description]
+
+            watchers = []
+            for row in cursor.fetchall():
+                watcher_dict = dict(zip(columns, row))
+
+                # Parse JSON fields
+                if watcher_dict.get("actions_json"):
+                    watcher_dict["actions"] = json.loads(watcher_dict["actions_json"])
+                    del watcher_dict["actions_json"]
+                else:
+                    watcher_dict["actions"] = []
+
+                if watcher_dict.get("captures_json"):
+                    watcher_dict["captures"] = json.loads(watcher_dict["captures_json"])
+                    del watcher_dict["captures_json"]
+                else:
+                    watcher_dict["captures"] = []
+
+                # Set a default name if it's None
+                if watcher_dict.get("name") is None:
+                    watcher_dict["name"] = f"Watcher {watcher_dict['id']}"
+
+                watchers.append(watcher_dict)
+
+            return {"watchers": watchers}
+
+    except Exception as e:
+        logger.error(f"Error getting all watchers: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get watchers")
+
+
 @app.get("/api/watchers/events")
 async def get_watcher_events(
     job_id: Optional[str] = Query(None, description="Filter by job ID"),
@@ -1646,7 +2108,8 @@ async def get_watcher_events(
 ):
     """Get recent watcher events."""
     try:
-        # Sanitize inputs
+        import json
+
         if job_id:
             job_id = InputSanitizer.sanitize_job_id(job_id)
 
@@ -1797,25 +2260,196 @@ async def pause_watcher(
         cache = get_cache()
 
         with cache._get_connection() as conn:
+            # First check if watcher exists and is active
+            cursor = conn.execute(
+                "SELECT state FROM job_watchers WHERE id = ?", (watcher_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Watcher not found")
+
+            if row["state"] != "active":
+                return {
+                    "message": f"Watcher {watcher_id} is not active (current state: {row['state']})"
+                }
+
+            # Update state to paused
             conn.execute(
                 "UPDATE job_watchers SET state = 'paused' WHERE id = ?", (watcher_id,)
             )
             conn.commit()
 
-        # Also cancel the async task if running
-        from ..watchers import get_watcher_engine
+        # Try to cancel the async task if engine is available
+        try:
+            from ..watchers import get_watcher_engine
 
-        engine = get_watcher_engine()
+            engine = get_watcher_engine()
 
-        if watcher_id in engine.active_tasks:
-            engine.active_tasks[watcher_id].cancel()
-            del engine.active_tasks[watcher_id]
+            if hasattr(engine, "active_tasks") and watcher_id in engine.active_tasks:
+                try:
+                    engine.active_tasks[watcher_id].cancel()
+                    del engine.active_tasks[watcher_id]
+                except Exception as task_error:
+                    logger.debug(
+                        f"Could not cancel task for watcher {watcher_id}: {task_error}"
+                    )
+        except Exception as engine_error:
+            logger.debug(f"Watcher engine not available: {engine_error}")
 
-        return {"message": f"Watcher {watcher_id} paused"}
+        return {"message": f"Watcher {watcher_id} paused successfully"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error pausing watcher {watcher_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to pause watcher")
+
+
+@app.post("/api/watchers/{watcher_id}/trigger")
+async def trigger_watcher_manually(
+    watcher_id: int,
+    test_text: str = Body(None, description="Optional test text to match against"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Manually trigger a watcher for testing purposes."""
+    try:
+        from ..models.watcher import WatcherState
+        from ..watchers.engine import get_watcher_engine
+
+        engine = get_watcher_engine()
+        cache = get_cache()
+
+        # Get watcher details
+        with cache._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT w.*
+                FROM job_watchers w
+                WHERE w.id = ?
+                """,
+                (watcher_id,),
+            )
+            watcher_row = cursor.fetchone()
+
+            if not watcher_row:
+                raise HTTPException(status_code=404, detail="Watcher not found")
+
+        # Get watcher instance from database
+        watcher = engine._get_watcher(watcher_id)
+        if not watcher:
+            raise HTTPException(status_code=404, detail="Watcher not found in database")
+
+        # Check if watcher is active
+        if watcher.state != WatcherState.ACTIVE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Watcher is in {watcher.state.value} state. It must be ACTIVE to trigger manually.",
+            )
+
+        # Check if watcher is in timer mode
+        if watcher.timer_mode_active:
+            # Execute timer mode actions directly
+            logger.info(
+                f"Watcher {watcher_id} is in timer mode, executing timer actions"
+            )
+            success, message = await engine.execute_timer_actions(watcher_id)
+
+            return {
+                "success": success,
+                "message": message,
+                "matches": success,  # For UI compatibility
+                "timer_mode": True,
+            }
+
+        # Regular pattern matching mode
+        # If test_text is provided, use it; otherwise fetch latest output from cache
+        if test_text:
+            content = test_text
+            logger.info(f"Manually triggering watcher {watcher_id} with test text")
+        else:
+            # Try to get output from cache
+            cache = get_cache()
+            cached_job = cache.get_cached_job(
+                watcher_row["job_id"], watcher_row["hostname"]
+            )
+
+            if cached_job and (
+                cached_job.stdout_compressed or cached_job.stderr_compressed
+            ):
+                import gzip
+
+                stdout_content = ""
+                stderr_content = ""
+
+                # Decompress cached outputs
+                if cached_job.stdout_compressed:
+                    try:
+                        if cached_job.stdout_compression == "gzip":
+                            stdout_content = gzip.decompress(
+                                cached_job.stdout_compressed
+                            ).decode("utf-8")
+                        else:
+                            stdout_content = cached_job.stdout_compressed.decode(
+                                "utf-8"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to decompress cached stdout: {e}")
+
+                if cached_job.stderr_compressed:
+                    try:
+                        if cached_job.stderr_compression == "gzip":
+                            stderr_content = gzip.decompress(
+                                cached_job.stderr_compressed
+                            ).decode("utf-8")
+                        else:
+                            stderr_content = cached_job.stderr_compressed.decode(
+                                "utf-8"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to decompress cached stderr: {e}")
+
+                # Take the last 100 lines (approximate)
+                combined_output = stdout_content + "\n" + stderr_content
+                lines = combined_output.split("\n")
+                content = (
+                    "\n".join(lines[-100:]) if len(lines) > 100 else combined_output
+                )
+
+                logger.info(
+                    f"Manually triggering watcher {watcher_id} with cached job output ({len(lines)} lines)"
+                )
+            else:
+                # No cached output available, use sample text for testing
+                content = f"Sample test output for job {watcher_row['job_id']} on {watcher_row['hostname']}"
+                logger.info(
+                    f"No cached output found, using sample text for watcher {watcher_id}"
+                )
+
+        # Run pattern matching and actions
+        matches_found = engine._check_patterns(watcher, content)
+
+        if matches_found:
+            return {
+                "success": True,
+                "message": f"Watcher {watcher_id} triggered successfully",
+                "matches": True,
+                "timer_mode": False,
+            }
+        else:
+            return {
+                "success": True,
+                "message": f"Watcher {watcher_id} checked but no patterns matched",
+                "matches": False,
+                "timer_mode": False,
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to manually trigger watcher {watcher_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to trigger watcher: {str(e)}"
+        )
 
 
 @app.post("/api/watchers/{watcher_id}/resume")
@@ -1830,12 +2464,18 @@ async def resume_watcher(
         # Get watcher details
         with cache._get_connection() as conn:
             cursor = conn.execute(
-                "SELECT job_id, hostname FROM job_watchers WHERE id = ?", (watcher_id,)
+                "SELECT job_id, hostname, state FROM job_watchers WHERE id = ?",
+                (watcher_id,),
             )
             row = cursor.fetchone()
 
             if not row:
                 raise HTTPException(status_code=404, detail="Watcher not found")
+
+            if row["state"] != "paused":
+                return {
+                    "message": f"Watcher {watcher_id} is not paused (current state: {row['state']})"
+                }
 
             job_id = row["job_id"]
             hostname = row["hostname"]
@@ -1846,23 +2486,140 @@ async def resume_watcher(
             )
             conn.commit()
 
-        # Restart the monitoring task
-        from ..watchers import get_watcher_engine
+        # Try to restart the monitoring task if engine is available
+        try:
+            from ..watchers import get_watcher_engine
 
-        engine = get_watcher_engine()
+            engine = get_watcher_engine()
 
-        task = asyncio.create_task(
-            engine._monitor_watcher(watcher_id, job_id, hostname)
-        )
-        engine.active_tasks[watcher_id] = task
+            # Only try to create task if the engine has an event loop
+            if hasattr(engine, "active_tasks"):
+                try:
+                    task = asyncio.create_task(
+                        engine._monitor_watcher(watcher_id, job_id, hostname)
+                    )
+                    engine.active_tasks[watcher_id] = task
+                except Exception as task_error:
+                    logger.debug(
+                        f"Could not restart monitoring task for watcher {watcher_id}: {task_error}"
+                    )
+        except Exception as engine_error:
+            logger.debug(f"Watcher engine not available: {engine_error}")
 
-        return {"message": f"Watcher {watcher_id} resumed"}
+        return {"message": f"Watcher {watcher_id} resumed successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error resuming watcher {watcher_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to resume watcher")
+
+
+@app.post("/api/jobs/{job_id}/watchers")
+async def attach_watchers_to_job(
+    job_id: str,
+    host: str = Query(..., description="Hostname where job is running"),
+    watchers: List[Dict[str, Any]] = Body(
+        ..., description="List of watcher definitions"
+    ),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Attach watchers to an existing running job."""
+    try:
+        # Validate job exists and is running
+        manager = get_slurm_manager()
+
+        # Get the slurm host
+        try:
+            slurm_host = manager.get_host_by_name(host)
+        except Exception as e:
+            logger.error(f"Error getting host {host}: {e}")
+            raise HTTPException(status_code=400, detail=f"Unknown host: {host}")
+
+        # Check job status
+        try:
+            job_info = manager.get_job_info(slurm_host, job_id)
+            if not job_info:
+                raise HTTPException(
+                    status_code=404, detail=f"Job {job_id} not found on {host}"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting job info for {job_id}: {e}")
+            raise HTTPException(
+                status_code=500, detail=f"Error checking job status: {str(e)}"
+            )
+
+        # Only allow attaching watchers to running or pending jobs
+        if job_info.state not in [JobState.RUNNING, JobState.PENDING]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Can only attach watchers to running or pending jobs. Job {job_id} is in state: {job_info.state}",
+            )
+
+        # Parse watcher definitions
+        from ..models.watcher import ActionType, WatcherAction, WatcherDefinition
+
+        watcher_defs = []
+        for w in watchers:
+            # Parse actions
+            actions = []
+            for a in w.get("actions", []):
+                # Handle action type - could be string or enum name
+                action_type_str = (
+                    a["type"].upper() if isinstance(a["type"], str) else a["type"]
+                )
+                try:
+                    action_type = ActionType[action_type_str]
+                except KeyError:
+                    # Try with the value instead of name
+                    action_type = ActionType(action_type_str.lower())
+
+                action = WatcherAction(type=action_type, params=a.get("params", {}))
+                actions.append(action)
+
+            # Create watcher definition
+            watcher_def = WatcherDefinition(
+                name=w.get("name", f"watcher_{job_id}"),
+                pattern=w.get("pattern", ""),
+                interval_seconds=w.get(
+                    "interval_seconds", 60
+                ),  # Default 60s instead of 30s
+                captures=w.get("capture_groups", []),
+                condition=w.get("condition"),
+                actions=actions,
+                max_triggers=w.get("max_triggers", 10),
+                output_type=w.get("output_type", "stdout"),
+                timer_mode_enabled=w.get("timer_mode_enabled", False),
+                timer_interval_seconds=w.get(
+                    "timer_interval_seconds", 60
+                ),  # Default 60s instead of 30s
+            )
+            watcher_defs.append(watcher_def)
+
+        # Start watchers using the engine
+        from ..watchers import get_watcher_engine
+
+        engine = get_watcher_engine()
+
+        # Start watchers for the job
+        watcher_ids = await engine.start_watchers_for_job(job_id, host, watcher_defs)
+
+        logger.info(f"Attached {len(watcher_ids)} watchers to job {job_id} on {host}")
+
+        return {
+            "message": f"Successfully attached {len(watcher_ids)} watchers to job {job_id}",
+            "watcher_ids": watcher_ids,
+            "job_id": job_id,
+            "hostname": host,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to attach watchers to job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/local/list")
@@ -1937,6 +2694,567 @@ async def list_local_path(
         )
 
 
+# WebSocket connection manager for watchers
+class WatcherConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        """Broadcast message to all connected clients."""
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                # Connection might be closed
+                pass
+
+
+watcher_manager = WatcherConnectionManager()
+
+
+# WebSocket connection manager for jobs
+class JobConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[
+            str, List[WebSocket]
+        ] = {}  # job_id -> [websockets]
+        self.all_jobs_connections: List[WebSocket] = []  # connections watching all jobs
+
+    async def connect(self, websocket: WebSocket, job_id: Optional[str] = None):
+        await websocket.accept()
+        if job_id:
+            if job_id not in self.active_connections:
+                self.active_connections[job_id] = []
+            self.active_connections[job_id].append(websocket)
+        else:
+            self.all_jobs_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket, job_id: Optional[str] = None):
+        if job_id and job_id in self.active_connections:
+            if websocket in self.active_connections[job_id]:
+                self.active_connections[job_id].remove(websocket)
+            if not self.active_connections[job_id]:
+                del self.active_connections[job_id]
+        elif websocket in self.all_jobs_connections:
+            self.all_jobs_connections.remove(websocket)
+
+    async def send_to_job(self, job_id: str, message: dict):
+        """Send message to all connections watching a specific job."""
+        if job_id in self.active_connections:
+            disconnected = []
+            for connection in self.active_connections[job_id]:
+                try:
+                    await connection.send_json(message)
+                except Exception:
+                    disconnected.append(connection)
+            # Clean up disconnected connections
+            for conn in disconnected:
+                self.disconnect(conn, job_id)
+
+    async def broadcast_job_update(self, job_id: str, hostname: str, message: dict):
+        """Broadcast job update to specific job watchers and all-jobs watchers."""
+        # Send to specific job watchers
+        await self.send_to_job(job_id, message)
+
+        # Send to all-jobs watchers with job_id and hostname context
+        message_with_context = {**message, "job_id": job_id, "hostname": hostname}
+        disconnected = []
+        for connection in self.all_jobs_connections:
+            try:
+                await connection.send_json(message_with_context)
+            except Exception:
+                disconnected.append(connection)
+        # Clean up disconnected connections
+        for conn in disconnected:
+            self.disconnect(conn)
+
+
+job_manager = JobConnectionManager()
+
+
+async def monitor_job_updates(
+    websocket: WebSocket, job_id: str, hostname: str, actual_job_id: str
+):
+    """Monitor a specific job for state changes and send updates via WebSocket."""
+    try:
+        from ..job_data_manager import get_job_data_manager
+
+        get_slurm_manager()
+        job_data_manager = get_job_data_manager()
+        last_state = None
+        last_output_size = 0
+
+        while True:
+            await asyncio.sleep(15)  # Poll every 15 seconds (reduced from 5s)
+
+            try:
+                # Fetch current job info
+                jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=hostname, job_ids=[actual_job_id], limit=1
+                )
+                job_info = jobs[0] if jobs else None
+
+                if not job_info:
+                    # Job disappeared or completed
+                    await websocket.send_json(
+                        {
+                            "type": "job_completed",
+                            "job_id": actual_job_id,
+                            "hostname": hostname,
+                        }
+                    )
+                    break
+
+                # Check for state change
+                if job_info.state != last_state:
+                    await websocket.send_json(
+                        {
+                            "type": "state_change",
+                            "job_id": actual_job_id,
+                            "hostname": hostname,
+                            "old_state": last_state.value if last_state else None,
+                            "new_state": job_info.state.value,
+                            "job": JobInfoWeb.from_job_info(job_info).model_dump(),
+                        }
+                    )
+                    last_state = job_info.state
+
+                    # Also broadcast to all-jobs watchers
+                    await job_manager.broadcast_job_update(
+                        job_id,
+                        hostname,
+                        {
+                            "type": "state_change",
+                            "old_state": last_state.value if last_state else None,
+                            "new_state": job_info.state.value,
+                            "job": JobInfoWeb.from_job_info(job_info).model_dump(),
+                        },
+                    )
+
+                # For running jobs, check for new output
+                if job_info.state == JobState.RUNNING and job_info.stdout_file:
+                    try:
+                        output_path = Path(job_info.stdout_file)
+                        if output_path.exists():
+                            current_size = output_path.stat().st_size
+                            if current_size > last_output_size:
+                                # Read new content
+                                with open(output_path, "r") as f:
+                                    f.seek(last_output_size)
+                                    new_content = f.read(10000)  # Read up to 10KB
+                                    if new_content:
+                                        await websocket.send_json(
+                                            {
+                                                "type": "output_update",
+                                                "job_id": actual_job_id,
+                                                "hostname": hostname,
+                                                "content": new_content,
+                                                "truncated": len(new_content) == 10000,
+                                            }
+                                        )
+                                last_output_size = current_size
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not read output for job {actual_job_id}: {e}"
+                        )
+
+            except Exception as e:
+                logger.error(f"Error monitoring job {actual_job_id}: {e}")
+
+    except asyncio.CancelledError:
+        logger.debug(f"Job monitoring cancelled for {actual_job_id}")
+    except Exception as e:
+        logger.error(f"Fatal error in job monitoring for {actual_job_id}: {e}")
+
+
+async def monitor_all_jobs_updates(websocket: WebSocket):
+    """Monitor all jobs for state changes and send updates via WebSocket."""
+    try:
+        from ..job_data_manager import get_job_data_manager
+
+        get_slurm_manager()
+        job_data_manager = get_job_data_manager()
+        job_states = {}  # Track states of all jobs
+
+        while True:
+            await asyncio.sleep(
+                30
+            )  # Poll every 30 seconds for all jobs (reduced from 10s)
+
+            try:
+                # Fetch all recent jobs (both active and recently completed)
+                all_jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=None,
+                    limit=200,
+                    active_only=False,  # Need to track completed jobs too
+                )
+
+                current_job_ids = set()
+                updates = []
+
+                for job in all_jobs:
+                    job_key = f"{job.hostname}:{job.job_id}"
+                    current_job_ids.add(job_key)
+
+                    # Check for new jobs or state changes
+                    if job_key not in job_states or job_states[job_key] != job.state:
+                        old_state = job_states.get(job_key)
+                        job_states[job_key] = job.state
+
+                        updates.append(
+                            {
+                                "type": "job_update",
+                                "job_id": job.job_id,
+                                "hostname": job.hostname,
+                                "old_state": old_state.value if old_state else None,
+                                "new_state": job.state.value,
+                                "job": JobInfoWeb.from_job_info(job).model_dump(),
+                            }
+                        )
+
+                # Check for completed/disappeared jobs
+                completed_jobs = set(job_states.keys()) - current_job_ids
+                for job_key in completed_jobs:
+                    hostname, job_id = job_key.split(":", 1)
+
+                    # Try to fetch the final state of the completed job
+                    try:
+                        completed_job_data = await job_data_manager.fetch_all_jobs(
+                            hostname=hostname, job_ids=[job_id], limit=1
+                        )
+                        if completed_job_data:
+                            # Send the completed job with its final state
+                            updates.append(
+                                {
+                                    "type": "job_completed",
+                                    "job_id": job_id,
+                                    "hostname": hostname,
+                                    "job": JobInfoWeb.from_job_info(
+                                        completed_job_data[0]
+                                    ).model_dump(),
+                                }
+                            )
+                        else:
+                            # Job not found, just mark as completed
+                            updates.append(
+                                {
+                                    "type": "job_completed",
+                                    "job_id": job_id,
+                                    "hostname": hostname,
+                                }
+                            )
+                    except Exception as e:
+                        logger.debug(f"Could not fetch completed job {job_id}: {e}")
+                        updates.append(
+                            {
+                                "type": "job_completed",
+                                "job_id": job_id,
+                                "hostname": hostname,
+                            }
+                        )
+
+                    del job_states[job_key]
+
+                # Send updates if any (check WebSocket is still open)
+                if updates:
+                    try:
+                        await websocket.send_json(
+                            {
+                                "type": "batch_update",
+                                "updates": updates,
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"WebSocket send failed, connection may be closing: {e}"
+                        )
+                        break  # Exit the monitoring loop
+
+            except Exception as e:
+                logger.error(f"Error monitoring all jobs: {e}")
+
+    except asyncio.CancelledError:
+        logger.debug("All jobs monitoring cancelled")
+    except Exception as e:
+        logger.error(f"Fatal error in all jobs monitoring: {e}")
+
+
+async def send_job_output(websocket: WebSocket, hostname: str, job_id: str):
+    """Send current job output to the WebSocket."""
+    try:
+        manager = get_slurm_manager()
+        slurm_host = manager.get_host_by_name(hostname)
+
+        # Get job output
+        output_result = await asyncio.to_thread(
+            slurm_host.slurm_client.get_job_output, job_id
+        )
+
+        if output_result.success:
+            await websocket.send_json(
+                {
+                    "type": "output",
+                    "job_id": job_id,
+                    "hostname": hostname,
+                    "stdout": output_result.stdout,
+                    "stderr": output_result.stderr,
+                }
+            )
+        else:
+            await websocket.send_json(
+                {
+                    "type": "output_error",
+                    "job_id": job_id,
+                    "hostname": hostname,
+                    "error": output_result.error,
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending job output: {e}")
+        await websocket.send_json(
+            {
+                "type": "output_error",
+                "job_id": job_id,
+                "hostname": hostname,
+                "error": str(e),
+            }
+        )
+
+
+@app.websocket("/ws/jobs/{job_id}")
+async def websocket_job(websocket: WebSocket, job_id: str):
+    """WebSocket endpoint for real-time updates of a specific job."""
+    try:
+        # Parse job_id to extract hostname if present (format: hostname:job_id)
+        if ":" in job_id:
+            hostname, actual_job_id = job_id.split(":", 1)
+        else:
+            # Try to find the job across all hosts
+            hostname = None
+            actual_job_id = job_id
+
+        # Accept the connection
+        await job_manager.connect(websocket, job_id)
+
+        # Send initial job data
+        try:
+            from ..job_data_manager import get_job_data_manager
+
+            manager = get_slurm_manager()
+            job_data_manager = get_job_data_manager()
+
+            # Fetch current job info
+            if hostname:
+                jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=hostname, job_ids=[actual_job_id], limit=1
+                )
+                job_info = jobs[0] if jobs else None
+            else:
+                # Search across all hosts
+                all_jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=None, job_ids=[actual_job_id], limit=1
+                )
+                job_info = all_jobs[0] if all_jobs else None
+                if job_info:
+                    hostname = job_info.hostname
+
+            if job_info:
+                # Send initial job state
+                await websocket.send_json(
+                    {
+                        "type": "initial",
+                        "job": JobInfoWeb.from_job_info(job_info).model_dump(),
+                        "hostname": hostname,
+                    }
+                )
+
+                # Only start monitoring for active jobs (running/pending)
+                if job_info.state in [JobState.RUNNING, JobState.PENDING]:
+                    # Start background task to monitor job changes
+                    monitor_task = asyncio.create_task(
+                        monitor_job_updates(websocket, job_id, hostname, actual_job_id)
+                    )
+                else:
+                    # For completed jobs, just send the final state
+                    logger.info(
+                        f"Job {actual_job_id} is already in state {job_info.state}, not starting monitor"
+                    )
+            else:
+                await websocket.send_json(
+                    {"type": "error", "message": f"Job {actual_job_id} not found"}
+                )
+        except Exception as e:
+            logger.error(f"Error fetching initial job data: {e}", exc_info=True)
+            try:
+                await websocket.send_json({"type": "error", "message": str(e)})
+            except Exception:
+                # WebSocket may already be closed
+                pass
+
+        # Keep connection alive and wait for messages
+        while True:
+            try:
+                data = await websocket.receive_text()
+
+                if data == "ping":
+                    await websocket.send_text("pong")
+                elif data == "get_output":
+                    # Client requests current output
+                    await send_job_output(websocket, hostname, actual_job_id)
+
+            except WebSocketDisconnect:
+                job_manager.disconnect(websocket, job_id)
+                if "monitor_task" in locals():
+                    monitor_task.cancel()
+                break
+            except Exception:
+                job_manager.disconnect(websocket, job_id)
+                if "monitor_task" in locals():
+                    monitor_task.cancel()
+                break
+
+    except Exception as e:
+        logger.error(f"WebSocket job error: {e}")
+        job_manager.disconnect(websocket, job_id)
+
+
+@app.websocket("/ws/jobs")
+async def websocket_all_jobs(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates of all jobs."""
+    try:
+        # Accept the connection
+        await job_manager.connect(websocket)
+
+        # Send initial job list
+        try:
+            from ..job_data_manager import get_job_data_manager
+
+            manager = get_slurm_manager()
+            job_data_manager = get_job_data_manager()
+
+            # Fetch recent jobs from all hosts (both active and recently completed)
+            all_jobs = await job_data_manager.fetch_all_jobs(
+                hostname=None,
+                limit=100,
+                active_only=False,  # Include completed jobs to show accurate states
+            )
+
+            # Convert to web format and group by host
+            jobs_by_host = {}
+            for job in all_jobs:
+                if job.hostname not in jobs_by_host:
+                    jobs_by_host[job.hostname] = []
+                jobs_by_host[job.hostname].append(
+                    JobInfoWeb.from_job_info(job).model_dump()
+                )
+
+            await websocket.send_json(
+                {"type": "initial", "jobs": jobs_by_host, "total": len(all_jobs)}
+            )
+
+            # Start background task to monitor all job changes
+            monitor_task = asyncio.create_task(monitor_all_jobs_updates(websocket))
+
+        except WebSocketDisconnect:
+            # Client disconnected - this is normal, don't log as error
+            logger.debug("WebSocket client disconnected during initial data fetch")
+            return
+        except Exception as e:
+            # Only log actual errors, not disconnections
+            if not isinstance(e, WebSocketDisconnect):
+                logger.error(f"Error fetching initial jobs data: {e}", exc_info=True)
+            try:
+                await websocket.send_json({"type": "error", "message": str(e)})
+            except WebSocketDisconnect:
+                # WebSocket closed, can't send error - this is fine
+                pass
+
+        # Keep connection alive and wait for messages
+        while True:
+            try:
+                data = await websocket.receive_text()
+
+                if data == "ping":
+                    await websocket.send_text("pong")
+
+            except WebSocketDisconnect:
+                job_manager.disconnect(websocket)
+                if "monitor_task" in locals():
+                    monitor_task.cancel()
+                break
+            except Exception:
+                job_manager.disconnect(websocket)
+                if "monitor_task" in locals():
+                    monitor_task.cancel()
+                break
+
+    except Exception as e:
+        logger.error(f"WebSocket all jobs error: {e}")
+        job_manager.disconnect(websocket)
+
+
+@app.websocket("/ws/watchers")
+async def websocket_watchers(websocket: WebSocket):
+    """WebSocket endpoint for real-time watcher updates."""
+    try:
+        # Accept the connection
+        await watcher_manager.connect(websocket)
+
+        # Send initial data
+        cache = get_cache()
+        with cache._get_connection() as conn:
+            # Get recent events
+            cursor = conn.execute("""
+                SELECT * FROM watcher_events 
+                ORDER BY timestamp DESC 
+                LIMIT 10
+            """)
+            columns = [desc[0] for desc in cursor.description]
+            events = []
+            for row in cursor.fetchall():
+                event_dict = dict(zip(columns, row))
+                if event_dict.get("captured_vars"):
+                    event_dict["captured_vars"] = json.loads(
+                        event_dict["captured_vars"]
+                    )
+                events.append(event_dict)
+
+            await websocket.send_json({"type": "initial", "events": events})
+
+        # Keep connection alive and wait for messages
+        while True:
+            try:
+                # Wait for any message from client (can be ping/pong)
+                data = await websocket.receive_text()
+
+                # If client sends "ping", respond with "pong"
+                if data == "ping":
+                    await websocket.send_text("pong")
+
+            except WebSocketDisconnect:
+                watcher_manager.disconnect(websocket)
+                break
+            except Exception:
+                # Any other error, disconnect
+                watcher_manager.disconnect(websocket)
+                break
+
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        if websocket in watcher_manager.active_connections:
+            watcher_manager.disconnect(websocket)
+
+
 def main():
     """Run the secure web server."""
     import uvicorn
@@ -1955,7 +3273,9 @@ def main():
     # Production settings
     uvicorn.run(
         app,
-        host="127.0.0.1",  # Only bind to localhost
+        host=os.getenv(
+            "SSYNC_HOST", "127.0.0.1"
+        ),  # Default to localhost, allow override
         port=int(os.getenv("SSYNC_PORT", "8042")),
         log_level=os.getenv("SSYNC_LOG_LEVEL", "info").lower(),
         access_log=False,  # Disable access logs for security

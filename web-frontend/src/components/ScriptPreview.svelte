@@ -1,23 +1,30 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, tick } from "svelte";
+  import CodeMirrorEditor from "./CodeMirrorEditor.svelte";
+  import SimpleMobileEditor from "./mobile/SimpleMobileEditor.svelte";
 
   const dispatch = createEventDispatcher<{
     launch: void;
     scriptChanged: { content: string };
+    openHistory: void;
   }>();
 
   export let generatedScript = "";
   export let launching = false;
   export let loading = false;
   export let validationDetails: { isValid: boolean; missing: string[]; missingText: string } = { isValid: false, missing: [], missingText: 'Missing configuration' };
+  
+  // Editor preferences
+  let vimModeEnabled = true;
 
   let editableScript = "";
-  let scriptTextarea: HTMLTextAreaElement;
-  let lineNumbersDiv: HTMLPreElement;
+  let codeMirrorEditor: CodeMirrorEditor;
   let hasUnsavedChanges = false;
   let autoSaveTimeout: number | null = null;
   let lastSavedScript = "";
   let userHasEdited = false;
+  let showMobileMenu = false;
+  let isMobile = false;
 
   // Initialize editable script when component mounts or generated script changes
   // Only update if user hasn't made manual edits (avoid overwriting user's edits)
@@ -27,27 +34,27 @@
     hasUnsavedChanges = false;
   }
   
-  // Calculate line count based on actual content
+  // Calculate line count for stats display
   $: currentText = editableScript || generatedScript || "";
   $: lineCount = Math.max(1, currentText.split("\n").length);
-  
-  // Generate line numbers as a single string with newlines
-  $: lineNumbersString = Array.from({length: lineCount}, (_, i) => i + 1).join('\n');
 
-  function handleScriptChange(event: Event): void {
-    const target = event.target as HTMLTextAreaElement;
-    editableScript = target.value;
-    userHasEdited = true;
-    hasUnsavedChanges = editableScript !== generatedScript;
+  function handleScriptChange(event: CustomEvent<{ content: string }>): void {
+    const newContent = event.detail.content;
+    // Only update if actually changed to prevent loops
+    if (newContent !== editableScript) {
+      editableScript = newContent;
+      userHasEdited = true;
+      hasUnsavedChanges = editableScript !== generatedScript;
 
-    // Auto-save after 1 second of no changes
-    if (autoSaveTimeout) {
-      clearTimeout(autoSaveTimeout);
+      // Auto-save after 1 second of no changes
+      if (autoSaveTimeout) {
+        clearTimeout(autoSaveTimeout);
+      }
+
+      autoSaveTimeout = setTimeout(() => {
+        saveChanges();
+      }, 1000);
     }
-
-    autoSaveTimeout = setTimeout(() => {
-      saveChanges();
-    }, 1000);
   }
 
   function saveChanges(): void {
@@ -67,12 +74,6 @@
     }
   }
 
-  function handleScroll(): void {
-    if (scriptTextarea && lineNumbersDiv) {
-      lineNumbersDiv.scrollTop = scriptTextarea.scrollTop;
-    }
-  }
-
   function handleKeyDown(event: KeyboardEvent): void {
     // Ctrl+S or Cmd+S to save manually
     if ((event.ctrlKey || event.metaKey) && event.key === "s") {
@@ -80,29 +81,20 @@
       saveChanges();
     }
 
-    // Tab support in textarea
-    if (event.key === "Tab") {
+    // Cmd+Enter to launch job
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
-      const target = event.target as HTMLTextAreaElement;
-      const start = target.selectionStart;
-      const end = target.selectionEnd;
-
-      // Insert tab character
-      const newValue =
-        editableScript.substring(0, start) +
-        "\t" +
-        editableScript.substring(end);
-      editableScript = newValue;
-
-      // Move cursor after tab
-      setTimeout(() => {
-        target.selectionStart = target.selectionEnd = start + 1;
-      }, 0);
+      if (!launching && !loading && validationDetails.isValid) {
+        handleLaunch();
+      }
     }
   }
 
   function resetScript(): void {
     editableScript = generatedScript;
+    if (codeMirrorEditor) {
+      codeMirrorEditor.setContent(generatedScript);
+    }
     userHasEdited = false;
     hasUnsavedChanges = false;
     lastSavedScript = generatedScript;
@@ -112,12 +104,32 @@
     }
   }
 
+  // Global keyboard shortcut handler
+  function handleGlobalKeyDown(event: KeyboardEvent): void {
+    // Cmd+Enter to launch job (global shortcut)
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      if (!launching && !loading && validationDetails.isValid) {
+        handleLaunch();
+      }
+    }
+  }
+
   // Clean up timeout on destroy
   onMount(() => {
+    // Detect mobile device
+    isMobile = window.matchMedia('(max-width: 768px)').matches ||
+               /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+               ('ontouchstart' in window);
+    
+    // Add global keyboard listener
+    document.addEventListener('keydown', handleGlobalKeyDown);
+    
     return () => {
       if (autoSaveTimeout) {
         clearTimeout(autoSaveTimeout);
       }
+      document.removeEventListener('keydown', handleGlobalKeyDown);
     };
   });
 
@@ -169,7 +181,18 @@
 
 </script>
 
-<div class="script-preview">
+{#if isMobile}
+  <SimpleMobileEditor
+    script={editableScript}
+    launching={launching}
+    canLaunch={validationDetails.isValid}
+    validationMessage={validationDetails.missingText}
+    on:launch={handleLaunch}
+    on:scriptChanged={handleScriptChange}
+    on:openHistory={() => dispatch('openHistory')}
+  />
+{:else}
+  <div class="script-preview">
   <div class="preview-header">
     <div class="header-content">
       <div class="header-title">
@@ -242,51 +265,15 @@
   <div class="preview-content">
     {#if generatedScript || editableScript}
       <div class="script-editor-container">
-        <textarea
-          bind:this={scriptTextarea}
-          class="enhanced-script-editor"
+        <CodeMirrorEditor
+          bind:this={codeMirrorEditor}
           bind:value={editableScript}
-          on:input={handleScriptChange}
-          on:keydown={handleKeyDown}
-          on:scroll={handleScroll}
-placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#10;#SBATCH --mem=4G&#10;&#10;#LOGIN_SETUP_BEGIN&#10;conda activate ml-env&#10;pip install torch transformers&#10;#LOGIN_SETUP_END&#10;&#10;echo 'Starting training on compute node...'&#10;python train_model.py"
+          vimMode={vimModeEnabled}
+          on:change={handleScriptChange}
+          on:toggleVim={() => vimModeEnabled = !vimModeEnabled}
+          placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#10;#SBATCH --mem=4G&#10;&#10;#LOGIN_SETUP_BEGIN&#10;conda activate ml-env&#10;pip install torch transformers&#10;#LOGIN_SETUP_END&#10;&#10;echo 'Starting training on compute node...'&#10;python train_model.py"
           disabled={launching}
-          rows="20"
-          spellcheck="false"
-        ></textarea>
-
-        <!-- Line numbers with exact same styling as textarea -->
-        {#key lineCount}
-        <pre 
-          class="line-numbers" 
-          aria-hidden="true" 
-          bind:this={lineNumbersDiv}
-          style="
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 3rem;
-            height: 100%;
-            margin: 0;
-            padding-top: 1.5rem;
-            padding-bottom: 1.5rem;
-            padding-left: 0.5rem;
-            padding-right: 0.5rem;
-            background: rgba(0, 0, 0, 0.2);
-            background-image: none !important;
-            border: none;
-            border-right: 1px solid rgba(255, 255, 255, 0.1);
-            font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 0.85rem;
-            line-height: 1.6;
-            text-align: right;
-            color: rgba(255, 255, 255, 0.4);
-            overflow-y: hidden;
-            overflow-x: hidden;
-            box-sizing: border-box;
-            white-space: pre;
-          ">{lineNumbersString}</pre>
-        {/key}
+        />
       </div>
     {:else}
       <div class="empty-preview">
@@ -306,7 +293,83 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     {/if}
   </div>
 
+  {#if isMobile}
+    <!-- Mobile Floating Action Button -->
+    <div class="mobile-fab-container">
+      {#if showMobileMenu}
+        <div class="fab-menu">
+          <button
+            class="fab-item"
+            on:click={() => { dispatch('openHistory'); showMobileMenu = false; }}
+            title="Script History"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M16.2,16.2L11,13V7H12.5V12.2L17,14.9L16.2,16.2Z" />
+            </svg>
+            <span>History</span>
+          </button>
+          
+          <button
+            class="fab-item"
+            on:click={() => { copyScript(); showMobileMenu = false; }}
+            disabled={!editableScript && !generatedScript}
+            title="Copy Script"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" />
+            </svg>
+            <span>Copy</span>
+          </button>
+          
+          <button
+            class="fab-item"
+            on:click={() => { saveScript(); showMobileMenu = false; }}
+            disabled={!editableScript && !generatedScript}
+            title="Download Script"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
+            </svg>
+            <span>Download</span>
+          </button>
+        </div>
+        
+        <button
+          class="fab-toggle fab-close"
+          on:click={() => showMobileMenu = false}
+          aria-label="Close menu"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />
+          </svg>
+        </button>
+      {:else}
+        <button
+          class="fab-toggle"
+          on:click={() => showMobileMenu = true}
+          aria-label="More options"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z" />
+          </svg>
+        </button>
+      {/if}
+    </div>
+  {/if}
+
   <div class="preview-actions">
+    <button
+      type="button"
+      class="action-btn secondary"
+      on:click={() => dispatch('openHistory')}
+      title="Browse script history and reuse previous scripts"
+    >
+      <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M16.2,16.2L11,13V7H12.5V12.2L17,14.9L16.2,16.2Z" />
+      </svg>
+      History
+    </button>
+
     <button
       type="button"
       class="action-btn secondary"
@@ -394,6 +457,7 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     </button>
   </div>
 </div>
+{/if}
 
 <style>
   .script-preview {
@@ -554,7 +618,7 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     background: rgba(255, 255, 255, 0.3);
   }
 
-  /* Enhanced Editor Styles */
+  /* CodeMirror Editor Styles */
 
   .script-editor-container {
     position: relative;
@@ -563,37 +627,6 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     height: 100%;
     background: #2d3748;
   }
-
-  .enhanced-script-editor {
-    flex: 1;
-    height: 100%;
-    margin: 0;
-    padding: 1.5rem 3rem 1.5rem 4rem;
-    font-family: "JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace;
-    font-size: 0.85rem;
-    line-height: 1.6;
-    color: #e2e8f0;
-    background: transparent;
-    border: none;
-    outline: none;
-    resize: none;
-    white-space: pre;
-    word-wrap: break-word;
-    z-index: 2;
-    position: relative;
-    box-sizing: border-box;
-  }
-
-  .enhanced-script-editor:focus {
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  .enhanced-script-editor::placeholder {
-    color: rgba(255, 255, 255, 0.4);
-    font-style: italic;
-  }
-
-  /* Line numbers are now handled by the pre element with inline styles */
 
   .empty-preview {
     display: flex;
@@ -699,6 +732,7 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     justify-content: center;
     font-weight: 600;
     min-height: 44px;
+    max-width: 200px;
   }
 
   .btn-icon {
@@ -729,13 +763,21 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
       height: 100%;
       border-radius: 0;
       margin: 0;
-      background: #2d3748;
+      background: #1a1f2e;
     }
 
     .preview-header {
-      padding: 0.875rem 1rem;
-      background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
-      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 15;
+      padding: 1rem;
+      padding-top: calc(1rem + env(safe-area-inset-top));
+      background: linear-gradient(135deg, rgba(45, 52, 65, 0.98) 0%, rgba(26, 31, 46, 0.98) 100%);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 2px 15px rgba(0, 0, 0, 0.3);
     }
 
     .header-content {
@@ -750,8 +792,10 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     }
 
     .preview-header h3 {
-      font-size: 0.9rem;
+      font-size: 1.1rem;
+      font-weight: 700;
       margin: 0;
+      letter-spacing: 0.5px;
     }
 
     .editor-status {
@@ -765,14 +809,23 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     }
 
     .stat-item {
-      font-size: 0.7rem;
-      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      padding: 0.4rem 0.7rem;
       min-width: auto;
+      border-radius: 20px;
+      font-weight: 600;
+      backdrop-filter: blur(10px);
     }
 
     .stat-item.warning,
     .stat-item.success {
       display: flex;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
     }
 
     .stat-item:not(.warning):not(.success) {
@@ -785,6 +838,9 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
       flex-direction: column;
       overflow: hidden;
       min-height: 0;
+      background: #1a1f2e;
+      margin-top: 80px;
+      padding-bottom: 80px;
     }
 
     .script-editor-container {
@@ -792,20 +848,8 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
       display: flex;
       height: 100%;
       position: relative;
+      background: transparent;
     }
-
-    .enhanced-script-editor {
-      flex: 1;
-      padding: 1rem;
-      padding-left: 3rem;
-      font-size: 0.8rem;
-      line-height: 1.5;
-      font-family: "Monaco", "Menlo", monospace;
-      background: #1e293b;
-      color: #e2e8f0;
-    }
-
-    /* Line numbers handled by pre element */
 
     .empty-preview {
       padding: 2rem 1rem;
@@ -829,19 +873,33 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
     }
 
     .preview-actions {
-      padding: 0.75rem;
-      background: #1a202c;
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 1rem;
+      padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+      background: linear-gradient(180deg, rgba(26, 31, 46, 0.98) 0%, rgba(20, 25, 38, 1) 100%);
+      border-top: 1px solid rgba(255, 255, 255, 0.15);
       display: flex;
-      gap: 0.5rem;
-      flex-shrink: 0;
+      gap: 0.75rem;
+      z-index: 20;
+      backdrop-filter: blur(15px);
+      box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.4);
     }
 
     .action-btn {
-      font-size: 0.75rem;
-      padding: 0.625rem 0.75rem;
-      min-height: 36px;
+      font-size: 0.95rem;
+      padding: 0.875rem 1.25rem;
+      min-height: 48px;
       flex: 1;
+      border-radius: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
     }
 
     .action-btn.secondary {
@@ -850,20 +908,140 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
 
     .action-btn.warning {
       flex: 0 0 auto;
+      min-width: 80px;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(217, 119, 6, 0.9) 100%);
+      border: 1px solid rgba(251, 191, 36, 0.3);
     }
 
     .launch-btn {
       flex: 1;
-      font-weight: 600;
-      font-size: 0.875rem;
-      padding: 0.75rem 1rem;
-      min-height: 44px;
+      font-weight: 700;
+      font-size: 1rem;
+      padding: 1rem 1.5rem;
+      min-height: 52px;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      border: 2px solid rgba(16, 185, 129, 0.4);
+      box-shadow: 0 3px 15px rgba(16, 185, 129, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      letter-spacing: 0.5px;
+    }
+    
+    .launch-btn:active:not(:disabled) {
+      transform: scale(0.98);
+      box-shadow: 0 1px 5px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
     }
 
     .btn-icon {
       width: 14px;
       height: 14px;
     }
+  }
+
+  /* Mobile FAB Styles */
+  .mobile-fab-container {
+    position: fixed;
+    bottom: 110px;
+    right: 1rem;
+    z-index: 30;
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-end;
+    gap: 0.75rem;
+  }
+
+  .fab-toggle {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    border: none;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .fab-toggle:active {
+    transform: scale(0.95);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  .fab-toggle.fab-close {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    animation: rotateIn 0.3s ease;
+  }
+
+  .fab-toggle svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  @keyframes rotateIn {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(90deg); }
+  }
+
+  .fab-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    animation: slideUp 0.3s ease;
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .fab-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: linear-gradient(135deg, rgba(26, 31, 46, 0.95) 0%, rgba(35, 41, 55, 0.95) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 28px;
+    color: white;
+    font-size: 0.875rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    min-width: 140px;
+    justify-content: flex-start;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .fab-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .fab-item:not(:disabled):active {
+    transform: scale(0.98);
+    background: linear-gradient(135deg, rgba(35, 41, 55, 0.95) 0%, rgba(45, 52, 65, 0.95) 100%);
+  }
+
+  .fab-item svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+
+  .fab-item span {
+    flex: 1;
   }
 
   /* Small mobile adjustments */
@@ -881,14 +1059,7 @@ placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --ntasks=1&#1
       padding: 0.2rem 0.4rem;
     }
 
-    .enhanced-script-editor {
-      font-size: 0.75rem;
-      padding: 0.75rem;
-      padding-left: 2.5rem;
-      line-height: 1.5;
-    }
-
-    /* Line numbers handled by pre element */
+    /* Small mobile specific styles handled by CodeMirror component */
 
     .preview-actions {
       padding: 0.625rem;

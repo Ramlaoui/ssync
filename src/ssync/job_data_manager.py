@@ -37,6 +37,26 @@ class CompleteJobData:
 
 
 class JobDataManager:
+    @staticmethod
+    def _decompress_output(compressed_data: bytes, compression: str) -> str:
+        """Decompress output data based on compression type."""
+        import gzip
+
+        if not compressed_data:
+            return None
+
+        if compression == "gzip":
+            try:
+                return gzip.decompress(compressed_data).decode("utf-8")
+            except Exception:
+                return None
+        elif compression == "none":
+            try:
+                return compressed_data.decode("utf-8")
+            except Exception:
+                return None
+        return None
+
     """THE SINGLE JOB FETCHER - replaces all job fetching logic."""
 
     def __init__(self):
@@ -201,19 +221,33 @@ class JobDataManager:
             try:
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
-                    timeout=10.0,  # 10 second timeout for getting connection
+                    timeout=15.0,  # Increased from 10s to 15s for initial connection
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Connection to {hostname} timed out after 10s, forcing refresh..."
+                    f"Connection to {hostname} timed out after 15s, attempting connection refresh..."
                 )
-                # Force refresh the connection and try again
-                conn = await asyncio.wait_for(
-                    self._run_in_executor(
-                        manager._get_connection, slurm_host.host, True
-                    ),
-                    timeout=30.0,  # Give more time for fresh connection
-                )
+                # Try a gentle refresh first (not force) - this preserves more state
+                try:
+                    conn = await asyncio.wait_for(
+                        self._run_in_executor(
+                            manager._get_connection,
+                            slurm_host.host,
+                            False,  # Don't force
+                        ),
+                        timeout=20.0,  # Give 20s for retry
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"Connection to {hostname} still timing out after retry, using force refresh as last resort..."
+                    )
+                    # Only force refresh as absolute last resort
+                    conn = await asyncio.wait_for(
+                        self._run_in_executor(
+                            manager._get_connection, slurm_host.host, True
+                        ),
+                        timeout=30.0,  # Give more time for fresh connection
+                    )
 
             # Check SLURM availability - run in thread pool
             slurm_available = await self._run_in_executor(
@@ -271,8 +305,6 @@ class JobDataManager:
                     self.cache.cache_job(
                         job,
                         script_content=None,  # Preserve existing
-                        stdout_content=None,  # Preserve existing
-                        stderr_content=None,  # Preserve existing
                     )
 
                 jobs.extend(active_jobs)
@@ -288,7 +320,9 @@ class JobDataManager:
 
                 # NEW: Get cached completed job IDs to skip re-querying
                 cached_completed_ids = set()
-                if not force_refresh:  # Only use cache if not forcing refresh
+                # Use cache even on force_refresh for completed jobs (they don't change)
+                # Only skip cache if we're looking for specific job_ids
+                if not job_ids:
                     cached_completed_ids = self.cache.get_cached_completed_job_ids(
                         hostname, effective_since
                     )
@@ -323,13 +357,12 @@ class JobDataManager:
                     self.cache.cache_job(
                         job,
                         script_content=None,  # Preserve existing
-                        stdout_content=None,  # Preserve existing
-                        stderr_content=None,  # Preserve existing
                     )
 
                     # If this is a new completed job without cached outputs, fetch them
                     if not cached_job or (
-                        not cached_job.stdout_content and not cached_job.stderr_content
+                        not cached_job.stdout_compressed
+                        and not cached_job.stderr_compressed
                     ):
                         if job.stdout_file or job.stderr_file:
                             try:
@@ -516,8 +549,6 @@ class JobDataManager:
             self.cache.cache_job(
                 job_info,
                 script_content=None,  # Preserve existing
-                stdout_content=None,  # Preserve existing
-                stderr_content=None,  # Preserve existing
             )
 
             # If job just completed, fetch outputs if we don't have them
@@ -532,8 +563,8 @@ class JobDataManager:
                 )
                 if (
                     cached_job
-                    and not cached_job.stdout_content
-                    and not cached_job.stderr_content
+                    and not cached_job.stdout_compressed
+                    and not cached_job.stderr_compressed
                 ):
                     if job_info.stdout_file or job_info.stderr_file:
                         logger.info(
@@ -607,7 +638,13 @@ class JobDataManager:
                     logger.debug(
                         f"Job {job_info.job_id} outputs already fetched after completion, using cache"
                     )
-                    return cached_job.stdout_content, cached_job.stderr_content
+                    stdout = self._decompress_output(
+                        cached_job.stdout_compressed, cached_job.stdout_compression
+                    )
+                    stderr = self._decompress_output(
+                        cached_job.stderr_compressed, cached_job.stderr_compression
+                    )
+                    return stdout, stderr
                 return None, None
 
             try:
@@ -626,7 +663,13 @@ class JobDataManager:
                     logger.info(
                         f"Using cached content for job {job_info.job_id} after connection error"
                     )
-                    return cached_job.stdout_content, cached_job.stderr_content
+                    stdout = self._decompress_output(
+                        cached_job.stdout_compressed, cached_job.stdout_compression
+                    )
+                    stderr = self._decompress_output(
+                        cached_job.stderr_compressed, cached_job.stderr_compression
+                    )
+                    return stdout, stderr
                 return None, None
 
             stdout_content = None
@@ -684,8 +727,11 @@ class JobDataManager:
                             cached_job = self.cache.get_cached_job(
                                 job_info.job_id, job_info.hostname
                             )
-                            if cached_job and cached_job.stdout_content:
-                                stdout_content = cached_job.stdout_content
+                            if cached_job and cached_job.stdout_compressed:
+                                stdout_content = self._decompress_output(
+                                    cached_job.stdout_compressed,
+                                    cached_job.stdout_compression,
+                                )
                 except Exception as e:
                     logger.error(
                         f"Error fetching stdout for job {job_info.job_id} from {job_info.hostname}: {e}"
@@ -698,18 +744,22 @@ class JobDataManager:
                     cached_job = self.cache.get_cached_job(
                         job_info.job_id, job_info.hostname
                     )
-                    if cached_job and cached_job.stdout_content:
+                    if cached_job and cached_job.stdout_compressed:
                         logger.info(
                             f"Using cached stdout for job {job_info.job_id} after fetch error"
                         )
-                        stdout_content = cached_job.stdout_content
+                        stdout_content = self._decompress_output(
+                            cached_job.stdout_compressed, cached_job.stdout_compression
+                        )
             else:
                 # Use cached content
                 cached_job = self.cache.get_cached_job(
                     job_info.job_id, job_info.hostname
                 )
                 if cached_job:
-                    stdout_content = cached_job.stdout_content
+                    stdout_content = self._decompress_output(
+                        cached_job.stdout_compressed, cached_job.stdout_compression
+                    )
 
             # Try to fetch stderr if needed
             if should_fetch_stderr:
@@ -763,8 +813,11 @@ class JobDataManager:
                             cached_job = self.cache.get_cached_job(
                                 job_info.job_id, job_info.hostname
                             )
-                            if cached_job and cached_job.stderr_content:
-                                stderr_content = cached_job.stderr_content
+                            if cached_job and cached_job.stderr_compressed:
+                                stderr_content = self._decompress_output(
+                                    cached_job.stderr_compressed,
+                                    cached_job.stderr_compression,
+                                )
                 except Exception as e:
                     logger.error(
                         f"Error fetching stderr for job {job_info.job_id} from {job_info.hostname}: {e}"
@@ -777,18 +830,22 @@ class JobDataManager:
                     cached_job = self.cache.get_cached_job(
                         job_info.job_id, job_info.hostname
                     )
-                    if cached_job and cached_job.stderr_content:
+                    if cached_job and cached_job.stderr_compressed:
                         logger.info(
                             f"Using cached stderr for job {job_info.job_id} after fetch error"
                         )
-                        stderr_content = cached_job.stderr_content
+                        stderr_content = self._decompress_output(
+                            cached_job.stderr_compressed, cached_job.stderr_compression
+                        )
             else:
                 # Use cached content
                 cached_job = self.cache.get_cached_job(
                     job_info.job_id, job_info.hostname
                 )
                 if cached_job:
-                    stderr_content = cached_job.stderr_content
+                    stderr_content = self._decompress_output(
+                        cached_job.stderr_compressed, cached_job.stderr_compression
+                    )
 
             # Update cache with fetched outputs
             if should_fetch_stdout or should_fetch_stderr:
@@ -810,7 +867,13 @@ class JobDataManager:
             # Return cached content on error
             cached_job = self.cache.get_cached_job(job_info.job_id, job_info.hostname)
             if cached_job:
-                return cached_job.stdout_content, cached_job.stderr_content
+                stdout = self._decompress_output(
+                    cached_job.stdout_compressed, cached_job.stdout_compression
+                )
+                stderr = self._decompress_output(
+                    cached_job.stderr_compressed, cached_job.stderr_compression
+                )
+                return stdout, stderr
             return None, None
 
     async def get_job_data(
@@ -832,8 +895,12 @@ class JobDataManager:
             if not cached_job:
                 return None
 
-            stdout_content = cached_job.stdout_content
-            stderr_content = cached_job.stderr_content
+            stdout_content = self._decompress_output(
+                cached_job.stdout_compressed, cached_job.stdout_compression
+            )
+            stderr_content = self._decompress_output(
+                cached_job.stderr_compressed, cached_job.stderr_compression
+            )
 
             # If job is completed but we don't have outputs cached, fetch them from filesystem
             if (

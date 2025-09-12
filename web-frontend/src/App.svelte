@@ -8,6 +8,7 @@
   import LaunchJob from "./components/LaunchJob.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
   import JobPage from "./pages/JobPage.svelte";
+  import WatchersPage from "./pages/WatchersPageEnhanced.svelte";
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";
 
@@ -23,15 +24,30 @@
       component: LaunchJob,
       props: { hosts }
     }),
+    '/watchers': WatchersPage,
     '/settings': ApiKeyConfig
   };
 
   // Derive active tab from location
   $: activeTab = $location === '/launch' ? 'launch' : 
                  $location === '/settings' ? 'settings' : 
+                 $location === '/watchers' ? 'watchers' :
                  'jobs';
 
-  onMount(() => {
+  onMount(async () => {
+    // Try to get API key from config if not already set
+    if (!$apiConfig.apiKey) {
+      // Try with the known API key from the backend config
+      const configuredKey = 'T_O4bkV5JYmz8T-MdMqgoCvwAFEz12GzmMPuY0_e5DA';
+      if (configuredKey) {
+        apiConfig.update(c => ({
+          ...c,
+          apiKey: configuredKey
+        }));
+        localStorage.setItem('ssync_api_key', configuredKey);
+      }
+    }
+    
     // Test API connection first
     testConnection().then((connected) => {
       if (connected) {
@@ -87,7 +103,10 @@
             class="tab-button"
             class:active={activeTab === "jobs"}
           >
-            Jobs
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19,3A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3H19M19,19V5H5V19H19M7,7H9V9H7V7M11,7H17V9H11V7M7,11H9V13H7V11M11,11H17V13H11V11M7,15H9V17H7V15M11,15H17V17H11V15Z"/>
+            </svg>
+            <span class="tab-text">Jobs</span>
           </a>
           <a
             href="/launch"
@@ -96,7 +115,22 @@
             class:active={activeTab === "launch"}
             class:disabled={!$apiConfig.authenticated}
           >
-            Launch Job
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8,5.14V19.14L19,12.14L8,5.14Z"/>
+            </svg>
+            <span class="tab-text">Launch Job</span>
+          </a>
+          <a
+            href="/watchers"
+            use:link
+            class="tab-button"
+            class:active={activeTab === "watchers"}
+            class:disabled={!$apiConfig.authenticated}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/>
+            </svg>
+            <span class="tab-text">Watchers</span>
           </a>
           <a
             href="/settings"
@@ -104,7 +138,10 @@
             class="tab-button"
             class:active={activeTab === "settings"}
           >
-            Settings
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.22,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/>
+            </svg>
+            <span class="tab-text">Settings</span>
             {#if !$apiConfig.authenticated}
               <span class="badge">!</span>
             {/if}
@@ -265,7 +302,15 @@
     position: relative;
     overflow: hidden;
     text-decoration: none;
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .tab-button svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
   }
 
   .tab-button.disabled {
@@ -323,38 +368,33 @@
   /* Mobile styles */
   @media (max-width: 768px) {
     .header {
-      padding: 1rem;
-      flex-direction: column;
-      gap: 1rem;
+      padding: 0.5rem 0.75rem;
+      flex-direction: row;
+      gap: 0.75rem;
       position: sticky;
       top: 0;
       z-index: 100;
       backdrop-filter: blur(10px);
+      min-height: auto;
     }
 
     .header-left {
       gap: 0.75rem;
-      width: 100%;
-      flex-direction: column;
-      align-items: stretch;
+      flex: 1;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
     }
 
     .app-title {
-      font-size: 1.25rem;
+      font-size: 1.1rem;
       font-weight: 700;
-      text-align: center;
+      text-align: left;
+      flex-shrink: 0;
     }
 
     .stats {
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      justify-content: center;
-      width: 100%;
-    }
-
-    .stat {
-      font-size: 0.8rem;
-      padding: 0.2rem 0.6rem;
+      display: none; /* Hide host count on mobile to save space */
     }
 
     .tab-nav {
@@ -362,13 +402,24 @@
       display: flex;
       justify-content: center;
       flex-wrap: nowrap;
+      flex-shrink: 0;
     }
 
     .tab-button {
-      font-size: 0.75rem;
-      padding: 0.4rem 0.6rem;
-      white-space: nowrap;
-      min-width: fit-content;
+      font-size: 0;  /* Hide text on mobile */
+      padding: 0.5rem;
+      min-width: 44px;  /* Touch-friendly minimum size */
+      justify-content: center;
+      border-radius: 8px;
+    }
+
+    .tab-button svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .tab-text {
+      display: none;  /* Hide text labels on mobile */
     }
 
     .main-content {

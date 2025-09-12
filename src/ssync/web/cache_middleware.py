@@ -191,12 +191,42 @@ class CacheMiddleware:
         """
         cached_job = self.cache.get_cached_job(job_id, hostname)
 
-        if cached_job and (cached_job.stdout_content or cached_job.stderr_content):
+        if cached_job and (
+            cached_job.stdout_compressed or cached_job.stderr_compressed
+        ):
+            # Decompress outputs if available
+            import gzip
+
+            stdout = None
+            stderr = None
+
+            if cached_job.stdout_compressed:
+                try:
+                    if cached_job.stdout_compression == "gzip":
+                        stdout = gzip.decompress(cached_job.stdout_compressed).decode(
+                            "utf-8"
+                        )
+                    else:
+                        stdout = cached_job.stdout_compressed.decode("utf-8")
+                except Exception as e:
+                    logger.error(f"Failed to decompress stdout: {e}")
+
+            if cached_job.stderr_compressed:
+                try:
+                    if cached_job.stderr_compression == "gzip":
+                        stderr = gzip.decompress(cached_job.stderr_compressed).decode(
+                            "utf-8"
+                        )
+                    else:
+                        stderr = cached_job.stderr_compressed.decode("utf-8")
+                except Exception as e:
+                    logger.error(f"Failed to decompress stderr: {e}")
+
             return JobOutputResponse(
                 job_id=job_id,
                 hostname=cached_job.hostname,
-                stdout=cached_job.stdout_content,
-                stderr=cached_job.stderr_content,
+                stdout=stdout,
+                stderr=stderr,
                 stdout_metadata=None,  # Metadata not cached currently
                 stderr_metadata=None,
             )

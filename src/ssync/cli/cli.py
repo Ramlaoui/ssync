@@ -5,7 +5,9 @@ from pathlib import Path
 import click
 
 from ..utils.config import ConfigError, config
+from .attach_watchers import attach_watchers
 from .auth import auth
+from .cleanup_watchers import cleanup_watchers
 from .commands import LaunchCommand, StatusCommand, SyncCommand
 from .watchers import watchers
 
@@ -229,7 +231,9 @@ def launch_command(
         ctx.exit(1)
 
 
+cli.add_command(attach_watchers)
 cli.add_command(auth)
+cli.add_command(cleanup_watchers)
 cli.add_command(watchers)
 
 

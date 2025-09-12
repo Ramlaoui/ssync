@@ -1,14 +1,20 @@
 """SLURM command execution utilities."""
 
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-
-from fabric import Connection
+from typing import Any, List, Optional, Protocol
 
 from ..models.job import JobInfo, JobState
 from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .parser import SlurmParser
+
+
+# Define a protocol for SSH connections (duck typing)
+class SSHConnection(Protocol):
+    """Protocol for SSH connection objects."""
+
+    def run(self, command: str, **kwargs) -> Any: ...
+
 
 logger = setup_logger(__name__, "INFO")
 
@@ -20,7 +26,9 @@ class SlurmClient:
         self.parser = SlurmParser()
         self._available_fields_cache = {}
 
-    def get_available_sacct_fields(self, conn: Connection, hostname: str) -> List[str]:
+    def get_available_sacct_fields(
+        self, conn: SSHConnection, hostname: str
+    ) -> List[str]:
         """Get list of available sacct fields for this SLURM cluster."""
         if hostname in self._available_fields_cache:
             logger.debug(
@@ -55,22 +63,17 @@ class SlurmClient:
 
             available_fields = []
 
-            # Split the output and extract all field names
             for line in result.stdout.replace("\r\n", "\n").split("\n"):
                 line = line.strip()
                 if line:
-                    # Split by whitespace to get individual field names
                     fields_in_line = line.split()
                     for field in fields_in_line:
                         field = field.strip()
                         if field and field.replace("_", "").isalnum():
                             available_fields.append(field)
 
-            # Essential fields that we absolutely need
             essential_fields = ["JobID", "JobName", "State", "User"]
 
-            # Additional useful fields in the ORDER we want them in the command
-            # This order determines both the sacct command format AND the parsing order
             wanted_fields = [
                 "JobID",
                 "JobName",
@@ -99,12 +102,10 @@ class SlurmClient:
                 "ConsumedEnergy",
             ]
 
-            # Filter to only available fields, preserving the order
             cluster_fields = [
                 field for field in wanted_fields if field in available_fields
             ]
 
-            # Ensure we have essential fields - if not, fall back to basic set
             missing_essential = [
                 field for field in essential_fields if field not in cluster_fields
             ]
@@ -129,7 +130,6 @@ class SlurmClient:
 
         except Exception as e:
             logger.debug(f"Failed to detect sacct fields for {hostname}: {e}")
-            # Fall back to basic fields
             basic_fields = [
                 "JobID",
                 "JobName",
@@ -145,7 +145,7 @@ class SlurmClient:
 
     def get_active_jobs(
         self,
-        conn: Connection,
+        conn: SSHConnection,
         hostname: str,
         user: Optional[str] = None,
         job_ids: Optional[List[str]] = None,
@@ -156,21 +156,16 @@ class SlurmClient:
         jobs = []
 
         try:
-            # Build squeue command
             format_str = "|".join(SQUEUE_FIELDS)
             cmd = f"squeue --format='{format_str}' --noheader"
 
-            # Use the provided user filter if given, otherwise detect current user
             if user:
-                # User explicitly provided - use it
                 query_user = user
                 logger.debug(f"Using provided user filter: {user}")
             elif not skip_user_detection:
-                # No user provided and detection not skipped - detect current user
                 query_user = self.get_username(conn)
                 logger.debug(f"Auto-detected current user: {query_user}")
             else:
-                # No user and detection skipped - query all users
                 query_user = None
                 logger.debug("Querying all users (no user filter)")
 
@@ -203,19 +198,24 @@ class SlurmClient:
                     try:
                         job_info = self.parser.from_squeue_fields(fields, hostname)
 
-                        # For RUNNING jobs, proactively get correct output paths from scontrol
+                        # For RUNNING and PENDING jobs, proactively get correct output paths and submit_line from scontrol
                         # This avoids the script-as-output bug that affects some SLURM clusters
-                        if job_info.state == JobState.RUNNING:
+                        # and ensures we have submit_line which isn't available in squeue
+                        if job_info.state in [JobState.RUNNING, JobState.PENDING]:
                             try:
-                                stdout_path, stderr_path = self.get_job_output_files(
-                                    conn, job_info.job_id, hostname
+                                stdout_path, stderr_path, submit_line = (
+                                    self.get_job_details_from_scontrol(
+                                        conn, job_info.job_id, hostname
+                                    )
                                 )
                                 if stdout_path:
                                     job_info.stdout_file = stdout_path
                                 if stderr_path:
                                     job_info.stderr_file = stderr_path
+                                if submit_line:
+                                    job_info.submit_line = submit_line
                                 logger.debug(
-                                    f"Got output paths from scontrol for running job {job_info.job_id}"
+                                    f"Got job details from scontrol for {job_info.state} job {job_info.job_id}"
                                 )
                             except Exception as e:
                                 # If scontrol fails, keep the paths from squeue
@@ -223,17 +223,53 @@ class SlurmClient:
                                     f"Could not get output paths from scontrol for {job_info.job_id}: {e}"
                                 )
 
-                                # Log if paths look suspicious
+                                # Log if paths look suspicious or try to expand placeholders
                                 if job_info.stdout_file and (
                                     job_info.stdout_file.endswith(
                                         (".sh", ".sbatch", ".bash", ".slurm")
                                     )
                                     or "/submit/" in job_info.stdout_file
                                     or "/scripts/" in job_info.stdout_file
+                                    or "%" in job_info.stdout_file
                                 ):
-                                    logger.warning(
-                                        f"Running job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}"
-                                    )
+                                    if "%" in job_info.stdout_file:
+                                        # Try to expand SLURM placeholders ourselves
+                                        from .parser import SlurmParser
+
+                                        var_dict = {
+                                            "j": job_info.job_id,
+                                            "i": job_info.job_id,
+                                            "u": job_info.user or "",
+                                            "x": job_info.name or "",
+                                        }
+                                        expanded_stdout = (
+                                            SlurmParser.expand_slurm_path_vars(
+                                                job_info.stdout_file, var_dict
+                                            )
+                                        )
+                                        if expanded_stdout != job_info.stdout_file:
+                                            job_info.stdout_file = expanded_stdout
+                                            logger.debug(
+                                                f"Expanded stdout path for running job {job_info.job_id}"
+                                            )
+                                        if (
+                                            job_info.stderr_file
+                                            and "%" in job_info.stderr_file
+                                        ):
+                                            expanded_stderr = (
+                                                SlurmParser.expand_slurm_path_vars(
+                                                    job_info.stderr_file, var_dict
+                                                )
+                                            )
+                                            if expanded_stderr != job_info.stderr_file:
+                                                job_info.stderr_file = expanded_stderr
+                                                logger.debug(
+                                                    f"Expanded stderr path for running job {job_info.job_id}"
+                                                )
+                                    else:
+                                        logger.warning(
+                                            f"Running job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}"
+                                        )
 
                         # For PENDING jobs, paths may not be set yet, so skip the check
                         # For other states, we rely on cached data
@@ -249,7 +285,7 @@ class SlurmClient:
 
     def get_completed_jobs(
         self,
-        conn: Connection,
+        conn: SSHConnection,
         hostname: str,
         since: Optional[datetime] = None,
         user: Optional[str] = None,
@@ -296,7 +332,7 @@ class SlurmClient:
 
     def _get_completed_jobs_single(
         self,
-        conn: Connection,
+        conn: SSHConnection,
         hostname: str,
         since: Optional[datetime] = None,
         user: Optional[str] = None,
@@ -317,7 +353,6 @@ class SlurmClient:
             format_str = ",".join(available_fields)
             cmd = f"sacct -X --format={format_str} --parsable2 --noheader"
 
-            # Time filter
             if since:
                 # Check if we can use relative time format (more reliable across timezones)
                 now = datetime.now(timezone.utc) if since.tzinfo else datetime.now()
@@ -347,17 +382,13 @@ class SlurmClient:
                         f"Using starttime={since_str} for sacct on {hostname} (input was {since})"
                     )
 
-            # Use the provided user filter if given, otherwise detect current user
             if user:
-                # User explicitly provided - use it
                 query_user = user
                 logger.debug(f"Using provided user filter: {user}")
             elif not skip_user_detection:
-                # No user provided and detection not skipped - detect current user
                 query_user = self.get_username(conn)
                 logger.debug(f"Auto-detected current user: {query_user}")
             else:
-                # No user and detection skipped - query all users
                 query_user = None
                 logger.debug("Querying all users (no user filter)")
 
@@ -430,29 +461,25 @@ class SlurmClient:
                     f"sacct found {len(result.stdout.strip().split(chr(10)))} lines for {hostname}"
                 )
 
-            skipped_cached = 0  # Track how many cached jobs we skip
+            skipped_cached = 0
             for line in result.stdout.strip().split("\n"):
                 if not line.strip():
                     continue
 
                 fields = line.strip().split("|")
                 if len(fields) >= len(available_fields):
-                    job_id = fields[0].split(".")[0]  # Remove job step suffix
+                    job_id = fields[0].split(".")[0]
 
-                    # Skip if we should exclude this job
                     if exclude_job_ids and job_id in exclude_job_ids:
                         continue
 
-                    # Skip if this job is already cached (NEW)
                     if cached_completed_ids and job_id in cached_completed_ids:
                         skipped_cached += 1
                         continue
 
                     try:
-                        # Parse job state
                         state = self.parser.map_slurm_state(fields[2], from_sacct=True)
 
-                        # Apply state filter if provided
                         if state_filter and state.value != state_filter:
                             continue
 
@@ -466,6 +493,7 @@ class SlurmClient:
 
                         # For recently completed jobs, try to get correct output paths from scontrol
                         # This might work if the job recently completed and is still in SLURM's memory
+                        # Also try to fix paths that have unexpanded SLURM placeholders
                         if job_info and (
                             (
                                 job_info.stdout_file
@@ -475,6 +503,7 @@ class SlurmClient:
                                     )
                                     or "/submit/" in job_info.stdout_file
                                     or "/scripts/" in job_info.stdout_file
+                                    or "%" in job_info.stdout_file  # SLURM placeholder
                                 )
                             )
                             or (
@@ -485,6 +514,7 @@ class SlurmClient:
                                     )
                                     or "/submit/" in job_info.stderr_file
                                     or "/scripts/" in job_info.stderr_file
+                                    or "%" in job_info.stderr_file  # SLURM placeholder
                                 )
                             )
                         ):
@@ -501,8 +531,39 @@ class SlurmClient:
                                 )
                             except Exception:
                                 # scontrol likely failed because job is too old
+                                # Try to expand SLURM placeholders ourselves
+                                from .parser import SlurmParser
+
+                                var_dict = {
+                                    "j": job_info.job_id,
+                                    "i": job_info.job_id,
+                                    "u": job_info.user or "",
+                                    "x": job_info.name or "",
+                                }
+                                if job_info.stdout_file and "%" in job_info.stdout_file:
+                                    expanded_stdout = (
+                                        SlurmParser.expand_slurm_path_vars(
+                                            job_info.stdout_file, var_dict
+                                        )
+                                    )
+                                    if expanded_stdout != job_info.stdout_file:
+                                        job_info.stdout_file = expanded_stdout
+                                        logger.debug(
+                                            f"Expanded stdout path for job {job_info.job_id}"
+                                        )
+                                if job_info.stderr_file and "%" in job_info.stderr_file:
+                                    expanded_stderr = (
+                                        SlurmParser.expand_slurm_path_vars(
+                                            job_info.stderr_file, var_dict
+                                        )
+                                    )
+                                    if expanded_stderr != job_info.stderr_file:
+                                        job_info.stderr_file = expanded_stderr
+                                        logger.debug(
+                                            f"Expanded stderr path for job {job_info.job_id}"
+                                        )
                                 logger.debug(
-                                    f"Could not correct paths for completed job {job_info.job_id} (job may be too old)"
+                                    f"Could not get paths from scontrol for completed job {job_info.job_id}, used placeholder expansion"
                                 )
                     except Exception as e:
                         logger.debug(f"Failed to parse sacct line: {line}, error: {e}")
@@ -520,7 +581,7 @@ class SlurmClient:
 
     def _get_completed_jobs_chunked(
         self,
-        conn: Connection,
+        conn: SSHConnection,
         hostname: str,
         since: datetime,
         user: Optional[str] = None,
@@ -585,7 +646,9 @@ class SlurmClient:
 
         return all_jobs[:limit] if limit else all_jobs
 
-    def get_username(self, conn: Connection, user: str | None = None) -> Optional[str]:
+    def get_username(
+        self, conn: SSHConnection, user: str | None = None
+    ) -> Optional[str]:
         """Get the username to use for SLURM queries."""
         if user:
             return user
@@ -600,7 +663,7 @@ class SlurmClient:
         return None
 
     def get_job_details(
-        self, conn: Connection, job_id: str, hostname: str, user: str | None = None
+        self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None
     ) -> Optional[JobInfo]:
         """Get detailed information about a specific job."""
         try:
@@ -608,7 +671,6 @@ class SlurmClient:
 
             user = user or self.get_username(conn)
 
-            # Try squeue first (for active jobs)
             format_str = "|".join(SQUEUE_FIELDS)
             result = conn.run(
                 f"squeue --user {user} -j {job_id} --format='{format_str}' --noheader",
@@ -622,7 +684,6 @@ class SlurmClient:
                 if len(fields) >= len(SQUEUE_FIELDS):
                     job_info = self.parser.from_squeue_fields(fields, hostname)
 
-            # Try sacct for completed jobs if not found in squeue
             if not job_info:
                 available_fields = self.get_available_sacct_fields(conn, hostname)
                 format_str = ",".join(available_fields)
@@ -634,7 +695,6 @@ class SlurmClient:
                 )
 
                 if result.ok and result.stdout.strip():
-                    # Take the first line (main job, not job steps)
                     lines = result.stdout.strip().split("\n")
                     for line in lines:
                         fields = line.strip().split("|")
@@ -662,9 +722,55 @@ class SlurmClient:
                     if stderr_path:
                         job_info.stderr_file = stderr_path
                 except Exception:
-                    # If scontrol fails (e.g., job too old), keep the paths from squeue
-                    # They might be wrong, but it's better than nothing
+                    # If scontrol fails (e.g., job too old), try to expand SLURM placeholders
+                    if job_info.stdout_file and "%" in job_info.stdout_file:
+                        from .parser import SlurmParser
+
+                        var_dict = {
+                            "j": job_info.job_id,
+                            "i": job_info.job_id,
+                            "u": job_info.user or "",
+                            "x": job_info.name or "",
+                        }
+                        expanded_stdout = SlurmParser.expand_slurm_path_vars(
+                            job_info.stdout_file, var_dict
+                        )
+                        if expanded_stdout != job_info.stdout_file:
+                            job_info.stdout_file = expanded_stdout
+                            logger.debug(
+                                f"Expanded stdout path for job {job_info.job_id}"
+                            )
+                        if job_info.stderr_file and "%" in job_info.stderr_file:
+                            expanded_stderr = SlurmParser.expand_slurm_path_vars(
+                                job_info.stderr_file, var_dict
+                            )
+                            if expanded_stderr != job_info.stderr_file:
+                                job_info.stderr_file = expanded_stderr
+                                logger.debug(
+                                    f"Expanded stderr path for job {job_info.job_id}"
+                                )
+                    # They might still be wrong, but at least placeholders are expanded
                     pass
+
+                # Merge cached submit_line if available
+                # This is important for running jobs where SLURM doesn't provide submit_line
+                if not job_info.submit_line:
+                    try:
+                        from ..cache import get_cache
+
+                        cache = get_cache()
+                        cached_data = cache.get_cached_job(job_id, hostname)
+                        if (
+                            cached_data
+                            and cached_data.job_info
+                            and cached_data.job_info.submit_line
+                        ):
+                            job_info.submit_line = cached_data.job_info.submit_line
+                            logger.debug(f"Merged cached submit_line for job {job_id}")
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not merge cached submit_line for job {job_id}: {e}"
+                        )
 
             return job_info
 
@@ -673,7 +779,7 @@ class SlurmClient:
 
         return None
 
-    def cancel_job(self, conn: Connection, job_id: str) -> bool:
+    def cancel_job(self, conn: SSHConnection, job_id: str) -> bool:
         """Cancel a SLURM job."""
         try:
             conn.run(f"scancel {job_id}", hide=False)
@@ -682,10 +788,10 @@ class SlurmClient:
             logger.debug(f"Failed to cancel job {job_id}: {e}")
             return False
 
-    def get_job_output_files(
-        self, conn: Connection, job_id: str, hostname: str, user: str | None = None
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Get stdout and stderr file paths for a job using scontrol show job.
+    def get_job_details_from_scontrol(
+        self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """Get job details including output files and submit_line using scontrol show job.
 
         Args:
             conn: SSH connection to the cluster
@@ -693,10 +799,10 @@ class SlurmClient:
             hostname: Cluster hostname
 
         Returns:
-            Tuple of (stdout_path, stderr_path). Either may be None if not found.
+            Tuple of (stdout_path, stderr_path, submit_line). Any may be None if not found.
         """
         try:
-            logger.debug(f"Getting output files for job {job_id} on {hostname}")
+            logger.debug(f"Getting job details for job {job_id} on {hostname}")
 
             user = user or self.get_username(conn)
 
@@ -710,12 +816,12 @@ class SlurmClient:
 
             if not result.ok:
                 logger.debug(f"scontrol show job failed for {job_id}: {result.stderr}")
-                return None, None
+                return None, None, None
 
             stdout_path = None
             stderr_path = None
+            submit_line = None
 
-            # Parse the scontrol output
             for line in result.stdout.split("\n"):
                 line = line.strip()
                 if "StdOut=" in line:
@@ -730,18 +836,157 @@ class SlurmClient:
                         if part.startswith("StdErr="):
                             stderr_path = part.split("=", 1)[1]
                             break
+                elif "Command=" in line:
+                    # Extract Command (submit_line) - format is "Command=/path/to/script.sh"
+                    for part in line.split():
+                        if part.startswith("Command="):
+                            submit_line = part.split("=", 1)[1]
+                            break
 
             logger.debug(
-                f"Found output files for job {job_id}: stdout={stdout_path}, stderr={stderr_path}"
+                f"Found job details for job {job_id}: stdout={stdout_path}, stderr={stderr_path}, submit_line={submit_line}"
             )
-            return stdout_path, stderr_path
+            return stdout_path, stderr_path, submit_line
 
         except Exception as e:
-            logger.debug(f"Failed to get output files for job {job_id}: {e}")
-            return None, None
+            logger.debug(f"Failed to get job details for job {job_id}: {e}")
+            return None, None, None
+
+    def get_job_output_files(
+        self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Get stdout and stderr file paths for a job using scontrol show job.
+
+        Args:
+            conn: SSH connection to the cluster
+            job_id: SLURM job ID
+            hostname: Cluster hostname
+
+        Returns:
+            Tuple of (stdout_path, stderr_path). Either may be None if not found.
+        """
+        # Use the new function and just return the output files
+        stdout_path, stderr_path, _ = self.get_job_details_from_scontrol(
+            conn, job_id, hostname, user
+        )
+        return stdout_path, stderr_path
+
+    def read_job_output_compressed(
+        self,
+        conn: SSHConnection,
+        job_id: str,
+        hostname: str,
+        output_type: str = "stdout",
+    ) -> Optional[dict]:
+        """Read and compress job output on remote host.
+
+        Args:
+            conn: SSH connection to the cluster
+            job_id: SLURM job ID
+            hostname: Cluster hostname
+            output_type: Either "stdout" or "stderr"
+
+        Returns:
+            Dictionary with compressed data and metadata or None
+        """
+        import base64
+
+        try:
+            stdout_path, stderr_path = self.get_job_output_files(conn, job_id, hostname)
+
+            file_path = stdout_path if output_type == "stdout" else stderr_path
+            if not file_path:
+                logger.debug(f"No {output_type} file path found for job {job_id}")
+                return None
+
+            # Check file size first
+            size_result = conn.run(
+                f"stat -c%s '{file_path}' 2>/dev/null", hide=True, warn=True
+            )
+
+            if not size_result.ok:
+                logger.debug(f"File not found: {file_path}")
+                return None
+
+            file_size = int(size_result.stdout.strip())
+            logger.debug(f"File {file_path} size: {file_size} bytes")
+
+            # Set size limits and compression threshold
+            MAX_SIZE = 100 * 1024 * 1024  # 100MB max
+            COMPRESS_THRESHOLD = 1024  # 1KB - compress anything larger
+
+            if file_size > MAX_SIZE:
+                # For very large files, read only the tail
+                logger.warning(
+                    f"File {file_path} is {file_size} bytes, reading last 10MB only"
+                )
+                result = conn.run(
+                    f"tail -c 10485760 '{file_path}' | gzip -9 | base64 -w0",
+                    hide=True,
+                    timeout=60,
+                    warn=True,
+                )
+
+                if result.ok:
+                    return {
+                        "compressed": True,
+                        "data": result.stdout,
+                        "original_size": file_size,
+                        "truncated": True,
+                        "truncated_size": 10485760,
+                        "compression": "gzip",
+                    }
+            elif file_size > COMPRESS_THRESHOLD:
+                # Compress on remote host
+                logger.debug(f"Compressing {output_type} on remote host")
+                result = conn.run(
+                    f"gzip -9 -c '{file_path}' | base64 -w0",
+                    hide=True,
+                    timeout=60,
+                    warn=True,
+                )
+
+                if result.ok:
+                    return {
+                        "compressed": True,
+                        "data": result.stdout,
+                        "original_size": file_size,
+                        "truncated": False,
+                        "compression": "gzip",
+                    }
+            else:
+                # Small file - just read directly
+                result = conn.run(
+                    f"cat '{file_path}'", hide=True, timeout=30, warn=True
+                )
+
+                if result.ok:
+                    # Base64 encode for consistency
+                    encoded = base64.b64encode(result.stdout.encode("utf-8")).decode(
+                        "ascii"
+                    )
+                    return {
+                        "compressed": False,
+                        "data": encoded,
+                        "original_size": file_size,
+                        "truncated": False,
+                        "compression": "none",
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.error(
+                f"Failed to read compressed {output_type} for job {job_id}: {e}"
+            )
+            return None
 
     def read_job_output_content(
-        self, conn: Connection, job_id: str, hostname: str, output_type: str = "stdout"
+        self,
+        conn: SSHConnection,
+        job_id: str,
+        hostname: str,
+        output_type: str = "stdout",
     ) -> Optional[str]:
         """Read the content of a job's output file (stdout or stderr).
 
@@ -780,7 +1025,7 @@ class SlurmClient:
             return None
 
     def get_job_batch_script(
-        self, conn: Connection, job_id: str, hostname: str
+        self, conn: SSHConnection, job_id: str, hostname: str
     ) -> Optional[str]:
         """Get the batch script content for a job using scontrol write batch_script.
 
@@ -823,7 +1068,7 @@ class SlurmClient:
             logger.debug(f"Failed to get batch script for job {job_id}: {e}")
             return None
 
-    def check_slurm_availability(self, conn: Connection, hostname: str) -> bool:
+    def check_slurm_availability(self, conn: SSHConnection, hostname: str) -> bool:
         """Check if SLURM is available on the host."""
         try:
             # Try a simple squeue command first - this is more reliable than 'which'

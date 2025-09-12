@@ -203,13 +203,19 @@ class ScriptProcessor:
         in_actions = False
 
         for line in lines:
-            # Skip comments and empty lines
-            if line.strip().startswith("#") or not line.strip():
+            # Skip empty lines
+            if not line.strip():
                 continue
 
             # Remove leading comment marker if present
-            if line.lstrip().startswith("# "):
-                line = line.lstrip()[2:]
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                line = stripped[2:]
+            elif stripped.startswith("#"):
+                # Try removing just the #
+                line = stripped[1:].strip()
+                if not line:  # Was just a single #
+                    continue
 
             # Parse key-value pairs
             if ":" in line and not in_actions:
@@ -239,6 +245,18 @@ class ScriptProcessor:
                         watcher.captures = [v.strip() for v in value.split(",")]
                 elif key == "condition":
                     watcher.condition = value.strip("\"'")
+                elif key == "timer_mode_enabled":
+                    watcher.timer_mode_enabled = value.lower() in [
+                        "true",
+                        "yes",
+                        "1",
+                        "on",
+                    ]
+                elif key == "timer_interval_seconds" or key == "timer_interval":
+                    try:
+                        watcher.timer_interval_seconds = int(value)
+                    except ValueError:
+                        pass
                 elif key == "action":
                     # Simple single action
                     action_type, params = ScriptProcessor._parse_action_string(value)
@@ -259,7 +277,13 @@ class ScriptProcessor:
                     )
 
         # Validate minimum requirements
-        if watcher.pattern and watcher.actions:
+        # Pattern is required, but actions can be empty (will be added later or use defaults)
+        if watcher.pattern:
+            # If no actions specified, add a default log_event action
+            if not watcher.actions:
+                watcher.actions.append(
+                    WatcherAction(type=ActionType.LOG_EVENT, params={})
+                )
             return watcher
         return None
 
@@ -308,7 +332,13 @@ class ScriptProcessor:
                 watcher.name = value
 
         # Validate minimum requirements
-        if watcher.pattern and watcher.actions:
+        # Pattern is required, but actions can be empty (will be added later or use defaults)
+        if watcher.pattern:
+            # If no actions specified, add a default log_event action
+            if not watcher.actions:
+                watcher.actions.append(
+                    WatcherAction(type=ActionType.LOG_EVENT, params={})
+                )
             return watcher
         return None
 

@@ -30,8 +30,13 @@ class CachedJobData:
     hostname: str
     job_info: JobInfo
     script_content: Optional[str] = None
-    stdout_content: Optional[str] = None
-    stderr_content: Optional[str] = None
+    # Compressed output storage
+    stdout_compressed: Optional[bytes] = None
+    stdout_size: int = 0
+    stdout_compression: str = "none"  # 'gzip' or 'none'
+    stderr_compressed: Optional[bytes] = None
+    stderr_size: int = 0
+    stderr_compression: str = "none"
     cached_at: datetime = None
     last_updated: datetime = None
     is_active: bool = True  # Whether job is still running/pending
@@ -104,8 +109,13 @@ class JobDataCache:
                     hostname TEXT,
                     job_info_json TEXT NOT NULL,
                     script_content TEXT,
-                    stdout_content TEXT,
-                    stderr_content TEXT,
+                    -- Compressed output storage
+                    stdout_compressed BLOB,
+                    stdout_size INTEGER DEFAULT 0,
+                    stdout_compression TEXT DEFAULT 'none',
+                    stderr_compressed BLOB,
+                    stderr_size INTEGER DEFAULT 0,
+                    stderr_compression TEXT DEFAULT 'none',
                     cached_at TEXT NOT NULL,
                     last_updated TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -191,10 +201,33 @@ class JobDataCache:
                     last_position INTEGER DEFAULT 0,
                     trigger_count INTEGER DEFAULT 0,
                     state TEXT DEFAULT 'active',
+                    timer_mode_enabled INTEGER DEFAULT 0,
+                    timer_interval_seconds INTEGER DEFAULT 30,
+                    timer_mode_active INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (job_id, hostname) REFERENCES cached_jobs(job_id, hostname)
                 )
             """)
+
+            # Add timer mode columns if they don't exist (for migration)
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN timer_mode_enabled INTEGER DEFAULT 0"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN timer_interval_seconds INTEGER DEFAULT 30"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN timer_mode_active INTEGER DEFAULT 0"
+                )
+            except:
+                pass  # Column already exists
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS watcher_events (
@@ -295,20 +328,16 @@ class JobDataCache:
         self,
         job_info: JobInfo,
         script_content: Optional[str] = None,
-        stdout_content: Optional[str] = None,
-        stderr_content: Optional[str] = None,
     ):
         """
         Cache job information and associated data.
 
-        IMPORTANT: This method preserves existing script/output content if not provided.
+        IMPORTANT: This method preserves existing script content if not provided.
         This ensures scripts cached at job launch time are not lost when job status is updated.
 
         Args:
             job_info: JobInfo object to cache
             script_content: Optional script content (if None, preserves existing)
-            stdout_content: Optional stdout content (if None, preserves existing)
-            stderr_content: Optional stderr content (if None, preserves existing)
         """
         now = datetime.now()
         is_active = job_info.state in ["PD", "R"]
@@ -321,16 +350,7 @@ class JobDataCache:
                 logger.debug(
                     f"Preserving existing script content for job {job_info.job_id}"
                 )
-            if stdout_content is None and existing_cached.stdout_content:
-                stdout_content = existing_cached.stdout_content
-                logger.debug(
-                    f"Preserving existing stdout content for job {job_info.job_id}"
-                )
-            if stderr_content is None and existing_cached.stderr_content:
-                stderr_content = existing_cached.stderr_content
-                logger.debug(
-                    f"Preserving existing stderr content for job {job_info.job_id}"
-                )
+            # Output preservation is now handled via update_job_outputs_compressed
 
             if existing_cached.job_info:
                 job_info = self._merge_job_info(job_info, existing_cached.job_info)
@@ -339,13 +359,34 @@ class JobDataCache:
         else:
             cached_at = now
 
+        # Preserve existing compressed outputs if available
+        stdout_compressed = (
+            existing_cached.stdout_compressed if existing_cached else None
+        )
+        stdout_size = existing_cached.stdout_size if existing_cached else 0
+        stdout_compression = (
+            existing_cached.stdout_compression if existing_cached else "none"
+        )
+        stderr_compressed = (
+            existing_cached.stderr_compressed if existing_cached else None
+        )
+        stderr_size = existing_cached.stderr_size if existing_cached else 0
+        stderr_compression = (
+            existing_cached.stderr_compression if existing_cached else "none"
+        )
+
         cached_data = CachedJobData(
             job_id=job_info.job_id,
             hostname=job_info.hostname,
             job_info=job_info,
             script_content=script_content,
-            stdout_content=stdout_content,
-            stderr_content=stderr_content,
+            # Preserve existing outputs or initialize empty
+            stdout_compressed=stdout_compressed,
+            stdout_size=stdout_size,
+            stdout_compression=stdout_compression,
+            stderr_compressed=stderr_compressed,
+            stderr_size=stderr_size,
+            stderr_compression=stderr_compression,
             cached_at=cached_at,
             last_updated=now,
             is_active=is_active,
@@ -364,17 +405,23 @@ class JobDataCache:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO cached_jobs 
-                (job_id, hostname, job_info_json, script_content, stdout_content, 
-                 stderr_content, cached_at, last_updated, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (job_id, hostname, job_info_json, script_content, 
+                 stdout_compressed, stdout_size, stdout_compression,
+                 stderr_compressed, stderr_size, stderr_compression,
+                 cached_at, last_updated, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     cached_data.job_id,
                     cached_data.hostname,
                     json.dumps(job_info_dict),
                     cached_data.script_content,
-                    cached_data.stdout_content,
-                    cached_data.stderr_content,
+                    cached_data.stdout_compressed,
+                    cached_data.stdout_size,
+                    cached_data.stdout_compression,
+                    cached_data.stderr_compressed,
+                    cached_data.stderr_size,
+                    cached_data.stderr_compression,
                     cached_data.cached_at.isoformat(),
                     cached_data.last_updated.isoformat(),
                     cached_data.is_active,
@@ -504,12 +551,108 @@ class JobDataCache:
             hostname=row["hostname"],
             job_info=job_info,
             script_content=row["script_content"],
-            stdout_content=row["stdout_content"],
-            stderr_content=row["stderr_content"],
+            stdout_compressed=row["stdout_compressed"],
+            stdout_size=row["stdout_size"],
+            stdout_compression=row["stdout_compression"],
+            stderr_compressed=row["stderr_compressed"],
+            stderr_size=row["stderr_size"],
+            stderr_compression=row["stderr_compression"],
             cached_at=datetime.fromisoformat(row["cached_at"]),
             last_updated=datetime.fromisoformat(row["last_updated"]),
             is_active=bool(row["is_active"]),
         )
+
+    def update_job_outputs_compressed(
+        self,
+        job_id: str,
+        hostname: str,
+        stdout_data: Optional[dict] = None,
+        stderr_data: Optional[dict] = None,
+        mark_fetched_after_completion: bool = False,
+    ):
+        """
+        Update cached job outputs with compressed data.
+
+        Args:
+            job_id: Job ID
+            hostname: Hostname
+            stdout_data: Dict with compressed stdout data and metadata
+            stderr_data: Dict with compressed stderr data and metadata
+            mark_fetched_after_completion: If True, mark outputs as fetched after job completion
+        """
+        import base64
+        import gzip
+
+        with self._get_connection() as conn:
+            updates = []
+            params = []
+
+            if stdout_data is not None:
+                # Decode base64 and store as BLOB
+                compressed_data = base64.b64decode(stdout_data["data"])
+
+                # Further compress if not already compressed and large enough
+                if not stdout_data.get("compressed") and len(compressed_data) > 1024:
+                    compressed_data = gzip.compress(compressed_data)
+                    compression = "gzip"
+                else:
+                    compression = stdout_data.get("compression", "none")
+
+                updates.extend(
+                    [
+                        "stdout_compressed = ?",
+                        "stdout_size = ?",
+                        "stdout_compression = ?",
+                    ]
+                )
+                params.extend(
+                    [compressed_data, stdout_data.get("original_size", 0), compression]
+                )
+
+                if mark_fetched_after_completion:
+                    updates.append("stdout_fetched_after_completion = 1")
+
+            if stderr_data is not None:
+                # Decode base64 and store as BLOB
+                compressed_data = base64.b64decode(stderr_data["data"])
+
+                # Further compress if not already compressed and large enough
+                if not stderr_data.get("compressed") and len(compressed_data) > 1024:
+                    compressed_data = gzip.compress(compressed_data)
+                    compression = "gzip"
+                else:
+                    compression = stderr_data.get("compression", "none")
+
+                updates.extend(
+                    [
+                        "stderr_compressed = ?",
+                        "stderr_size = ?",
+                        "stderr_compression = ?",
+                    ]
+                )
+                params.extend(
+                    [compressed_data, stderr_data.get("original_size", 0), compression]
+                )
+
+                if mark_fetched_after_completion:
+                    updates.append("stderr_fetched_after_completion = 1")
+
+            if updates:
+                updates.append("last_updated = ?")
+                params.append(datetime.now().isoformat())
+                params.extend([job_id, hostname])
+
+                query = f"""
+                    UPDATE cached_jobs 
+                    SET {", ".join(updates)}
+                    WHERE job_id = ? AND hostname = ?
+                """
+                conn.execute(query, params)
+                conn.commit()
+
+                logger.debug(
+                    f"Updated compressed outputs for job {job_id} on {hostname}"
+                )
 
     def update_job_outputs(
         self,
@@ -521,43 +664,72 @@ class JobDataCache:
     ):
         """
         Update cached job outputs without replacing the entire entry.
+        This is a compatibility wrapper that converts text content to compressed format.
 
         Args:
             job_id: Job ID
             hostname: Hostname
-            stdout_content: Updated stdout content
-            stderr_content: Updated stderr content
+            stdout_content: Updated stdout content (plain text)
+            stderr_content: Updated stderr content (plain text)
             mark_fetched_after_completion: If True, mark outputs as fetched after job completion
         """
-        with self._get_connection() as conn:
-            updates = []
-            params = []
+        import base64
+        import gzip
 
-            if stdout_content is not None:
-                updates.append("stdout_content = ?")
-                params.append(stdout_content)
-                if mark_fetched_after_completion:
-                    updates.append("stdout_fetched_after_completion = 1")
+        # Convert text content to compressed format
+        stdout_data = None
+        stderr_data = None
 
-            if stderr_content is not None:
-                updates.append("stderr_content = ?")
-                params.append(stderr_content)
-                if mark_fetched_after_completion:
-                    updates.append("stderr_fetched_after_completion = 1")
+        if stdout_content is not None:
+            # Compress if large enough
+            if len(stdout_content) > 1024:
+                compressed = gzip.compress(stdout_content.encode("utf-8"))
+                stdout_data = {
+                    "compressed": True,
+                    "data": base64.b64encode(compressed).decode("ascii"),
+                    "original_size": len(stdout_content),
+                    "compression": "gzip",
+                }
+            else:
+                # Store uncompressed for small content
+                stdout_data = {
+                    "compressed": False,
+                    "data": base64.b64encode(stdout_content.encode("utf-8")).decode(
+                        "ascii"
+                    ),
+                    "original_size": len(stdout_content),
+                    "compression": "none",
+                }
 
-            if updates:
-                updates.append("last_updated = ?")
-                params.append(datetime.now().isoformat())
+        if stderr_content is not None:
+            # Compress if large enough
+            if len(stderr_content) > 1024:
+                compressed = gzip.compress(stderr_content.encode("utf-8"))
+                stderr_data = {
+                    "compressed": True,
+                    "data": base64.b64encode(compressed).decode("ascii"),
+                    "original_size": len(stderr_content),
+                    "compression": "gzip",
+                }
+            else:
+                # Store uncompressed for small content
+                stderr_data = {
+                    "compressed": False,
+                    "data": base64.b64encode(stderr_content.encode("utf-8")).decode(
+                        "ascii"
+                    ),
+                    "original_size": len(stderr_content),
+                    "compression": "none",
+                }
 
-                query = f"""
-                    UPDATE cached_jobs 
-                    SET {", ".join(updates)}
-                    WHERE job_id = ? AND hostname = ?
-                """
-                params.extend([job_id, hostname])
-
-                conn.execute(query, params)
-                conn.commit()
+        # Call the compressed version
+        self.update_job_outputs_compressed(
+            job_id=job_id,
+            hostname=hostname,
+            stdout_data=stdout_data,
+            stderr_data=stderr_data,
+            mark_fetched_after_completion=mark_fetched_after_completion,
+        )
 
     def update_job_script(
         self,

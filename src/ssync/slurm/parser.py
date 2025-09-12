@@ -11,8 +11,7 @@ class SlurmParser:
     def map_slurm_state(state_str: str, from_sacct: bool = False) -> JobState:
         """Map SLURM state string to JobState enum."""
         if from_sacct:
-            # Handle sacct states
-            state_clean = state_str.split()[0]  # Remove extra state info
+            state_clean = state_str.split()[0]
             if state_clean in ["COMPLETED"]:
                 return JobState.COMPLETED
             elif state_clean in [
@@ -31,7 +30,6 @@ class SlurmParser:
             else:
                 return JobState.UNKNOWN
         else:
-            # Handle squeue states - map full state names to short codes
             state_upper = state_str.upper().strip()
             if state_upper == "PENDING":
                 return JobState.PENDING
@@ -46,20 +44,44 @@ class SlurmParser:
             elif state_upper == "TIMEOUT":
                 return JobState.TIMEOUT
             else:
-                # Try to match the short code directly (for backwards compatibility)
                 try:
                     return JobState(state_str)
                 except ValueError:
                     return JobState.UNKNOWN
 
     @staticmethod
-    def create_var_dict(fields: list[str]) -> dict:
-        """Create variable dictionary for SLURM path expansion."""
-        return {
-            "j": fields[0],  # JobID
-            "i": fields[0],  # JobID
-            "u": fields[3],  # User
-        }
+    def create_var_dict(fields: list[str], field_names: list[str] = None) -> dict:
+        """Create variable dictionary for SLURM path expansion.
+
+        Args:
+            fields: Field values from SLURM command output
+            field_names: Field names for sacct parsing (optional)
+
+        Returns:
+            Dictionary mapping SLURM variable names to values
+        """
+        if field_names:
+
+            def get_field_value(field_name: str) -> str:
+                try:
+                    idx = field_names.index(field_name)
+                    return fields[idx] if len(fields) > idx and fields[idx] else ""
+                except (ValueError, IndexError):
+                    return ""
+
+            return {
+                "j": get_field_value("JobID"),
+                "i": get_field_value("JobID"),
+                "u": get_field_value("User"),
+                "x": get_field_value("JobName"),
+            }
+        else:
+            return {
+                "j": fields[0] if len(fields) > 0 else "",
+                "i": fields[0] if len(fields) > 0 else "",
+                "u": fields[3] if len(fields) > 3 else "",
+                "x": fields[1] if len(fields) > 1 else "",
+            }
 
     @staticmethod
     def expand_slurm_path_vars(path_str: str, var_dict: dict) -> str:
@@ -86,7 +108,6 @@ class SlurmParser:
         """Create JobInfo from squeue field array."""
         state = cls.map_slurm_state(fields[2])
 
-        # Get field by name helper
         def get_field(field_name: str) -> str | None:
             try:
                 idx = SQUEUE_FIELDS.index(field_name)
@@ -94,7 +115,6 @@ class SlurmParser:
             except (ValueError, IndexError):
                 return None
 
-        # Create variable dictionary for path expansion
         var_dict = cls.create_var_dict(fields)
         stdout_file = (
             cls.expand_slurm_path_vars(get_field("%o") or "", var_dict)
@@ -107,7 +127,6 @@ class SlurmParser:
             else None
         )
 
-        # Parse array job info from job_id if present
         job_id_str = get_field("%i") or ""
         array_job_id = None
         array_task_id = None
@@ -150,10 +169,8 @@ class SlurmParser:
         """Create JobInfo from sacct field array."""
         state = cls.map_slurm_state(fields[2], from_sacct=True)
 
-        # Use provided field names or fall back to default
         active_field_names = field_names or SACCT_FIELDS
 
-        # Get field by name helper
         def get_field(field_name: str) -> str | None:
             try:
                 idx = active_field_names.index(field_name)
@@ -161,13 +178,11 @@ class SlurmParser:
             except (ValueError, IndexError):
                 return None
 
-        # Infer stdout/stderr paths
         work_dir = get_field("WorkDir")
-        var_dict = cls.create_var_dict(fields)
+        var_dict = cls.create_var_dict(fields, active_field_names)
         stdout_file = cls.expand_slurm_path_vars(get_field("StdOut") or "", var_dict)
         stderr_file = cls.expand_slurm_path_vars(get_field("StdErr") or "", var_dict)
 
-        # Parse array job info from job_id if present
         job_id_str = get_field("JobID") or ""
         array_job_id = None
         array_task_id = None
@@ -204,10 +219,8 @@ class SlurmParser:
             priority=get_field("Priority"),
             array_job_id=array_job_id,
             array_task_id=array_task_id,
-            # Resource allocation
             alloc_tres=get_field("AllocTRES"),
             req_tres=get_field("ReqTRES"),
-            # CPU metrics
             cpu_time=get_field("CPUTime"),
             total_cpu=get_field("TotalCPU"),
             user_cpu=get_field("UserCPU"),
@@ -216,16 +229,13 @@ class SlurmParser:
             ave_cpu_freq=get_field("AveCPUFreq"),
             req_cpu_freq_min=get_field("ReqCPUFreqMin"),
             req_cpu_freq_max=get_field("ReqCPUFreqMax"),
-            # Memory metrics
             max_rss=get_field("MaxRSS"),
             ave_rss=get_field("AveRSS"),
             max_vmsize=get_field("MaxVMSize"),
             ave_vmsize=get_field("AveVMSize"),
-            # Disk I/O metrics
             max_disk_read=get_field("MaxDiskRead"),
             max_disk_write=get_field("MaxDiskWrite"),
             ave_disk_read=get_field("AveDiskRead"),
             ave_disk_write=get_field("AveDiskWrite"),
-            # Energy metrics
             consumed_energy=get_field("ConsumedEnergy"),
         )

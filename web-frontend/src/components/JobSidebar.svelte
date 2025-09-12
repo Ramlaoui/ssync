@@ -3,14 +3,16 @@
   import { push } from 'svelte-spa-router';
   import type { JobInfo } from '../types/api';
   import { jobsStore, sidebarJobs, hostLoadingStates, isAnyHostLoading } from '../stores/jobs';
+  import { allJobsWebSocketStore } from '../stores/jobWebSocket';
+  import { dataSyncManager } from '../lib/DataSyncManager';
   
   export let currentJobId: string = '';
   export let currentHost: string = '';
   export let collapsed = false;
   export let isMobile = false;
+  export let onMobileJobSelect: (() => void) | undefined = undefined;
   
   let loading = false;
-  let refreshInterval: ReturnType<typeof setInterval>;
   
   // Track which hosts are loading
   $: hostsLoading = $isAnyHostLoading;
@@ -22,13 +24,44 @@
   $: pendingJobs = $sidebarJobs.pendingJobs;
   $: recentJobs = $sidebarJobs.recentJobs;
   
+  // Subscribe to WebSocket updates to keep sidebar in sync
+  $: if ($allJobsWebSocketStore.connected && $allJobsWebSocketStore.jobs) {
+    // Update the cache for each job from WebSocket
+    for (const [hostname, jobList] of Object.entries($allJobsWebSocketStore.jobs)) {
+      jobList.forEach(job => {
+        jobsStore.updateJobCache(job, hostname);
+      });
+    }
+  }
+  
+  // Handle WebSocket update events
+  $: if ($allJobsWebSocketStore.updates.length > 0) {
+    const latestUpdate = $allJobsWebSocketStore.updates[$allJobsWebSocketStore.updates.length - 1];
+    if (latestUpdate?.type === 'state_change' && latestUpdate.data) {
+      if (Array.isArray(latestUpdate.data)) {
+        latestUpdate.data.forEach((update: any) => {
+          if (update.job && update.hostname) {
+            jobsStore.updateJobCache(update.job, update.hostname);
+          }
+        });
+      }
+    }
+  }
+  
   async function loadJobs(forceRefresh = false) {
     if (loading) return; // Prevent multiple simultaneous loads
     
     try {
       loading = true;
-      // Start progressive loading - this won't block
-      jobsStore.fetchAllJobsProgressive(forceRefresh);
+      
+      if (forceRefresh) {
+        // Use DataSyncManager for immediate refresh
+        await dataSyncManager.requestImmediateRefresh();
+      } else {
+        // For normal loads, just trigger progressive loading
+        jobsStore.fetchAllJobsProgressive(forceRefresh);
+      }
+      
       // Loading indicator will be handled by hostsLoading
       setTimeout(() => loading = false, 500); // Brief loading state
     } catch (error) {
@@ -40,6 +73,11 @@
   function selectJob(job: JobInfo) {
     // Navigate to the job
     push(`/jobs/${job.job_id}/${job.hostname}`);
+    
+    // Close mobile sidebar if callback provided
+    if (isMobile && onMobileJobSelect) {
+      onMobileJobSelect();
+    }
   }
   
   function getStateColor(state: string): string {
@@ -84,16 +122,12 @@
   onMount(() => {
     loadJobs();
     
-    // Refresh every 2 minutes (120 seconds)
-    refreshInterval = setInterval(() => {
-      loadJobs(true);
-    }, 120000);
+    // DataSyncManager handles automatic refreshing
+    // No need for manual intervals
   });
   
   onDestroy(() => {
-    if (refreshInterval) {
-      clearInterval(refreshInterval);
-    }
+    // DataSyncManager handles cleanup automatically
   });
 </script>
 
@@ -160,7 +194,7 @@
         <div class="job-section">
           <h4 class="section-title">
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M8.5,7.5L7.5,8.5L10.5,11.5L7.5,14.5L8.5,15.5L11.5,12.5L14.5,15.5L15.5,14.5L12.5,11.5L15.5,8.5L14.5,7.5L11.5,10.5L8.5,7.5Z" />
+              <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
             </svg>
             Running ({runningJobs.length})
           </h4>
@@ -340,6 +374,13 @@
     background: #f8fafc;
     min-width: 280px;
   }
+
+  .job-sidebar.mobile .sidebar-header {
+    padding: 1rem !important;
+    background: #f8fafc !important;
+    border-bottom: none !important;
+    min-width: auto !important;
+  }
   
   .sidebar-header h3 {
     flex: 1;
@@ -392,6 +433,17 @@
     overflow-y: auto;
     padding: 0.5rem;
     min-width: 280px;
+  }
+
+  .job-sidebar.mobile .sidebar-content {
+    flex: 1 !important;
+    padding: 0.75rem !important;
+    background: #f8fafc !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    min-height: 0 !important;
+    min-width: auto !important;
+    max-height: none !important;
   }
   
   .loading-state {
@@ -674,11 +726,169 @@
     width: 100%;
     position: static;
     border-right: none;
-    border-bottom: 1px solid #e2e8f0;
-    max-height: 50vh;
+    border-bottom: none;
+    height: 100vh;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
   }
   
-  .job-sidebar.mobile .sidebar-content {
-    max-height: calc(50vh - 60px);
+  
+  .job-sidebar.mobile .refresh-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+  }
+  
+  .job-sidebar.mobile .refresh-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+  
+  .job-sidebar.mobile .section-title {
+    margin-bottom: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: white;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    font-size: 0.75rem;
+    color: #1e293b;
+  }
+  
+  .job-sidebar.mobile .section-title svg {
+    width: 16px;
+    height: 16px;
+  }
+  
+  .job-sidebar.mobile .job-list {
+    gap: 0.5rem;
+  }
+  
+  .job-sidebar.mobile .job-item {
+    padding: 1rem;
+    border-radius: 12px;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e2e8f0;
+    min-height: 72px;
+    gap: 0.5rem;
+  }
+  
+  .job-sidebar.mobile .job-item:hover {
+    transform: none;
+    background: #f8fafc;
+    border-color: #3b82f6;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+  }
+
+  .job-sidebar.mobile .job-item:active {
+    transform: scale(0.98);
+    background: #f1f5f9;
+    border-color: #2563eb;
+    box-shadow: 0 1px 4px rgba(59, 130, 246, 0.2);
+    transition: transform 0.1s ease;
+  }
+
+  /* Ensure touch events work properly on mobile */
+  .job-sidebar.mobile .job-item {
+    cursor: pointer;
+    -webkit-tap-highlight-color: rgba(59, 130, 246, 0.1);
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  
+  .job-sidebar.mobile .job-item.active {
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    border-color: #3b82f6;
+    box-shadow: 0 2px 12px rgba(59, 130, 246, 0.15);
+  }
+  
+  .job-sidebar.mobile .job-header {
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  
+  .job-sidebar.mobile .job-id-group {
+    gap: 0.75rem;
+    align-items: center;
+  }
+  
+  .job-sidebar.mobile .status-dot {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+  }
+  
+  .job-sidebar.mobile .job-id {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  
+  .job-sidebar.mobile .job-runtime {
+    font-size: 0.85rem;
+    color: #6b7280;
+    font-weight: 600;
+    background: #f3f4f6;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  
+  .job-sidebar.mobile .job-name {
+    font-size: 0.9rem;
+    color: #374151;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  .job-sidebar.mobile .job-footer {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .job-sidebar.mobile .job-host {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  
+  .job-sidebar.mobile .job-reason,
+  .job-sidebar.mobile .job-state-text {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    background: #f3f4f6;
+    color: #6b7280;
+  }
+  
+  .job-sidebar.mobile .job-section {
+    margin-bottom: 1.5rem;
+  }
+  
+  .job-sidebar.mobile .host-loading-bar {
+    margin: 0.75rem;
+    padding: 1rem;
+    border-radius: 12px;
+  }
+  
+  .job-sidebar.mobile .loading-state,
+  .job-sidebar.mobile .empty-state {
+    padding: 3rem 1.5rem;
+  }
+  
+  .job-sidebar.mobile .loading-state svg,
+  .job-sidebar.mobile .empty-state svg {
+    width: 48px;
+    height: 48px;
   }
 </style>

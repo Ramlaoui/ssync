@@ -25,6 +25,7 @@ class WatcherEngine:
         self.cache = get_cache()
         self.active_tasks: Dict[int, asyncio.Task] = {}
         self._shutdown = False
+        self._pattern_cache: Dict[str, re.Pattern] = {}  # Cache compiled regex patterns
 
     async def start_watchers_for_job(
         self, job_id: str, hostname: str, watchers: List[WatcherDefinition]
@@ -64,6 +65,10 @@ class WatcherEngine:
         for watcher_id in watcher_ids:
             if watcher_id in self.active_tasks:
                 self.active_tasks[watcher_id].cancel()
+                try:
+                    await self.active_tasks[watcher_id]
+                except asyncio.CancelledError:
+                    pass
                 del self.active_tasks[watcher_id]
 
             # Update state in database
@@ -71,54 +76,273 @@ class WatcherEngine:
 
         logger.info(f"Stopped {len(watcher_ids)} watchers for job {job_id}")
 
+    async def cleanup_orphaned_watchers(self):
+        """Stop watchers for jobs that no longer exist or have completed."""
+        try:
+            # Get all active watchers from database
+            with self.cache._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT id, job_id, hostname FROM job_watchers WHERE state = 'active'"
+                )
+                active_watchers = cursor.fetchall()
+
+            for row in active_watchers:
+                watcher_id, job_id, hostname = row
+
+                # Check if job still exists and is active
+                job_info = await self._get_job_info(job_id, hostname)
+
+                should_stop = False
+                if not job_info:
+                    logger.info(
+                        f"Job {job_id} not found, stopping orphaned watcher {watcher_id}"
+                    )
+                    should_stop = True
+                elif job_info.state in [
+                    JobState.COMPLETED,
+                    JobState.FAILED,
+                    JobState.CANCELLED,
+                    JobState.TIMEOUT,
+                ]:
+                    logger.info(
+                        f"Job {job_id} is {job_info.state}, stopping watcher {watcher_id}"
+                    )
+                    should_stop = True
+
+                if should_stop:
+                    # Cancel task if running
+                    if watcher_id in self.active_tasks:
+                        self.active_tasks[watcher_id].cancel()
+                        try:
+                            await self.active_tasks[watcher_id]
+                        except asyncio.CancelledError:
+                            pass
+                        del self.active_tasks[watcher_id]
+
+                    # Update state in database
+                    self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
+
+        except Exception as e:
+            logger.error(f"Error cleaning up orphaned watchers: {e}")
+
+    async def check_and_restart_watchers(self):
+        """Check health of watchers and restart if needed."""
+        try:
+            # Get all active watchers from database
+            with self.cache._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT id, job_id, hostname, last_check, interval_seconds
+                    FROM job_watchers 
+                    WHERE state = 'active'
+                    """
+                )
+                watchers = cursor.fetchall()
+
+            for row in watchers:
+                watcher_id = row["id"]
+                job_id = row["job_id"]
+                hostname = row["hostname"]
+                last_check = row["last_check"]
+                interval = row["interval_seconds"]
+
+                # Check if watcher task is running
+                if (
+                    watcher_id not in self.active_tasks
+                    or self.active_tasks[watcher_id].done()
+                ):
+                    # Task is not running or has finished
+
+                    # Check if it should still be running
+                    job_info = await self._get_job_info(job_id, hostname)
+                    if job_info and job_info.state in [
+                        JobState.RUNNING,
+                        JobState.PENDING,
+                    ]:
+                        logger.warning(
+                            f"Watcher {watcher_id} for job {job_id} is not running, restarting..."
+                        )
+
+                        # Restart the watcher
+                        task = asyncio.create_task(
+                            self._monitor_watcher(watcher_id, job_id, hostname)
+                        )
+                        self.active_tasks[watcher_id] = task
+
+                # Check if watcher is stale (hasn't checked in too long)
+                if last_check:
+                    last_check_time = datetime.fromisoformat(last_check)
+                    time_since_check = (
+                        datetime.now() - last_check_time
+                    ).total_seconds()
+
+                    # If hasn't checked in 3x the interval, might be stuck
+                    if time_since_check > interval * 3:
+                        logger.warning(
+                            f"Watcher {watcher_id} hasn't checked in {time_since_check:.0f}s "
+                            f"(expected every {interval}s)"
+                        )
+
+        except Exception as e:
+            logger.error(f"Error checking watcher health: {e}")
+
     async def _monitor_watcher(self, watcher_id: int, job_id: str, hostname: str):
         """Monitor a single watcher."""
         backoff_factor = 1.0
         consecutive_failures = 0
+        last_action_time = datetime.now()
+        action_count_in_window = 0
+        rate_limit_window = 60  # 1 minute window
+        max_actions_per_window = 10  # Max 10 actions per minute
+
+        # Initial delay to let job start and produce some output
+        initial_delay = 5  # seconds
+        logger.info(f"Watcher {watcher_id} waiting {initial_delay}s before first check")
+        await asyncio.sleep(initial_delay)
 
         try:
             while not self._shutdown:
                 try:
-                    # Get watcher details from database
+                    # Get watcher details from database (fresh state each iteration)
                     watcher = self._get_watcher(watcher_id)
                     if not watcher or watcher.state != WatcherState.ACTIVE:
                         break
 
+                    # Update last check timestamp
+                    self._update_watcher_last_check(watcher_id)
+
                     # Check if job is still active
                     job_info = await self._get_job_info(job_id, hostname)
-                    if not job_info or job_info.state not in [
-                        JobState.PENDING,
-                        JobState.RUNNING,
-                    ]:
+                    if not job_info:
                         logger.info(
-                            f"Job {job_id} no longer active, stopping watcher {watcher_id}"
+                            f"Job {job_id} not found, stopping watcher {watcher_id}"
                         )
+                        self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
                         break
 
-                    # Get new output content
-                    new_content = await self._get_new_output(
-                        job_info, watcher.definition.output_type, watcher.last_position
-                    )
+                    # Check if job has finished (any terminal state)
+                    if job_info.state in [
+                        JobState.COMPLETED,
+                        JobState.FAILED,
+                        JobState.CANCELLED,
+                        JobState.TIMEOUT,
+                    ]:
+                        logger.info(
+                            f"Job {job_id} finished with state {job_info.state}, stopping watcher {watcher_id}"
+                        )
+                        self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
+                        break
 
-                    if new_content:
-                        # Update last position
-                        new_position = watcher.last_position + len(new_content.encode())
-                        self._update_watcher_position(watcher_id, new_position)
+                    # Check if watcher is in timer mode
+                    if watcher.timer_mode_active:
+                        logger.debug(
+                            f"Timer mode active for watcher {watcher_id}, executing actions"
+                        )
 
-                        # Check for pattern matches
-                        matches_found = self._check_patterns(watcher, new_content)
+                        # Rate limiting check
+                        now = datetime.now()
+                        if (now - last_action_time).total_seconds() > rate_limit_window:
+                            action_count_in_window = 0
+                            last_action_time = now
 
-                        if matches_found:
-                            # Reset backoff on successful match
-                            backoff_factor = 1.0
-                            consecutive_failures = 0
-                        else:
-                            # No matches, increase backoff slightly
-                            backoff_factor = min(backoff_factor * 1.1, 5.0)
+                        if action_count_in_window >= max_actions_per_window:
+                            logger.warning(
+                                f"Rate limit reached for watcher {watcher_id}, skipping actions"
+                            )
+                            await asyncio.sleep(
+                                watcher.definition.timer_interval_seconds
+                            )
+                            continue
 
-                    # Sleep with backoff
-                    sleep_time = watcher.definition.interval_seconds * backoff_factor
-                    await asyncio.sleep(sleep_time)
+                        # Timer mode: execute actions periodically using cached variables
+                        # Reload variables from database for consistency
+                        fresh_variables = self._get_watcher_variables(watcher_id)
+
+                        actions_executed = 0
+                        for action in watcher.definition.actions:
+                            # Check action-specific condition
+                            if action.condition:
+                                if not self._evaluate_condition(
+                                    action.condition, fresh_variables
+                                ):
+                                    continue
+
+                            # Execute action with fresh variables and track result
+                            try:
+                                success, result = await self._execute_action(
+                                    watcher, action, "", fresh_variables
+                                )
+                                if success:
+                                    actions_executed += 1
+                                    action_count_in_window += 1
+                                logger.debug(f"Timer action result: {result}")
+                            except Exception as e:
+                                logger.error(f"Failed to execute timer action: {e}")
+
+                        # Update trigger count for timer mode (increment from current database value)
+                        new_trigger_count = watcher.trigger_count + 1
+                        self._update_watcher_trigger_count(
+                            watcher.id, new_trigger_count
+                        )
+
+                        # Check max triggers in timer mode
+                        if watcher.definition.max_triggers:
+                            if new_trigger_count >= watcher.definition.max_triggers:
+                                logger.info(
+                                    f"Timer mode watcher {watcher_id} reached max triggers "
+                                    f"({watcher.definition.max_triggers}), disabling"
+                                )
+                                self._update_watcher_state(
+                                    watcher_id, WatcherState.TRIGGERED
+                                )
+                                break
+
+                        # Sleep for timer interval
+                        logger.debug(
+                            f"Timer mode watcher {watcher_id} sleeping for {watcher.definition.timer_interval_seconds}s"
+                        )
+                        await asyncio.sleep(watcher.definition.timer_interval_seconds)
+
+                    else:
+                        # Pattern matching mode
+                        # Get new output content
+                        new_content = await self._get_new_output(
+                            job_info,
+                            watcher.definition.output_type,
+                            watcher.last_position,
+                        )
+
+                        if new_content:
+                            # Update last position
+                            new_position = watcher.last_position + len(
+                                new_content.encode()
+                            )
+                            self._update_watcher_position(watcher_id, new_position)
+
+                            # Check for pattern matches
+                            matches_found = self._check_patterns(watcher, new_content)
+
+                            if matches_found:
+                                # Reset backoff on successful match
+                                backoff_factor = 1.0
+                                consecutive_failures = 0
+
+                                # Switch to timer mode if enabled
+                                if watcher.definition.timer_mode_enabled:
+                                    watcher.timer_mode_active = True
+                                    self._update_watcher_timer_mode(watcher_id, True)
+                                    logger.info(
+                                        f"Watcher {watcher_id} switched to timer mode after pattern match"
+                                    )
+                            else:
+                                # No matches, increase backoff slightly
+                                backoff_factor = min(backoff_factor * 1.1, 5.0)
+
+                        # Sleep with backoff for pattern matching mode
+                        sleep_time = (
+                            watcher.definition.interval_seconds * backoff_factor
+                        )
+                        await asyncio.sleep(sleep_time)
 
                 except Exception as e:
                     logger.error(f"Error in watcher {watcher_id} monitor loop: {e}")
@@ -146,8 +370,15 @@ class WatcherEngine:
         matches_found = False
 
         try:
-            # Compile regex pattern
-            regex = re.compile(pattern, re.MULTILINE)
+            # Use cached compiled regex if available
+            if pattern not in self._pattern_cache:
+                try:
+                    self._pattern_cache[pattern] = re.compile(pattern, re.MULTILINE)
+                except re.error as e:
+                    logger.error(f"Invalid regex pattern '{pattern}': {e}")
+                    return False
+
+            regex = self._pattern_cache[pattern]
 
             for match in regex.finditer(content):
                 matches_found = True
@@ -172,7 +403,7 @@ class WatcherEngine:
                     ):
                         continue
 
-                # Trigger actions
+                # Trigger actions (with rate limiting)
                 for action in watcher.definition.actions:
                     # Check action-specific condition
                     if action.condition:
@@ -181,12 +412,20 @@ class WatcherEngine:
                         ):
                             continue
 
-                    # Execute action asynchronously
-                    asyncio.create_task(
-                        self._execute_action(
-                            watcher, action, matched_text, captured_vars
+                    # Execute action and track results properly
+                    try:
+                        # Create task but also track it for cleanup
+                        task = asyncio.create_task(
+                            self._execute_action(
+                                watcher, action, matched_text, captured_vars
+                            )
                         )
-                    )
+                        # Store task reference for potential cleanup
+                        if not hasattr(self, "_action_tasks"):
+                            self._action_tasks = []
+                        self._action_tasks.append(task)
+                    except Exception as e:
+                        logger.error(f"Failed to create action task: {e}")
 
                 # Update trigger count
                 watcher.trigger_count += 1
@@ -242,12 +481,14 @@ class WatcherEngine:
 
         try:
             executor = ActionExecutor()
+            # Include matched text in variables for $0 substitution
+            variables_with_match = {"_matched_text": matched_text, **captured_vars}
             success, result = await executor.execute(
                 action_type=action.type,
                 params=action.params,
                 job_id=watcher.job_id,
                 hostname=watcher.hostname,
-                variables=captured_vars,
+                variables=variables_with_match,
             )
 
             # Log event
@@ -267,8 +508,76 @@ class WatcherEngine:
                 f"success={success}, result={result}"
             )
 
+            return success, result
+
         except Exception as e:
             logger.error(f"Failed to execute action for watcher {watcher.id}: {e}")
+            return False, f"Error: {e}"
+
+    async def execute_timer_actions(self, watcher_id: int) -> tuple[bool, str]:
+        """
+        Manually execute timer mode actions for a watcher.
+        Used for manual triggers from the UI.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            # Get watcher instance
+            watcher = self._get_watcher(watcher_id)
+            if not watcher:
+                return False, "Watcher not found"
+
+            # Check if watcher is in timer mode
+            if not watcher.timer_mode_active:
+                return False, "Watcher is not in timer mode"
+
+            # Get fresh variables from database
+            fresh_variables = self._get_watcher_variables(watcher_id)
+
+            actions_executed = 0
+            action_results = []
+
+            for action in watcher.definition.actions:
+                # Check action-specific condition
+                if action.condition:
+                    if not self._evaluate_condition(action.condition, fresh_variables):
+                        continue
+
+                # Execute action with fresh variables
+                try:
+                    success, result = await self._execute_action(
+                        watcher, action, "[Manual Timer Trigger]", fresh_variables
+                    )
+                    if success:
+                        actions_executed += 1
+                        action_results.append(f"{action.type.value}: {result}")
+                    else:
+                        action_results.append(f"{action.type.value}: Failed - {result}")
+                except Exception as e:
+                    logger.error(f"Failed to execute timer action: {e}")
+                    action_results.append(f"{action.type.value}: Error - {str(e)}")
+
+            # Update trigger count
+            new_trigger_count = watcher.trigger_count + 1
+            self._update_watcher_trigger_count(watcher.id, new_trigger_count)
+
+            # Check max triggers
+            if watcher.definition.max_triggers:
+                if new_trigger_count >= watcher.definition.max_triggers:
+                    self._update_watcher_state(watcher.id, WatcherState.TRIGGERED)
+                    action_results.append("Max triggers reached - watcher disabled")
+
+            if actions_executed > 0:
+                result_msg = f"Executed {actions_executed} timer action(s): "
+                result_msg += "; ".join(action_results)
+                return True, result_msg
+            else:
+                return True, "No timer actions met conditions for execution"
+
+        except Exception as e:
+            logger.error(f"Error executing timer actions for watcher {watcher_id}: {e}")
+            return False, f"Error: {str(e)}"
 
     async def _get_job_info(self, job_id: str, hostname: str) -> Optional[JobInfo]:
         """Get job information."""
@@ -305,15 +614,52 @@ class WatcherEngine:
             else:
                 return None
 
+            # First check if file exists and get its size
+            size_result = conn.run(
+                f"stat -c %s '{file_path}' 2>/dev/null || echo 0",
+                hide=True,
+                warn=True,
+            )
+
+            if size_result.ok:
+                try:
+                    file_size = int(size_result.stdout.strip())
+
+                    # Handle file rotation/truncation
+                    if file_size < last_position:
+                        logger.warning(
+                            f"File {file_path} was truncated/rotated "
+                            f"(size={file_size} < position={last_position}), resetting position"
+                        )
+                        last_position = 0
+                        # Note: Position will be updated by caller
+
+                    # Don't read if we're at the end
+                    if file_size == last_position:
+                        return None
+
+                except ValueError:
+                    pass
+
             # Read from last position (like tail -f)
+            # Limit read size to prevent memory issues
+            max_read_size = 1024 * 1024  # 1MB max per read
             result = conn.run(
-                f"tail -c +{last_position + 1} '{file_path}' 2>/dev/null || true",
+                f"tail -c +{last_position + 1} '{file_path}' 2>/dev/null | head -c {max_read_size}",
                 hide=True,
                 warn=True,
             )
 
             if result.ok and result.stdout:
-                return result.stdout
+                # Filter out binary data
+                try:
+                    # Try to decode as UTF-8, replace invalid chars
+                    clean_output = result.stdout.encode("utf-8", "ignore").decode(
+                        "utf-8", "ignore"
+                    )
+                    return clean_output
+                except Exception:
+                    return result.stdout
 
             return None
 
@@ -333,8 +679,9 @@ class WatcherEngine:
                     """
                     INSERT INTO job_watchers 
                     (job_id, hostname, name, pattern, interval_seconds, 
-                     captures_json, condition, actions_json, created_at, state)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     captures_json, condition, actions_json, created_at, state,
+                     timer_mode_enabled, timer_interval_seconds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -356,6 +703,8 @@ class WatcherEngine:
                         ),
                         datetime.now().isoformat(),
                         WatcherState.ACTIVE.value,
+                        1 if definition.timer_mode_enabled else 0,
+                        definition.timer_interval_seconds,
                     ),
                 )
                 conn.commit()
@@ -391,6 +740,14 @@ class WatcherEngine:
                             )
                             for action_data in json.loads(row["actions_json"] or "[]")
                         ],
+                        timer_mode_enabled=bool(
+                            row["timer_mode_enabled"]
+                            if "timer_mode_enabled" in row.keys()
+                            else 0
+                        ),
+                        timer_interval_seconds=row["timer_interval_seconds"]
+                        if "timer_interval_seconds" in row.keys()
+                        else 30,
                     )
 
                     instance = WatcherInstance(
@@ -401,6 +758,11 @@ class WatcherEngine:
                         state=WatcherState(row["state"]),
                         last_position=row["last_position"],
                         trigger_count=row["trigger_count"],
+                        timer_mode_active=bool(
+                            row["timer_mode_active"]
+                            if "timer_mode_active" in row.keys()
+                            else 0
+                        ),
                     )
 
                     # Load variables
@@ -494,6 +856,47 @@ class WatcherEngine:
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} variables: {e}")
+
+    def _update_watcher_timer_mode(self, watcher_id: int, timer_mode_active: bool):
+        """Update watcher timer mode state."""
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute(
+                    "UPDATE job_watchers SET timer_mode_active = ? WHERE id = ?",
+                    (1 if timer_mode_active else 0, watcher_id),
+                )
+                conn.commit()
+
+        except Exception as e:
+            logger.error(f"Failed to update watcher {watcher_id} timer mode: {e}")
+
+    def _update_watcher_last_check(self, watcher_id: int):
+        """Update watcher last check timestamp."""
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute(
+                    "UPDATE job_watchers SET last_check = ? WHERE id = ?",
+                    (datetime.now().isoformat(), watcher_id),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to update watcher {watcher_id} last check: {e}")
+
+    def _get_watcher_variables(self, watcher_id: int) -> Dict[str, Any]:
+        """Get watcher variables from database."""
+        try:
+            with self.cache._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT variable_name, variable_value FROM watcher_variables WHERE watcher_id = ?",
+                    (watcher_id,),
+                )
+                return {
+                    row["variable_name"]: row["variable_value"]
+                    for row in cursor.fetchall()
+                }
+        except Exception as e:
+            logger.error(f"Failed to get watcher {watcher_id} variables: {e}")
+            return {}
 
     def _log_watcher_event(
         self,

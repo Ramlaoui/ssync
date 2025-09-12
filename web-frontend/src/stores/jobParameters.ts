@@ -31,6 +31,7 @@ export interface JobParametersState {
   syncMode: SyncMode;
   lastScriptUpdate: number; // Timestamp of last script update
   scriptUpdateDebounceTimer?: number;
+  isResubmit: boolean; // Flag to indicate we're in resubmit mode
 }
 
 // Default parameter definitions
@@ -59,6 +60,7 @@ function createJobParametersStore() {
     scriptHasSbatch: false,
     syncMode: 'bidirectional',
     lastScriptUpdate: Date.now(),
+    isResubmit: false,
   };
 
   const store = writable<JobParametersState>(initialState);
@@ -476,9 +478,9 @@ function createJobParametersStore() {
           param.hasConflict = false;
         }
 
-        // Always sync form changes to script (bidirectional)
+        // Always sync form changes to script (bidirectional) unless in resubmit mode
         const valueChanged = prevValue !== value || prevEnabled !== enabled;
-        const shouldSyncToScript = valueChanged;
+        const shouldSyncToScript = valueChanged && !state.isResubmit;
 
         if (shouldSyncToScript) {
           // Clear any existing debounce timer
@@ -672,6 +674,52 @@ function createJobParametersStore() {
       }
 
       return result;
+    },
+
+    // Set resubmit mode
+    setResubmitMode(isResubmit: boolean) {
+      store.update(state => ({ ...state, isResubmit }));
+    },
+
+    // Set script content for resubmit (bypasses form sync)
+    setResubmitScript(content: string) {
+      store.update(state => {
+        state.rawScriptContent = content;
+        state.scriptContent = content;
+        state.scriptHasSbatch = hasSbatchDirectives(content);
+        state.lastScriptUpdate = Date.now();
+        state.isResubmit = true;
+
+        // Parse SBATCH directives but don't sync to form
+        const directives = parseSbatchDirectives(content);
+
+        // Update parameters with script values but keep them as 'script' source
+        for (const param of state.parameters.values()) {
+          const scriptDirective = directives.get(param.name);
+
+          if (scriptDirective) {
+            const { value, line } = scriptDirective;
+            param.scriptValue = value;
+            param.scriptLine = line;
+            param.value = value;
+            param.enabled = true;
+            param.source = 'script';
+            param.hasConflict = false;
+          } else {
+            // Parameter not in script
+            param.scriptValue = undefined;
+            param.scriptLine = undefined;
+            param.hasConflict = false;
+          }
+        }
+
+        // Auto-switch to script mode if we detect SBATCH directives
+        if (state.scriptHasSbatch && state.mode === 'quick') {
+          state.mode = 'script';
+        }
+
+        return state;
+      });
     },
 
     // Reset to initial state

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/aliramlaoui/slurm-manager/src/ssync/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

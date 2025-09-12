@@ -81,12 +81,46 @@ class ActionExecutor:
         result = {}
         for key, value in params.items():
             if isinstance(value, str):
-                # Replace ${var} patterns
+                original_value = value
+                # First, handle numbered capture groups ($0, $1, $2, etc.)
+                # These come from the regex match groups
+                import re
+
+                # Handle $0 - the full matched text (if available)
+                if "$0" in value and "_matched_text" in variables:
+                    value = value.replace("$0", str(variables.get("_matched_text", "")))
+
+                # Look for $1, $2, etc. patterns
+                # Sort capture names for consistent ordering
+                capture_names = sorted(
+                    [k for k in variables.keys() if not k.startswith("_")]
+                )
+
+                for match in re.finditer(r"\$(\d+)", value):
+                    group_num = int(match.group(1))
+                    if group_num > 0 and group_num <= len(capture_names):
+                        # $1 corresponds to first capture, $2 to second, etc.
+                        capture_name = capture_names[group_num - 1]
+                        replacement = str(variables.get(capture_name, ""))
+                        logger.debug(
+                            f"Replacing ${group_num} with {capture_name}={replacement}"
+                        )
+                        value = value.replace(f"${group_num}", replacement)
+
+                # Also handle named variables directly - $output_dir, $error_rate, etc.
+                for var_name, var_value in variables.items():
+                    if not var_name.startswith("_"):  # Skip internal variables
+                        value = value.replace(f"${var_name}", str(var_value))
+
+                # Then replace ${var} patterns for named variables
                 for var_name, var_value in all_vars.items():
                     value = value.replace(f"${{{var_name}}}", str(var_value))
                     value = value.replace(
                         f"${var_name}", str(var_value)
-                    )  # Also support $var
+                    )  # Also support $var without braces
+
+                if original_value != value:
+                    logger.debug(f"Substituted '{original_value}' -> '{value}'")
             result[key] = value
 
         return result
@@ -304,9 +338,54 @@ class ActionExecutor:
             if not command:
                 return False, "No command specified"
 
+            logger.debug(f"Original command: {command}")
+            logger.debug(f"Available variables: {variables}")
+
             # Security check - only allow certain commands
-            allowed_prefixes = ["echo", "logger", "date", "ls", "cat"]
-            if not any(command.startswith(prefix) for prefix in allowed_prefixes):
+            allowed_prefixes = [
+                "echo",
+                "logger",
+                "date",
+                "ls",
+                "cat",
+                "cd",  # Change directory (often used with && to run commands in specific dirs)
+                "pwd",  # Print working directory (useful for debugging)
+                "mkdir",  # Create directories (useful for organizing outputs)
+                "cp",  # Copy files/directories
+                "mv",  # Move/rename files
+                "touch",  # Create empty files or update timestamps
+                "grep",  # Search text patterns
+                "find",  # Find files/directories
+                "tail",  # View end of files
+                "head",  # View beginning of files
+                "wc",  # Count lines/words/chars
+                "uv run",  # Run Python with uv-managed dependencies
+                "uvx",  # Run Python tools/packages directly
+                "python -m uv",  # Alternative uv invocation
+                "python",  # Direct Python execution
+                "pip",  # Python package management
+                "wandb",  # Weights & Biases CLI tool
+            ]
+            # Also allow compound commands with && or ;
+            # Check each part of compound commands
+
+            # Split by && and ; to check each command part
+            parts = []
+            for part in command.replace("&&", ";").split(";"):
+                parts.append(part.strip())
+
+            # Check if all parts are allowed
+            all_allowed = True
+            for part in parts:
+                if part:  # Skip empty parts
+                    part_allowed = any(
+                        part.startswith(prefix) for prefix in allowed_prefixes
+                    )
+                    if not part_allowed:
+                        all_allowed = False
+                        break
+
+            if not all_allowed:
                 return False, f"Command not allowed: {command}"
 
             from ..web.app import get_slurm_manager
@@ -318,15 +397,59 @@ class ActionExecutor:
             slurm_host = manager.get_host_by_name(hostname)
             conn = manager._get_connection(slurm_host.host)
 
-            # Run command
-            result = conn.run(command, hide=True, warn=True)
+            # Try to get job's working directory for better context
+            work_dir = None
+            try:
+                # Get job info to find working directory
+                job_result = conn.run(
+                    f"scontrol show job {job_id}", hide=True, warn=True
+                )
+                if job_result.ok:
+                    for line in job_result.stdout.split("\n"):
+                        if "WorkDir=" in line:
+                            work_dir = line.split("WorkDir=")[1].split()[0]
+                            break
+            except:
+                pass  # Continue without work dir
+
+            # Run command (in job's working directory if available)
+            if work_dir and not command.startswith("cd "):
+                # For uv commands, run in the job's working directory
+                if any(
+                    command.startswith(prefix)
+                    for prefix in ["uv ", "uvx ", "python -m uv"]
+                ):
+                    command = f"cd {work_dir} && {command}"
+                    logger.info(f"Running command in job directory: {work_dir}")
+
+            # Run command asynchronously using asyncio.to_thread to avoid blocking
+            import asyncio
+
+            def run_ssh_command():
+                """Run SSH command in a thread to avoid blocking."""
+                try:
+                    result = conn.run(
+                        command, hide=True, warn=True, timeout=120
+                    )  # 2 minutes
+                    return result
+                except Exception as e:
+                    logger.error(f"SSH command execution failed: {e}")
+                    return None
+
+            # Run the SSH command in a thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, run_ssh_command)
+
+            if result is None:
+                return False, "Failed to execute SSH command"
 
             if result.ok:
                 output = result.stdout.strip()[:500]  # Limit output size
                 logger.info(f"Ran command for job {job_id}: {command}")
                 return True, f"Command output: {output}"
             else:
-                return False, f"Command failed: {result.stderr}"
+                error = result.stderr.strip()[:500]
+                return False, f"Command failed: {error}"
 
         except Exception as e:
             logger.error(f"Failed to run command: {e}")

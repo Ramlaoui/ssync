@@ -41,6 +41,7 @@
   export let outputFile = '';
   export let errorFile = '';
   export let loading = false;
+  export let readonly = false;
 
   function onHostChanged(newHostName: string): void {
     const host = hosts.find(h => h.hostname === newHostName);
@@ -107,7 +108,17 @@
   
 </script>
 
-<div class="job-config-form">
+<div class="job-config-form" class:readonly-mode={readonly}>
+  
+  {#if readonly}
+    <div class="readonly-banner">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/>
+      </svg>
+      <span>Parameters loaded from resubmitted job - modify via script editor if needed</span>
+    </div>
+  {/if}
+  
   <!-- Host Selection -->
   <section class="form-section">
     <div class="section-header">
@@ -116,7 +127,7 @@
     </div>
     <div class="field">
       <label for="host">SLURM Host *</label>
-      <select id="host" bind:value={selectedHost} required disabled={loading} class="select-input" on:change={() => onHostChanged(selectedHost)}>
+      <select id="host" bind:value={selectedHost} required disabled={loading || readonly} class="select-input" on:change={() => onHostChanged(selectedHost)}>
         <option value="">Select a host...</option>
         {#if loading}
           <option disabled>Loading hosts...</option>
@@ -164,18 +175,18 @@
     <div class="field-group">
       <div class="field">
         <label for="job-name">Job Name</label>
-        <input id="job-name" type="text" bind:value={jobName} placeholder="my-job" class="text-input" on:input={dispatchChange} />
+        <input id="job-name" type="text" bind:value={jobName} placeholder="my-job" class="text-input" readonly={readonly} on:input={dispatchChange} />
       </div>
       <div class="field">
         <label for="partition">Partition</label>
-        <input id="partition" type="text" bind:value={partition} placeholder="gpu" class="text-input" on:input={dispatchChange} />
+        <input id="partition" type="text" bind:value={partition} placeholder="gpu" class="text-input" readonly={readonly} on:input={dispatchChange} />
       </div>
     </div>
     
     <div class="field-group">
       <div class="field">
         <label for="constraint">Constraint</label>
-        <input id="constraint" type="text" bind:value={constraint} placeholder="gpu" class="text-input" on:input={dispatchChange} />
+        <input id="constraint" type="text" bind:value={constraint} placeholder="gpu" class="text-input" readonly={readonly} on:input={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -185,7 +196,7 @@
       </div>
       <div class="field">
         <label for="account">Account</label>
-        <input id="account" type="text" bind:value={account} placeholder="project-123" class="text-input" on:input={dispatchChange} />
+        <input id="account" type="text" bind:value={account} placeholder="project-123" class="text-input" readonly={readonly} on:input={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -213,6 +224,7 @@
           max="64"
           bind:value={cpus}
           class="slider"
+          disabled={readonly}
           on:input={dispatchChange}
         />
       </div>
@@ -221,13 +233,13 @@
         <label for="memory">Memory</label>
         <div class="memory-control">
           <label class="checkbox-control">
-            <input type="checkbox" bind:checked={useMemory} on:change={dispatchChange} />
+            <input type="checkbox" bind:checked={useMemory} disabled={readonly} on:change={dispatchChange} />
             <span>Specify memory limit</span>
           </label>
           {#if useMemory}
             <div class="memory-slider">
               <label for="memory">{formatMemoryLabel(memory)}</label>
-              <input id="memory" type="range" min="1" max="512" bind:value={memory} class="slider" on:input={dispatchChange} />
+              <input id="memory" type="range" min="1" max="512" bind:value={memory} class="slider" disabled={readonly} on:input={dispatchChange} />
             </div>
           {/if}
         </div>
@@ -244,6 +256,7 @@
           max="16"
           bind:value={nodes}
           class="slider"
+          disabled={readonly}
           on:input={dispatchChange}
         />
       </div>
@@ -257,6 +270,7 @@
           max="128"
           bind:value={ntasksPerNode}
           class="slider"
+          disabled={readonly}
           on:input={dispatchChange}
         />
       </div>
@@ -272,6 +286,7 @@
         step="5"
         bind:value={timeLimit}
         class="slider"
+        disabled={readonly}
         on:input={dispatchChange}
       />
     </div>
@@ -294,13 +309,14 @@
           max="8"
           bind:value={gpusPerNode}
           class="slider"
+          disabled={readonly}
           on:input={dispatchChange}
         />
       </div>
       
       <div class="field">
         <label for="gres">Generic Resources</label>
-        <input id="gres" type="text" bind:value={gres} placeholder="gpu:tesla:2" class="text-input" on:input={dispatchChange} />
+        <input id="gres" type="text" bind:value={gres} placeholder="gpu:tesla:2" class="text-input" readonly={readonly} on:input={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,1 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -348,6 +364,30 @@
 </div>
 
 <style>
+  .readonly-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: var(--info-light, #e3f2fd);
+    border: 1px solid var(--info-border, #90caf9);
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    color: var(--info-dark, #1565c0);
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .readonly-banner svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+
+  .readonly-mode {
+    opacity: 0.8;
+  }
+
   .job-config-form {
     display: flex;
     flex-direction: column;

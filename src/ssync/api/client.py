@@ -24,6 +24,23 @@ class ApiClient:
         self.base_url = base_url
         self.server_manager = ServerManager(base_url)
         self.verbose = verbose
+        self.api_key = self._get_api_key()
+
+    def _get_api_key(self) -> Optional[str]:
+        """Get API key from config or environment."""
+        try:
+            from ..utils.config import config as global_config
+
+            return global_config.api_key if global_config.api_key else None
+        except Exception:
+            return None
+
+    def _get_headers(self) -> dict:
+        """Get headers including API key if available."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
 
     def ensure_server_running(self, config_path: Path) -> tuple[bool, Optional[str]]:
         """Ensure API server is running, start if needed.
@@ -84,7 +101,11 @@ class ApiClient:
             params["completed_only"] = "true"
 
         response = requests.get(
-            f"{self.base_url}/api/status", params=params, timeout=30, verify=False
+            f"{self.base_url}/api/status",
+            params=params,
+            headers=self._get_headers(),
+            timeout=30,
+            verify=False,
         )
         response.raise_for_status()
 
@@ -225,6 +246,7 @@ class ApiClient:
             response = requests.post(
                 f"{self.base_url}/api/jobs/launch",
                 json=request_data,
+                headers=self._get_headers(),
                 timeout=120,  # Longer timeout for launch operations
                 verify=False,
             )

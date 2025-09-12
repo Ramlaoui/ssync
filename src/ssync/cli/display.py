@@ -79,6 +79,10 @@ class JobDisplay:
             if job.submit_time and job.submit_time != "N/A":
                 click.echo(f"  Submitted: {job.submit_time}")
 
+            # Submit command
+            if job.submit_line and job.submit_line != "N/A":
+                click.echo(f"  Submit Command: {job.submit_line}")
+
             # Files
             if job.stdout_file and job.stdout_file != "N/A":
                 click.echo(f"  Output: {job.stdout_file}")

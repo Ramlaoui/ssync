@@ -91,7 +91,7 @@ class ServerManager:
         """Check if API server is running."""
         # Use localhost for health checks even if binding to 0.0.0.0
         check_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
-        
+
         # First check if we have a PID and process is running
         pid = self._get_saved_pid()
         if pid and self._is_process_running(pid):
@@ -207,12 +207,14 @@ class ServerManager:
                 **os.environ,
                 "SSYNC_CONFIG_PATH": str(config_path),
             }
-            
+
             # If binding to 0.0.0.0, add it to trusted hosts
             if self.host == "0.0.0.0":
-                current_trusted = os.environ.get("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1")
+                current_trusted = os.environ.get(
+                    "SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1"
+                )
                 env["SSYNC_TRUSTED_HOSTS"] = f"{current_trusted},0.0.0.0"
-            
+
             # Start the process with proper stdin handling to avoid TTY issues
             process = subprocess.Popen(
                 cmd,
@@ -231,7 +233,7 @@ class ServerManager:
             protocol = "https" if self.use_https else "http"
             start_time = time.time()
             max_wait = 15  # Maximum seconds to wait
-            
+
             # Use localhost for health checks even if binding to 0.0.0.0
             check_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
 

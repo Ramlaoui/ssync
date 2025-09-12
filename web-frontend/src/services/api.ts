@@ -5,7 +5,6 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
 import { writable, get } from 'svelte/store';
 
-// Store for API configuration
 export const apiConfig = writable({
   baseURL: import.meta.env.VITE_API_URL || '',
   apiKey: localStorage.getItem('ssync_api_key') || import.meta.env.VITE_API_KEY || '',
@@ -13,7 +12,6 @@ export const apiConfig = writable({
   authError: null as string | null
 });
 
-// Create axios instance with authentication
 let apiInstance: AxiosInstance;
 
 function createApiInstance() {
@@ -27,7 +25,6 @@ function createApiInstance() {
     } : {}
   });
   
-  // Add response interceptor for auth errors
   apiInstance.interceptors.response.use(
     response => response,
     (error: AxiosError) => {
@@ -45,10 +42,8 @@ function createApiInstance() {
   return apiInstance;
 }
 
-// Initialize API instance
 apiInstance = createApiInstance();
 
-// Subscribe to config changes
 apiConfig.subscribe(config => {
   if (config.apiKey) {
     localStorage.setItem('ssync_api_key', config.apiKey);
@@ -61,7 +56,6 @@ apiConfig.subscribe(config => {
  */
 export async function testConnection(): Promise<boolean> {
   try {
-    // Test authentication directly using the API instance
     const response = await apiInstance.get('/api/hosts');
     apiConfig.update(c => ({
       ...c,

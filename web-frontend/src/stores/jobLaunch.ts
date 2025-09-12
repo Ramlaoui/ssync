@@ -81,7 +81,6 @@ const initialState: JobLaunchState = {
   success: null
 };
 
-// Create a single store
 const { subscribe, update, set } = writable<JobLaunchState>(initialState);
 
 // Derived stores for individual state slices for easier component binding
@@ -105,12 +104,12 @@ function getValidationDetails(config: JobLaunchConfig) {
     (config.scriptSource === 'local' && config.localScriptPath.trim()) ||
     (config.scriptSource === 'upload' && config.uploadedScriptName);
 
-  if (!hasHost) missing.push('Select a host');
-  if (!hasSourceDir) missing.push('Select source directory');
+  if (!hasHost) missing.push('host selection');
+  if (!hasSourceDir) missing.push('source directory');
   if (!hasScript) {
-    if (config.scriptSource === 'editor') missing.push('Add script content');
-    else if (config.scriptSource === 'local') missing.push('Select local script file');
-    else if (config.scriptSource === 'upload') missing.push('Upload script file');
+    if (config.scriptSource === 'editor') missing.push('script content');
+    else if (config.scriptSource === 'local') missing.push('local script file');
+    else if (config.scriptSource === 'upload') missing.push('uploaded script');
   }
 
   return {

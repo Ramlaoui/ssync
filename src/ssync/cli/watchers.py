@@ -105,7 +105,8 @@ class WatcherCommands:
                 SELECT 
                     id, job_id, hostname, name, pattern, 
                     interval_seconds, state, trigger_count,
-                    last_check, last_position, created_at
+                    last_check, last_position, created_at,
+                    timer_mode_enabled, timer_interval_seconds, timer_mode_active
                 FROM job_watchers
                 WHERE 1=1
             """
@@ -139,6 +140,19 @@ class WatcherCommands:
                     "last_check": row["last_check"],
                     "last_pos": row["last_position"],
                     "created": row["created_at"],
+                    "timer_mode_enabled": bool(
+                        row["timer_mode_enabled"]
+                        if "timer_mode_enabled" in row.keys()
+                        else 0
+                    ),
+                    "timer_interval_seconds": row["timer_interval_seconds"]
+                    if "timer_interval_seconds" in row.keys()
+                    else 30,
+                    "timer_mode_active": bool(
+                        row["timer_mode_active"]
+                        if "timer_mode_active" in row.keys()
+                        else 0
+                    ),
                 }
                 watchers.append(watcher)
 
@@ -411,10 +425,20 @@ def list_watchers(job_id, host, output_json):
                 "Triggers",
                 "Last Check",
                 "Interval",
+                "Mode",
             ]
             rows = []
 
             for watcher in watchers:
+                # Determine mode display
+                if watcher.get("timer_mode_enabled"):
+                    if watcher.get("timer_mode_active"):
+                        mode = f"Timer({watcher.get('timer_interval_seconds', 30)}s)"
+                    else:
+                        mode = "Timer(waiting)"
+                else:
+                    mode = "Pattern"
+
                 rows.append(
                     [
                         watcher["id"],
@@ -426,6 +450,7 @@ def list_watchers(job_id, host, output_json):
                         watcher["triggers"],
                         format_time_ago(watcher["last_check"]),
                         f"{watcher['interval']}s",
+                        mode,
                     ]
                 )
 

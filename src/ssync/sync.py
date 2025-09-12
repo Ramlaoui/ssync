@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -113,7 +114,7 @@ class SyncManager:
                         os.unlink(temp_gitignore_path)
                     raise
 
-                exclude_args.extend(["--filter", f"'merge {temp_gitignore_path}'"])
+                exclude_args.extend(["--filter", f"merge {temp_gitignore_path}"])
             else:
                 gitignore_path = self.source_dir / ".gitignore"
                 if gitignore_path.exists():
@@ -137,14 +138,41 @@ class SyncManager:
         else:
             target = f"{slurm_host.host.hostname}:{target_dir}/"
 
-        rsync_cmd = []
-        if slurm_host.host.password:
-            rsync_cmd = ["sshpass", "-p", slurm_host.host.password]
-        rsync_cmd += ["rsync", "-avz", *exclude_args, f"{self.source_dir}/", target]
+        # First ensure the remote directory exists
+        try:
+            conn.run(f"mkdir -p {target_dir}")
+            logger.debug(f"Created remote directory: {target_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to create remote directory {target_dir}: {e}")
 
         try:
-            result = conn.local(" ".join(rsync_cmd), hide=False)
-            return result.ok
+            # Use subprocess to run rsync locally
+            # Build command based on authentication method
+            if slurm_host.host.password:
+                # Use sshpass with environment variable for better security
+                env = os.environ.copy()
+                env["SSHPASS"] = slurm_host.host.password
+                rsync_cmd = (
+                    ["sshpass", "-e", "rsync", "-avz"]
+                    + exclude_args
+                    + [f"{self.source_dir}/", target]
+                )
+                logger.debug("Running rsync with password authentication")
+                result = subprocess.run(rsync_cmd, env=env, capture_output=False)
+            else:
+                # Use rsync directly for key-based auth
+                rsync_cmd = (
+                    ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
+                )
+                logger.debug(f"Running rsync command: {' '.join(rsync_cmd)}")
+                result = subprocess.run(rsync_cmd, capture_output=False)
+
+            if result.returncode == 0:
+                logger.info(f"Successfully synced to {slurm_host.host.hostname}")
+                return True
+            else:
+                logger.warning(f"Rsync failed with exit code {result.returncode}")
+                return False
         except Exception as e:
             logger.warning(f"Failed to sync to {slurm_host.host.hostname}: {e}")
             return False

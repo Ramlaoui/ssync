@@ -23,6 +23,14 @@ export interface JobInfo {
   start_time: string | null;
   end_time: string | null;
   node_list: string | null;
+  
+  // Additional job metadata
+  exit_code?: string | null;
+  account?: string | null;
+  qos?: string | null;
+  priority?: string | null;
+  array_job_id?: string | null;
+  array_task_id?: string | null;
 
   // Resource allocation
   alloc_tres: string | null;

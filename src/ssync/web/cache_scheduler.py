@@ -96,7 +96,9 @@ class CacheScheduler:
 
             except Exception as e:
                 logger.error(f"Error in cache scheduler: {e}")
-                await asyncio.sleep(60)  # Wait a minute before retrying
+                await asyncio.sleep(
+                    120
+                )  # Wait 2 minutes before retrying (reduced frequency)
 
     async def _perform_cleanup(self):
         """Perform cache cleanup operations."""

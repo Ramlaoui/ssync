@@ -50,6 +50,8 @@ class WatcherDefinition:
     actions: List[WatcherAction] = field(default_factory=list)
     max_triggers: Optional[int] = None  # Limit number of triggers
     output_type: str = "stdout"  # stdout, stderr, or both
+    timer_mode_enabled: bool = False  # Switch to timer mode after first match
+    timer_interval_seconds: int = 30  # Interval for timer mode execution
 
 
 @dataclass
@@ -66,6 +68,7 @@ class WatcherInstance:
     trigger_count: int = 0
     created_at: datetime = field(default_factory=datetime.now)
     variables: Dict[str, Any] = field(default_factory=dict)  # Captured variables
+    timer_mode_active: bool = False  # Whether watcher is in timer mode
 
 
 @dataclass

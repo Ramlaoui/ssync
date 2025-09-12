@@ -108,7 +108,8 @@ def setup(force):
 
 
 @auth.command()
-def show():
+@click.option("--reveal", is_flag=True, help="Show the full API key (security risk!)")
+def show(reveal):
     """Show current API key configuration."""
 
     # Check various sources
@@ -117,8 +118,8 @@ def show():
     # Environment variable
     if os.getenv("SSYNC_API_KEY"):
         key = os.getenv("SSYNC_API_KEY")
-        masked = f"{key[:8]}...{key[-4:]}"
-        sources.append(("Environment variable", masked, "SSYNC_API_KEY"))
+        display_key = key if reveal else f"{key[:8]}...{key[-4:]}"
+        sources.append(("Environment variable", display_key, "SSYNC_API_KEY"))
 
     # Config file
     config_file = Path.home() / ".config" / "ssync" / "config.yaml"
@@ -128,8 +129,8 @@ def show():
                 config_data = yaml.safe_load(f) or {}
                 if config_data.get("api_key"):
                     key = config_data["api_key"]
-                    masked = f"{key[:8]}...{key[-4:]}"
-                    sources.append(("Config file", masked, str(config_file)))
+                    display_key = key if reveal else f"{key[:8]}...{key[-4:]}"
+                    sources.append(("Config file", display_key, str(config_file)))
         except Exception:
             pass
 
@@ -138,8 +139,8 @@ def show():
     if api_key_file.exists():
         try:
             key = api_key_file.read_text().strip()
-            masked = f"{key[:8]}...{key[-4:]}"
-            sources.append(("API key file", masked, str(api_key_file)))
+            display_key = key if reveal else f"{key[:8]}...{key[-4:]}"
+            sources.append(("API key file", display_key, str(api_key_file)))
         except Exception:
             pass
 
@@ -147,6 +148,14 @@ def show():
         click.echo("❌ No API key configured")
         click.echo("Run 'ssync auth setup' to generate one")
     else:
+        if reveal:
+            click.echo(
+                click.style(
+                    "⚠️  WARNING: Full API key will be displayed!", fg="red", bold=True
+                )
+            )
+            click.echo("Make sure no one else can see your screen.\n")
+
         click.echo("🔐 API Key Configuration:\n")
         for source, key, location in sources:
             click.echo(f"  {source}:")

@@ -32,6 +32,14 @@
     --color-error: #dc3545;
     --color-error-bg: #f8d7da;
     --color-error-border: #f5c6cb;
+    --color-warning: #f39c12;
+    --color-warning-bg: #fff3cd;
+    --color-info: #17a2b8;
+    --color-info-bg: #d1ecf1;
+    --color-primary: #3498db;
+    --color-primary-dark: #2980b9;
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f8f9fa;
 }
 
 * {

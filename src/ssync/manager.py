@@ -176,10 +176,32 @@ class SlurmManager:
                     logger.warning(f"Failed to extract watchers: {e}")
 
             cmd.append(remote_script_path)
-            result = conn.run(" ".join(cmd), hide=False)
+            submit_line = " ".join(cmd)  # Store the submit line for caching
+            result = conn.run(submit_line, hide=False)
             job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
             if job_id_match:
                 job_id = job_id_match.group(1)
+
+                # Cache the submit line for this job
+                try:
+                    from .cache import get_cache
+                    from .models.job import JobInfo, JobState
+
+                    cache = get_cache()
+                    # Create a basic job info with the submit line
+                    job_info = JobInfo(
+                        job_id=job_id,
+                        name=params.job_name or "unknown",
+                        state=JobState.PENDING,  # Will be updated when job is queried
+                        hostname=slurm_host.host.hostname
+                        if isinstance(slurm_host, SlurmHost)
+                        else slurm_host,
+                        submit_line=submit_line,
+                        user=None,  # Will be updated when job is queried
+                    )
+                    cache.cache_job(job_info)
+                except Exception as e:
+                    logger.warning(f"Failed to cache submit line for job {job_id}: {e}")
 
                 # Start watchers if any were found
                 if watchers and enable_watchers:
@@ -187,6 +209,7 @@ class SlurmManager:
                         import asyncio
 
                         from .watchers import get_watcher_engine
+                        from .watchers.daemon import start_daemon_if_needed
 
                         engine = get_watcher_engine()
                         # Run async function in sync context
@@ -206,6 +229,16 @@ class SlurmManager:
                                 logger.info(
                                     f"Started {len(watcher_ids)} watchers for job {job_id}"
                                 )
+
+                                # Start the watcher daemon to monitor them
+                                if start_daemon_if_needed():
+                                    logger.info(
+                                        "Watcher daemon is running to monitor watchers"
+                                    )
+                                else:
+                                    logger.warning(
+                                        "Failed to start watcher daemon - watchers won't be monitored"
+                                    )
                         finally:
                             loop.close()
                     except Exception as e:
@@ -240,6 +273,29 @@ class SlurmManager:
         host = self.get_host_by_name(slurm_host)
         conn = self._get_connection(host.host)
         return self.slurm_client.cancel_job(conn, job_id)
+
+    def fetch_job_output_compressed(
+        self, job_id: str, hostname: str, output_type: str = "stdout"
+    ) -> dict | None:
+        """Fetch and compress job output from remote host.
+
+        Args:
+            job_id: Job ID
+            hostname: Hostname
+            output_type: 'stdout' or 'stderr'
+
+        Returns:
+            Dictionary with compressed data or None
+        """
+        try:
+            host = self.get_host_by_name(hostname)
+            conn = self._get_connection(host.host)
+            return self.slurm_client.read_job_output_compressed(
+                conn, job_id, hostname, output_type
+            )
+        except Exception as e:
+            logger.error(f"Error fetching compressed output: {e}")
+            return None
 
     def get_job_info(
         self, slurm_host: SlurmHost | str, job_id: str, username: str | None = None

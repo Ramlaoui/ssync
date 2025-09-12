@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import type { JobInfo } from '../types/api';
   
   export let hostname: string;
@@ -11,6 +11,13 @@
   const dispatch = createEventDispatcher<{
     jobSelect: JobInfo;
   }>();
+  
+  // Mobile detection
+  let isMobile = false;
+  
+  function checkMobile() {
+    isMobile = window.innerWidth <= 768;
+  }
   
   function selectJob(job: JobInfo): void {
     if (loading) return;
@@ -63,6 +70,15 @@
     }
     return truncated + '...';
   }
+  
+  onMount(() => {
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+  });
+  
+  onDestroy(() => {
+    window.removeEventListener('resize', checkMobile);
+  });
 </script>
 
 <div class="job-list">
@@ -90,7 +106,52 @@
     <div class="no-jobs">
       No jobs found
     </div>
+  {:else if isMobile}
+    <!-- Mobile Card Layout -->
+    <div class="mobile-job-cards">
+      {#each jobs as job}
+        <div 
+          class="job-card" 
+          on:click={() => selectJob(job)}
+          on:keydown={(e) => e.key === 'Enter' && selectJob(job)}
+          class:loading={loading}
+          class:clickable={!loading}
+          role="button"
+          tabindex="0"
+          aria-label="View job details for job {job.job_id}"
+        >
+          <div class="card-header">
+            <div class="job-info">
+              <span class="job-id">{job.job_id}</span>
+              <span class="job-user">{job.user || 'N/A'}</span>
+            </div>
+            <span 
+              class="state-badge mobile" 
+              style="background-color: {getStateColor(job.state)}"
+            >
+              {job.state}
+            </span>
+          </div>
+          
+          <div class="card-body">
+            <h4 class="job-name" title={job.name}>
+              {smartTruncate(job.name, 60)}
+            </h4>
+            
+            <div class="job-meta">
+              <span class="runtime">{job.runtime || 'N/A'}</span>
+              {#if job.submit_time}
+                <span class="submitted" title={new Date(job.submit_time).toLocaleString()}>
+                  {formatTime(job.submit_time)}
+                </span>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/each}
+    </div>
   {:else}
+    <!-- Desktop Table Layout -->
     <div class="job-table-container">
       <div class="table-header">
         <div class="col job-id">Job ID</div>
@@ -181,8 +242,11 @@
     background: white;
     border-radius: 0.5rem;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    overflow: hidden;
+    overflow: visible;
     flex-shrink: 0;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
   }
 
   .header {
@@ -192,6 +256,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-shrink: 0;
   }
 
   .header h3 {
@@ -247,8 +312,8 @@
   .job-table-container {
     display: flex;
     flex-direction: column;
-    max-height: 70vh;
     background: white;
+    flex-shrink: 0;
   }
 
   .table-header {
@@ -265,7 +330,6 @@
   }
 
   .job-table-body {
-    overflow-y: auto;
     background: white;
   }
 
@@ -424,21 +488,34 @@
   }
 
   @media (max-width: 800px) {
-    .table-header,
-    .job-row {
-      grid-template-columns: 80px 1fr 110px 120px;
+    .job-table-container {
+      display: none; /* Hide table on mobile, use cards instead */
     }
     
-    .col.resources {
-      display: none;
+    .mobile-job-cards {
+      padding: 0.25rem;
+      gap: 0.375rem;
+    }
+    
+    .job-card {
+      padding: 0.625rem;
+      min-height: 70px;
+    }
+    
+    .job-id {
+      font-size: 0.95rem;
+    }
+    
+    .job-user {
+      font-size: 0.7rem;
     }
     
     .job-name {
-      font-size: 0.9rem;
+      font-size: 0.85rem;
     }
     
-    .job-table-container {
-      max-height: 60vh;
+    .job-meta {
+      font-size: 0.7rem;
     }
   }
 
@@ -465,5 +542,149 @@
   .job-table-body {
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
+  }
+
+  /* Mobile Card Layout Styles */
+  .mobile-job-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: transparent;
+    flex-shrink: 0;
+  }
+
+  .job-card {
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    padding: 0.75rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    min-height: 80px;
+    height: auto;
+    flex-shrink: 0;
+  }
+
+  .job-card.clickable:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transform: translateY(-1px);
+    border-color: #007bff;
+  }
+
+  .job-card.clickable:active {
+    transform: translateY(0);
+  }
+
+  .job-card.loading {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .job-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .job-id {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #007bff;
+    line-height: 1;
+  }
+
+  .job-user {
+    font-size: 0.75rem;
+    color: #6c757d;
+    font-weight: 500;
+  }
+
+  .state-badge.mobile {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.7rem;
+    border-radius: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .job-name {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #374151;
+    line-height: 1.3;
+  }
+
+  .job-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    color: #6c757d;
+  }
+
+  .runtime {
+    font-weight: 500;
+  }
+
+  .submitted {
+    font-weight: 400;
+  }
+
+  /* Mobile scrollbar */
+  .mobile-job-cards::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .mobile-job-cards::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .mobile-job-cards::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 2px;
+  }
+
+  .mobile-job-cards::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  /* Mobile layout fixes */
+  @media (max-width: 768px) {
+    .job-list {
+      margin-bottom: 0.75rem;
+      border-radius: 8px;
+    }
+    
+    .header {
+      padding: 0.75rem;
+    }
+    
+    .header h3 {
+      font-size: 0.95rem;
+    }
+    
+    .job-count {
+      font-size: 0.75rem;
+    }
+    
+    .last-updated {
+      font-size: 0.75rem;
+    }
   }
 </style>

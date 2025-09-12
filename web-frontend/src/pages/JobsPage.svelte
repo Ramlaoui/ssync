@@ -8,6 +8,13 @@
   import { api } from "../services/api";
   import { jobsStore, hostLoadingStates, isAnyHostLoading } from "../stores/jobs";
   import type { HostInfo, JobFilters, JobInfo, JobStatusResponse } from "../types/api";
+  import { 
+    allJobsWebSocketStore,
+    connectAllJobsWebSocket,
+    disconnectAllJobsWebSocket
+  } from "../stores/jobWebSocket";
+  import { dataSyncManager } from "../lib/DataSyncManager";
+  import SyncStatus from "../components/SyncStatus.svelte";
 
   let hosts: HostInfo[] = [];
   let jobsByHost = new Map<string, JobStatusResponse>();
@@ -36,6 +43,60 @@
   
   // Cache indicator (from backend)
   let dataFromCache = false;
+  
+  // Subscribe to WebSocket updates with debounced processing
+  let wsUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
+  
+  $: if ($allJobsWebSocketStore.connected && $allJobsWebSocketStore.jobs) {
+    // Debounce WebSocket updates to prevent excessive re-renders
+    if (wsUpdateTimeout) clearTimeout(wsUpdateTimeout);
+    
+    wsUpdateTimeout = setTimeout(() => {
+      // Update jobsByHost with WebSocket data
+      for (const [hostname, jobs] of Object.entries($allJobsWebSocketStore.jobs)) {
+        // Don't filter by hosts array - accept all data from WebSocket
+        // This prevents losing jobs when hosts array isn't loaded yet
+        // or when new hosts appear
+        jobsByHost.set(hostname, {
+          hostname,
+          jobs,
+          total_jobs: jobs.length,
+          query_time: new Date().toISOString()
+        });
+        
+        // Update the cache for each job using batched updates
+        jobs.forEach(job => {
+          jobsStore.updateJobCache(job, hostname);
+        });
+        
+        // If this host isn't in our hosts list yet, add it
+        if (!hosts.find(h => h.hostname === hostname)) {
+          hosts = [...hosts, { 
+            hostname, 
+            host: hostname,
+            available: true,
+            error: null
+          }];
+        }
+      }
+      jobsByHost = jobsByHost; // Trigger reactivity
+    }, 50); // 50ms debounce
+  }
+  
+  // Handle WebSocket update events with batching
+  $: if ($allJobsWebSocketStore.updates.length > 0) {
+    const latestUpdate = $allJobsWebSocketStore.updates[$allJobsWebSocketStore.updates.length - 1];
+    if (latestUpdate?.type === 'state_change' && latestUpdate.data) {
+      // Process batch updates using the batched updates system
+      if (Array.isArray(latestUpdate.data)) {
+        latestUpdate.data.forEach((update: any) => {
+          if (update.job && update.hostname) {
+            jobsStore.updateJobCache(update.job, update.hostname);
+          }
+        });
+      }
+    }
+  }
 
   function checkMobile() {
     isMobile = window.innerWidth <= 768;
@@ -77,7 +138,7 @@
         });
 
         if (requestId === lastRequestId) {
-          jobsByHost = new Map<string, JobStatusResponse>();
+          // Don't clear the entire map - preserve data from other hosts
           dataFromCache = false;
           response.forEach((hostData: JobStatusResponse) => {
             jobsByHost.set(hostData.hostname, hostData);
@@ -139,7 +200,6 @@
   }
 
   let filterChangeTimeout: ReturnType<typeof setTimeout>;
-  let refreshInterval: ReturnType<typeof setInterval>;
 
   function handleJobSelect(job: JobInfo): void {
     // Find the host for this job
@@ -160,7 +220,11 @@
 
   function handleManualRefresh(): void {
     if (!loading) {
-      loadJobs();
+      // Use the DataSyncManager for immediate refresh instead of direct loadJobs()
+      dataSyncManager.requestImmediateRefresh().then(() => {
+        // Update local state after sync manager refresh
+        loadJobs(true);
+      });
     }
   }
 
@@ -201,17 +265,20 @@
     loadHosts();
     loadJobs();
     
+    // DataSyncManager handles WebSocket connection and polling automatically
+    // No need for manual intervals or WebSocket management
+    
     checkMobile();
     window.addEventListener("resize", checkMobile);
-
-    // Auto-refresh every 2 minutes (120 seconds)
-    refreshInterval = setInterval(loadJobs, 120000);
   });
 
   onDestroy(() => {
-    if (refreshInterval) clearInterval(refreshInterval);
+    if (filterChangeTimeout) clearTimeout(filterChangeTimeout);
+    if (wsUpdateTimeout) clearTimeout(wsUpdateTimeout);
     if (unsubscribeHostStates) unsubscribeHostStates();
     window.removeEventListener("resize", checkMobile);
+    
+    // DataSyncManager handles WebSocket cleanup automatically
   });
 </script>
 
@@ -246,14 +313,17 @@
         </div>
       {/if}
     </div>
-    
-    <button
-      class="refresh-button"
-      class:loading
-      on:click={handleManualRefresh}
-      disabled={loading}
-      aria-label="Refresh data"
-    >
+
+    <div class="header-actions">
+      <SyncStatus compact={isMobile} />
+      
+      <button
+        class="refresh-button"
+        class:loading
+        on:click={handleManualRefresh}
+        disabled={loading}
+        aria-label="Refresh data"
+      >
       <svg
         class="refresh-icon"
         class:spinning={loading}
@@ -278,6 +348,7 @@
         Filters
       </button>
     {/if}
+    </div>
   </div>
 
   {#if error}
@@ -377,6 +448,12 @@
     gap: 1rem;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
   .stats {
     display: flex;
     align-items: center;
@@ -419,6 +496,7 @@
   .refresh-button {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.375rem;
     padding: 0.5rem 1rem;
     background: #3b82f6;
@@ -429,6 +507,7 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.15s ease;
+    box-sizing: border-box;
   }
 
   .refresh-button:hover:not(:disabled) {
@@ -530,6 +609,7 @@
     flex-direction: column;
     gap: 1rem;
     min-height: min-content;
+    padding: 0.5rem 0;
   }
 
   .loading-container {
@@ -563,6 +643,7 @@
   .mobile-filter-toggle {
     display: none;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
     background: #f8f9fa;
@@ -572,6 +653,7 @@
     font-size: 0.85rem;
     cursor: pointer;
     transition: all 0.2s ease;
+    box-sizing: border-box;
   }
 
   .mobile-filter-toggle svg {
@@ -665,18 +747,65 @@
 
   @media (max-width: 768px) {
     .page-header {
-      flex-direction: column;
-      gap: 0.5rem;
-      align-items: stretch;
+      flex-direction: row;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 0.75rem;
     }
 
     .stats {
-      justify-content: center;
+      flex: 1;
+      justify-content: flex-start;
+      gap: 0.5rem;
+    }
+
+    .stat-value {
+      font-size: 1rem;
+    }
+
+    .stat-label {
+      font-size: 0.8rem;
+    }
+
+    .refresh-button {
+      padding: 0 !important;
+      font-size: 0 !important;  /* Hide text on mobile */
+      min-width: 44px;
+      min-height: 44px;
+      width: 44px;
+      height: 44px;
+      justify-content: center !important;
+      align-items: center !important;
+      display: flex !important;
+      gap: 0 !important;
+      box-sizing: border-box;
+    }
+
+    .refresh-button svg {
+      margin: 0 !important;
+      width: 20px !important;
+      height: 20px !important;
     }
 
     .mobile-filter-toggle {
-      display: flex;
-      align-self: center;
+      display: flex !important;
+      padding: 0 !important;
+      font-size: 0 !important;  /* Hide text on mobile */
+      min-width: 44px;
+      min-height: 44px;
+      width: 44px;
+      height: 44px;
+      justify-content: center !important;
+      align-items: center !important;
+      gap: 0 !important;
+      box-sizing: border-box;
+    }
+
+    .mobile-filter-toggle svg {
+      margin: 0 !important;
+      width: 20px !important;
+      height: 20px !important;
     }
 
     .sidebar.mobile-hidden {

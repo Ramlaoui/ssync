@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import type { JobInfo, JobStatusResponse, JobOutputResponse, HostInfo } from '../types/api';
 import { api } from '../services/api';
+import { batchedUpdates } from '../lib/BatchedUpdates';
 
 interface JobCache {
   [key: string]: {
@@ -29,8 +30,67 @@ interface JobsState {
   availableHosts: HostInfo[];
 }
 
-const CACHE_DURATION = 30000; // 30 seconds cache for individual jobs
-const OUTPUT_CACHE_DURATION = 10000; // 10 seconds for output cache
+// Intelligent cache durations based on job state
+const CACHE_DURATIONS = {
+  // Completed jobs change rarely - cache for longer
+  COMPLETED: 300000,    // 5 minutes for completed/failed/cancelled jobs
+  STABLE: 120000,       // 2 minutes for stable running jobs
+  ACTIVE: 60000,        // 1 minute for active/pending jobs
+  DEFAULT: 60000        // 1 minute default
+};
+
+const OUTPUT_CACHE_DURATIONS = {
+  // Output caching based on job state
+  COMPLETED: 180000,    // 3 minutes for completed jobs
+  RUNNING: 30000,       // 30 seconds for running jobs
+  DEFAULT: 60000        // 1 minute default
+};
+
+// Helper function to get appropriate cache duration based on job state
+function getCacheDuration(job?: JobInfo): number {
+  if (!job) return CACHE_DURATIONS.DEFAULT;
+  
+  const state = job.state;
+  switch (state) {
+    case 'CD': // Completed
+    case 'F':  // Failed
+    case 'CA': // Cancelled
+    case 'TO': // Timeout
+      return CACHE_DURATIONS.COMPLETED;
+    case 'R':  // Running
+      // For running jobs, check runtime to determine stability
+      if (job.runtime && job.runtime !== 'N/A') {
+        const runtimeParts = job.runtime.split(':');
+        if (runtimeParts.length >= 2) {
+          const minutes = parseInt(runtimeParts[runtimeParts.length - 2]);
+          if (minutes > 30) { // Running for more than 30 minutes = stable
+            return CACHE_DURATIONS.STABLE;
+          }
+        }
+      }
+      return CACHE_DURATIONS.ACTIVE;
+    case 'PD': // Pending
+    default:
+      return CACHE_DURATIONS.ACTIVE;
+  }
+}
+
+function getOutputCacheDuration(job?: JobInfo): number {
+  if (!job) return OUTPUT_CACHE_DURATIONS.DEFAULT;
+  
+  const state = job.state;
+  switch (state) {
+    case 'CD': // Completed
+    case 'F':  // Failed
+    case 'CA': // Cancelled
+    case 'TO': // Timeout
+      return OUTPUT_CACHE_DURATIONS.COMPLETED;
+    case 'R':  // Running
+      return OUTPUT_CACHE_DURATIONS.RUNNING;
+    default:
+      return OUTPUT_CACHE_DURATIONS.DEFAULT;
+  }
+}
 
 function createJobsStore() {
   const { subscribe, update, set } = writable<JobsState>({
@@ -45,6 +105,53 @@ function createJobsStore() {
     availableHosts: [],
   });
 
+  // Register batched update callback for job store updates
+  batchedUpdates.registerCallback('jobs-store', (updates) => {
+    // Process all updates in a single store update
+    update(state => {
+      for (const updateItem of updates) {
+        if (updateItem.type === 'job_update' && updateItem.jobId && updateItem.hostname) {
+          const cacheKey = `${updateItem.hostname}:${updateItem.jobId}`;
+          const existingCache = state.cache[cacheKey];
+          const cacheDuration = getCacheDuration(updateItem.data);
+          
+          // Update cache
+          state.cache[cacheKey] = {
+            job: updateItem.data,
+            timestamp: Date.now(),
+            output: existingCache?.output,
+            outputTimestamp: existingCache?.outputTimestamp,
+          };
+          
+          // Update host jobs if needed
+          const hostData = state.hostJobs.get(updateItem.hostname);
+          if (hostData) {
+            const jobIndex = hostData.jobs.findIndex(j => j.job_id === updateItem.jobId);
+            if (jobIndex >= 0) {
+              hostData.jobs[jobIndex] = updateItem.data;
+            } else {
+              hostData.jobs.push(updateItem.data);
+            }
+            state.hostJobs.set(updateItem.hostname, { ...hostData });
+          }
+        } else if (updateItem.type === 'host_jobs_update' && updateItem.hostname) {
+          // Update entire host job list
+          const jobs = updateItem.data;
+          const existingHostData = state.hostJobs.get(updateItem.hostname);
+          
+          state.hostJobs.set(updateItem.hostname, {
+            hostname: updateItem.hostname,
+            jobs,
+            total_jobs: jobs.length,
+            query_time: new Date().toISOString(),
+            cached: existingHostData?.cached || false
+          });
+        }
+      }
+      return state;
+    });
+  });
+
   return {
     subscribe,
     
@@ -53,8 +160,11 @@ function createJobsStore() {
       const cacheKey = `${hostname}:${jobId}`;
       const cached = state.cache[cacheKey];
       
+      // Get intelligent cache duration based on job state
+      const cacheDuration = getCacheDuration(cached?.job);
+      
       // Return cached job if still valid and not forcing refresh
-      if (!forceRefresh && cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+      if (!forceRefresh && cached && Date.now() - cached.timestamp < cacheDuration) {
         return cached.job;
       }
       
@@ -110,9 +220,12 @@ function createJobsStore() {
       const cacheKey = `${hostname}:${jobId}`;
       const cached = state.cache[cacheKey];
       
+      // Get intelligent cache duration for output based on job state
+      const outputCacheDuration = getOutputCacheDuration(cached?.job);
+      
       // Return cached output if still valid
       if (!forceRefresh && cached?.output && cached.outputTimestamp && 
-          Date.now() - cached.outputTimestamp < OUTPUT_CACHE_DURATION) {
+          Date.now() - cached.outputTimestamp < outputCacheDuration) {
         return cached.output;
       }
       
@@ -170,15 +283,23 @@ function createJobsStore() {
     async fetchAvailableHosts(): Promise<HostInfo[]> {
       try {
         const response = await api.get<HostInfo[]>('/api/hosts');
+        const hosts = response.data || [];
         update(s => {
-          s.availableHosts = response.data;
+          s.availableHosts = hosts;
           return s;
         });
-        return response.data;
+        console.log(`Loaded ${hosts.length} hosts`);
+        return hosts;
       } catch (error: any) {
         console.error('Failed to fetch hosts:', error);
+        // Try to return cached hosts if available
         const state = get({ subscribe });
-        return state.availableHosts;
+        if (state.availableHosts.length > 0) {
+          console.log('Using cached hosts:', state.availableHosts.length);
+          return state.availableHosts;
+        }
+        // Return empty array instead of undefined
+        return [];
       }
     },
     
@@ -187,20 +308,26 @@ function createJobsStore() {
       
       // First, get the list of available hosts if we don't have it
       if (state.availableHosts.length === 0) {
+        console.log('No hosts cached, fetching...');
         await this.fetchAvailableHosts();
       }
       
       const hosts = get({ subscribe }).availableHosts;
       if (hosts.length === 0) {
+        console.warn('No hosts available to fetch jobs from');
         return;
       }
       
-      // Check if we need to refresh based on cache
+      console.log(`Fetching jobs from ${hosts.length} hosts`);
+      
+      // Check if we need to refresh based on cache (intelligent cache time)
       const hostsNeedingRefresh = forceRefresh 
         ? hosts 
         : hosts.filter(host => {
             const hostState = state.hostLoadingStates.get(host.hostname);
-            return !hostState || Date.now() - hostState.lastFetch > 15000;
+            // Use intelligent cache duration based on whether host has errors
+            const cacheTimeout = hostState?.error ? 10000 : 60000;  // 10s if error, 60s normally
+            return !hostState || Date.now() - hostState.lastFetch > cacheTimeout;
           });
       
       if (hostsNeedingRefresh.length === 0) {
@@ -242,19 +369,23 @@ function createJobsStore() {
               if (hostData) {
                 s.hostJobs.set(hostData.hostname, hostData);
                 
-                // Update individual job cache
+                // Update individual job cache with intelligent duration
                 hostData.jobs.forEach(job => {
                   if (!job.hostname) {
                     job.hostname = hostData.hostname;
                   }
                   
                   const jobCacheKey = `${hostData.hostname}:${job.job_id}`;
-                  if (!s.cache[jobCacheKey] || s.cache[jobCacheKey].timestamp < Date.now() - CACHE_DURATION) {
+                  const cacheDuration = getCacheDuration(job);
+                  const existingCache = s.cache[jobCacheKey];
+                  
+                  // Only update cache if it doesn't exist or is expired
+                  if (!existingCache || existingCache.timestamp < Date.now() - cacheDuration) {
                     s.cache[jobCacheKey] = {
                       job,
                       timestamp: Date.now(),
-                      output: s.cache[jobCacheKey]?.output,
-                      outputTimestamp: s.cache[jobCacheKey]?.outputTimestamp,
+                      output: existingCache?.output,
+                      outputTimestamp: existingCache?.outputTimestamp,
                     };
                   }
                 });
@@ -269,12 +400,24 @@ function createJobsStore() {
             });
           })
           .catch(error => {
-            // Mark host as errored but don't fail the whole operation
+            // Mark host as errored but preserve existing job data
             update(s => {
+              const existingJobs = s.hostJobs.get(host.hostname);
+              
+              // Keep existing jobs data if we have it (stale data is better than no data)
+              if (existingJobs && existingJobs.jobs.length > 0) {
+                // Mark data as potentially stale but keep it
+                s.hostJobs.set(host.hostname, {
+                  ...existingJobs,
+                  cached: true,  // Mark as cached/stale
+                  query_time: existingJobs.query_time  // Keep original query time
+                });
+              }
+              
               s.hostLoadingStates.set(host.hostname, {
                 loading: false,
                 error: error.message || 'Failed to fetch jobs',
-                lastFetch: s.hostLoadingStates.get(host.hostname)?.lastFetch || 0
+                lastFetch: Date.now()  // Update lastFetch to retry sooner (10s timeout)
               });
               return s;
             });
@@ -299,10 +442,16 @@ function createJobsStore() {
     
     // Keep old method for backward compatibility
     async fetchAllJobs(forceRefresh = false, filters?: any): Promise<JobInfo[]> {
-      // Start progressive fetching with filters
-      await this.fetchAllJobsProgressive(forceRefresh, filters);
-      // Return current jobs immediately (may be partial)
-      return this.getCurrentJobs();
+      try {
+        // Start progressive fetching with filters
+        await this.fetchAllJobsProgressive(forceRefresh, filters);
+      } catch (error) {
+        console.error('Error fetching jobs:', error);
+      }
+      // Return current jobs immediately (may be partial or empty)
+      const jobs = this.getCurrentJobs();
+      console.log(`fetchAllJobs returning ${jobs.length} jobs`);
+      return jobs;
     },
     
     async fetchHostJobs(hostname?: string, filters?: any): Promise<JobStatusResponse[]> {
@@ -310,12 +459,12 @@ function createJobsStore() {
       const cacheKey = hostname || 'all';
       const lastFetch = state.lastFetch.get(cacheKey) || 0;
       
-      // Don't fetch if recently fetched (within 5 seconds) and we have the data we need
+      // Don't fetch if recently fetched (intelligent timeout) and we have the data we need
       const hasValidCache = hostname 
         ? state.hostJobs.has(hostname)
         : state.hostJobs.size > 0;
         
-      if (Date.now() - lastFetch < 5000 && hasValidCache) {
+      if (Date.now() - lastFetch < 30000 && hasValidCache) {
         const result: JobStatusResponse[] = [];
         if (hostname && state.hostJobs.has(hostname)) {
           result.push(state.hostJobs.get(hostname)!);
@@ -344,15 +493,19 @@ function createJobsStore() {
           data.forEach(hostData => {
             s.hostJobs.set(hostData.hostname, hostData);
             
-            // Update individual job cache
+            // Update individual job cache with intelligent duration
             hostData.jobs.forEach(job => {
               const jobCacheKey = `${hostData.hostname}:${job.job_id}`;
-              if (!s.cache[jobCacheKey] || s.cache[jobCacheKey].timestamp < Date.now() - CACHE_DURATION) {
+              const cacheDuration = getCacheDuration(job);
+              const existingCache = s.cache[jobCacheKey];
+              
+              // Only update cache if it doesn't exist or is expired
+              if (!existingCache || existingCache.timestamp < Date.now() - cacheDuration) {
                 s.cache[jobCacheKey] = {
                   job,
                   timestamp: Date.now(),
-                  output: s.cache[jobCacheKey]?.output,
-                  outputTimestamp: s.cache[jobCacheKey]?.outputTimestamp,
+                  output: existingCache?.output,
+                  outputTimestamp: existingCache?.outputTimestamp,
                 };
               }
             });
@@ -377,16 +530,22 @@ function createJobsStore() {
     },
     
     updateJob(hostname: string, job: JobInfo) {
-      update(s => {
-        const cacheKey = `${hostname}:${job.job_id}`;
-        s.cache[cacheKey] = {
-          job,
-          timestamp: Date.now(),
-          output: s.cache[cacheKey]?.output,
-          outputTimestamp: s.cache[cacheKey]?.outputTimestamp,
-        };
-        return s;
-      });
+      // Use batched updates instead of immediate store update
+      batchedUpdates.queueJobUpdate(job.job_id, hostname, job, 'job_update');
+    },
+    
+    updateJobCache(job: JobInfo, hostname: string) {
+      // Use batched updates to prevent excessive re-renders
+      // Determine if this is a state change or just a regular update
+      const existingJob = get({ subscribe }).cache[`${hostname}:${job.job_id}`]?.job;
+      const isStateChange = existingJob && existingJob.state !== job.state;
+      
+      batchedUpdates.queueJobUpdate(
+        job.job_id, 
+        hostname, 
+        job, 
+        isStateChange ? 'job_state_change' : 'job_update'
+      );
     },
     
     clearCache() {
@@ -435,14 +594,14 @@ function createJobsStore() {
     async loadSidebarJobs(forceRefresh = false): Promise<void> {
       const state = get({ subscribe });
       
-      // Skip if not forcing and we have recent data
-      if (!forceRefresh && state.sidebarJobs.length > 0 && Date.now() - state.sidebarLastLoad < 60000) {
+      // Skip if not forcing and we have recent data (increased cache time)
+      if (!forceRefresh && state.sidebarJobs.length > 0 && Date.now() - state.sidebarLastLoad < 120000) {
         return;
       }
       
       try {
-        // Start progressive fetching (non-blocking)
-        this.fetchAllJobsProgressive(forceRefresh || Date.now() - state.sidebarLastLoad > 15000);
+        // Start progressive fetching (non-blocking) - increased threshold from 15s to 45s
+        this.fetchAllJobsProgressive(forceRefresh || Date.now() - state.sidebarLastLoad > 45000);
         
         // Immediately update sidebar with current jobs (may be partial)
         const currentJobs = this.getCurrentJobs();

@@ -1,6 +1,5 @@
 from pathlib import Path
-
-from fabric import Connection
+from typing import Any, Protocol
 
 from .config import config
 from .logging import setup_logger
@@ -8,8 +7,18 @@ from .logging import setup_logger
 logger = setup_logger(__name__, "INFO")
 
 
+class SSHConnection(Protocol):
+    """Protocol for SSH connection objects."""
+
+    def get(self, remote: str, local: Any) -> None: ...
+    def put(self, local: Any, remote: str) -> None: ...
+    def run(self, command: str, **kwargs) -> Any: ...
+    @property
+    def host(self) -> str: ...
+
+
 def get_file(
-    conn: Connection, remote_path: str, local_path: str, filename: str | None
+    conn: SSHConnection, remote_path: str, local_path: str, filename: str | None
 ) -> None:
     """Download a file from a remote host."""
 
@@ -22,7 +31,7 @@ def get_file(
 
 
 def send_file(
-    conn: Connection,
+    conn: SSHConnection,
     local_path: str | Path,
     remote_path: str | Path,
     is_remote_dir: bool = False,

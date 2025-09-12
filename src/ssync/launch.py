@@ -376,44 +376,175 @@ class LaunchManager:
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
         try:
+            # Read the script to check for existing SBATCH directives
+            result = conn.run(f"head -50 {remote_script_path}", hide=True)
+            script_header = result.stdout
+
+            # Check if script already has comprehensive SBATCH directives
+            has_partition = "#SBATCH --partition" in script_header
+            has_time = "#SBATCH --time" in script_header
+            has_cpus = "#SBATCH --cpus" in script_header
+            has_gpus = (
+                "#SBATCH --gpus" in script_header
+                or "#SBATCH --gres=gpu" in script_header
+            )
+
+            # If script has key SBATCH directives, use minimal command line params
+            # to avoid conflicts (command line overrides script directives)
+            is_comprehensive_script = has_partition or (has_time and has_cpus)
+
             cmd = ["sbatch"]
 
-            if slurm_params.job_name:
-                cmd.append(f"--job-name={slurm_params.job_name}")
-            if slurm_params.time_min:
-                cmd.append(f"--time={slurm_params.time_min}")
-            if slurm_params.cpus_per_task:
-                cmd.append(f"--cpus-per-task={slurm_params.cpus_per_task}")
-            if slurm_params.mem_gb:
-                cmd.append(f"--mem={slurm_params.mem_gb}G")
-            if slurm_params.partition:
-                cmd.append(f"--partition={slurm_params.partition}")
-            if slurm_params.output:
-                cmd.append(f"--output={slurm_params.output}")
-            if slurm_params.error:
-                cmd.append(f"--error={slurm_params.error}")
-            if slurm_params.constraint:
-                cmd.append(f"--constraint={slurm_params.constraint}")
-            if slurm_params.account:
-                cmd.append(f"--account={slurm_params.account}")
-            if slurm_params.nodes:
-                cmd.append(f"--nodes={slurm_params.nodes}")
-            if slurm_params.n_tasks_per_node:
-                cmd.append(f"--ntasks-per-node={slurm_params.n_tasks_per_node}")
-            if slurm_params.gpus_per_node:
-                cmd.append(f"--gpus-per-node={slurm_params.gpus_per_node}")
-            if slurm_params.gres:
-                cmd.append(f"--gres={slurm_params.gres}")
+            if is_comprehensive_script:
+                logger.info(
+                    "Script has SBATCH directives, using minimal command-line parameters"
+                )
+                # Only add parameters that are NOT likely to be in the script
+                # and won't conflict with script directives
+                if slurm_params.output and "#SBATCH --output" not in script_header:
+                    cmd.append(f"--output={slurm_params.output}")
+                if slurm_params.error and "#SBATCH --error" not in script_header:
+                    cmd.append(f"--error={slurm_params.error}")
+            else:
+                # Script doesn't have SBATCH directives, use all provided params
+                logger.info(
+                    "Script lacks SBATCH directives, using command-line parameters"
+                )
+                if slurm_params.job_name:
+                    cmd.append(f"--job-name={slurm_params.job_name}")
+                if slurm_params.time_min:
+                    cmd.append(f"--time={slurm_params.time_min}")
+                if slurm_params.cpus_per_task:
+                    cmd.append(f"--cpus-per-task={slurm_params.cpus_per_task}")
+                if slurm_params.mem_gb:
+                    cmd.append(f"--mem={slurm_params.mem_gb}G")
+                if slurm_params.partition:
+                    cmd.append(f"--partition={slurm_params.partition}")
+                if slurm_params.output:
+                    cmd.append(f"--output={slurm_params.output}")
+                if slurm_params.error:
+                    cmd.append(f"--error={slurm_params.error}")
+                if slurm_params.constraint:
+                    cmd.append(f"--constraint={slurm_params.constraint}")
+                if slurm_params.account:
+                    cmd.append(f"--account={slurm_params.account}")
+                if slurm_params.nodes:
+                    cmd.append(f"--nodes={slurm_params.nodes}")
+                if slurm_params.n_tasks_per_node:
+                    cmd.append(f"--ntasks-per-node={slurm_params.n_tasks_per_node}")
+                if slurm_params.gpus_per_node:
+                    cmd.append(f"--gpus-per-node={slurm_params.gpus_per_node}")
+                if slurm_params.gres:
+                    cmd.append(f"--gres={slurm_params.gres}")
 
             cmd.append(remote_script_path)
             full_cmd = f"cd {work_dir} && {' '.join(cmd)}"
+
+            # Store the sbatch command for caching (without the 'cd' part)
+            submit_line = " ".join(cmd)
             logger.info(f"Running: {full_cmd}")
+
+            # Extract watchers from the local script before submission
+            watchers = []
+            try:
+                # Read the local script to extract watchers
+                local_script_path = (
+                    remote_script_path  # This assumes the script was copied
+                )
+                # We need to read from the original local script instead
+                # Find the original script path from earlier in the method
+                result_read = conn.run(f"cat {remote_script_path}", hide=True)
+                script_content = result_read.stdout
+
+                from .script_processor import ScriptProcessor
+
+                watchers, _ = ScriptProcessor.extract_watchers(script_content)
+
+                if watchers:
+                    logger.info(f"Found {len(watchers)} watchers in script")
+            except Exception as e:
+                logger.warning(f"Failed to extract watchers: {e}")
 
             result = conn.run(full_cmd, hide=False)
             job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
             if job_id_match:
                 job_id = job_id_match.group(1)
-                return Job(job_id, slurm_host, self.slurm_manager)
+                job = Job(job_id, slurm_host, self.slurm_manager)
+
+                # Cache the submit line for this job
+                try:
+                    from .cache import get_cache
+                    from .models.job import JobInfo, JobState
+
+                    cache = get_cache()
+                    # Create a basic job info with the submit line for running jobs
+                    job_info = JobInfo(
+                        job_id=job_id,
+                        name=slurm_params.job_name or "unknown",
+                        state=JobState.PENDING,  # Will be updated when job is queried
+                        hostname=slurm_host.host.hostname,
+                        submit_line=submit_line,
+                        user=None,  # Will be updated when job is queried
+                    )
+                    cache.cache_job(job_info)
+                except Exception as e:
+                    logger.warning(f"Failed to cache submit line for job {job_id}: {e}")
+
+                # Start watchers if any were found
+                if watchers:
+                    try:
+                        import asyncio
+
+                        from .watchers import get_watcher_engine
+                        from .watchers.daemon import start_daemon_if_needed
+
+                        engine = get_watcher_engine()
+
+                        # Check if there's an existing event loop (e.g., from web server)
+                        try:
+                            loop = asyncio.get_running_loop()
+                            # We're in an async context, can directly create the task
+                            asyncio.create_task(
+                                engine.start_watchers_for_job(
+                                    job_id,
+                                    slurm_host.host.hostname,
+                                    watchers,
+                                )
+                            )
+                            logger.info(
+                                f"Scheduled {len(watchers)} watchers for job {job_id}"
+                            )
+                        except RuntimeError:
+                            # No running loop, create one temporarily just to register watchers
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                watcher_ids = loop.run_until_complete(
+                                    engine.start_watchers_for_job(
+                                        job_id,
+                                        slurm_host.host.hostname,
+                                        watchers,
+                                    )
+                                )
+                                logger.info(
+                                    f"Registered {len(watcher_ids)} watchers for job {job_id}"
+                                )
+
+                                # Start the watcher daemon to monitor them
+                                if start_daemon_if_needed():
+                                    logger.info(
+                                        "Watcher daemon is running to monitor watchers"
+                                    )
+                                else:
+                                    logger.warning(
+                                        "Failed to start watcher daemon - watchers won't be monitored"
+                                    )
+                            finally:
+                                loop.close()
+                    except Exception as e:
+                        logger.error(f"Failed to start watchers for job {job_id}: {e}")
+
+                return job
             else:
                 logger.error(f"Could not parse job ID from: {result.stdout}")
                 return None
