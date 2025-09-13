@@ -1,26 +1,50 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
 
   export let resetError: () => void = () => {};
   
   let hasError = false;
   let errorMessage = '';
   let errorInfo = '';
+  let errorCount = 0;
+  let lastErrorTime = 0;
   
   // Set up error handler
   onMount(() => {
     const originalOnError = window.onerror;
     
     window.onerror = (message: string | Event, source?: string, line?: number, column?: number, error?: Error) => {
+      // Prevent error loops
+      const now = Date.now();
+      if (now - lastErrorTime < 100) {
+        errorCount++;
+        if (errorCount > 10) {
+          console.error('Too many errors in succession, stopping error handling');
+          return true;
+        }
+      } else {
+        errorCount = 0;
+      }
+      lastErrorTime = now;
+      
       hasError = true;
       errorMessage = typeof message === 'string' ? message : 'An unknown error occurred';
-      errorInfo = `${source || ''}:${line || ''}:${column || ''}`;
+      
+      // Better error info formatting
+      if (error?.stack) {
+        errorInfo = error.stack;
+      } else if (source && line) {
+        errorInfo = `at ${source}:${line}:${column || 0}`;
+      }
+      
+      // Log to console for debugging
+      console.error('ErrorBoundary caught:', { message, source, line, column, error });
       
       if (originalOnError) {
         return originalOnError(message, source, line, column, error);
       }
       
-      return false;
+      return true; // Prevent default error handling
     };
     
     // Also handle unhandled promise rejections

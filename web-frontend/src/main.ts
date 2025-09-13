@@ -1,4 +1,5 @@
 import App from './App.svelte';
+import './app.css';
 import './global.css';
 
 // Configure axios for better error handling

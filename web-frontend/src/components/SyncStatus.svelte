@@ -1,57 +1,34 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { dataSyncManager } from '../lib/DataSyncManager';
-  import { batchedUpdates } from '../lib/BatchedUpdates';
-  import { isWebSocketHealthy } from '../stores/jobWebSocket';
+  import { jobStateManager } from '../lib/JobStateManager';
   
   export let compact = false;
   export let showDetails = false;
   
-  let status = {
-    webSocketConnected: false,
-    webSocketReliable: false,
-    isPolling: false,
-    isTabActive: true,
-    isPaused: false,
-    connectionAttempts: 0,
-    lastActivity: 0
-  };
-  
-  let batchStatus = {
-    queueSize: 0,
-    isProcessing: false,
-    hasTimer: false,
-    callbackCount: 0
-  };
-  
-  let updateInterval: ReturnType<typeof setInterval>;
-  
-  function updateStatus() {
-    status = dataSyncManager.getStatus();
-    batchStatus = batchedUpdates.getStatus();
-  }
+  const connectionStatus = jobStateManager.getConnectionStatus();
+  const managerState = jobStateManager.getState();
   
   function getStatusText(): string {
-    if (status.isPaused) return 'Paused';
-    if (status.webSocketConnected && status.webSocketReliable) return 'Real-time';
-    if (status.webSocketConnected && !status.webSocketReliable) return 'Reconnecting';
-    if (!status.webSocketConnected && status.isPolling) return 'Polling';
-    if (!status.webSocketConnected && status.connectionAttempts === 0) return 'Initializing';
+    if ($managerState.isPaused) return 'Paused';
+    if ($connectionStatus.source === 'websocket' && $connectionStatus.healthy) return 'Real-time';
+    if ($connectionStatus.source === 'websocket' && !$connectionStatus.healthy) return 'Reconnecting';
+    if ($connectionStatus.source === 'api') return 'Polling';
+    if ($connectionStatus.source === 'cache') return 'Cached';
     return 'Connecting';
   }
   
   function getStatusColor(): string {
-    if (status.isPaused) return '#6b7280'; // Gray
-    if (status.webSocketConnected && status.webSocketReliable) return '#10b981'; // Green
-    if (status.webSocketConnected && !status.webSocketReliable) return '#f97316'; // Orange
-    if (!status.webSocketConnected && status.isPolling) return '#f59e0b'; // Amber
-    if (!status.webSocketConnected && status.connectionAttempts === 0) return '#3b82f6'; // Blue
+    if ($managerState.isPaused) return '#6b7280'; // Gray
+    if ($connectionStatus.source === 'websocket' && $connectionStatus.healthy) return '#10b981'; // Green
+    if ($connectionStatus.source === 'websocket' && !$connectionStatus.healthy) return '#f97316'; // Orange
+    if ($connectionStatus.source === 'api') return '#f59e0b'; // Amber
+    if ($connectionStatus.source === 'cache') return '#3b82f6'; // Blue
     return '#ef4444'; // Red
   }
   
   function formatLastActivity(): string {
-    if (!status.lastActivity) return 'Never';
-    const seconds = Math.floor((Date.now() - status.lastActivity) / 1000);
+    if (!$managerState.lastActivity) return 'Never';
+    const seconds = Math.floor((Date.now() - $managerState.lastActivity) / 1000);
     if (seconds < 60) return `${seconds}s ago`;
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `${minutes}m ago`;
@@ -59,14 +36,9 @@
     return `${hours}h ago`;
   }
   
-  onMount(() => {
-    updateStatus();
-    updateInterval = setInterval(updateStatus, 2000); // Update every 2 seconds
-  });
-  
-  onDestroy(() => {
-    if (updateInterval) clearInterval(updateInterval);
-  });
+  // Queue status
+  $: queueSize = $managerState.pendingUpdates.length;
+  $: isProcessing = $managerState.processingUpdates;
 </script>
 
 <div class="sync-status" class:compact>
@@ -74,7 +46,7 @@
     <div 
       class="status-dot" 
       style="background-color: {getStatusColor()}"
-      class:pulsing={!status.webSocketReliable && status.webSocketConnected}
+      class:pulsing={$connectionStatus.source === 'websocket' && !$connectionStatus.healthy}
     ></div>
     
     {#if !compact}
@@ -85,27 +57,25 @@
   {#if showDetails}
     <div class="status-details">
       <div class="detail-row">
-        <span class="label">Connection:</span>
+        <span class="label">Source:</span>
+        <span class="value">{$connectionStatus.source}</span>
+      </div>
+      
+      <div class="detail-row">
+        <span class="label">Status:</span>
         <span class="value">
-          {status.webSocketConnected ? 'Connected' : 'Disconnected'}
-          {#if status.connectionAttempts > 0}
-            (Attempt {status.connectionAttempts})
+          {$connectionStatus.connected ? 'Connected' : 'Disconnected'}
+          {#if $connectionStatus.healthy}
+            (Healthy)
+          {:else}
+            (Unhealthy)
           {/if}
         </span>
       </div>
       
       <div class="detail-row">
-        <span class="label">Mode:</span>
-        <span class="value">
-          {status.isPolling ? 'Polling' : 'WebSocket'}
-        </span>
-      </div>
-      
-      <div class="detail-row">
-        <span class="label">Tab:</span>
-        <span class="value">
-          {status.isTabActive ? 'Active' : 'Background'}
-        </span>
+        <span class="label">Tab Active:</span>
+        <span class="value">{$managerState.isTabActive ? 'Yes' : 'No'}</span>
       </div>
       
       <div class="detail-row">
@@ -113,12 +83,22 @@
         <span class="value">{formatLastActivity()}</span>
       </div>
       
-      {#if batchStatus.queueSize > 0}
+      {#if queueSize > 0}
         <div class="detail-row">
-          <span class="label">Queued Updates:</span>
-          <span class="value">{batchStatus.queueSize}</span>
+          <span class="label">Queue:</span>
+          <span class="value">
+            {queueSize} update{queueSize !== 1 ? 's' : ''}
+            {#if isProcessing}
+              (Processing)
+            {/if}
+          </span>
         </div>
       {/if}
+      
+      <div class="detail-row">
+        <span class="label">Hosts:</span>
+        <span class="value">{$managerState.hostStates.size} tracked</span>
+      </div>
     </div>
   {/if}
 </div>
@@ -126,13 +106,13 @@
 <style>
   .sync-status {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    font-size: 0.875rem;
+    flex-direction: column;
+    gap: 0.5rem;
   }
   
   .sync-status.compact {
-    gap: 0.5rem;
+    flex-direction: row;
+    align-items: center;
   }
   
   .status-indicator {
@@ -145,7 +125,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    transition: background-color 0.2s ease;
+    transition: background-color 0.3s ease;
   }
   
   .status-dot.pulsing {
@@ -162,50 +142,36 @@
   }
   
   .status-text {
+    font-size: 0.875rem;
     font-weight: 500;
-    color: #374151;
-    user-select: none;
+    color: var(--text-primary);
   }
   
   .status-details {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.5rem;
-    background: #f9fafb;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
     border-radius: 0.375rem;
-    border: 1px solid #e5e7eb;
+    padding: 0.75rem;
     font-size: 0.75rem;
+    min-width: 200px;
   }
   
   .detail-row {
     display: flex;
     justify-content: space-between;
-    gap: 1rem;
+    padding: 0.25rem 0;
+  }
+  
+  .detail-row:not(:last-child) {
+    border-bottom: 1px solid var(--border-color-light);
   }
   
   .label {
-    color: #6b7280;
+    color: var(--text-secondary);
     font-weight: 500;
   }
   
   .value {
-    color: #374151;
-    font-weight: 400;
-  }
-  
-  @media (max-width: 768px) {
-    .status-details {
-      position: absolute;
-      top: 100%;
-      right: 0;
-      z-index: 10;
-      min-width: 200px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    
-    .sync-status {
-      position: relative;
-    }
+    color: var(--text-primary);
   }
 </style>

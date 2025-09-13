@@ -1,20 +1,24 @@
 <script lang="ts">
-  import { allJobsWebSocketStore } from '../stores/jobWebSocket';
-  import { dataSyncManager } from '../lib/DataSyncManager';
+  import { jobStateManager } from '../lib/JobStateManager';
   
   let showDetails = false;
-  let syncStatus: any = {};
   
-  // Update sync status periodically (reduced from 1s to 10s)
-  setInterval(() => {
-    syncStatus = dataSyncManager.getStatus();
-  }, 10000);
+  const connectionStatus = jobStateManager.getConnectionStatus();
+  const managerState = jobStateManager.getState();
   
-  $: isConnected = $allJobsWebSocketStore.connected;
-  $: connectionClass = isConnected ? 'connected' : 'disconnected';
+  $: isConnected = $connectionStatus.connected;
+  $: connectionClass = $connectionStatus.source === 'websocket' ? 'connected' : 
+                       $connectionStatus.source === 'api' ? 'polling' : 'disconnected';
   
   function handleReconnect() {
-    dataSyncManager.requestImmediateRefresh();
+    jobStateManager.forceRefresh();
+  }
+  
+  function getStatusText() {
+    if ($connectionStatus.source === 'websocket') return 'Live';
+    if ($connectionStatus.source === 'api') return 'Polling';
+    if ($connectionStatus.source === 'cache') return 'Cached';
+    return 'Reconnecting...';
   }
 </script>
 
@@ -22,35 +26,43 @@
   <button 
     class="status-indicator"
     on:click={() => showDetails = !showDetails}
-    title={isConnected ? 'WebSocket connected' : 'WebSocket disconnected - using polling'}
+    title="Connection status: {$connectionStatus.source}"
   >
     <span class="status-dot"></span>
     <span class="status-text">
-      {isConnected ? 'Live' : 'Reconnecting...'}
+      {getStatusText()}
     </span>
   </button>
   
   {#if showDetails}
     <div class="status-details">
       <div class="detail-row">
-        <span>WebSocket:</span>
-        <span class:text-green={isConnected} class:text-red={!isConnected}>
-          {isConnected ? 'Connected' : 'Disconnected'}
+        <span>Source:</span>
+        <span class:text-green={$connectionStatus.source === 'websocket'} 
+              class:text-amber={$connectionStatus.source === 'api'}
+              class:text-blue={$connectionStatus.source === 'cache'}>
+          {$connectionStatus.source}
         </span>
       </div>
       <div class="detail-row">
-        <span>Data sync:</span>
-        <span>{syncStatus.isWebSocketReliable ? 'Real-time' : 'Polling'}</span>
+        <span>Connected:</span>
+        <span class:text-green={isConnected} class:text-red={!isConnected}>
+          {isConnected ? 'Yes' : 'No'}
+        </span>
       </div>
-      {#if !isConnected}
+      <div class="detail-row">
+        <span>Tab Active:</span>
+        <span>{$managerState.isTabActive ? 'Yes' : 'No'}</span>
+      </div>
+      {#if $managerState.isPaused}
         <div class="detail-row">
-          <span>Next retry:</span>
-          <span>{syncStatus.nextReconnectIn || 'Calculating...'}</span>
+          <span>Status:</span>
+          <span class="text-amber">Paused (Inactive)</span>
         </div>
-        <button class="reconnect-btn" on:click={handleReconnect}>
-          Force Refresh
-        </button>
       {/if}
+      <button class="reconnect-btn" on:click={handleReconnect}>
+        Force Refresh
+      </button>
     </div>
   {/if}
 </div>
@@ -90,8 +102,13 @@
     background: #10b981;
   }
   
-  .disconnected .status-dot {
+  .polling .status-dot {
     background: #f59e0b;
+    animation: pulse 1.5s infinite;
+  }
+  
+  .disconnected .status-dot {
+    background: #ef4444;
     animation: pulse 1s infinite;
   }
   
@@ -99,8 +116,12 @@
     color: #374151;
   }
   
-  .disconnected .status-text {
+  .polling .status-text {
     color: #f59e0b;
+  }
+  
+  .disconnected .status-text {
+    color: #ef4444;
   }
   
   .status-details {
@@ -118,6 +139,14 @@
   
   .text-green {
     color: #10b981;
+  }
+  
+  .text-amber {
+    color: #f59e0b;
+  }
+  
+  .text-blue {
+    color: #3b82f6;
   }
   
   .text-red {

@@ -12,6 +12,8 @@
   import SyncSettings from "./SyncSettings.svelte";
   import ConfirmationDialog from "./ConfirmationDialog.svelte";
   import ScriptHistory from "./ScriptHistory.svelte";
+  import MobileJobLauncher from "./mobile/MobileJobLauncher.svelte";
+  import JobEditor from "./JobEditor.svelte";
   // Import store and actions
   import {
     config,
@@ -44,7 +46,8 @@
   let pendingLaunchRequest: LaunchJobRequest | null = null;
 
   // Tab state (unified for both mobile and desktop)
-  let activeTab: 'config' | 'browser' | 'sync' | 'script' = 'config';
+  let activeTab: 'config' | 'browser' | 'sync' | 'script' = 'script';
+  let previousTab: 'config' | 'browser' | 'sync' | 'script' = 'config';
   let isMobile = false;
   
   // Resubmit info
@@ -70,6 +73,20 @@
   // Check if mobile
   function checkMobile() {
     isMobile = window.innerWidth <= 768;
+  }
+  
+  // Handle tab switching with data preservation
+  function switchTab(newTab: typeof activeTab) {
+    if (activeTab === newTab) return;
+    
+    // Save any pending changes before switching
+    if (activeTab === 'script') {
+      // Trigger save in ScriptPreview if there are unsaved changes
+      // The component will handle this through its auto-save mechanism
+    }
+    
+    previousTab = activeTab;
+    activeTab = newTab;
   }
 
   onMount(() => {
@@ -223,13 +240,23 @@
     }
   }
 
+  // Add flag to prevent duplicate submissions
+  let isCurrentlyLaunching = false;
+  
   async function launchJob(forceSync: boolean = false): Promise<void> {
+    // Prevent duplicate submissions
+    if (isCurrentlyLaunching) {
+      console.warn('Job launch already in progress, ignoring duplicate request');
+      return;
+    }
+    
     // Validate using store
     if (!$isValid) {
       jobLaunchActions.setError("Please complete all required fields");
       return;
     }
 
+    isCurrentlyLaunching = true;
     jobLaunchActions.setLaunching(true);
     jobLaunchActions.resetMessages();
 
@@ -304,6 +331,7 @@
           directoryStats = response.data.directory_stats || null;
           showConfirmationDialog = true;
           jobLaunchActions.setLaunching(false);
+          isCurrentlyLaunching = false; // Reset flag when showing confirmation
           return;
         }
         
@@ -350,6 +378,7 @@
       jobLaunchActions.setError(errorMessage);
     } finally {
       jobLaunchActions.setLaunching(false);
+      isCurrentlyLaunching = false;
     }
   }
 
@@ -371,6 +400,34 @@
 
   function handleSyncSettingsChange(event: CustomEvent) {
     jobLaunchActions.setSyncSettings(event.detail);
+  }
+
+  function handleConfigFromEditor(event: CustomEvent) {
+    // Handle configuration changes from the integrated editor
+    const config = event.detail;
+    
+    // Update jobParameters store with the new configuration
+    if (config.jobName) {
+      jobParameters.updateParameter('jobName', config.jobName);
+    }
+    if (config.partition) {
+      jobParameters.updateParameter('partition', config.partition);
+    }
+    if (config.timeLimit) {
+      jobParameters.updateParameter('timeLimit', config.timeLimit);
+    }
+    if (config.memory) {
+      jobParameters.updateParameter('memory', config.memory);
+    }
+    if (config.cpus) {
+      jobParameters.updateParameter('cpus', config.cpus);
+    }
+    if (config.nodes) {
+      jobParameters.updateParameter('nodes', config.nodes);
+    }
+    if (config.gpusPerNode !== undefined) {
+      jobParameters.updateParameter('gpusPerNode', config.gpusPerNode);
+    }
   }
 
   function handlePathSelected(event: CustomEvent) {
@@ -530,205 +587,45 @@
     </div>
   {/if}
 
-  <!-- Clean Tab System -->
-  <div class="content-controls">
-    <div class="view-selection">
-      <button 
-        class="view-tab"
-        class:active={activeTab === 'config'}
-        on:click={() => activeTab = 'config'}
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/>
-        </svg>
-        <span class="tab-label">Configuration</span>
-      </button>
-      <button 
-        class="view-tab"
-        class:active={activeTab === 'browser'}
-        on:click={() => activeTab = 'browser'}
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"/>
-        </svg>
-        <span class="tab-label">Directory</span>
-      </button>
-      <button 
-        class="view-tab"
-        class:active={activeTab === 'sync'}
-        on:click={() => activeTab = 'sync'}
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12,18A6,6 0 0,1 6,12C6,11 6.25,10.03 6.7,9.2L5.24,7.74C4.46,8.97 4,10.43 4,12A8,8 0 0,0 12,20V23L16,19L12,15M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13 17.75,13.97 17.3,14.8L18.76,16.26C19.54,15.03 20,13.57 20,12A8,8 0 0,0 12,4Z"/>
-        </svg>
-        <span class="tab-label">Sync</span>
-      </button>
-      <button 
-        class="view-tab"
-        class:active={activeTab === 'script'}
-        on:click={() => activeTab = 'script'}
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M14.6,16.6L19.2,12L14.6,7.4L16,6L22,12L16,18L14.6,16.6M9.4,16.6L4.8,12L9.4,7.4L8,6L2,12L8,18L9.4,16.6Z"/>
-        </svg>
-        <span class="tab-label">Script</span>
-      </button>
-    </div>
-  </div>
 
   <!-- Content Area -->
   <div class="content-area" class:mobile-layout={isMobile}>
     {#if isMobile}
-      <!-- Mobile Layout -->
-      <div class="mobile-content">
-        {#if activeTab === 'config'}
-          <div class="tab-content">
-            <JobConfigForm
-              hosts={$hostsStore}
-              selectedHost={$config.selectedHost}
-              sourceDir={$config.sourceDir}
-              jobName={$config.jobName}
-              partition={$config.partition}
-              constraint={$config.constraint}
-              account={$config.account}
-              cpus={$config.cpus}
-              useMemory={$config.useMemory}
-              memory={$config.memory}
-              timeLimit={$config.timeLimit}
-              nodes={$config.nodes}
-              ntasksPerNode={$config.ntasksPerNode}
-              gpusPerNode={$config.gpusPerNode}
-              gres={$config.gres}
-              outputFile={$config.outputFile}
-              errorFile={$config.errorFile}
-              loading={$loading}
-              readonly={$jobParameters.isResubmit}
-              on:configChanged={handleConfigChangeWithSync}
-            />
-          </div>
-        {:else if activeTab === 'browser'}
-          <div class="tab-content">
-            <div class="browser-section mobile">
-              <h3>Select Source Directory</h3>
-              <FileBrowser
-                sourceDir={$config.sourceDir}
-                initialPath="/home"
-                on:pathSelected={handlePathSelected}
-                on:change={(e) => jobLaunchActions.setSourceDir(e.detail)}
-              />
-            </div>
-          </div>
-        {:else if activeTab === 'sync'}
-          <div class="tab-content">
-            <div class="sync-settings-wrapper mobile">
-              <SyncSettings
-                excludePatterns={$config.excludePatterns}
-                includePatterns={$config.includePatterns}
-                noGitignore={$config.noGitignore}
-                on:settingsChanged={handleSyncSettingsChange}
-              />
-            </div>
-          </div>
-        {:else if activeTab === 'script'}
-          <div class="tab-content script-tab">
-            <!-- Quick host selector for mobile in script view -->
-            <div class="mobile-quick-host-selector">
-              <label for="mobile-script-host">Host:</label>
-              <select
-                id="mobile-script-host"
-                class="mobile-host-select"
-                value={$config.selectedHost}
-                on:change={handleHostChange}
-                disabled={$loading || $launching}
-              >
-                <option value="">Select a host</option>
-                {#each $hostsStore as host}
-                  <option value={host.hostname}>{host.hostname}</option>
-                {/each}
-              </select>
-            </div>
-            
-            <ScriptPreview
-              generatedScript={$jobParameters.scriptContent || $generatedScript}
-              launching={$launching}
-              loading={$loading}
-              validationDetails={$validationDetails}
-              on:launch={handleLaunchJob}
-              on:scriptChanged={handleScriptChange}
-              on:openHistory={() => showScriptHistory = true}
-            />
-          </div>
-        {/if}
-      </div>
+      <!-- Enhanced Mobile Layout -->
+      <MobileJobLauncher
+        script={$jobParameters.scriptContent || $generatedScript}
+        launching={$launching}
+        hosts={$hostsStore.map(h => h.hostname)}
+        selectedHost={$config.selectedHost}
+        canLaunch={$isValid}
+        validationMessage={$validationDetails?.message || ''}
+        on:launch={handleLaunchJob}
+        on:scriptUpdate={(e) => handleScriptChange(e.detail.script)}
+        on:hostChange={(e) => {
+          jobLaunchActions.setSelectedHost(e.detail.host);
+          const selectedHost = $hostsStore.find(h => h.hostname === e.detail.host);
+          if (selectedHost) {
+            jobParameters.applyHostDefaults(selectedHost);
+          }
+        }}
+      />
     {:else}
-      <!-- Desktop Layout -->
-      <div class="desktop-content">
-        <div class="content-panel" class:full-width={activeTab === 'script'}>
-          {#if activeTab === 'config'}
-            <JobConfigForm
-              hosts={$hostsStore}
-              selectedHost={$config.selectedHost}
-              sourceDir={$config.sourceDir}
-              jobName={$config.jobName}
-              partition={$config.partition}
-              constraint={$config.constraint}
-              account={$config.account}
-              cpus={$config.cpus}
-              useMemory={$config.useMemory}
-              memory={$config.memory}
-              timeLimit={$config.timeLimit}
-              nodes={$config.nodes}
-              ntasksPerNode={$config.ntasksPerNode}
-              gpusPerNode={$config.gpusPerNode}
-              gres={$config.gres}
-              outputFile={$config.outputFile}
-              errorFile={$config.errorFile}
-              loading={$loading}
-              readonly={$jobParameters.isResubmit}
-              on:configChanged={handleConfigChangeWithSync}
-            />
-          {:else if activeTab === 'browser'}
-            <FileBrowser
-              sourceDir={$config.sourceDir}
-              initialPath="/home"
-              on:pathSelected={handlePathSelected}
-              on:change={(e) => jobLaunchActions.setSourceDir(e.detail)}
-            />
-          {:else if activeTab === 'sync'}
-            <SyncSettings
-              excludePatterns={$config.excludePatterns}
-              includePatterns={$config.includePatterns}
-              noGitignore={$config.noGitignore}
-              on:settingsChanged={handleSyncSettingsChange}
-            />
-          {:else if activeTab === 'script'}
-            <ScriptPreview
-              generatedScript={$jobParameters.scriptContent || $generatedScript}
-              launching={$launching}
-              loading={$loading}
-              validationDetails={$validationDetails}
-              on:launch={handleLaunchJob}
-              on:scriptChanged={handleScriptChange}
-              on:openHistory={() => showScriptHistory = true}
-            />
-          {/if}
-        </div>
-        
-        <!-- Side Script Panel (only show when not in script tab) -->
-        {#if activeTab !== 'script'}
-          <div class="script-panel">
-            <ScriptPreview
-              generatedScript={$jobParameters.scriptContent || $generatedScript}
-              launching={$launching}
-              loading={$loading}
-              validationDetails={$validationDetails}
-              on:launch={handleLaunchJob}
-              on:scriptChanged={handleScriptChange}
-              on:openHistory={() => showScriptHistory = true}
-            />
-          </div>
-        {/if}
-      </div>
+      <!-- Desktop Layout - Full Screen Editor -->
+      <JobEditor
+        script={$jobParameters.scriptContent || $generatedScript}
+        launching={$launching}
+        hosts={$hostsStore}
+        selectedHost={$config.selectedHost}
+        loading={$loading}
+        validationDetails={$validationDetails}
+        config={$config}
+        on:launch={handleLaunchJob}
+        on:scriptChanged={handleScriptChange}
+        on:configChanged={handleConfigFromEditor}
+        on:pathSelected={handlePathSelected}
+        on:syncSettingsChanged={handleSyncSettingsChange}
+        on:openHistory={() => showScriptHistory = true}
+      />
     {/if}
   </div>
 </div>
@@ -814,6 +711,20 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    height: calc(100vh - 60px); /* Account for any headers */
+    width: 100%;
+    position: relative;
+  }
+  
+  /* Full screen modern editor on desktop */
+  .content-area > :global(.modern-editor) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
   }
   
   .desktop-content {

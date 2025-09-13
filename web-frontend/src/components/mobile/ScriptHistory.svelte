@@ -48,7 +48,7 @@
       error = '';
       
       // Get jobs from all hosts
-      const response = await api.get('/jobs/status');
+      const response = await api.get('/api/status');
       const allJobs = [];
       
       for (const host of Object.keys(response.data)) {

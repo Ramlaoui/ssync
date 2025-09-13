@@ -94,28 +94,68 @@ export const success = derived({ subscribe }, $state => $state.success);
 // Derived store for generated SLURM script
 export const generatedScript = derived(config, $config => generateSlurmScript($config));
 
-// Helper function to get validation details
+// Helper function to get validation details with improved messages
 function getValidationDetails(config: JobLaunchConfig) {
+  const errors: { field: string; message: string }[] = [];
+  const warnings: string[] = [];
   const missing: string[] = [];
-  const hasHost = config.selectedHost && config.selectedHost.trim();
-  const hasSourceDir = config.sourceDir && config.sourceDir.trim();
+  
+  // Check host
+  if (!config.selectedHost || !config.selectedHost.trim()) {
+    errors.push({ field: 'selectedHost', message: 'Please select a host to run the job on' });
+    missing.push('host selection');
+  }
+  
+  // Check source directory
+  if (!config.sourceDir || !config.sourceDir.trim()) {
+    errors.push({ field: 'sourceDir', message: 'Please select a source directory to sync' });
+    missing.push('source directory');
+  } else if (!config.sourceDir.startsWith('/')) {
+    warnings.push('Source directory should be an absolute path');
+  }
+  
+  // Check script based on source
   const hasScript = 
     (config.scriptSource === 'editor' && config.scriptContent.trim()) ||
     (config.scriptSource === 'local' && config.localScriptPath.trim()) ||
     (config.scriptSource === 'upload' && config.uploadedScriptName);
-
-  if (!hasHost) missing.push('host selection');
-  if (!hasSourceDir) missing.push('source directory');
+    
   if (!hasScript) {
-    if (config.scriptSource === 'editor') missing.push('script content');
-    else if (config.scriptSource === 'local') missing.push('local script file');
-    else if (config.scriptSource === 'upload') missing.push('uploaded script');
+    if (config.scriptSource === 'editor') {
+      errors.push({ field: 'scriptContent', message: 'Please enter a script to run' });
+      missing.push('script content');
+    } else if (config.scriptSource === 'local') {
+      errors.push({ field: 'localScriptPath', message: 'Please specify a local script path' });
+      missing.push('local script file');
+    } else if (config.scriptSource === 'upload') {
+      errors.push({ field: 'uploadedScript', message: 'Please upload a script file' });
+      missing.push('uploaded script');
+    }
+  } else if (config.scriptSource === 'editor' && !config.scriptContent.includes('#!/')) {
+    warnings.push('Script should start with a shebang (#!/bin/bash)');
   }
-
+  
+  // Check time limit
+  if (config.timeLimit && config.timeLimit > 10080) { // 7 days in minutes
+    warnings.push('Time limit exceeds 7 days, job may be rejected');
+  }
+  
+  // Check memory
+  if (config.useMemory && config.memory > 512) {
+    warnings.push('High memory request (>512GB) may delay job scheduling');
+  }
+  
   return {
-    isValid: missing.length === 0,
+    isValid: errors.length === 0,
+    errors,
+    warnings,
     missing,
-    missingText: missing.length > 0 ? `Missing: ${missing.join(', ')}` : 'Ready to launch'
+    missingText: errors.length > 0 
+      ? errors[0].message 
+      : warnings.length > 0 
+        ? `Warning: ${warnings[0]}` 
+        : 'Ready to launch',
+    message: errors.length > 0 ? errors[0].message : ''
   };
 }
 

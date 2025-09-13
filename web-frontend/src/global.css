@@ -40,6 +40,27 @@
     --color-primary-dark: #2980b9;
     --color-bg-primary: #ffffff;
     --color-bg-secondary: #f8f9fa;
+    
+    /* Component-specific theme variables */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-tertiary: #e9ecef;
+    --text-primary: #212529;
+    --text-secondary: #6c757d;
+    --text-tertiary: #adb5bd;
+    --accent-color: #3498db;
+    --accent-hover: #2980b9;
+    --button-primary-bg: #3498db;
+    --button-primary-text: #ffffff;
+    --button-primary-hover: #2980b9;
+    --input-bg: #ffffff;
+    --input-border: #ced4da;
+    --error-bg: #f8d7da;
+    --error-text: #721c24;
+    --error-border: #f5c6cb;
+    --success-bg: #d4edda;
+    --success-text: #155724;
+    --success-border: #c3e6cb;
 }
 
 * {

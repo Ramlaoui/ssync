@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { push } from "svelte-spa-router";
-  import { jobsStore } from "../stores/jobs";
+  import { jobStateManager } from "../lib/JobStateManager";
   import { api, apiConfig } from "../services/api";
   import { get } from "svelte/store";
   import type { JobInfo, JobOutputResponse, JobScriptResponse } from "../types/api";
@@ -24,6 +24,20 @@
   let sidebarCollapsed = false;
   let showMobileSidebar = false;
   let isMobile = false;
+  
+  // Get reactive job data from JobStateManager
+  const allJobs = jobStateManager.getAllJobs();
+  
+  // Subscribe to job updates
+  $: if (params.id && params.host && $allJobs.length > 0) {
+    const currentJob = $allJobs.find(j => 
+      j.job_id === params.id && j.hostname === params.host
+    );
+    if (currentJob && job?.state !== currentJob.state) {
+      // Job state changed, update local job
+      job = currentJob;
+    }
+  }
   
   // Tab state
   let activeTab: 'info' | 'output' | 'errors' | 'script' = 'info';
@@ -72,7 +86,7 @@
       loading = true;
       error = null;
       
-      const fetchedJob = await jobsStore.fetchJob(params.id, params.host, forceRefresh);
+      const fetchedJob = await jobStateManager.fetchJob(params.id, params.host);
       
       if (mounted) {
         if (fetchedJob) {
@@ -591,9 +605,10 @@
     mounted = true;
     loadJob();
     
-    // Connect WebSocket for real-time updates
-    if (params.id) {
-      connectJobWebSocket(params.id, params.host);
+    // JobStateManager handles WebSocket connection automatically
+    // Just ensure we sync this specific job
+    if (params.id && params.host) {
+      jobStateManager.syncHost(params.host);
     }
     
     // Check if mobile
@@ -636,8 +651,7 @@
       console.warn('Error removing event listeners:', e);
     }
     
-    // Disconnect WebSocket
-    disconnectJobWebSocket();
+    // JobStateManager handles WebSocket cleanup automatically
   });
   
   function toggleSidebar() {

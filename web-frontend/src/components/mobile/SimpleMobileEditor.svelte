@@ -82,11 +82,10 @@
   <div class="script-container">
     <CodeMirrorEditor
       bind:this={codeMirrorEditor}
-      content={script}
+      value={script}
       on:change={handleScriptChange}
-      vim={vimMode}
-      readOnly={false}
-      height="100%"
+      vimMode={vimMode}
+      disabled={false}
     />
   </div>
   

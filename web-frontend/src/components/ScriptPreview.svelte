@@ -28,10 +28,14 @@
 
   // Initialize editable script when component mounts or generated script changes
   // Only update if user hasn't made manual edits (avoid overwriting user's edits)
-  $: if (!userHasEdited && generatedScript !== lastSavedScript) {
-    editableScript = generatedScript;
-    lastSavedScript = generatedScript;
-    hasUnsavedChanges = false;
+  // Reset userHasEdited flag when script is programmatically changed
+  $: if (generatedScript !== lastSavedScript) {
+    if (!userHasEdited || generatedScript === '') {
+      editableScript = generatedScript;
+      lastSavedScript = generatedScript;
+      hasUnsavedChanges = false;
+      userHasEdited = false; // Reset flag when script is externally updated
+    }
   }
   
   // Calculate line count for stats display
@@ -126,10 +130,23 @@
     document.addEventListener('keydown', handleGlobalKeyDown);
     
     return () => {
+      // Clean up all timers
       if (autoSaveTimeout) {
         clearTimeout(autoSaveTimeout);
+        autoSaveTimeout = null;
       }
+      
+      // Remove event listener
       document.removeEventListener('keydown', handleGlobalKeyDown);
+      
+      // Clean up CodeMirror instance if it exists
+      if (codeMirrorEditor) {
+        // Save any pending changes before cleanup
+        if (hasUnsavedChanges) {
+          saveChanges();
+        }
+        // Note: CodeMirror component should handle its own cleanup
+      }
     };
   });
 
