@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { EditorView, keymap, drawSelection, dropCursor, rectangularSelection, crosshairCursor, lineNumbers, gutter } from '@codemirror/view';
+  import { EditorView, keymap, drawSelection, dropCursor, rectangularSelection, crosshairCursor, lineNumbers as lineNumbersGutter, gutter } from '@codemirror/view';
   import { EditorState, Compartment } from '@codemirror/state';
   import type { Extension } from '@codemirror/state';
-  import { vim } from '@replit/codemirror-vim';
+  import { vim, Vim } from '@replit/codemirror-vim';
   import { shell } from '@codemirror/legacy-modes/mode/shell';
-  import { StreamLanguage, indentOnInput, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
-  import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+  import { StreamLanguage, indentOnInput, bracketMatching, foldGutter, foldKeymap, indentUnit } from '@codemirror/language';
+  import { defaultKeymap, history, historyKeymap, insertTab } from '@codemirror/commands';
   import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
   import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
   import { lintKeymap } from '@codemirror/lint';
@@ -20,40 +20,181 @@
   export let placeholder = '';
   export let disabled = false;
   export let vimMode = true;
+  export let theme = 'dark';
+  export let fontSize = 14;
+  export let lineNumbers = true;
+  export let wordWrap = false;
+  export let tabSize = 2;
+  export let autoIndent = true;
 
   let editorElement: HTMLDivElement;
   let editorView: EditorView | null = null;
   let previousValue = '';
   let previousDisabled = disabled;
   let previousVimMode = vimMode;
+  let previousTheme = theme;
+  let previousLineNumbers = lineNumbers;
+  let previousWordWrap = wordWrap;
+  let previousTabSize = tabSize;
+  let previousAutoIndent = autoIndent;
+  let previousFontSize = fontSize;
   let isInternalChange = false;
   let isMobile = false;
   
   // Create compartments for dynamic configuration
   const readOnlyCompartment = new Compartment();
   const vimCompartment = new Compartment();
+  const themeCompartment = new Compartment();
+  const lineNumbersCompartment = new Compartment();
+  const wrapCompartment = new Compartment();
 
   // Create the bash language support using legacy modes
   const bashLanguage = StreamLanguage.define(shell);
 
+  function getThemeExtension() {
+    const isDark = theme === 'dark' || theme === 'dracula';
+    // Softer, more consistent colors with the page theme
+    const backgroundColor = theme === 'dracula' ? '#282a36' : (isDark ? '#1a1f2e' : (isMobile ? '#fafbfc' : '#fafbfc'));
+    const foregroundColor = theme === 'dracula' ? '#f8f8f2' : (isDark ? '#e2e8f0' : '#374151');
+    const mobileFont = '"SF Mono", "Monaco", "Menlo", "Consolas", "Courier New", monospace';
+    const desktopFont = '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace';
+
+    return EditorView.theme({
+      '&': {
+        height: '100%',
+        fontSize: `${fontSize}px`,
+        fontFamily: isMobile ? mobileFont : desktopFont,
+        backgroundColor,
+        color: foregroundColor,
+      },
+      '.cm-content': {
+        padding: isMobile ? '0.75rem' : '1.5rem',
+        paddingTop: isMobile ? '0.75rem' : '1.5rem',
+        paddingBottom: isMobile ? '1rem' : '1.5rem',
+        minHeight: '100%',
+        backgroundColor: 'transparent',
+        color: foregroundColor,
+        fontSize: `${fontSize}px !important`,
+        fontFamily: isMobile ? mobileFont : desktopFont,
+        caretColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
+        lineHeight: '1.5',
+        letterSpacing: isMobile ? '0.01em' : 'normal',
+      },
+      '.cm-focused': {
+        outline: 'none',
+      },
+      '.cm-editor': {
+        height: '100%',
+        backgroundColor: 'transparent',
+      },
+      '.cm-scroller': {
+        fontFamily: isMobile ? mobileFont : desktopFont,
+        fontSize: `${fontSize}px !important`,
+        lineHeight: '1.5',
+      },
+      '.cm-cursor': {
+        borderColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
+        borderWidth: isMobile ? '2px' : '1px',
+      },
+      '.cm-selectionBackground': {
+        backgroundColor: theme === 'dracula' ? 'rgba(255, 121, 198, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+      },
+      '.cm-activeLine': {
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 0, 0, 0.02)',
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+      },
+      '.cm-gutters': {
+        backgroundColor: isDark ? 'rgba(0, 0, 0, 0.1)' : 'transparent',
+        color: isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(156, 163, 175, 0.8)',
+        border: 'none',
+        fontSize: `${fontSize}px`,
+        borderRight: isDark ? '1px solid rgba(255, 255, 255, 0.05)' : 'none',
+        minWidth: isMobile ? '2.5rem' : '3rem',
+        lineHeight: '1.5',
+      },
+      '.cm-lineNumbers': {
+        color: isDark ? 'rgba(255, 255, 255, 0.4)' : (isMobile ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.4)'),
+        paddingRight: isMobile ? '0.3rem' : '0.5rem',
+        paddingLeft: isMobile ? '0.3rem' : '0.5rem',
+        minWidth: isMobile ? '2.5rem' : '3rem',
+        fontSize: `${fontSize}px`,
+        fontFamily: isMobile ? mobileFont : desktopFont,
+        lineHeight: '1.5',
+      },
+      '.cm-lineNumbers .cm-gutterElement': {
+        padding: '0',
+        display: 'flex',
+        alignItems: 'center',
+        minHeight: `calc(${fontSize}px * 1.5)`,
+      },
+      '.cm-foldGutter': {
+        color: isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)',
+      },
+      '.cm-placeholder': {
+        color: isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)',
+        fontStyle: 'italic',
+      },
+      '.cm-line': {
+        fontSize: `${fontSize}px !important`,
+        fontFamily: isMobile ? mobileFont : desktopFont,
+        paddingLeft: isMobile ? '0.125rem' : '0',
+        lineHeight: '1.5',
+        minHeight: `calc(${fontSize}px * 1.5)`,
+      },
+      // Syntax highlighting with mobile-optimized colors
+      '.cm-keyword': {
+        color: theme === 'dracula' ? '#8be9fd' : (isDark ? '#c678dd' : (isMobile ? '#7c3aed' : '#d73a49')),
+        fontWeight: isMobile ? '500' : 'normal'
+      },
+      '.cm-string': {
+        color: theme === 'dracula' ? '#f1fa8c' : (isDark ? '#98c379' : (isMobile ? '#059669' : '#032f62'))
+      },
+      '.cm-comment': {
+        color: theme === 'dracula' ? '#6272a4' : (isDark ? '#5c6370' : (isMobile ? '#6b7280' : '#6a737d')),
+        fontStyle: 'italic',
+        opacity: isMobile ? '0.8' : '1'
+      },
+      '.cm-number': {
+        color: theme === 'dracula' ? '#bd93f9' : (isDark ? '#d19a66' : (isMobile ? '#2563eb' : '#005cc5'))
+      },
+      '.cm-variable': {
+        color: theme === 'dracula' ? '#ff79c6' : (isDark ? '#e06c75' : (isMobile ? '#dc2626' : '#e36209'))
+      },
+      '.cm-punctuation': {
+        color: theme === 'dracula' ? '#f8f8f2' : (isDark ? '#abb2bf' : (isMobile ? '#4b5563' : '#24292e'))
+      },
+      '.cm-operator': {
+        color: theme === 'dracula' ? '#ff79c6' : (isDark ? '#56b6c2' : (isMobile ? '#7c3aed' : '#d73a49'))
+      },
+      '.cm-builtin': {
+        color: theme === 'dracula' ? '#50fa7b' : (isDark ? '#e5c07b' : (isMobile ? '#0891b2' : '#005cc5'))
+      },
+    }, { dark: isDark });
+  }
+
   function createEditorState(initialDoc: string) {
     const extensions = [
       // Basic editor functionality
-      EditorView.lineWrapping,
-      lineNumbers(),
+      wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
+      lineNumbersCompartment.of(lineNumbers ? lineNumbersGutter() : []),
       foldGutter(),
       history(),
       drawSelection(),
       dropCursor(),
       EditorState.allowMultipleSelections.of(true),
-      indentOnInput(),
+      autoIndent ? indentOnInput() : [],
       bracketMatching(),
       closeBrackets(),
       autocompletion(),
       rectangularSelection(),
       crosshairCursor(),
       highlightSelectionMatches(),
+      indentUnit.of(' '.repeat(tabSize)),
       keymap.of([
+        // Custom tab handling to prevent tab from leaving editor
+        { key: 'Tab', run: insertTab, shift: insertTab },
         ...closeBracketsKeymap,
         ...defaultKeymap,
         ...searchKeymap,
@@ -65,78 +206,9 @@
       
       // Language and theme
       bashLanguage,
-      EditorView.theme({
-        '&': {
-          height: '100%',
-          fontSize: isMobile ? '1.1rem' : '0.85rem',
-          fontFamily: isMobile ? '"SF Mono", "Monaco", "Courier New", monospace' : '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace',
-          backgroundColor: '#1a1f2e',
-          color: '#e2e8f0',
-        },
-        '.cm-content': {
-          padding: isMobile ? '1rem' : '1.5rem',
-          paddingTop: isMobile ? '4.5rem' : '1.5rem',
-          paddingBottom: isMobile ? '8rem' : '1.5rem',
-          minHeight: '100%',
-          backgroundColor: 'transparent',
-          color: '#e2e8f0',
-          caretColor: '#10b981',
-          lineHeight: isMobile ? '2' : '1.6',
-        },
-        '.cm-focused': {
-          outline: 'none',
-        },
-        '.cm-editor': {
-          height: '100%',
-          backgroundColor: 'transparent',
-        },
-        '.cm-scroller': {
-          fontFamily: '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace',
-          lineHeight: '1.6',
-        },
-        '.cm-cursor': {
-          borderColor: '#10b981',
-        },
-        '.cm-selectionBackground': {
-          backgroundColor: 'rgba(16, 185, 129, 0.2)',
-        },
-        '.cm-activeLine': {
-          backgroundColor: 'rgba(255, 255, 255, 0.02)',
-        },
-        '.cm-activeLineGutter': {
-          backgroundColor: 'rgba(255, 255, 255, 0.05)',
-        },
-        '.cm-gutters': {
-          backgroundColor: 'rgba(0, 0, 0, 0.2)',
-          color: 'rgba(255, 255, 255, 0.4)',
-          border: 'none',
-          borderRight: '1px solid rgba(255, 255, 255, 0.1)',
-        },
-        '.cm-lineNumbers': {
-          color: 'rgba(255, 255, 255, 0.4)',
-          paddingRight: '0.5rem',
-          paddingLeft: '0.5rem',
-          minWidth: '3rem',
-        },
-        '.cm-foldGutter': {
-          color: 'rgba(255, 255, 255, 0.4)',
-        },
-        '.cm-placeholder': {
-          color: 'rgba(255, 255, 255, 0.4)',
-          fontStyle: 'italic',
-        },
-        // Syntax highlighting
-        '.cm-keyword': { color: '#c678dd' },
-        '.cm-string': { color: '#98c379' },
-        '.cm-comment': { color: '#5c6370', fontStyle: 'italic' },
-        '.cm-number': { color: '#d19a66' },
-        '.cm-variable': { color: '#e06c75' },
-        '.cm-punctuation': { color: '#abb2bf' },
-        '.cm-operator': { color: '#56b6c2' },
-        '.cm-builtin': { color: '#e5c07b' },
-      }, { dark: true }),
+      themeCompartment.of(getThemeExtension()),
       readOnlyCompartment.of(disabled ? EditorState.readOnly.of(true) : []),
-      vimCompartment.of(vimMode ? vim() : []),
+      vimCompartment.of(vimMode ? [vim(), getVimKeymaps()] : []),
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !isInternalChange) {
           const newContent = update.state.doc.toString();
@@ -217,7 +289,7 @@
     }
     
     if (vimMode !== previousVimMode) {
-      effects.push(vimCompartment.reconfigure(vimMode ? vim() : []));
+      effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
       previousVimMode = vimMode;
     }
     
@@ -275,45 +347,74 @@
     dispatch('toggleVim');
   }
 
-  function sendEscKey() {
-    if (editorView && vimMode) {
-      // Dispatch ESC key event to CodeMirror
-      const escEvent = new KeyboardEvent('keydown', {
-        key: 'Escape',
-        code: 'Escape',
-        keyCode: 27,
-        which: 27,
-        bubbles: true,
-        cancelable: true
-      });
-      editorView.contentDOM.dispatchEvent(escEvent);
-      editorView.focus();
+  function getVimKeymaps() {
+    // Configure vim key mappings using the vim API
+    if (typeof Vim !== 'undefined') {
+      // Map 'jk' to escape in insert mode
+      Vim.map('jk', '<Esc>', 'insert');
+      // Alternative mapping 'jj'
+      Vim.map('jj', '<Esc>', 'insert');
+    }
+    return [];
+  }
+
+  // Reactive updates for editor options
+  $: if (editorView) {
+    const effects = [];
+    let needsRecreate = false;
+
+    if (vimMode !== previousVimMode) {
+      effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
+      previousVimMode = vimMode;
+    }
+
+    if (theme !== previousTheme || fontSize !== previousFontSize) {
+      effects.push(themeCompartment.reconfigure(getThemeExtension()));
+      previousTheme = theme;
+      previousFontSize = fontSize;
+    }
+
+    if (lineNumbers !== previousLineNumbers) {
+      effects.push(lineNumbersCompartment.reconfigure(lineNumbers ? lineNumbersGutter() : []));
+      previousLineNumbers = lineNumbers;
+    }
+
+    if (wordWrap !== previousWordWrap) {
+      effects.push(wrapCompartment.reconfigure(wordWrap ? EditorView.lineWrapping : []));
+      previousWordWrap = wordWrap;
+    }
+
+    if (disabled !== previousDisabled) {
+      effects.push(readOnlyCompartment.reconfigure(disabled ? EditorState.readOnly.of(true) : []));
+      previousDisabled = disabled;
+    }
+
+    // Tab size and autoIndent require recreating some extensions
+    if (tabSize !== previousTabSize || autoIndent !== previousAutoIndent) {
+      needsRecreate = true;
+      previousTabSize = tabSize;
+      previousAutoIndent = autoIndent;
+    }
+
+    if (needsRecreate) {
+      // For tabSize and autoIndent changes, we need to recreate the editor
+      const currentValue = editorView.state.doc.toString();
+      const currentSelection = editorView.state.selection;
+      createEditor();
+      if (editorView) {
+        editorView.dispatch({
+          changes: { from: 0, to: editorView.state.doc.length, insert: currentValue },
+          selection: currentSelection
+        });
+      }
+    } else if (effects.length > 0) {
+      editorView.dispatch({ effects });
     }
   }
 </script>
 
 <div class="codemirror-container">
   <div class="codemirror-editor" bind:this={editorElement}></div>
-  
-  <div class="editor-controls">
-    <button 
-      class="vim-toggle {vimMode ? 'active' : ''}" 
-      on:click={toggleVimMode}
-      title={vimMode ? 'Disable vim keybindings' : 'Enable vim keybindings'}
-    >
-      VIM
-    </button>
-  </div>
-  
-  {#if isMobile && vimMode}
-    <button 
-      class="mobile-esc-button"
-      on:click={sendEscKey}
-      title="Exit to normal mode (ESC)"
-    >
-      ESC
-    </button>
-  {/if}
 </div>
 
 <style>
@@ -332,90 +433,29 @@
     width: 100%;
   }
 
-  .editor-controls {
-    position: fixed;
-    top: auto;
-    bottom: 100px;
-    right: 1rem;
-    z-index: 10;
-    display: flex;
-    gap: 0.5rem;
-  }
+  /* Removed vim toggle styles - now handled by parent component */
 
-  .vim-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  /* Vim escape hint for mobile users */
+  .codemirror-container::after {
+    content: 'Tip: Type "jk" or "jj" quickly to exit insert mode';
+    position: absolute;
+    bottom: 0.5rem;
+    right: 0.5rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(0, 0, 0, 0.5);
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.65rem;
-    font-weight: 600;
-    font-family: monospace;
-    letter-spacing: 0.5px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    background: rgba(0, 0, 0, 0.3);
-    color: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    backdrop-filter: blur(4px);
-    min-width: 2.5rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: 10;
   }
 
-  .vim-toggle:hover {
-    background: rgba(0, 0, 0, 0.4);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: rgba(255, 255, 255, 0.8);
-  }
-
-  .vim-toggle.active {
-    background: rgba(16, 185, 129, 0.2);
-    color: #10b981;
-    border-color: rgba(16, 185, 129, 0.3);
-  }
-
-  .vim-toggle.active:hover {
-    background: rgba(16, 185, 129, 0.3);
-    border-color: rgba(16, 185, 129, 0.4);
-  }
-
-  /* Mobile ESC button */
-  .mobile-esc-button {
-    position: fixed;
-    bottom: 100px;
-    left: 1rem;
-    z-index: 11;
-    
-    padding: 0.75rem 1.25rem;
-    min-width: 4rem;
-    min-height: 48px;
-    
-    background: linear-gradient(135deg, rgba(239, 68, 68, 0.95) 0%, rgba(220, 38, 38, 0.95) 100%);
-    color: white;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-radius: 24px;
-    
-    font-size: 1rem;
-    font-weight: 700;
-    font-family: system-ui, -apple-system, sans-serif;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    
-    cursor: pointer;
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
-    -webkit-user-select: none;
-    user-select: none;
-    
-    backdrop-filter: blur(10px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(239, 68, 68, 0.4);
-    
-    animation: slideIn 0.3s ease-out;
-    transition: all 0.15s ease;
-  }
-
-  .mobile-esc-button:active {
-    transform: scale(0.95);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15), 0 1px 2px rgba(239, 68, 68, 0.3);
+  @media (max-width: 768px) {
+    .codemirror-container:hover::after {
+      opacity: 1;
+    }
   }
   
   @keyframes slideIn {
@@ -497,31 +537,44 @@
     }
     
     :global(.cm-content) {
-      font-size: 1.1rem !important;
-      line-height: 2 !important;
+      font-size: 14px !important;
+      line-height: 1.5 !important;
       -webkit-text-size-adjust: none;
-      padding-top: 1rem !important;
-      padding-bottom: 8rem !important;
+      padding-top: 0.5rem !important;
+      padding-bottom: 0.5rem !important;
     }
-    
+
     :global(.cm-line) {
-      padding-top: 0.25rem !important;
-      padding-bottom: 0.25rem !important;
+      padding: 0 !important;
+      line-height: 1.5 !important;
+      min-height: calc(14px * 1.5) !important;
+      font-size: 14px !important;
+    }
+
+    :global(.cm-lineNumbers .cm-gutterElement) {
+      padding: 0 !important;
+      display: flex !important;
+      align-items: center !important;
+      min-height: calc(14px * 1.5) !important;
+      line-height: 1.5 !important;
+      font-size: 14px !important;
     }
     
     :global(.cm-gutters) {
       min-width: 3rem !important;
-      font-size: 0.9rem !important;
     }
-    
+
     :global(.cm-lineNumbers) {
-      font-size: 0.9rem !important;
       min-width: 2.5rem !important;
       padding-right: 0.75rem !important;
+      line-height: 1.5 !important;
+      font-size: 14px !important;
     }
     
     :global(.cm-scroller) {
       font-family: "SF Mono", "Monaco", "Courier New", monospace !important;
+      font-size: 14px !important;
+      line-height: 1.5 !important;
     }
   }
 </style>

@@ -51,7 +51,8 @@
     Circle,
     ChevronDown,
     Menu,
-    Filter
+    Filter,
+    ArrowLeft
   } from 'lucide-svelte';
 
   // Get jobs store from JobStateManager
@@ -87,6 +88,8 @@
   
   // Filter and search state
   let searchQuery = '';
+  let searchExpanded = false;
+  let searchInput: HTMLInputElement;
   let filterState: 'all' | 'active' | 'paused' | 'completed' = 'all';
   let filterWatcherId: number | null = null;
   let selectedTags: Set<string> = new Set();
@@ -407,6 +410,28 @@
     notification = { message, type };
     setTimeout(() => notification = null, 3000);
   }
+
+  function toggleSearch() {
+    searchExpanded = !searchExpanded;
+    if (!searchExpanded) {
+      searchQuery = '';
+    } else {
+      // Focus the input after expanding
+      setTimeout(() => searchInput?.focus(), 100);
+    }
+  }
+
+  function handleBackNavigation() {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      push('/dashboard');
+    }
+  }
+
+  function focus(element) {
+    element.focus();
+  }
 </script>
 
 <div 
@@ -418,128 +443,253 @@
   <!-- Subtle gradient accent at the top -->
   <div class="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none z-0"></div>
 
-  <!-- Integrated Content Controls -->
-  <div class="w-full p-4 lg:px-8 bg-background/95 backdrop-blur border-b border-border relative z-10" transition:slide={{ duration: 300 }}>
-    <!-- Tab Selection -->
-    <div class="flex justify-between items-center mb-4">
-      <div class="flex gap-1">
-        <Button 
-          variant={activeTab === 'watchers' ? 'default' : 'ghost'}
-          size="sm"
-          class="gap-2"
-          on:click={() => activeTab = 'watchers'}
-        >
-          <Eye class="h-4 w-4" />
-          <span class="hidden sm:inline">Watchers</span>
-        </Button>
-        <Button 
-          variant={activeTab === 'events' ? 'default' : 'ghost'}
-          size="sm"
-          class="gap-2"
-          on:click={() => activeTab = 'events'}
-        >
-          <Bell class="h-4 w-4" />
-          <span class="hidden sm:inline">Events</span>
-        </Button>
-        {#if !isMobile}
-          <Button 
-            variant={activeTab === 'metrics' ? 'default' : 'ghost'}
-            size="sm"
-            class="gap-2"
-            on:click={() => activeTab = 'metrics'}
+  <!-- Desktop Header -->
+  {#if !isMobile}
+    <div class="w-full p-4 lg:px-8 bg-background/95 backdrop-blur border-b border-border relative z-10" transition:slide={{ duration: 300 }}>
+      <!-- Navigation Header -->
+      <div class="flex justify-between items-center mb-4">
+        <div class="flex items-center gap-3">
+          <!-- Back Button (just arrow) -->
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-8 w-8"
+            on:click={handleBackNavigation}
+            title="Back"
           >
-            <BarChart3 class="h-4 w-4" />
-            <span class="hidden sm:inline">Metrics</span>
+            <ArrowLeft class="h-4 w-4" />
           </Button>
-        {/if}
-      </div>
-      
-      <!-- Tab Actions on the right -->
-      <div class="flex gap-2">
-        <Button 
-          variant="ghost"
-          size="icon"
-          on:click={() => refreshData()}
-          disabled={$watchersLoading}
-          class="h-8 w-8"
-        >
-          <RefreshCw class="h-4 w-4" class:animate-spin={$watchersLoading} />
-        </Button>
-        {#if activeTab === 'watchers'}
-          <Button 
-            size="sm"
-            class="gap-2"
-            on:click={openAttachDialog}
-          >
-            <Plus class="h-4 w-4" />
-            <span class="hidden sm:inline">New Watcher</span>
-          </Button>
-        {/if}
-      </div>
-    </div>
-    
-    {#if activeTab === 'watchers'}
-      <!-- Search and filter tools -->
-      <div class="flex flex-col sm:flex-row gap-4 mb-4">
-        <div class="relative flex-1 max-w-md">
-          <Search class="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            id="search-input"
-            type="text"
-            placeholder="Search watchers..."
-            bind:value={searchQuery}
-            class="pl-10 pr-10"
-          />
-          {#if searchQuery}
+
+          <!-- Tab Selection -->
+          <div class="flex gap-1">
             <Button
-              variant="ghost"
-              size="icon"
-              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6"
-              on:click={() => searchQuery = ''}
-              transition:scale={{ duration: 200 }}
+              variant={activeTab === 'watchers' ? 'default' : 'ghost'}
+              size="sm"
+              class="gap-2"
+              on:click={() => activeTab = 'watchers'}
             >
-              <X class="h-4 w-4" />
+              <Eye class="h-4 w-4" />
+              <span>Watchers</span>
+            </Button>
+            <Button
+              variant={activeTab === 'events' ? 'default' : 'ghost'}
+              size="sm"
+              class="gap-2"
+              on:click={() => activeTab = 'events'}
+            >
+              <Bell class="h-4 w-4" />
+              <span>Events</span>
+            </Button>
+            <Button
+              variant={activeTab === 'metrics' ? 'default' : 'ghost'}
+              size="sm"
+              class="gap-2"
+              on:click={() => activeTab = 'metrics'}
+            >
+              <BarChart3 class="h-4 w-4" />
+              <span>Metrics</span>
+            </Button>
+          </div>
+        </div>
+
+        <!-- Tab Actions on the right -->
+        <div class="flex items-center gap-2">
+          <!-- Expandable Search (Desktop) -->
+          <div class="search-container" class:expanded={searchExpanded}>
+            {#if searchExpanded}
+              <div class="relative">
+                <Search class="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search watchers..."
+                  bind:value={searchQuery}
+                  class="pl-10 pr-10 w-64"
+                  on:blur={() => { if (!searchQuery) toggleSearch(); }}
+                  bind:this={searchInput}
+                />
+                {#if searchQuery}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6"
+                    on:click={() => searchQuery = ''}
+                  >
+                    <X class="h-4 w-4" />
+                  </Button>
+                {/if}
+              </div>
+            {:else}
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8"
+                on:click={toggleSearch}
+                title="Search"
+              >
+                <Search class="h-4 w-4" />
+              </Button>
+            {/if}
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            on:click={() => refreshData()}
+            disabled={$watchersLoading}
+            class="h-8 w-8"
+            title="Refresh"
+          >
+            <RefreshCw class="h-4 w-4 {$watchersLoading ? 'animate-spin' : ''}" />
+          </Button>
+
+          {#if activeTab === 'watchers'}
+            <!-- New Watcher Button (just plus) -->
+            <Button
+              size="icon"
+              class="h-8 w-8"
+              on:click={openAttachDialog}
+              title="New Watcher"
+            >
+              <Plus class="h-4 w-4" />
             </Button>
           {/if}
         </div>
       </div>
+  {:else}
+    <!-- Mobile Header -->
+    <div class="mobile-header border-b border-border">
+      <!-- Top row: Back button, tabs, and actions -->
+      <div class="mobile-header-row">
+        <!-- Back Button -->
+        <Button
+          variant="ghost"
+          size="icon"
+          class="h-8 w-8 flex-shrink-0"
+          on:click={handleBackNavigation}
+          title="Back"
+        >
+          <ArrowLeft class="h-4 w-4" />
+        </Button>
+
+        <!-- Tab Selection -->
+        <div class="flex gap-1 flex-1 justify-center">
+          <Button
+            variant={activeTab === 'watchers' ? 'default' : 'ghost'}
+            size="sm"
+            class="gap-2"
+            on:click={() => activeTab = 'watchers'}
+          >
+            <Eye class="h-4 w-4" />
+            <span class="text-xs">Watchers</span>
+          </Button>
+          <Button
+            variant={activeTab === 'events' ? 'default' : 'ghost'}
+            size="sm"
+            class="gap-2"
+            on:click={() => activeTab = 'events'}
+          >
+            <Bell class="h-4 w-4" />
+            <span class="text-xs">Events</span>
+          </Button>
+        </div>
+
+        <!-- Flexible spacer to push actions to the right -->
+        <div style="flex: 1;"></div>
+
+        <!-- Expandable search -->
+        <div class="mobile-search-container {searchExpanded ? 'expanded' : ''}">
+          {#if searchExpanded}
+            <div class="search-bar expanded">
+              <div class="search-icon">
+                <Search size={16} />
+              </div>
+              <input
+                type="text"
+                class="search-input"
+                placeholder="Search..."
+                bind:value={searchQuery}
+                on:blur={() => { if (!searchQuery) searchExpanded = false; }}
+                bind:this={searchInput}
+              />
+              {#if searchQuery}
+                <button class="clear-btn" on:click={() => searchQuery = ''}>
+                  <X size={14} />
+                </button>
+              {/if}
+            </div>
+          {:else}
+            <button class="search-toggle-btn" on:click={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
+              <Search size={16} />
+            </button>
+          {/if}
+        </div>
+
+        <!-- Action buttons on the right -->
+        <button
+          on:click={() => refreshData()}
+          disabled={$watchersLoading}
+          class="refresh-btn"
+          title="{$watchersLoading ? 'Loading...' : 'Refresh'}"
+        >
+          <RefreshCw class="icon {$watchersLoading ? 'animate-spin' : ''}" />
+        </button>
+
+        {#if activeTab === 'watchers'}
+          <button
+            on:click={openAttachDialog}
+            class="refresh-btn"
+            title="New Watcher"
+          >
+            <Plus class="icon" />
+          </button>
+        {/if}
+      </div>
+    </div>
+  {/if}
+    
+    {#if activeTab === 'watchers'}
       
       <!-- Filter chips -->
       <div class="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
         <div class="flex gap-2 overflow-x-auto pb-2 sm:pb-0">
-          <Button 
+          <Button
             variant={filterState === 'all' ? 'default' : 'outline'}
             size="sm"
+            class="watcher-filter-btn"
             on:click={() => filterState = 'all'}
           >
-            All ({totalWatchers})
+            <span class="mobile-filter-text hidden sm:inline">All</span>
+            <span class="mobile-filter-count">({totalWatchers})</span>
           </Button>
-          <Button 
+          <Button
             variant={filterState === 'active' ? 'default' : 'outline'}
             size="sm"
-            class="gap-2"
+            class="gap-2 watcher-filter-btn"
             on:click={() => filterState = 'active'}
           >
             <div class="h-2 w-2 rounded-full bg-green-500"></div>
-            Active ({activeCount})
+            <span class="mobile-filter-text hidden sm:inline">Active</span>
+            <span class="mobile-filter-count">({activeCount})</span>
           </Button>
-          <Button 
+          <Button
             variant={filterState === 'paused' ? 'default' : 'outline'}
             size="sm"
-            class="gap-2"
+            class="gap-2 watcher-filter-btn"
             on:click={() => filterState = 'paused'}
           >
             <div class="h-2 w-2 rounded-full bg-yellow-500"></div>
-            Paused ({pausedCount})
+            <span class="mobile-filter-text hidden sm:inline">Paused</span>
+            <span class="mobile-filter-count">({pausedCount})</span>
           </Button>
-          <Button 
+          <Button
             variant={filterState === 'completed' ? 'default' : 'outline'}
             size="sm"
-            class="gap-2"
+            class="gap-2 watcher-filter-btn"
             on:click={() => filterState = 'completed'}
           >
             <div class="h-2 w-2 rounded-full bg-blue-500"></div>
-            Completed ({completedCount})
+            <span class="mobile-filter-text hidden sm:inline">Completed</span>
+            <span class="mobile-filter-count">({completedCount})</span>
           </Button>
         </div>
         
@@ -626,7 +776,6 @@
             {#each Object.entries(watchersByJob) as [jobKey, jobGroup]}
               <Card 
                 class="overflow-hidden transition-all duration-200 hover:shadow-lg"
-                in:fly={{ y: 20, duration: 300 }}
               >
                 <button 
                   class="w-full p-4 bg-muted/50 dark:bg-muted/20 border-b border-border hover:bg-muted/70 dark:hover:bg-muted/30 transition-colors text-left flex justify-between items-center"
@@ -651,9 +800,8 @@
                       <div class="text-lg font-semibold text-green-600">{jobGroup.stats.active}</div>
                       <div class="text-xs text-green-600">active</div>
                     </div>
-                    <ChevronDown 
-                      class="h-5 w-5 text-muted-foreground transition-transform duration-300"
-                      class:rotate-180={!collapsedJobs.has(jobKey)}
+                    <ChevronDown
+                      class="h-5 w-5 text-muted-foreground transition-transform duration-300 {!collapsedJobs.has(jobKey) ? 'rotate-180' : ''}"
                     />
                   </div>
                 </button>
@@ -798,5 +946,188 @@
       }}
     />
   {/if}
-  
+
 </div>
+
+<style>
+  .search-container {
+    display: flex;
+    align-items: center;
+    transition: all 0.3s ease;
+  }
+
+  .search-container.expanded {
+    min-width: 250px;
+    flex: 1;
+    max-width: 100%;
+  }
+
+  /* Mobile Header Styles */
+  .mobile-header {
+    padding: 0.75rem 1rem;
+    background: white;
+  }
+
+  .mobile-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 40px;
+  }
+
+  .mobile-search-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+  }
+
+  .mobile-search-container:not(.expanded) {
+    width: 32px;
+  }
+
+  .mobile-search-container.expanded {
+    width: 180px;
+    max-width: 180px;
+  }
+
+  .search-toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .search-toggle-btn:hover {
+    background: #f3f4f6;
+    color: #374151;
+  }
+
+  .search-bar {
+    position: relative;
+    width: 100%;
+  }
+
+  .search-bar.expanded {
+    width: 100%;
+    animation: searchExpand 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+
+  @keyframes searchExpand {
+    from {
+      width: 32px;
+      opacity: 0;
+    }
+    to {
+      width: 100%;
+      opacity: 1;
+    }
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #9ca3af;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .search-input {
+    width: 100%;
+    padding: 0.5rem 2.5rem 0.5rem 2.5rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    transition: all 0.15s;
+    background: #f9fafb;
+  }
+
+  .search-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    background: white;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+
+  .search-input::placeholder {
+    color: #9ca3af;
+  }
+
+  .clear-btn {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 0.25rem;
+    background: none;
+    border: none;
+    color: #6b7280;
+    cursor: pointer;
+    border-radius: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+
+  .clear-btn:hover {
+    background: #f3f4f6;
+    color: #ef4444;
+  }
+
+  .refresh-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    padding: 0.5rem;
+    width: 32px;
+    height: 32px;
+    background: white;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 0.5rem;
+    font-size: 0.813rem;
+    font-weight: 500;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+
+  .refresh-btn:hover:not(:disabled) {
+    background: #f8fafc;
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+
+  .refresh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+</style>

@@ -2,6 +2,7 @@
   import { onMount, createEventDispatcher } from 'svelte';
   import { fly } from 'svelte/transition';
   import { api } from '../../services/api';
+  import { jobUtils } from '../../lib/jobUtils';
   
   const dispatch = createEventDispatcher<{
     select: { script: string };
@@ -113,15 +114,7 @@
     return date.toLocaleDateString();
   }
   
-  function getStateColor(state: string): string {
-    switch (state.toUpperCase()) {
-      case 'COMPLETED': return 'success';
-      case 'RUNNING': return 'info';
-      case 'FAILED': return 'error';
-      case 'CANCELLED': return 'warning';
-      default: return 'default';
-    }
-  }
+  // Use centralized job utilities
   
   onMount(() => {
     loadHistory();
@@ -192,7 +185,7 @@
                 <h4>{script.job_name || `Job ${script.job_id}`}</h4>
                 <span class="job-id">#{script.job_id}</span>
               </div>
-              <span class="state-badge {getStateColor(script.state)}">
+              <span class="state-badge {jobUtils.getStateColorClass(script.state)}">
                 {script.state}
               </span>
             </div>

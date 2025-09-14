@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { push } from 'svelte-spa-router';
+  import { push, location } from 'svelte-spa-router';
+  import { navigationActions } from '../stores/navigation';
   import type { Watcher } from '../types/watchers';
   import { pauseWatcher, resumeWatcher } from '../stores/watchers';
   import { api } from '../services/api';
@@ -10,6 +11,7 @@
   export let watcher: Watcher;
   export let jobInfo: any = null;
   export let showJobLink = true;
+  export let lastEvent: any = null; // Latest event for this watcher
   
   const dispatch = createEventDispatcher();
   
@@ -76,6 +78,36 @@
     if (actionType.includes('command')) return '>';
     if (actionType.includes('checkpoint')) return '*';
     return '+';
+  }
+
+  function getActionTypeDisplay(action: any): string {
+    if (!action.type) return 'Unknown';
+    const type = action.type.toLowerCase();
+    if (type.includes('metric')) return 'Metrics';
+    if (type.includes('email')) return 'Email';
+    if (type.includes('log')) return 'Log';
+    if (type.includes('command')) return 'Command';
+    if (type.includes('checkpoint')) return 'Checkpoint';
+    return action.type;
+  }
+
+  function getActionDescription(action: any): string {
+    if (!action.params) return '';
+    const params = action.params;
+
+    if (action.type.includes('email') && params.subject) {
+      return `"${params.subject}"`;
+    }
+    if (action.type.includes('command') && params.command) {
+      return `${params.command.substring(0, 40)}...`;
+    }
+    if (action.type.includes('log') && params.message) {
+      return `"${params.message.substring(0, 40)}..."`;
+    }
+    if (action.type.includes('metric') && params.name) {
+      return params.name;
+    }
+    return '';
   }
   
   async function togglePause() {
@@ -154,6 +186,8 @@
   }
   
   function navigateToJob() {
+    // Track where we're coming from for smart back navigation
+    navigationActions.setPreviousRoute($location);
     // Navigate to the job details page
     push(`/jobs/${watcher.job_id}/${watcher.hostname}`);
   }
@@ -215,7 +249,7 @@
   }
 </script>
 
-<div class="watcher-card {pulseClass}" class:expanded={isExpanded}>
+<div class="watcher-card {pulseClass}" class:expanded={isExpanded} on:click={() => isExpanded = !isExpanded} role="button" tabindex="0" on:keydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 
@@ -236,10 +270,16 @@
         <div class="name-row">
           <h3 class="watcher-name">{watcher.name}</h3>
         </div>
-        {#if showJobLink && jobInfo}
+{#if showJobLink && jobInfo}
           <button class="job-link" on:click={navigateToJob}>
-            Job #{watcher.job_id} - {jobInfo?.name || 'Unknown'}
+            {#if watcher.job_name && watcher.job_name !== 'N/A'}
+              Job #{watcher.job_id} - {watcher.job_name}
+            {:else}
+              Job #{watcher.job_id}
+            {/if}
           </button>
+        {:else if watcher.job_name && watcher.job_name !== 'N/A'}
+          <span class="job-id" title="{watcher.job_name}">Job #{watcher.job_id} - {watcher.job_name}</span>
         {:else}
           <span class="job-id">Job #{watcher.job_id}</span>
         {/if}
@@ -255,16 +295,6 @@
         </div>
       {/if}
       
-      <button
-        class="detail-btn"
-        on:click|stopPropagation={openDetailDialog}
-        title="View details and get code snippet"
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/>
-        </svg>
-        <span>Details</span>
-      </button>
       
       <button
         id="copy-btn-{watcher.id}"
@@ -279,10 +309,10 @@
       </button>
       
       {#if watcher.state === 'active' || watcher.state === 'paused'}
-        <button 
+        <button
           class="control-btn {watcher.state === 'paused' ? 'resume' : ''}"
           class:pausing={isPausing}
-          on:click={togglePause}
+          on:click|stopPropagation={togglePause}
           disabled={isPausing}
           title={watcher.state === 'active' ? 'Pause watcher' : 'Resume watcher'}
         >
@@ -292,22 +322,22 @@
             </svg>
           {:else if watcher.state === 'active'}
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <rect x="7" y="6" width="3" height="12" />
-              <rect x="14" y="6" width="3" height="12" />
+              <rect x="8" y="8" width="2.5" height="8" rx="0.5" />
+              <rect x="13.5" y="8" width="2.5" height="8" rx="0.5" />
             </svg>
           {:else}
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z"/>
+              <path d="M9.5 6.5v11l8-5.5-8-5.5z"/>
             </svg>
           {/if}
         </button>
       {/if}
       
       {#if watcher.state === 'active'}
-        <button 
+        <button
           class="control-btn"
           class:triggering={isTriggering}
-          on:click={triggerManually}
+          on:click|stopPropagation={triggerManually}
           disabled={isTriggering}
           title="Manually trigger watcher">
           {#if isTriggering}
@@ -316,24 +346,19 @@
             </svg>
           {:else}
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8,5.14V19.14L19,12.14L8,5.14Z"/>
+              <path d="M9.5 6.5v11l8-5.5-8-5.5z"/>
             </svg>
           {/if}
         </button>
       {/if}
       
-      <button 
-        class="expand-btn"
-        on:click={() => isExpanded = !isExpanded}
-        title={isExpanded ? 'Collapse' : 'Expand'}
+      <button
+        class="edit-btn"
+        on:click|stopPropagation={openDetailDialog}
+        title="Edit watcher"
       >
-        <svg 
-          class="chevron"
-          class:rotated={isExpanded}
-          viewBox="0 0 24 24" 
-          fill="currentColor"
-        >
-          <path d="M7 10l5 5 5-5z"/>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
         </svg>
       </button>
     </div>
@@ -393,9 +418,66 @@
         </div>
       {/if}
       
+      <!-- Actions Preview -->
+      {#if watcher.actions && watcher.actions.length > 0}
+        <div class="actions-section">
+          <label>Actions ({watcher.actions.length})</label>
+          <div class="actions-preview">
+            {#each watcher.actions as action, i}
+              <div class="action-item">
+                <span class="action-icon">{getActionIcon(action.type)}</span>
+                <div class="action-details">
+                  <span class="action-type">{getActionTypeDisplay(action)}</span>
+                  {#if getActionDescription(action)}
+                    <span class="action-desc">{getActionDescription(action)}</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Last Trigger Result -->
+      {#if lastEvent}
+        <div class="last-trigger-section">
+          <label>Last Trigger</label>
+          <div class="trigger-result">
+            <div class="trigger-header">
+              <span class="trigger-time">{formatTime(lastEvent.timestamp)}</span>
+              <span class="trigger-status {lastEvent.success ? 'success' : 'failed'}">
+                {lastEvent.success ? '✓ Success' : '✗ Failed'}
+              </span>
+            </div>
+            {#if lastEvent.matched_text}
+              <div class="matched-text">
+                <span class="label">Match:</span>
+                <code>{lastEvent.matched_text.length > 100 ? lastEvent.matched_text.substring(0, 100) + '...' : lastEvent.matched_text}</code>
+              </div>
+            {/if}
+            {#if lastEvent.action_result}
+              <div class="action-result">
+                <span class="label">Result:</span>
+                <code>{lastEvent.action_result.length > 150 ? lastEvent.action_result.substring(0, 150) + '...' : lastEvent.action_result}</code>
+              </div>
+            {/if}
+            {#if lastEvent.captured_vars && Object.keys(lastEvent.captured_vars).length > 0}
+              <div class="captured-vars">
+                <span class="label">Variables:</span>
+                <div class="vars-list">
+                  {#each Object.entries(lastEvent.captured_vars) as [key, value]}
+                    <span class="var-item">${key}: {value}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
       <div class="details-actions">
         <button class="detail-btn" on:click={viewDetails}>
-          View Details & Events
+          View All Events
         </button>
         {#if showJobLink}
           <button class="detail-btn" on:click={navigateToJob}>
@@ -424,12 +506,13 @@
   .watcher-card {
     background: var(--color-bg-primary, white);
     border: 1px solid var(--color-border, #e5e7eb);
-    border-radius: 8px;
-    padding: 0.75rem;
-    margin-bottom: 0.75rem;
+    border-radius: 6px;
+    padding: 0.625rem;
+    margin-bottom: 0.5rem;
     transition: all 0.3s ease;
     position: relative;
     overflow: hidden;
+    cursor: pointer;
   }
   
   .watcher-card:hover {
@@ -460,25 +543,32 @@
   .card-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.375rem;
+    gap: 0.5rem;
   }
   
   .header-left {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
   }
   
   .state-indicator {
-    font-size: 1.5rem;
+    font-size: 1.25rem;
     line-height: 1;
+    margin-top: 0.125rem;
+    flex-shrink: 0;
   }
   
   .watcher-info {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.125rem;
+    min-width: 0;
+    flex: 1;
   }
   
   .name-row {
@@ -490,9 +580,12 @@
   
   .watcher-name {
     margin: 0;
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 600;
     color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   
   .timer-indicator {
@@ -505,6 +598,7 @@
     background: #f3f4f6;
     color: #6b7280;
     transition: all 0.2s;
+    flex-shrink: 0;
   }
   
   .timer-indicator.active {
@@ -514,8 +608,8 @@
   }
   
   .timer-indicator svg {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
   }
   
   @keyframes timer-pulse {
@@ -527,12 +621,16 @@
     background: none;
     border: none;
     color: var(--color-primary);
-    font-size: 0.875rem;
+    font-size: 0.75rem;
     cursor: pointer;
     padding: 0;
     text-align: left;
     text-decoration: underline;
     text-decoration-style: dotted;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
   
   .job-link:hover {
@@ -541,35 +639,46 @@
   
   .job-id {
     color: var(--color-text-secondary);
-    font-size: 0.875rem;
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   
   .header-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.25rem;
+    flex-shrink: 0;
+    align-items: flex-start;
   }
   
   .control-btn,
   .expand-btn,
-  .detail-btn {
+  .edit-btn,
+  .detail-btn,
+  .copy-btn {
     background: white;
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 0;
-    width: 32px;
-    height: 32px;
+    width: 24px;
+    height: 24px;
     cursor: pointer;
     transition: all 0.2s;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--color-text-secondary);
+    font-size: 0;
   }
   
   .detail-btn {
-    width: auto;
-    padding: 0 0.5rem;
-    gap: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
   }
   
   .detail-btn:hover {
@@ -578,16 +687,21 @@
     color: #3b82f6;
   }
   
-  .detail-btn span {
-    font-size: 0.75rem;
-    font-weight: 500;
+  .copy-btn span {
+    display: none !important; /* Hide text in compact mode */
   }
   
   .control-btn svg,
   .expand-btn svg,
   .detail-btn svg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .copy-btn svg {
+    width: 12px;
+    height: 12px;
   }
   
   .control-btn:hover:not(:disabled) {
@@ -643,10 +757,33 @@
     }
   }
   
-  .expand-btn:hover {
-    background: var(--color-bg-secondary);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
+
+  .edit-btn {
+    background: white;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+    font-size: 0;
+  }
+
+  .edit-btn svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+
+  .edit-btn:hover {
+    background: #eff6ff;
+    border-color: #3b82f6;
+    color: #3b82f6;
   }
   
   .control-btn:disabled {
@@ -687,15 +824,6 @@
     to { transform: rotate(360deg); }
   }
   
-  .chevron {
-    width: 20px;
-    height: 20px;
-    transition: transform 0.3s;
-  }
-  
-  .chevron.rotated {
-    transform: rotate(180deg);
-  }
   
   .compact-info {
     display: flex;
@@ -712,8 +840,8 @@
   }
   
   .trigger-count {
-    font-weight: 700;
-    font-size: 1rem;
+    font-weight: 600;
+    font-size: 0.875rem;
     color: var(--color-primary);
   }
   
@@ -726,6 +854,15 @@
     font-size: 0.75rem;
     color: var(--color-text-secondary);
     font-weight: 500;
+  }
+
+  .job-name-truncated {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-style: italic;
+    color: var(--color-primary) !important;
   }
   
   .pattern-compact {
@@ -869,13 +1006,13 @@
     }
     
     .timer-indicator {
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
     }
-    
+
     .timer-indicator svg {
-      width: 12px;
-      height: 12px;
+      width: 14px;
+      height: 14px;
     }
     
     .job-link,
@@ -888,26 +1025,37 @@
     }
     
     .control-btn,
-    .expand-btn {
+    .expand-btn,
+    .edit-btn {
       width: 32px;
       height: 32px;
       min-width: 32px;
       min-height: 32px;
     }
+
+    .edit-btn svg {
+      width: 16px;
+      height: 16px;
+    }
     
     .copy-btn {
-      padding: 0.25rem 0.5rem;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
       font-size: 0.625rem;
     }
-    
-    .copy-btn svg {
-      width: 12px;
-      height: 12px;
-    }
-    
+
     .copy-btn span {
-      display: none;
+      display: none; /* Hide text on mobile, icon only */
     }
+
+    .copy-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+    
     
     .compact-info {
       gap: 0.75rem;
@@ -986,6 +1134,7 @@
     /* Touch optimization */
     .control-btn,
     .expand-btn,
+    .edit-btn,
     .copy-btn,
     .detail-btn {
       -webkit-tap-highlight-color: transparent;
@@ -1046,5 +1195,161 @@
       width: 100%;
       justify-content: center;
     }
+  }
+
+  /* Actions Preview Styles */
+  .actions-section {
+    margin: 1rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid #e2e8f0;
+  }
+
+  .actions-section label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 0.5rem;
+  }
+
+  .actions-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .action-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: #f1f5f9;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+
+  .action-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    background: #3b82f6;
+    color: white;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .action-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
+  .action-type {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+  }
+
+  .action-desc {
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+  }
+
+  /* Last Trigger Result Styles */
+  .last-trigger-section {
+    margin: 1rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid #e2e8f0;
+  }
+
+  .last-trigger-section label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 0.5rem;
+  }
+
+  .trigger-result {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 0.75rem;
+  }
+
+  .trigger-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .trigger-time {
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+
+  .trigger-status {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+  }
+
+  .trigger-status.success {
+    color: #059669;
+    background: #ecfdf5;
+  }
+
+  .trigger-status.failed {
+    color: #dc2626;
+    background: #fef2f2;
+  }
+
+  .matched-text, .action-result, .captured-vars {
+    margin-bottom: 0.5rem;
+  }
+
+  .matched-text:last-child, .action-result:last-child, .captured-vars:last-child {
+    margin-bottom: 0;
+  }
+
+  .label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #374151;
+    margin-right: 0.5rem;
+  }
+
+  .matched-text code, .action-result code {
+    font-size: 0.75rem;
+    background: #f1f5f9;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid #e2e8f0;
+    word-break: break-all;
+    display: inline-block;
+    max-width: 100%;
+  }
+
+  .vars-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+
+  .var-item {
+    font-size: 0.75rem;
+    background: #dbeafe;
+    color: #1e40af;
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
   }
 </style>

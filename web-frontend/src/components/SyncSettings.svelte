@@ -1,5 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { Plus, X, FolderX, FileCheck, GitBranch, HelpCircle, Trash2, RotateCcw } from 'lucide-svelte';
+  import Button from '../lib/components/ui/Button.svelte';
+  import Input from '../lib/components/ui/Input.svelte';
+  import Card from '../lib/components/ui/Card.svelte';
 
   const dispatch = createEventDispatcher<{
     settingsChanged: {
@@ -16,9 +20,39 @@
   // UI state
   let currentExcludePattern = '';
   let currentIncludePattern = '';
+  let showHelp = false;
+
+  // Preset patterns for quick adding
+  const presetExcludePatterns = [
+    { pattern: 'node_modules/', description: 'Node.js dependencies', category: 'Build' },
+    { pattern: '.git/', description: 'Git repository data', category: 'VCS' },
+    { pattern: 'dist/', description: 'Distribution/build folder', category: 'Build' },
+    { pattern: 'build/', description: 'Build output folder', category: 'Build' },
+    { pattern: '__pycache__/', description: 'Python bytecode cache', category: 'Python' },
+    { pattern: '.venv/', description: 'Python virtual environment', category: 'Python' },
+    { pattern: '*.log', description: 'Log files', category: 'Logs' },
+    { pattern: '*.tmp', description: 'Temporary files', category: 'Temp' },
+    { pattern: '*.pyc', description: 'Python compiled files', category: 'Python' },
+    { pattern: '.DS_Store', description: 'macOS system files', category: 'System' },
+    { pattern: 'Thumbs.db', description: 'Windows thumbnail cache', category: 'System' },
+    { pattern: '*.swp', description: 'Vim swap files', category: 'Editor' },
+  ];
+
+  const presetIncludePatterns = [
+    { pattern: '*.py', description: 'Python files', category: 'Code' },
+    { pattern: '*.js', description: 'JavaScript files', category: 'Code' },
+    { pattern: '*.ts', description: 'TypeScript files', category: 'Code' },
+    { pattern: '*.sh', description: 'Shell scripts', category: 'Scripts' },
+    { pattern: '*.md', description: 'Markdown files', category: 'Docs' },
+    { pattern: '*.yml', description: 'YAML configuration', category: 'Config' },
+    { pattern: '*.yaml', description: 'YAML configuration', category: 'Config' },
+    { pattern: '*.json', description: 'JSON files', category: 'Config' },
+    { pattern: '*.toml', description: 'TOML configuration', category: 'Config' },
+    { pattern: '*.txt', description: 'Text files', category: 'Docs' },
+  ];
 
   function addExcludePattern(): void {
-    if (currentExcludePattern.trim() && excludePatterns.indexOf(currentExcludePattern.trim()) === -1) {
+    if (currentExcludePattern.trim() && !excludePatterns.includes(currentExcludePattern.trim())) {
       excludePatterns = [...excludePatterns, currentExcludePattern.trim()];
       currentExcludePattern = '';
       dispatchChange();
@@ -31,7 +65,7 @@
   }
 
   function addIncludePattern(): void {
-    if (currentIncludePattern.trim() && includePatterns.indexOf(currentIncludePattern.trim()) === -1) {
+    if (currentIncludePattern.trim() && !includePatterns.includes(currentIncludePattern.trim())) {
       includePatterns = [...includePatterns, currentIncludePattern.trim()];
       currentIncludePattern = '';
       dispatchChange();
@@ -62,353 +96,495 @@
     }
   }
 
-  function addDefaultExcludePatterns(): void {
-    const defaults = ['node_modules/', '.git/', 'dist/', 'build/', '*.log', '*.tmp'];
-    const newPatterns = defaults.filter(pattern => excludePatterns.indexOf(pattern) === -1);
-    if (newPatterns.length > 0) {
-      excludePatterns = [...excludePatterns, ...newPatterns];
+  function addPresetPattern(pattern: string, type: 'exclude' | 'include'): void {
+    if (type === 'exclude' && !excludePatterns.includes(pattern)) {
+      excludePatterns = [...excludePatterns, pattern];
+      dispatchChange();
+    } else if (type === 'include' && !includePatterns.includes(pattern)) {
+      includePatterns = [...includePatterns, pattern];
       dispatchChange();
     }
   }
 
-  function addDefaultIncludePatterns(): void {
-    const defaults = ['*.py', '*.js', '*.ts', '*.sh', '*.md'];
-    const newPatterns = defaults.filter(pattern => includePatterns.indexOf(pattern) === -1);
-    if (newPatterns.length > 0) {
-      includePatterns = [...includePatterns, ...newPatterns];
-      dispatchChange();
+  function clearAllPatterns(type: 'exclude' | 'include'): void {
+    if (type === 'exclude') {
+      excludePatterns = [];
+    } else {
+      includePatterns = [];
     }
-  }
-
-  function clearAllExcludePatterns(): void {
-    excludePatterns = [];
     dispatchChange();
   }
 
-  function clearAllIncludePatterns(): void {
+  function resetToDefaults(): void {
+    excludePatterns = ['*.log', '*.tmp', '__pycache__/'];
     includePatterns = [];
+    noGitignore = false;
     dispatchChange();
   }
+
+  // Group presets by category
+  function groupPresetsByCategory(presets: typeof presetExcludePatterns) {
+    const groups: Record<string, typeof presets> = {};
+    presets.forEach(preset => {
+      if (!groups[preset.category]) groups[preset.category] = [];
+      groups[preset.category].push(preset);
+    });
+    return groups;
+  }
+
+  $: excludeGroups = groupPresetsByCategory(presetExcludePatterns);
+  $: includeGroups = groupPresetsByCategory(presetIncludePatterns);
 </script>
 
-<div class="sync-settings" data-testid="sync-settings">
-    <!-- Gitignore Option -->
-    <div class="setting-section">
-      <div class="setting-row">
-        <label class="checkbox-label">
-          <input 
-            type="checkbox" 
-            bind:checked={noGitignore} 
-            on:change={handleGitignoreChange}
-          />
-          <span class="checkbox-text">Disable .gitignore</span>
-        </label>
-        <div class="setting-help">
-          <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
-          </svg>
-          By default, patterns from .gitignore are excluded from sync
-        </div>
-      </div>
-    </div>
+<div class="sync-settings">
+  <!-- Action Buttons -->
+  <div class="action-buttons">
+    <Button
+      variant="ghost"
+      size="sm"
+      on:click={() => showHelp = !showHelp}
+      class="help-btn"
+    >
+      <HelpCircle class="w-4 h-4" />
+      Help
+    </Button>
+    <Button
+      variant="ghost"
+      size="sm"
+      on:click={resetToDefaults}
+      class="reset-btn"
+    >
+      <RotateCcw class="w-4 h-4" />
+      Reset
+    </Button>
+  </div>
 
-    <!-- Exclude Patterns -->
-    <div class="setting-section">
-      <div class="section-header">
-        <h4>Exclude Patterns</h4>
-        <div class="section-actions">
-          <button type="button" class="action-btn small" on:click={addDefaultExcludePatterns}>
-            <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
-            </svg>
-            Add Defaults
-          </button>
-          {#if excludePatterns.length > 0}
-            <button type="button" class="action-btn small danger" on:click={clearAllExcludePatterns}>
-              <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/>
-              </svg>
-              Clear All
-            </button>
-          {/if}
+  <!-- Gitignore Setting -->
+  <Card class="gitignore-section">
+    <div class="setting-header">
+      <div class="setting-info">
+        <GitBranch class="w-5 h-5 text-blue-600" />
+        <div>
+          <h4 class="setting-title">.gitignore Integration</h4>
+          <p class="setting-description">Automatically respect .gitignore patterns</p>
         </div>
       </div>
-      
-      <div class="pattern-input-row">
+      <label class="toggle-switch">
         <input
-          type="text"
-          bind:value={currentExcludePattern}
-          placeholder="*.log, node_modules/, __pycache__/"
-          class="pattern-input"
-          on:keypress={(e) => handleKeyPress(e, addExcludePattern)}
+          type="checkbox"
+          bind:checked={noGitignore}
+          on:change={handleGitignoreChange}
         />
-        <button 
-          type="button" 
-          class="add-btn" 
-          on:click={addExcludePattern}
-          disabled={!currentExcludePattern.trim()}
-        >
-          <svg class="add-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
-          </svg>
-          Add
-        </button>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="setting-note">
+      {#if noGitignore}
+        <span class="note-text warning">⚠️ .gitignore patterns will be ignored</span>
+      {:else}
+        <span class="note-text success">✓ .gitignore patterns will be respected</span>
+      {/if}
+    </div>
+  </Card>
+
+  <!-- Exclude Patterns -->
+  <Card class="patterns-section">
+    <div class="section-header">
+      <div class="section-info">
+        <FolderX class="w-5 h-5 text-red-600" />
+        <div>
+          <h4 class="section-title">Exclude Patterns</h4>
+          <p class="section-description">Files and directories to skip during sync</p>
+        </div>
       </div>
-      
-      <div class="pattern-list">
-        {#each excludePatterns as pattern, index}
-          <span class="pattern-tag exclude">
-            <svg class="pattern-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/>
-            </svg>
-            <span class="pattern-text">{pattern}</span>
-            <button
-              type="button"
-              class="remove-pattern"
-              on:click={() => removeExcludePattern(index)}
-              title="Remove pattern"
-            >
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-              </svg>
-            </button>
-          </span>
-        {/each}
-        
-        {#if excludePatterns.length === 0}
-          <div class="empty-patterns">
-            <svg class="empty-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/>
-            </svg>
-            No exclude patterns - all files will be synced
-          </div>
+      <div class="section-actions">
+        {#if excludePatterns.length > 0}
+          <Button
+            variant="ghost"
+            size="sm"
+            on:click={() => clearAllPatterns('exclude')}
+            class="clear-btn"
+          >
+            <Trash2 class="w-4 h-4" />
+            Clear All
+          </Button>
         {/if}
       </div>
     </div>
 
-    <!-- Include Patterns -->
-    <div class="setting-section">
-      <div class="section-header">
-        <h4>Include Patterns <span class="optional">(override .gitignore)</span></h4>
-        <div class="section-actions">
-          <button type="button" class="action-btn small" on:click={addDefaultIncludePatterns}>
-            <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
-            </svg>
-            Add Common
-          </button>
-          {#if includePatterns.length > 0}
-            <button type="button" class="action-btn small danger" on:click={clearAllIncludePatterns}>
-              <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/>
-              </svg>
-              Clear All
-            </button>
-          {/if}
+    <!-- Pattern Input -->
+    <div class="pattern-input">
+      <Input
+        bind:value={currentExcludePattern}
+        placeholder="e.g., *.log, node_modules/, __pycache__/"
+        class="pattern-field"
+        on:keypress={(e) => handleKeyPress(e, addExcludePattern)}
+      />
+      <Button
+        on:click={addExcludePattern}
+        disabled={!currentExcludePattern.trim()}
+        size="sm"
+        class="add-pattern-btn"
+      >
+        <Plus class="w-4 h-4" />
+        Add
+      </Button>
+    </div>
+
+    <!-- Pattern Tags -->
+    <div class="patterns-display">
+      {#if excludePatterns.length > 0}
+        <div class="pattern-tags">
+          {#each excludePatterns as pattern, index}
+            <span class="pattern-tag exclude-tag">
+              <FolderX class="w-3 h-3" />
+              <span class="tag-text">{pattern}</span>
+              <button
+                type="button"
+                class="remove-tag-btn"
+                on:click={() => removeExcludePattern(index)}
+                title="Remove pattern"
+              >
+                <X class="w-3 h-3" />
+              </button>
+            </span>
+          {/each}
+        </div>
+      {:else}
+        <div class="empty-state">
+          <FolderX class="w-8 h-8 text-gray-400" />
+          <p class="empty-text">No exclude patterns</p>
+          <p class="empty-description">All files will be synced (except .gitignore patterns)</p>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Preset Patterns -->
+    <details class="preset-section">
+      <summary class="preset-header">
+        <span>Quick Add Common Patterns</span>
+      </summary>
+      <div class="preset-content">
+        {#each Object.entries(excludeGroups) as [category, presets]}
+          <div class="preset-category">
+            <h5 class="category-title">{category}</h5>
+            <div class="preset-buttons">
+              {#each presets as preset}
+                <button
+                  type="button"
+                  class="preset-btn"
+                  class:added={excludePatterns.includes(preset.pattern)}
+                  on:click={() => addPresetPattern(preset.pattern, 'exclude')}
+                  disabled={excludePatterns.includes(preset.pattern)}
+                  title={preset.description}
+                >
+                  <span class="preset-pattern">{preset.pattern}</span>
+                  <span class="preset-desc">{preset.description}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    </details>
+  </Card>
+
+  <!-- Include Patterns -->
+  <Card class="patterns-section">
+    <div class="section-header">
+      <div class="section-info">
+        <FileCheck class="w-5 h-5 text-green-600" />
+        <div>
+          <h4 class="section-title">Include Patterns <span class="optional-badge">Optional</span></h4>
+          <p class="section-description">Force include files even if excluded by .gitignore</p>
         </div>
       </div>
-      
-      <div class="pattern-input-row">
-        <input
-          type="text"
-          bind:value={currentIncludePattern}
-          placeholder="data/*.csv, models/*.pkl, config.yaml"
-          class="pattern-input"
-          on:keypress={(e) => handleKeyPress(e, addIncludePattern)}
-        />
-        <button 
-          type="button" 
-          class="add-btn" 
-          on:click={addIncludePattern}
-          disabled={!currentIncludePattern.trim()}
-        >
-          <svg class="add-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
-          </svg>
-          Add
-        </button>
-      </div>
-      
-      <div class="pattern-list">
-        {#each includePatterns as pattern, index}
-          <span class="pattern-tag include">
-            <svg class="pattern-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M17,9L12,14L7,9L8.41,7.59L12,11.17L15.59,7.59L17,9Z"/>
-            </svg>
-            <span class="pattern-text">{pattern}</span>
-            <button
-              type="button"
-              class="remove-pattern"
-              on:click={() => removeIncludePattern(index)}
-              title="Remove pattern"
-            >
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-              </svg>
-            </button>
-          </span>
-        {/each}
-        
-        {#if includePatterns.length === 0}
-          <div class="empty-patterns">
-            <svg class="empty-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M17,9L12,14L7,9L8.41,7.59L12,11.17L15.59,7.59L17,9Z"/>
-            </svg>
-            No include patterns - rely on .gitignore and exclude patterns
-          </div>
+      <div class="section-actions">
+        {#if includePatterns.length > 0}
+          <Button
+            variant="ghost"
+            size="sm"
+            on:click={() => clearAllPatterns('include')}
+            class="clear-btn"
+          >
+            <Trash2 class="w-4 h-4" />
+            Clear All
+          </Button>
         {/if}
       </div>
     </div>
 
-    <!-- Pattern Help -->
-    <div class="pattern-help">
-      <details class="help-details">
-        <summary class="help-summary">
-          <svg class="help-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M11,18H13V16H11V18M12,6A4,4 0 0,0 8,10H10A2,2 0 0,1 12,8A2,2 0 0,1 14,10C14,12 11,11.75 11,15H13C13,12.75 16,12.5 16,10A4,4 0 0,0 12,6M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z"/>
-          </svg>
-          Pattern Examples & Tips
-        </summary>
-        <div class="help-content">
-          <div class="help-section">
-            <h5>Common Patterns:</h5>
-            <ul>
-              <li><code>*.log</code> - All log files</li>
-              <li><code>node_modules/</code> - Node.js dependencies</li>
-              <li><code>**/*.tmp</code> - All temp files recursively</li>
-              <li><code>data/*.csv</code> - CSV files in data directory</li>
-            </ul>
+    <!-- Pattern Input -->
+    <div class="pattern-input">
+      <Input
+        bind:value={currentIncludePattern}
+        placeholder="e.g., *.py, *.js, *.md"
+        class="pattern-field"
+        on:keypress={(e) => handleKeyPress(e, addIncludePattern)}
+      />
+      <Button
+        on:click={addIncludePattern}
+        disabled={!currentIncludePattern.trim()}
+        size="sm"
+        class="add-pattern-btn"
+      >
+        <Plus class="w-4 h-4" />
+        Add
+      </Button>
+    </div>
+
+    <!-- Pattern Tags -->
+    <div class="patterns-display">
+      {#if includePatterns.length > 0}
+        <div class="pattern-tags">
+          {#each includePatterns as pattern, index}
+            <span class="pattern-tag include-tag">
+              <FileCheck class="w-3 h-3" />
+              <span class="tag-text">{pattern}</span>
+              <button
+                type="button"
+                class="remove-tag-btn"
+                on:click={() => removeIncludePattern(index)}
+                title="Remove pattern"
+              >
+                <X class="w-3 h-3" />
+              </button>
+            </span>
+          {/each}
+        </div>
+      {:else}
+        <div class="empty-state">
+          <FileCheck class="w-8 h-8 text-gray-400" />
+          <p class="empty-text">No include patterns</p>
+          <p class="empty-description">Relying on .gitignore and exclude patterns</p>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Preset Patterns -->
+    <details class="preset-section">
+      <summary class="preset-header">
+        <span>Quick Add Common Patterns</span>
+      </summary>
+      <div class="preset-content">
+        {#each Object.entries(includeGroups) as [category, presets]}
+          <div class="preset-category">
+            <h5 class="category-title">{category}</h5>
+            <div class="preset-buttons">
+              {#each presets as preset}
+                <button
+                  type="button"
+                  class="preset-btn"
+                  class:added={includePatterns.includes(preset.pattern)}
+                  on:click={() => addPresetPattern(preset.pattern, 'include')}
+                  disabled={includePatterns.includes(preset.pattern)}
+                  title={preset.description}
+                >
+                  <span class="preset-pattern">{preset.pattern}</span>
+                  <span class="preset-desc">{preset.description}</span>
+                </button>
+              {/each}
+            </div>
           </div>
-          <div class="help-section">
-            <h5>Wildcards:</h5>
-            <ul>
+        {/each}
+      </div>
+    </details>
+  </Card>
+
+  <!-- Help Section -->
+  {#if showHelp}
+    <Card class="help-section">
+      <div class="help-header">
+        <HelpCircle class="w-5 h-5 text-blue-600" />
+        <h4 class="help-title">Pattern Help & Examples</h4>
+      </div>
+
+      <div class="help-content">
+        <div class="help-row">
+          <div class="help-column">
+            <h5 class="help-subtitle">Wildcards</h5>
+            <ul class="help-list">
               <li><code>*</code> - Matches any characters in filename</li>
               <li><code>**</code> - Matches directories recursively</li>
               <li><code>?</code> - Matches single character</li>
               <li><code>[abc]</code> - Matches any character in brackets</li>
             </ul>
           </div>
+          <div class="help-column">
+            <h5 class="help-subtitle">Examples</h5>
+            <ul class="help-list">
+              <li><code>*.log</code> - All log files</li>
+              <li><code>data/*.csv</code> - CSV files in data directory</li>
+              <li><code>**/temp</code> - All temp directories</li>
+              <li><code>test_*.py</code> - Python test files</li>
+            </ul>
+          </div>
         </div>
-      </details>
-    </div>
+
+        <div class="help-note">
+          <p><strong>Tips:</strong></p>
+          <ul>
+            <li>Exclude patterns prevent files from being synced</li>
+            <li>Include patterns override .gitignore exclusions</li>
+            <li>Patterns are applied in order of precedence</li>
+            <li>Use forward slashes (/) for directory separators</li>
+          </ul>
+        </div>
+      </div>
+    </Card>
+  {/if}
 </div>
 
 <style>
   .sync-settings {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
-    padding: 0;
+    gap: 1rem;
   }
 
-
-
-  .setting-section {
+  /* Action Buttons */
+  .action-buttons {
     display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-    padding: 1.5rem;
-    background: var(--color-surface, #ffffff);
-    border: 1px solid var(--color-border, #e5e7eb);
-    border-radius: 12px;
-    transition: all 0.2s ease;
-  }
-
-  .setting-section:hover {
-    border-color: rgba(52, 152, 219, 0.3);
-    box-shadow: 0 2px 8px rgba(52, 152, 219, 0.08);
-  }
-
-  .setting-row {
-    display: flex;
-    flex-direction: column;
     gap: 0.5rem;
+    justify-content: flex-end;
+    margin-bottom: 1rem;
   }
 
-  .checkbox-label {
+  /* Gitignore Section */
+  .gitignore-section {
+    padding: 1rem;
+  }
+
+  .setting-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+  }
+
+  .setting-info {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    cursor: pointer;
-    font-size: 0.95rem;
-    font-weight: 500;
-    color: var(--color-text-primary, #212529);
-    padding: 0.75rem;
-    border-radius: 8px;
-    transition: all 0.2s ease;
   }
 
-  .checkbox-label:hover {
-    background: var(--color-surface-hover, #f8f9fa);
-  }
-
-  .checkbox-label input[type="checkbox"] {
+  .setting-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1f2937;
     margin: 0;
+  }
+
+  .setting-description {
+    font-size: 0.875rem;
+    color: #6b7280;
+    margin: 0;
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
     cursor: pointer;
-    width: 18px;
-    height: 18px;
-    accent-color: var(--color-accent, #3498db);
   }
 
-  .checkbox-text {
-    flex: 1;
+  .toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
   }
 
-  .setting-help {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--color-text-secondary, #6c757d);
-    line-height: 1.5;
-    margin-left: 2.25rem;
-    padding: 0.75rem 1rem;
-    background: rgba(52, 152, 219, 0.05);
-    border-radius: 8px;
-    border-left: 3px solid var(--color-accent, #3498db);
+  .toggle-slider {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #d1d5db;
+    border-radius: 24px;
+    transition: background 0.2s ease;
   }
 
-  .info-icon {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-    margin-top: 0.1rem;
-    color: var(--color-accent, #3498db);
+  .toggle-slider::before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 2px;
+    bottom: 2px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s ease;
+  }
+
+  .toggle-switch input:checked + .toggle-slider {
+    background: #3b82f6;
+  }
+
+  .toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+  }
+
+  .setting-note {
+    padding: 0.5rem 0.75rem;
+    background: #f8fafc;
+    border-radius: 6px;
+    border-left: 4px solid transparent;
+  }
+
+  .note-text {
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .note-text.success {
+    color: #059669;
+    border-left-color: #059669;
+  }
+
+  .note-text.warning {
+    color: #d97706;
+    border-left-color: #d97706;
+  }
+
+  /* Patterns Sections */
+  .patterns-section {
+    padding: 1rem;
   }
 
   .section-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
+    margin-bottom: 1rem;
   }
 
-  .section-header h4 {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: var(--color-text-primary, #212529);
+  .section-info {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
 
-  .section-header h4::before {
-    content: '';
-    width: 6px;
-    height: 6px;
-    background: var(--color-accent, #3498db);
-    border-radius: 50%;
+  .section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1f2937;
+    margin: 0;
   }
 
-  .optional {
-    font-size: 0.85rem;
-    font-weight: 400;
-    color: var(--color-text-secondary, #6c757d);
-    background: rgba(108, 117, 125, 0.1);
-    padding: 0.25rem 0.5rem;
+  .optional-badge {
+    font-size: 0.75rem;
+    background: #e5e7eb;
+    color: #6b7280;
+    padding: 0.125rem 0.375rem;
     border-radius: 12px;
-    margin-left: 0.5rem;
+    font-weight: 500;
+  }
+
+  .section-description {
+    font-size: 0.875rem;
+    color: #6b7280;
+    margin: 0;
   }
 
   .section-actions {
@@ -416,456 +592,315 @@
     gap: 0.5rem;
   }
 
-  .action-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    border: 1.5px solid var(--color-border, #e5e7eb);
-    border-radius: 8px;
-    background: var(--color-surface, #ffffff);
-    color: var(--color-text-primary, #212529);
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-  }
-
-  .action-btn::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-    transition: left 0.5s;
-  }
-
-  .action-btn:hover::before {
-    left: 100%;
-  }
-
-  .action-btn:hover {
-    border-color: var(--color-accent, #3498db);
-    background: var(--color-accent-alpha, rgba(52, 152, 219, 0.05));
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
-  }
-
-  .action-btn.danger {
-    color: var(--color-error, #dc3545);
-    border-color: rgba(220, 53, 69, 0.3);
-  }
-
-  .action-btn.danger:hover {
-    background: rgba(220, 53, 69, 0.05);
-    border-color: var(--color-error, #dc3545);
-    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2);
-  }
-
-  .action-icon {
-    width: 14px;
-    height: 14px;
-  }
-
-  .pattern-input-row {
-    display: flex;
-    gap: 0.5rem;
-    align-items: stretch;
-  }
-
+  /* Pattern Input */
   .pattern-input {
-    flex: 1;
-    padding: 1rem;
-    border: 2px solid var(--color-border, #e5e7eb);
-    border-radius: 12px;
-    background: var(--color-surface, #ffffff);
-    color: var(--color-text-primary, #212529);
-    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Consolas', 'Courier New', monospace;
-    font-size: 0.9rem;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    position: relative;
-  }
-
-  .pattern-input:focus {
-    outline: none;
-    border-color: var(--color-accent, #3498db);
-    box-shadow: 0 0 0 4px rgba(52, 152, 219, 0.15), 0 4px 12px rgba(52, 152, 219, 0.1);
-    transform: translateY(-1px);
-  }
-
-  .pattern-input::placeholder {
-    color: var(--color-text-secondary, #6c757d);
-    opacity: 0.7;
-  }
-
-  .add-btn {
     display: flex;
-    align-items: center;
     gap: 0.5rem;
-    padding: 1rem 1.25rem;
-    background: linear-gradient(135deg, var(--color-accent, #3498db) 0%, #667eea 100%);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-weight: 600;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    white-space: nowrap;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .add-btn::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(135deg, transparent 30%, rgba(255, 255, 255, 0.2) 50%, transparent 70%);
-    transform: translateX(-100%);
-    transition: transform 0.6s;
-  }
-
-  .add-btn:hover::before {
-    transform: translateX(100%);
-  }
-
-  .add-btn:hover:not(:disabled) {
-    transform: translateY(-2px) scale(1.02);
-    box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
-  }
-
-  .add-btn:active {
-    transform: translateY(0) scale(0.98);
-    transition: transform 0.1s;
-  }
-
-  .add-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    transform: none;
-    background: #9ca3af;
-  }
-
-  .add-btn:disabled::before {
-    display: none;
-  }
-
-  .add-icon {
-    width: 16px;
-    height: 16px;
-  }
-
-  .pattern-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    min-height: 2.5rem;
-    align-items: flex-start;
-    align-content: flex-start;
-  }
-
-  .pattern-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border-radius: 16px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    border: 2px solid;
-    position: relative;
-    overflow: hidden;
-    cursor: default;
-  }
-
-  .pattern-tag::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.3) 50%, transparent 70%);
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-
-  .pattern-tag:hover::before {
-    opacity: 1;
-  }
-
-  .pattern-tag:hover {
-    transform: translateY(-2px) scale(1.02);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  }
-
-  .pattern-tag.exclude {
-    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
-    border-color: #fca5a5;
-    color: #dc2626;
-  }
-
-  .pattern-tag.exclude:hover {
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
-  }
-
-  .pattern-tag.include {
-    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-    border-color: #86efac;
-    color: #16a34a;
-  }
-
-  .pattern-tag.include:hover {
-    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.25);
-  }
-
-  .pattern-icon {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-  }
-
-  .pattern-text {
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    font-size: 0.8rem;
-  }
-
-  .remove-pattern {
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid currentColor;
-    color: inherit;
-    cursor: pointer;
-    padding: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    opacity: 0.8;
-    position: relative;
-    z-index: 1;
-  }
-
-  .remove-pattern:hover {
-    opacity: 1;
-    background: currentColor;
-    color: white;
-    transform: scale(1.2) rotate(90deg);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  }
-
-  .remove-pattern:active {
-    transform: scale(1.1) rotate(90deg);
-  }
-
-  .remove-pattern svg {
-    width: 12px;
-    height: 12px;
-    transition: transform 0.2s;
-  }
-
-  .remove-pattern:hover svg {
-    transform: rotate(0deg);
-  }
-
-  .empty-patterns {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 1.5rem;
-    background: linear-gradient(135deg, var(--color-surface-hover, #f8f9fa) 0%, #f1f3f4 100%);
-    border: 2px dashed var(--color-border, #e5e7eb);
-    border-radius: 12px;
-    color: var(--color-text-secondary, #6c757d);
-    font-size: 0.9rem;
-    font-style: italic;
-    justify-content: center;
-    text-align: center;
-    transition: all 0.3s ease;
-  }
-
-  .empty-patterns:hover {
-    border-color: rgba(52, 152, 219, 0.3);
-    background: linear-gradient(135deg, rgba(52, 152, 219, 0.02) 0%, rgba(52, 152, 219, 0.05) 100%);
-  }
-
-  .empty-icon {
-    width: 16px;
-    height: 16px;
-    opacity: 0.5;
-  }
-
-  .pattern-help {
-    border-top: 2px solid var(--color-border, #e5e7eb);
-    padding-top: 1.5rem;
-    margin-top: 0.5rem;
-  }
-
-  .help-details {
-    border: 1.5px solid var(--color-border, #e5e7eb);
-    border-radius: 12px;
-    overflow: hidden;
-    transition: all 0.3s ease;
-    background: var(--color-surface, #ffffff);
-  }
-
-  .help-details[open] {
-    border-color: var(--color-accent, #3498db);
-    box-shadow: 0 4px 12px rgba(52, 152, 219, 0.1);
-  }
-
-  .help-summary {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 1rem 1.25rem;
-    background: linear-gradient(135deg, var(--color-surface-hover, #f8f9fa) 0%, #f1f3f4 100%);
-    cursor: pointer;
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--color-text-primary, #212529);
-    list-style: none;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-  }
-
-  .help-summary::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(52, 152, 219, 0.1), transparent);
-    transition: left 0.5s;
-  }
-
-  .help-summary:hover::before {
-    left: 100%;
-  }
-
-  .help-summary:hover {
-    background: linear-gradient(135deg, rgba(52, 152, 219, 0.05) 0%, rgba(52, 152, 219, 0.08) 100%);
-    transform: translateY(-1px);
-  }
-
-  .help-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .help-icon {
-    width: 16px;
-    height: 16px;
-    color: #6b7280;
-  }
-
-  .help-content {
-    padding: 1.25rem;
-    background: var(--color-surface, #ffffff);
-    border-top: 1px solid var(--color-border, #e5e7eb);
-    font-size: 0.9rem;
-    color: var(--color-text-primary, #212529);
-    line-height: 1.6;
-  }
-
-  .help-section {
     margin-bottom: 1rem;
   }
 
-  .help-section:last-child {
-    margin-bottom: 0;
+  :global(.pattern-field) {
+    flex: 1;
   }
 
-  .help-section h5 {
-    margin: 0 0 0.5rem 0;
-    font-size: 0.9rem;
+  /* Pattern Display */
+  .patterns-display {
+    margin-bottom: 1rem;
+  }
+
+  .pattern-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .pattern-tag {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+
+  .exclude-tag {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+  }
+
+  .include-tag {
+    background: #f0fdf4;
+    color: #16a34a;
+    border: 1px solid #bbf7d0;
+  }
+
+  .tag-text {
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8125rem;
+  }
+
+  .remove-tag-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: currentColor;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+    padding: 0.25rem;
+    border-radius: 4px;
+  }
+
+  .remove-tag-btn:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  /* Empty State */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    border: 2px dashed #e5e7eb;
+    border-radius: 12px;
+    background: #f9fafb;
+  }
+
+  .empty-text {
+    font-size: 1rem;
+    font-weight: 500;
+    color: #6b7280;
+    margin: 0.5rem 0 0.25rem 0;
+  }
+
+  .empty-description {
+    font-size: 0.875rem;
+    color: #9ca3af;
+    margin: 0;
+  }
+
+  /* Preset Section */
+  .preset-section {
+    border-top: 1px solid #e5e7eb;
+    padding-top: 1rem;
+  }
+
+  .preset-header {
+    cursor: pointer;
+    font-weight: 500;
+    color: #374151;
+    padding: 0.5rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .preset-header::before {
+    content: '▶';
+    transition: transform 0.2s ease;
+  }
+
+  .preset-section[open] .preset-header::before {
+    transform: rotate(90deg);
+  }
+
+  .preset-content {
+    padding-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .preset-category {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .category-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #4b5563;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+  }
+
+  .preset-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+
+  .preset-btn {
+    background: white;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.125rem;
+    min-width: 0;
+  }
+
+  .preset-btn:hover:not(:disabled) {
+    border-color: #3b82f6;
+    background: #eff6ff;
+  }
+
+  .preset-btn:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
+    cursor: not-allowed;
+  }
+
+  .preset-btn.added {
+    background: #eff6ff;
+    border-color: #3b82f6;
+    color: #1d4ed8;
+  }
+
+  .preset-pattern {
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+
+  .preset-desc {
+    font-size: 0.75rem;
+    color: #6b7280;
+    line-height: 1.2;
+  }
+
+  /* Help Section */
+  .help-section {
+    padding: 1rem;
+  }
+
+  .help-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .help-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1f2937;
+    margin: 0;
+  }
+
+  .help-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .help-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+  }
+
+  .help-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .help-subtitle {
+    font-size: 0.875rem;
     font-weight: 600;
     color: #374151;
-  }
-
-  .help-section ul {
     margin: 0;
-    padding-left: 1.25rem;
-    list-style-type: disc;
   }
 
-  .help-section li {
+  .help-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .help-list li {
+    font-size: 0.875rem;
+    color: #6b7280;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .help-list code {
+    background: #f3f4f6;
+    padding: 0.125rem 0.25rem;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8125rem;
+    color: #1f2937;
+  }
+
+  .help-note {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 1rem;
+  }
+
+  .help-note p {
+    margin: 0 0 0.5rem 0;
+    font-weight: 600;
+    color: #1e40af;
+  }
+
+  .help-note ul {
+    margin: 0;
+    padding-left: 1rem;
+    color: #3730a3;
+  }
+
+  .help-note li {
+    font-size: 0.875rem;
     margin-bottom: 0.25rem;
   }
 
-  .help-section code {
-    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-    padding: 0.25rem 0.5rem;
-    border-radius: 6px;
-    border: 1px solid rgba(30, 64, 175, 0.1);
-    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Consolas', 'Courier New', monospace;
-    font-size: 0.85rem;
-    color: var(--color-accent, #3498db);
-    font-weight: 600;
-  }
-
-  /* Mobile responsive */
+  /* Mobile Responsive */
   @media (max-width: 768px) {
-    .sync-settings {
-      overflow: visible;
-      height: auto;
-      min-height: auto;
-      max-height: none;
-      margin-bottom: 1rem;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    }
-
-    .setting-section {
-      padding: 1.25rem;
+    .action-buttons {
+      justify-content: center;
     }
 
     .section-header {
       flex-direction: column;
       align-items: flex-start;
-      gap: 0.75rem;
+      gap: 0.5rem;
     }
 
-    .section-actions {
-      align-self: stretch;
-      justify-content: space-between;
-    }
-
-    .pattern-input-row {
+    .pattern-input {
       flex-direction: column;
-      gap: 0.75rem;
     }
 
-    .add-btn {
-      align-self: stretch;
-      justify-content: center;
+    .help-row {
+      grid-template-columns: 1fr;
+      gap: 1rem;
     }
 
-    .pattern-tag {
-      font-size: 0.8rem;
-      padding: 0.375rem 0.625rem;
+    .preset-buttons {
+      gap: 0.25rem;
     }
 
-    .help-content {
-      padding: 0.75rem;
-    }
-
-    .setting-help {
-      margin-left: 1.125rem;
+    .preset-btn {
+      padding: 0.375rem 0.5rem;
     }
   }
-
 </style>

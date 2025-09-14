@@ -1,16 +1,25 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { push } from 'svelte-spa-router';
+  import { push, location } from 'svelte-spa-router';
   import type { JobInfo } from '../types/api';
   import { jobStateManager } from '../lib/JobStateManager';
+  import { jobUtils } from '../lib/jobUtils';
+  import { navigationActions } from '../stores/navigation';
+  import LoadingSpinner from './LoadingSpinner.svelte';
   
   export let currentJobId: string = '';
   export let currentHost: string = '';
   export let collapsed = false;
+
+  // On mobile, we never want the sidebar to be collapsed
+  $: actuallyCollapsed = !isMobile && collapsed;
   export let isMobile = false;
   export let onMobileJobSelect: (() => void) | undefined = undefined;
-  
+  export let onClose: (() => void) | undefined = undefined;
+
   let loading = false;
+  let hamburgerToX = false;
+  let isClosing = false;
   
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
@@ -19,10 +28,8 @@
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
   
-  // Compute recent jobs (completed, failed, cancelled, timeout)
-  $: recentJobs = $allJobs.filter(j => 
-    j.state === 'CD' || j.state === 'F' || j.state === 'CA' || j.state === 'TO'
-  ).slice(0, 50);
+  // Compute recent jobs (terminal states)
+  $: recentJobs = $allJobs.filter(j => jobUtils.isTerminalState(j.state)).slice(0, 50);
   
   // Track loading state
   $: isLoading = Array.from($managerState.hostStates.values()).some(h => h.status === 'loading');
@@ -47,38 +54,19 @@
   }
   
   function selectJob(job: JobInfo) {
+    // Track where we're coming from for smart back navigation
+    navigationActions.setPreviousRoute($location);
+
     // Navigate to the job
     push(`/jobs/${job.job_id}/${job.hostname}`);
-    
+
     // Close mobile sidebar if callback provided
     if (isMobile && onMobileJobSelect) {
       onMobileJobSelect();
     }
   }
   
-  function getStateColor(state: string): string {
-    switch (state) {
-      case 'R': return '#10b981';  // Green for running
-      case 'PD': return '#f59e0b'; // Amber for pending
-      case 'CD': return '#8b5cf6'; // Purple for completed
-      case 'F': return '#ef4444';  // Red for failed
-      case 'CA': return '#6b7280'; // Gray for cancelled
-      case 'TO': return '#f97316'; // Orange for timeout
-      default: return '#06b6d4';
-    }
-  }
-  
-  function getStateLabel(state: string): string {
-    switch (state) {
-      case 'R': return 'Running';
-      case 'PD': return 'Pending';
-      case 'CD': return 'Completed';
-      case 'F': return 'Failed';
-      case 'CA': return 'Cancelled';
-      case 'TO': return 'Timeout';
-      default: return 'Unknown';
-    }
-  }
+  // Use centralized job utilities
   
   function formatRuntime(runtime: string | null): string {
     if (!runtime || runtime === 'N/A') return '';
@@ -97,6 +85,18 @@
   
   onMount(() => {
     // JobStateManager automatically handles initial load
+
+    // Trigger hamburger animation after sidebar slides in
+    if (isMobile) {
+      // Reset states on mount
+      isClosing = false;
+      hamburgerToX = false;
+
+      // Start morphing to X after slide begins
+      setTimeout(() => {
+        hamburgerToX = true;
+      }, 200); // Start morphing partway through slide animation
+    }
   });
   
   onDestroy(() => {
@@ -104,17 +104,17 @@
   });
 </script>
 
-<div class="job-sidebar" class:collapsed class:mobile={isMobile}>
+<div class="job-sidebar" class:collapsed={actuallyCollapsed} class:mobile={isMobile} class:closing={isClosing}>
   <!-- Toggle button with animation (desktop only) -->
   {#if !isMobile}
-  <button 
+  <button
     class="toggle-btn"
-    class:collapsed
+    class:collapsed={actuallyCollapsed}
     on:click={() => collapsed = !collapsed}
-    aria-label="{collapsed ? 'Show' : 'Hide'} job sidebar"
+    aria-label="{actuallyCollapsed ? 'Show' : 'Hide'} job sidebar"
   >
     <svg viewBox="0 0 24 24" fill="currentColor">
-      {#if collapsed}
+      {#if actuallyCollapsed}
         <path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z" />
       {:else}
         <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z" />
@@ -124,35 +124,39 @@
   {/if}
   
   <div class="sidebar-header">
-    {#if !collapsed || isMobile}
+    {#if !actuallyCollapsed}
     <h3>Jobs</h3>
     <div class="header-actions">
-      {#if $connectionStatus.connected}
-        <span class="connection-indicator" title="Source: {$connectionStatus.source}">
-          <svg viewBox="0 0 24 24" fill="currentColor" class="status-icon {$connectionStatus.source}">
-            {#if $connectionStatus.source === 'websocket'}
-              <path d="M4.93,4.93C3.12,6.74 2,9.24 2,12C2,14.76 3.12,17.26 4.93,19.07L6.34,17.66C4.89,16.22 4,14.22 4,12C4,9.79 4.89,7.78 6.34,6.34L4.93,4.93M19.07,4.93L17.66,6.34C19.11,7.78 20,9.79 20,12C20,14.22 19.11,16.22 17.66,17.66L19.07,19.07C20.88,17.26 22,14.76 22,12C22,9.24 20.88,6.74 19.07,4.93M7.76,7.76C6.67,8.85 6,10.35 6,12C6,13.65 6.67,15.15 7.76,16.24L9.17,14.83C8.45,14.11 8,13.11 8,12C8,10.89 8.45,9.89 9.17,9.17L7.76,7.76M16.24,7.76L14.83,9.17C15.55,9.89 16,10.89 16,12C16,13.11 15.55,14.11 14.83,14.83L16.24,16.24C17.33,15.15 18,13.65 18,12C18,10.35 17.33,8.85 16.24,7.76M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10Z" />
-            {:else}
-              <path d="M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z" />
-            {/if}
-          </svg>
-        </span>
-      {/if}
       <button class="refresh-btn" on:click={() => loadJobs(true)} disabled={loading || isLoading} aria-label="Refresh jobs">
         <svg viewBox="0 0 24 24" fill="currentColor" class:spinning={loading || isLoading}>
           <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
         </svg>
       </button>
+      {#if isMobile && onClose}
+        <button class="close-btn" on:click={() => {
+          isClosing = true;
+          hamburgerToX = false;  // Start morphing back to hamburger
+          setTimeout(() => {
+            onClose();
+            isClosing = false;  // Reset for next open
+          }, 400);
+        }} aria-label="Close job list">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class={hamburgerToX ? 'hamburger-to-x' : ''}>
+            <line x1="3" y1="6" x2="21" y2="6" class="hamburger-line top" />
+            <line x1="3" y1="12" x2="21" y2="12" class="hamburger-line middle" />
+            <line x1="3" y1="18" x2="21" y2="18" class="hamburger-line bottom" />
+          </svg>
+        </button>
+      {/if}
     </div>
     {/if}
   </div>
   
-  {#if !collapsed || isMobile}
+  {#if !actuallyCollapsed}
   <div class="sidebar-content">
     {#if loading && $allJobs.length === 0}
       <div class="loading-state">
-        <div class="spinner"></div>
-        <span>Loading jobs...</span>
+        <LoadingSpinner size="sm" message="Loading jobs..." centered={false} />
       </div>
     {:else}
       <!-- Running Jobs -->
@@ -171,16 +175,26 @@
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 on:click={() => selectJob(job)}
               >
-                <div class="job-status" style="background-color: {getStateColor(job.state)}"></div>
+                <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
                 <div class="job-info">
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
                     {#if job.runtime}
-                      <span class="job-runtime">{formatRuntime(job.runtime)}</span>
+                      <span class="job-runtime-badge runtime-active">{formatRuntime(job.runtime)}</span>
                     {/if}
                   </div>
-                  <span class="job-name">{formatJobName(job.name)}</span>
-                  <span class="job-host">{job.hostname.toUpperCase()}</span>
+                  <div class="job-content">
+                    <span class="job-name">{formatJobName(job.name)}</span>
+                    <span class="job-state-label state-running">
+                      <svg viewBox="0 0 24 24" fill="currentColor" class="state-icon">
+                        <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
+                      </svg>
+                      Running
+                    </span>
+                  </div>
+                  <div class="job-meta">
+                    <span class="job-host">{job.hostname.toUpperCase()}</span>
+                  </div>
                 </div>
               </button>
             {/each}
@@ -204,16 +218,26 @@
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 on:click={() => selectJob(job)}
               >
-                <div class="job-status" style="background-color: {getStateColor(job.state)}"></div>
+                <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
                 <div class="job-info">
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
+                  </div>
+                  <div class="job-content">
+                    <span class="job-name">{formatJobName(job.name)}</span>
+                    <span class="job-state-label state-pending">
+                      <svg viewBox="0 0 24 24" fill="currentColor" class="state-icon">
+                        <path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z" />
+                      </svg>
+                      Pending
+                    </span>
+                  </div>
+                  <div class="job-meta">
+                    <span class="job-host">{job.hostname.toUpperCase()}</span>
                     {#if job.reason}
-                      <span class="job-reason">{job.reason}</span>
+                      <span class="job-reason-badge">{job.reason}</span>
                     {/if}
                   </div>
-                  <span class="job-name">{formatJobName(job.name)}</span>
-                  <span class="job-host">{job.hostname.toUpperCase()}</span>
                 </div>
               </button>
             {/each}
@@ -237,14 +261,21 @@
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 on:click={() => selectJob(job)}
               >
-                <div class="job-status" style="background-color: {getStateColor(job.state)}"></div>
+                <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
                 <div class="job-info">
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
-                    <span class="job-state-label">{getStateLabel(job.state)}</span>
+                    {#if job.runtime}
+                      <span class="job-runtime-badge">{formatRuntime(job.runtime)}</span>
+                    {/if}
                   </div>
-                  <span class="job-name">{formatJobName(job.name)}</span>
-                  <span class="job-host">{job.hostname.toUpperCase()}</span>
+                  <div class="job-content">
+                    <span class="job-name">{formatJobName(job.name)}</span>
+                    <span class="job-state-label state-{job.state.toLowerCase()}">{jobUtils.getStateLabel(job.state)}</span>
+                  </div>
+                  <div class="job-meta">
+                    <span class="job-host">{job.hostname.toUpperCase()}</span>
+                  </div>
                 </div>
               </button>
             {/each}
@@ -268,12 +299,18 @@
 <style>
   .job-sidebar {
     width: 280px;
+    height: 100%;
+    max-height: 100vh;
     background: var(--bg-secondary);
-    border-left: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     position: relative;
     transition: width 0.3s ease;
+    overflow: hidden;
+    /* Optimize composite layer creation */
+    contain: layout style paint;
+    transform: translateZ(0);
   }
   
   .job-sidebar.collapsed {
@@ -282,8 +319,47 @@
   
   .job-sidebar.mobile {
     width: 100%;
-    border-left: none;
+    height: 100%;
+    border-right: none;
     border-top: 1px solid var(--border-color);
+    /* On mobile, always show full width regardless of collapsed state */
+    animation: slideInFromLeft 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  .job-sidebar.mobile.closing {
+    animation: slideOutToLeft 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  @keyframes slideInFromLeft {
+    0% {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+    60% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideOutToLeft {
+    0% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    40% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+  }
+
+  .job-sidebar.mobile.collapsed {
+    width: 100%;
   }
   
   .toggle-btn {
@@ -326,6 +402,16 @@
     justify-content: space-between;
     align-items: center;
   }
+
+  .job-sidebar.mobile .sidebar-header {
+    /* Ensure header is always visible on mobile */
+    display: flex;
+    padding: 0.75rem; /* Smaller padding on mobile */
+  }
+
+  .job-sidebar.mobile .sidebar-header h3 {
+    font-size: 0.9rem; /* Smaller title on mobile */
+  }
   
   .sidebar-header h3 {
     margin: 0;
@@ -338,25 +424,6 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
-  }
-  
-  .connection-indicator {
-    display: flex;
-    align-items: center;
-  }
-  
-  .status-icon {
-    width: 16px;
-    height: 16px;
-    color: var(--text-secondary);
-  }
-  
-  .status-icon.websocket {
-    color: #10b981;
-  }
-  
-  .status-icon.api {
-    color: #f59e0b;
   }
   
   .refresh-btn {
@@ -391,7 +458,70 @@
   .refresh-btn svg.spinning {
     animation: spin 1s linear infinite;
   }
-  
+
+  .close-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    transition: all 0.15s;
+  }
+
+  .close-btn:hover {
+    background: var(--bg-tertiary);
+  }
+
+  .close-btn svg {
+    width: 18px;
+    height: 18px;
+    color: var(--text-secondary);
+  }
+
+  /* Hamburger to X animation - synchronized with sidebar slide */
+  .hamburger-line {
+    transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    transform-origin: center;
+  }
+
+  /* Initial hamburger state */
+  .hamburger-line.top {
+    transform: translateY(0) rotate(0);
+  }
+
+  .hamburger-line.middle {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  .hamburger-line.bottom {
+    transform: translateY(0) rotate(0);
+  }
+
+  /* Transform to X with proper positioning */
+  .hamburger-to-x .hamburger-line.top {
+    transform: rotate(45deg) translateY(6px);
+  }
+
+  .hamburger-to-x .hamburger-line.middle {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+
+  .hamburger-to-x .hamburger-line.bottom {
+    transform: rotate(-45deg) translateY(-6px);
+  }
+
+  /* When closing, ensure smooth transition back */
+  .job-sidebar.closing .hamburger-line {
+    transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
@@ -400,7 +530,20 @@
   .sidebar-content {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 0.5rem;
+    /* Optimize scrolling performance */
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    will-change: scroll-position;
+    transform: translateZ(0);
+  }
+
+  .job-sidebar.mobile .sidebar-content {
+    /* Ensure content is always visible on mobile */
+    display: flex;
+    flex-direction: column;
+    padding: 0.375rem; /* Much smaller padding on mobile */
   }
   
   .loading-state,
@@ -413,14 +556,6 @@
     color: var(--text-secondary);
   }
   
-  .spinner {
-    width: 2rem;
-    height: 2rem;
-    border: 2px solid var(--border-color);
-    border-top-color: var(--accent-color);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
   
   .empty-state svg {
     width: 2rem;
@@ -468,34 +603,50 @@
     align-items: flex-start;
     gap: 0.75rem;
     width: 100%;
-    padding: 0.75rem;
-    background: white;
+    padding: 1rem;
+    background: linear-gradient(135deg, #ffffff 0%, #fafbfc 100%);
     border: 1px solid #e5e7eb;
-    border-radius: 0.75rem;
+    border-radius: 0.875rem;
     cursor: pointer;
     text-align: left;
-    transition: all 0.2s;
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    transition: all 0.25s ease;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    position: relative;
+    overflow: hidden;
+    /* Optimize rendering performance */
+    backface-visibility: hidden;
+    transform: translateZ(0);
+    will-change: transform, box-shadow;
+  }
+
+  /* Mobile job items - much more compact */
+  .job-sidebar.mobile .job-item {
+    padding: 0.5rem; /* Much smaller padding */
+    gap: 0.5rem; /* Smaller gap */
+    border-radius: 0.5rem; /* Less rounded */
+    font-size: 0.875rem; /* Smaller text */
   }
   
   .job-item:hover {
-    background: #fafbfc;
-    border-color: #d1d5db;
-    box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08);
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border-color: #cbd5e1;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    transform: translateY(-1px);
   }
   
   .job-item.selected {
-    background: #eff6ff;
+    background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
     border-color: #3b82f6;
-    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 6px -1px rgba(59, 130, 246, 0.1);
   }
   
   .job-status {
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     flex-shrink: 0;
-    margin-top: 4px;
+    margin-top: 6px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
   }
   
   .job-info {
@@ -519,17 +670,21 @@
   }
   
   .job-meta {
-    font-size: 0.8rem;
-    color: #6b7280;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.25rem;
   }
   
   .job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+  }
+
+  .job-content {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -541,29 +696,153 @@
     font-weight: 700;
     color: #111827;
   }
-  
+
   .job-runtime {
     font-size: 0.875rem;
     font-weight: 500;
     color: #6b7280;
   }
-  
+
   .job-reason {
     font-size: 0.75rem;
     color: #9ca3af;
   }
-  
+
   .job-state-label {
     font-size: 0.75rem;
     font-weight: 500;
     color: #6b7280;
     text-transform: uppercase;
   }
-  
+
   .job-host {
-    font-size: 0.75rem;
+    font-size: 0.65rem;
     color: #9ca3af;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    background: rgba(156, 163, 175, 0.1);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+  }
+
+  /* Mobile job elements - smaller and more compact */
+  .job-sidebar.mobile .job-id {
+    font-size: 0.875rem; /* Smaller job ID text */
+    font-weight: 600;
+  }
+
+  .job-sidebar.mobile .job-runtime {
+    font-size: 0.75rem; /* Smaller runtime text */
+  }
+
+  .job-sidebar.mobile .job-reason {
+    font-size: 0.625rem; /* Even smaller reason text */
+  }
+
+  .job-sidebar.mobile .job-state-label {
+    font-size: 0.625rem; /* Smaller state label */
+  }
+
+  .job-sidebar.mobile .job-host {
+    font-size: 0.5rem; /* Much smaller host label */
+    padding: 0.0625rem 0.25rem; /* Tighter padding */
+  }
+
+  /* Enhanced job state labels */
+  .job-state-label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.375rem;
+    background: rgba(107, 114, 128, 0.1);
+    color: #6b7280;
+  }
+
+  .state-icon {
+    width: 10px;
+    height: 10px;
+  }
+
+  .state-running {
+    background: rgba(16, 185, 129, 0.1);
+    color: #059669;
+  }
+
+  .state-pending {
+    background: rgba(245, 158, 11, 0.1);
+    color: #d97706;
+  }
+
+  .state-cd {
+    background: rgba(139, 92, 246, 0.1);
+    color: #8b5cf6;
+  }
+
+  .state-f {
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+  }
+
+  .state-ca {
+    background: rgba(107, 114, 128, 0.1);
+    color: #6b7280;
+  }
+
+  .state-to {
+    background: rgba(249, 115, 22, 0.1);
+    color: #ea580c;
+  }
+
+  /* Runtime and reason badges */
+  .job-runtime-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #374151;
+    background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid #d1d5db;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  }
+
+  .runtime-active {
+    background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+    color: #065f46;
+    border-color: #86efac;
+    animation: pulse-runtime 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-runtime {
+    0%, 100% {
+      opacity: 1;
+      transform: translateZ(0);
+    }
+    50% {
+      opacity: 0.8;
+      transform: translateZ(0);
+    }
+  }
+
+  .job-reason-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.65rem;
     font-weight: 500;
-    letter-spacing: 0.025em;
+    color: #92400e;
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.375rem;
+    border: 1px solid #f59e0b;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

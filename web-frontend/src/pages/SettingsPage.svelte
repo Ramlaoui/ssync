@@ -1,0 +1,1260 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { push } from 'svelte-spa-router';
+  import NavigationHeader from '../components/NavigationHeader.svelte';
+  import SyncSettings from '../components/SyncSettings.svelte';
+  import { apiConfig, setApiKey, clearApiKey, testConnection } from '../services/api';
+  import {
+    Key,
+    Eye,
+    EyeOff,
+    Check,
+    X,
+    RefreshCw,
+    Moon,
+    Sun,
+    Bell,
+    Database,
+    Shield,
+    Monitor,
+    Zap,
+    Trash2,
+    Download,
+    Upload,
+    ChevronRight,
+    Settings as SettingsIcon
+  } from 'lucide-svelte';
+
+  // Mobile detection
+  let isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+
+  // API Key state
+  let showApiKey = false;
+  let apiKeyInput = '';
+  let testing = false;
+  let testResult: 'success' | 'error' | null = null;
+
+  // UI Preferences (stored in localStorage)
+  let preferences = {
+    theme: 'light',
+    autoRefresh: true,
+    refreshInterval: 30,
+    compactMode: false,
+    showNotifications: true,
+    soundAlerts: false,
+    jobsPerPage: 50,
+    defaultJobView: 'table',
+    showCompletedJobs: true,
+    groupJobsByHost: false
+  };
+
+  // Cache stats
+  let cacheStats = {
+    size: '0 MB',
+    entries: 0,
+    lastCleared: null as Date | null
+  };
+
+  // Active section for mobile
+  let activeSection: string | null = null;
+
+  // Collapsible sections state - expand on mobile when viewing sync section
+  $: collapsedSections = {
+    sync: !(isMobile && activeSection === 'sync') // Expand on mobile when viewing sync section
+  };
+
+  $: isConfigured = $apiConfig.apiKey !== '';
+
+  function checkMobile() {
+    isMobile = window.innerWidth < 768;
+  }
+
+  onMount(() => {
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+
+    // Load preferences from localStorage
+    loadPreferences();
+
+    // Apply compact mode if enabled
+    if (preferences.compactMode) {
+      document.documentElement.classList.add('compact-mode');
+    }
+
+    // Test connection if API key exists
+    if ($apiConfig.apiKey) {
+      handleTestConnection();
+    }
+
+    // Load cache stats
+    loadCacheStats();
+
+    return () => {
+      window.removeEventListener('resize', checkMobile);
+    };
+  });
+
+  function loadPreferences() {
+    const saved = localStorage.getItem('ssync_preferences');
+    if (saved) {
+      try {
+        preferences = { ...preferences, ...JSON.parse(saved) };
+      } catch (e) {
+        console.error('Failed to load preferences:', e);
+      }
+    }
+  }
+
+  function savePreferences() {
+    localStorage.setItem('ssync_preferences', JSON.stringify(preferences));
+  }
+
+  function handlePreferenceChange(key: string, value: any) {
+    preferences[key] = value;
+    savePreferences();
+
+    // Apply changes immediately
+    if (key === 'theme') {
+      document.documentElement.classList.toggle('dark', value === 'dark');
+    } else if (key === 'compactMode') {
+      document.documentElement.classList.toggle('compact-mode', value);
+    }
+  }
+
+  async function loadCacheStats() {
+    // In a real implementation, this would fetch from the API
+    cacheStats = {
+      size: '12.4 MB',
+      entries: 234,
+      lastCleared: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
+    };
+  }
+
+  async function handleTestConnection() {
+    testing = true;
+    testResult = null;
+
+    const success = await testConnection();
+    testResult = success ? 'success' : 'error';
+    testing = false;
+  }
+
+  function handleSaveApiKey() {
+    if (apiKeyInput.trim()) {
+      setApiKey(apiKeyInput.trim());
+      apiKeyInput = '';
+      showApiKey = false;
+      handleTestConnection();
+    }
+  }
+
+  function handleClearApiKey() {
+    if (confirm('Are you sure you want to remove the API key?')) {
+      clearApiKey();
+      testResult = null;
+    }
+  }
+
+  function toggleShowApiKey() {
+    showApiKey = !showApiKey;
+  }
+
+  async function clearCache() {
+    if (confirm('Are you sure you want to clear all cached data? This cannot be undone.')) {
+      // In a real implementation, this would call an API endpoint
+      console.log('Clearing cache...');
+      await loadCacheStats();
+    }
+  }
+
+  function exportSettings() {
+    const data = {
+      preferences,
+      apiKey: $apiConfig.apiKey ? '***' : null,
+      exportDate: new Date().toISOString()
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ssync-settings-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importSettings() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const text = await file.text();
+        try {
+          const data = JSON.parse(text);
+          if (data.preferences) {
+            preferences = { ...preferences, ...data.preferences };
+            savePreferences();
+          }
+        } catch (e) {
+          console.error('Failed to import settings:', e);
+        }
+      }
+    };
+    input.click();
+  }
+
+  function getSectionTitle(section: string): string {
+    const titles = {
+      'api': 'API Authentication',
+      'display': 'Display Preferences',
+      'sync': 'Sync Settings',
+      'notifications': 'Notifications',
+      'cache': 'Cache Management',
+      'data': 'Data & Privacy'
+    };
+    return titles[section] || 'Settings';
+  }
+</script>
+
+<div class="h-full flex flex-col bg-white">
+  {#if !isMobile || activeSection !== null}
+    <NavigationHeader
+      title={isMobile && activeSection ? getSectionTitle(activeSection) : "Settings"}
+      showBackButton={true}
+      customBackHandler={isMobile && activeSection !== null}
+      customBackLabel={isMobile && activeSection ? "Settings" : ""}
+      on:back={() => activeSection = null}
+    />
+  {/if}
+
+  <div class="flex-1 overflow-auto">
+    {#if isMobile && !activeSection}
+      <!-- Mobile: Settings list -->
+      <div class="mobile-settings-list">
+        <button
+          class="settings-item"
+          on:click={() => activeSection = 'api'}
+        >
+          <div class="item-icon">
+            <Key class="w-5 h-5" />
+          </div>
+          <div class="item-content">
+            <div class="item-title">API Authentication</div>
+            <div class="item-subtitle">
+              {#if $apiConfig.authenticated}
+                <span class="status-badge success">Connected</span>
+              {:else if isConfigured}
+                <span class="status-badge warning">Not authenticated</span>
+              {:else}
+                <span class="status-badge">Not configured</span>
+              {/if}
+            </div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400" />
+        </button>
+
+        <button
+          class="settings-item"
+          on:click={() => activeSection = 'display'}
+        >
+          <div class="item-icon">
+            <Monitor class="w-5 h-5" />
+          </div>
+          <div class="item-content">
+            <div class="item-title">Display Preferences</div>
+            <div class="item-subtitle">Theme, layout, and appearance</div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400" />
+        </button>
+
+        <button
+          class="settings-item"
+          on:click={() => activeSection = 'sync'}
+        >
+          <div class="item-icon">
+            <RefreshCw class="w-5 h-5" />
+          </div>
+          <div class="item-content">
+            <div class="item-title">Sync Settings</div>
+            <div class="item-subtitle">File patterns and filters</div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400" />
+        </button>
+
+        <button
+          class="settings-item"
+          on:click={() => activeSection = 'notifications'}
+        >
+          <div class="item-icon">
+            <Bell class="w-5 h-5" />
+          </div>
+          <div class="item-content">
+            <div class="item-title">Notifications</div>
+            <div class="item-subtitle">Alerts and sounds</div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400" />
+        </button>
+
+        <button
+          class="settings-item"
+          on:click={() => activeSection = 'cache'}
+        >
+          <div class="item-icon">
+            <Database class="w-5 h-5" />
+          </div>
+          <div class="item-content">
+            <div class="item-title">Cache Management</div>
+            <div class="item-subtitle">{cacheStats.size} used</div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400" />
+        </button>
+
+        <button
+          class="settings-item"
+          on:click={() => activeSection = 'data'}
+        >
+          <div class="item-icon">
+            <Shield class="w-5 h-5" />
+          </div>
+          <div class="item-content">
+            <div class="item-title">Data & Privacy</div>
+            <div class="item-subtitle">Export and import settings</div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400" />
+        </button>
+      </div>
+    {:else}
+      <!-- Desktop: Grid layout / Mobile: Section view -->
+      <div class="settings-container" class:mobile-section={isMobile}>
+        {#if !isMobile || activeSection === 'api'}
+          <!-- API Authentication Section -->
+          <div class="settings-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Key class="w-5 h-5" />
+                <h2>API Authentication</h2>
+              </div>
+              {#if $apiConfig.authenticated}
+                <span class="status-badge success">Connected</span>
+              {:else if isConfigured}
+                <span class="status-badge warning">Not authenticated</span>
+              {:else}
+                <span class="status-badge">Not configured</span>
+              {/if}
+            </div>
+
+            <div class="section-content">
+              {#if !isConfigured}
+                <div class="help-text">
+                  To use the API, generate a key using the CLI:
+                </div>
+                <pre class="command">ssync auth setup</pre>
+
+                <div class="input-group">
+                  {#if showApiKey}
+                    <input
+                      type="text"
+                      placeholder="Enter your API key..."
+                      bind:value={apiKeyInput}
+                      on:keydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+                      class="input-field"
+                    />
+                  {:else}
+                    <input
+                      type="password"
+                      placeholder="Enter your API key..."
+                      bind:value={apiKeyInput}
+                      on:keydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+                      class="input-field"
+                    />
+                  {/if}
+                  <button
+                    type="button"
+                    class="btn-icon"
+                    on:click={toggleShowApiKey}
+                  >
+                    {#if showApiKey}
+                      <EyeOff class="w-4 h-4" />
+                    {:else}
+                      <Eye class="w-4 h-4" />
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    on:click={handleSaveApiKey}
+                    disabled={!apiKeyInput.trim()}
+                  >
+                    Save API Key
+                  </button>
+                </div>
+              {:else}
+                <div class="key-display">
+                  <span class="label">Current API Key:</span>
+                  <code class="key-value">
+                    {$apiConfig.apiKey.substring(0, 8)}...{$apiConfig.apiKey.substring($apiConfig.apiKey.length - 4)}
+                  </code>
+                </div>
+
+                <div class="button-group">
+                  <button
+                    class="btn-secondary"
+                    on:click={handleTestConnection}
+                    disabled={testing}
+                  >
+                    {#if testing}
+                      <RefreshCw class="w-4 h-4 animate-spin" />
+                      Testing...
+                    {:else}
+                      Test Connection
+                    {/if}
+                  </button>
+
+                  <button
+                    class="btn-danger"
+                    on:click={handleClearApiKey}
+                  >
+                    <Trash2 class="w-4 h-4" />
+                    Remove API Key
+                  </button>
+                </div>
+
+                {#if testResult === 'success'}
+                  <div class="alert alert-success">
+                    <Check class="w-4 h-4" />
+                    API connection successful!
+                  </div>
+                {:else if testResult === 'error'}
+                  <div class="alert alert-error">
+                    <X class="w-4 h-4" />
+                    {$apiConfig.authError || 'Connection failed'}
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if !isMobile || activeSection === 'display'}
+          <!-- Display Preferences Section -->
+          <div class="settings-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Monitor class="w-5 h-5" />
+                <h2>Display Preferences</h2>
+              </div>
+            </div>
+
+            <div class="section-content">
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Theme</label>
+                  <span class="preference-description">Choose your preferred color scheme (Coming soon)</span>
+                </div>
+                <div class="button-toggle disabled">
+                  <button class="toggle-option disabled">
+                    <Sun class="w-4 h-4" />
+                    Light
+                  </button>
+                  <button class="toggle-option disabled">
+                    <Moon class="w-4 h-4" />
+                    Dark
+                  </button>
+                </div>
+              </div>
+
+              <div class="preference-item">
+                <div class="preference-info">
+                  <label>Compact Mode</label>
+                  <span class="preference-description">Reduce spacing for more content</span>
+                </div>
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    bind:checked={preferences.compactMode}
+                    on:change={() => handlePreferenceChange('compactMode', preferences.compactMode)}
+                  />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Auto Refresh</label>
+                  <span class="preference-description">Automatically update job status (Coming soon)</span>
+                </div>
+                <label class="switch disabled">
+                  <input type="checkbox" disabled />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Refresh Interval</label>
+                  <span class="preference-description">How often to check for updates (Coming soon)</span>
+                </div>
+                <select class="select-field" disabled>
+                  <option>30 seconds</option>
+                </select>
+              </div>
+
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Jobs Per Page</label>
+                  <span class="preference-description">Number of jobs to display (Coming soon)</span>
+                </div>
+                <select class="select-field" disabled>
+                  <option>50</option>
+                </select>
+              </div>
+
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Default Job View</label>
+                  <span class="preference-description">How to display job listings (Coming soon)</span>
+                </div>
+                <div class="button-toggle disabled">
+                  <button class="toggle-option disabled">Table</button>
+                  <button class="toggle-option disabled">Cards</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        {#if !isMobile || activeSection === 'sync'}
+          <!-- Sync Settings Section -->
+          <div class="settings-section full-width">
+            <div class="section-header collapsible" class:collapsed={collapsedSections.sync}>
+              <div class="section-title">
+                <RefreshCw class="w-5 h-5" />
+                <h2>Sync Settings</h2>
+              </div>
+              <button
+                class="collapse-btn"
+                on:click={() => collapsedSections.sync = !collapsedSections.sync}
+                title="{collapsedSections.sync ? 'Expand' : 'Collapse'} sync settings"
+              >
+                <ChevronRight class="w-4 h-4 collapse-icon {collapsedSections.sync ? '' : 'collapsed'}" />
+              </button>
+            </div>
+
+            {#if !collapsedSections.sync}
+              <div class="section-content">
+                <SyncSettings />
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        {#if !isMobile || activeSection === 'notifications'}
+          <!-- Notifications Section -->
+          <div class="settings-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Bell class="w-5 h-5" />
+                <h2>Notifications</h2>
+              </div>
+            </div>
+
+            <div class="section-content">
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Show Notifications</label>
+                  <span class="preference-description">Browser notifications for job status changes (Coming soon)</span>
+                </div>
+                <label class="switch disabled">
+                  <input type="checkbox" disabled />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="preference-item disabled">
+                <div class="preference-info">
+                  <label>Sound Alerts</label>
+                  <span class="preference-description">Play sound when jobs complete (Coming soon)</span>
+                </div>
+                <label class="switch disabled">
+                  <input type="checkbox" disabled />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        {#if !isMobile || activeSection === 'cache'}
+          <!-- Cache Management Section -->
+          <div class="settings-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Database class="w-5 h-5" />
+                <h2>Cache Management</h2>
+              </div>
+            </div>
+
+            <div class="section-content">
+              <div class="cache-stats">
+                <div class="stat">
+                  <span class="stat-label">Cache Size</span>
+                  <span class="stat-value">{cacheStats.size}</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">Cached Items</span>
+                  <span class="stat-value">{cacheStats.entries}</span>
+                </div>
+                {#if cacheStats.lastCleared}
+                  <div class="stat">
+                    <span class="stat-label">Last Cleared</span>
+                    <span class="stat-value">
+                      {cacheStats.lastCleared.toLocaleDateString()}
+                    </span>
+                  </div>
+                {/if}
+              </div>
+
+              <button
+                class="btn-danger full-width"
+                disabled
+                title="Cache management coming soon"
+              >
+                <Trash2 class="w-4 h-4" />
+                Clear All Cache (Coming soon)
+              </button>
+
+              <div class="help-text">
+                Clearing cache will remove all stored job data and require re-fetching from servers.
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        {#if !isMobile || activeSection === 'data'}
+          <!-- Data & Privacy Section -->
+          <div class="settings-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Shield class="w-5 h-5" />
+                <h2>Data & Privacy</h2>
+              </div>
+            </div>
+
+            <div class="section-content">
+              <button
+                class="btn-secondary full-width"
+                on:click={exportSettings}
+              >
+                <Download class="w-4 h-4" />
+                Export Settings
+              </button>
+
+              <button
+                class="btn-secondary full-width"
+                on:click={importSettings}
+              >
+                <Upload class="w-4 h-4" />
+                Import Settings
+              </button>
+
+              <div class="help-text">
+                Export your settings to back them up or transfer to another device. API keys are not included in exports for security.
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .settings-container {
+    padding: 1.5rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    max-width: 100%;
+  }
+
+  @media (min-width: 1024px) {
+    .settings-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+      grid-auto-rows: min-content;
+      align-items: start;
+    }
+  }
+
+  .settings-container.mobile-section {
+    padding: 0;
+    display: block;
+  }
+
+  .mobile-settings-list {
+    background: white;
+  }
+
+  .settings-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 1rem;
+    background: white;
+    border: none;
+    border-bottom: 1px solid #e5e7eb;
+    cursor: pointer;
+    transition: background 0.15s;
+    text-align: left;
+  }
+
+  .settings-item:hover {
+    background: #f9fafb;
+  }
+
+  .item-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: #f3f4f6;
+    border-radius: 10px;
+    margin-right: 1rem;
+  }
+
+  .item-content {
+    flex: 1;
+  }
+
+  .item-title {
+    font-weight: 500;
+    color: #111827;
+    margin-bottom: 0.25rem;
+  }
+
+  .item-subtitle {
+    font-size: 0.875rem;
+    color: #6b7280;
+  }
+
+  .settings-section {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+
+  @media (min-width: 1024px) {
+    .settings-section.full-width {
+      grid-column: 1 / -1;
+    }
+  }
+
+  .mobile-section .settings-section {
+    border: none;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #f3f4f6;
+  }
+
+  .section-header.collapsible {
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 0;
+  }
+
+  .section-header.collapsible:hover {
+    background: #fafbfc;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin: -0.75rem -1rem 0 -1rem;
+  }
+
+  .section-header.collapsed {
+    border-bottom: none;
+    margin-bottom: 0;
+  }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .section-title h2 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #111827;
+    margin: 0;
+  }
+
+  .section-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .collapse-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.375rem;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    color: #6b7280;
+  }
+
+  .collapse-btn:hover {
+    background: #f3f4f6;
+    color: #374151;
+  }
+
+  .collapse-icon {
+    transition: transform 0.2s ease;
+  }
+
+  .collapse-icon.collapsed {
+    transform: rotate(90deg);
+  }
+
+  .preference-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 0;
+  }
+
+  .preference-info {
+    flex: 1;
+  }
+
+  .preference-info label {
+    display: block;
+    font-weight: 500;
+    color: #111827;
+    margin-bottom: 0.25rem;
+  }
+
+  .preference-description {
+    font-size: 0.875rem;
+    color: #6b7280;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: #f3f4f6;
+    color: #6b7280;
+  }
+
+  .status-badge.success {
+    background: #d1fae5;
+    color: #065f46;
+  }
+
+  .status-badge.warning {
+    background: #fed7aa;
+    color: #92400e;
+  }
+
+  .help-text {
+    font-size: 0.875rem;
+    color: #6b7280;
+    line-height: 1.5;
+  }
+
+  .command {
+    background: #1f2937;
+    color: #f3f4f6;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    margin: 0.75rem 0;
+  }
+
+  .input-group {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .input-field {
+    flex: 1;
+    padding: 0.625rem 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    transition: all 0.15s;
+  }
+
+  .input-field:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+
+  .button-group {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+  }
+
+  .btn-primary {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #2563eb;
+  }
+
+  .btn-primary:disabled,
+  .btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    background: white;
+    color: #374151;
+    border: 1px solid #d1d5db;
+  }
+
+  .btn-secondary:hover {
+    background: #f9fafb;
+  }
+
+  .btn-danger {
+    background: white;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+  }
+
+  .btn-danger:hover {
+    background: #fef2f2;
+  }
+
+  .btn-icon {
+    padding: 0.625rem;
+    background: white;
+    border: 1px solid #d1d5db;
+  }
+
+  .btn-icon:hover {
+    background: #f9fafb;
+  }
+
+  .full-width {
+    width: 100%;
+  }
+
+  .key-display {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: #f9fafb;
+    border-radius: 8px;
+  }
+
+  .key-display .label {
+    font-weight: 500;
+    color: #374151;
+  }
+
+  .key-value {
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    color: #3b82f6;
+  }
+
+  .alert {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+  }
+
+  .alert-success {
+    background: #d1fae5;
+    color: #065f46;
+    border: 1px solid #6ee7b7;
+  }
+
+  .alert-error {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fca5a5;
+  }
+
+  /* Toggle Switch */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 24px;
+  }
+
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #cbd5e1;
+    transition: 0.3s;
+    border-radius: 24px;
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+  }
+
+  input:checked + .slider {
+    background-color: #3b82f6;
+  }
+
+  input:checked + .slider:before {
+    transform: translateX(24px);
+  }
+
+  /* Button Toggle */
+  .button-toggle {
+    display: flex;
+    background: #f3f4f6;
+    border-radius: 8px;
+    padding: 2px;
+  }
+
+  .toggle-option {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .toggle-option.active {
+    background: white;
+    color: #111827;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  }
+
+  .select-field {
+    padding: 0.625rem 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    background: white;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .select-field:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+
+  .select-field:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: #f9fafb;
+  }
+
+  /* Cache Stats */
+  .cache-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    padding: 1rem;
+    background: #f9fafb;
+    border-radius: 8px;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stat-label {
+    font-size: 0.75rem;
+    color: #6b7280;
+    margin-bottom: 0.25rem;
+  }
+
+  .stat-value {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #111827;
+  }
+
+  /* Animations */
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* Disabled state styles */
+  .preference-item.disabled {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .preference-item.disabled label {
+    color: #9ca3af;
+  }
+
+  .preference-item.disabled .preference-description {
+    color: #d1d5db;
+  }
+
+  .switch.disabled {
+    opacity: 0.6;
+  }
+
+  .switch.disabled input {
+    cursor: not-allowed;
+  }
+
+  .button-toggle.disabled {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .toggle-option.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  /* Compact Mode - Global styles */
+  :global(.compact-mode) {
+    --spacing-xs: 0.125rem;
+    --spacing-sm: 0.25rem;
+    --spacing-md: 0.5rem;
+    --spacing-lg: 0.75rem;
+    --spacing-xl: 1rem;
+  }
+
+  :global(.compact-mode .settings-section) {
+    padding: 1rem;
+  }
+
+  :global(.compact-mode .preference-item) {
+    padding: 0.5rem 0;
+  }
+
+  :global(.compact-mode .section-header) {
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+  }
+
+  :global(.compact-mode .section-content) {
+    gap: 0.75rem;
+  }
+
+  /* Mobile responsive */
+  @media (max-width: 768px) {
+    .settings-container {
+      padding: 1rem;
+      gap: 1rem;
+    }
+
+    .preference-item {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    .button-toggle,
+    .switch,
+    .select-field {
+      width: 100%;
+    }
+
+    .button-group {
+      flex-direction: column;
+    }
+
+    .button-group button {
+      width: 100%;
+    }
+
+    .settings-section {
+      padding: 1rem;
+    }
+  }
+
+  /* Large screens - better utilize space */
+  @media (min-width: 1400px) {
+    .settings-container {
+      padding: 1.5rem 3rem;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+    }
+  }
+</style>

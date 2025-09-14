@@ -1,6 +1,8 @@
 <script lang="ts">
   import { apiConfig, setApiKey, clearApiKey, testConnection } from '../services/api';
   import { onMount } from 'svelte';
+  import { push } from 'svelte-spa-router';
+  import { ArrowLeft } from 'lucide-svelte';
   
   let showApiKey = false;
   let apiKeyInput = '';
@@ -45,9 +47,27 @@
   }
 </script>
 
-<div class="api-key-config">
-  <div class="header">
-    <h3>API Authentication</h3>
+<div class="settings-page">
+  <!-- Navigation Header -->
+  <header class="bg-white border-b border-gray-200 sticky top-0 z-40">
+    <div class="px-4 sm:px-6 lg:px-8">
+      <div class="flex h-16 items-center">
+        <button
+          class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
+          on:click={() => push('/')}
+        >
+          <ArrowLeft class="w-4 h-4" />
+          Home
+        </button>
+        <div class="w-px h-6 bg-gray-300 mx-4"></div>
+        <h1 class="text-lg font-semibold text-gray-900">Settings</h1>
+      </div>
+    </div>
+  </header>
+
+  <div class="api-key-config">
+    <div class="header">
+      <h3>API Authentication</h3>
     {#if $apiConfig.authenticated}
       <span class="status success">Connected</span>
     {:else if isConfigured}
@@ -140,6 +160,7 @@
       {$apiConfig.authError}
     </div>
   {/if}
+  </div>
 </div>
 
 <style>

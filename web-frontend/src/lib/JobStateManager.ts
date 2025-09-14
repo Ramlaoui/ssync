@@ -276,7 +276,7 @@ class JobStateManager {
                 source: 'websocket',
                 timestamp: Date.now(),
                 priority: 'high',
-              }, data.type === 'initial'); // Immediate for initial data
+              }, true); // Immediate for initial data
             }
           });
         }
@@ -527,7 +527,8 @@ class JobStateManager {
         });
         
         // Queue all job updates after state update
-        console.log(`[JobStateManager] Queueing ${jobsToQueue.length} job updates for ${hostname}`);\n        const isForceSync = forceSync;\n        jobsToQueue.forEach(update => this.queueUpdate(update, isForceSync));
+        console.log(`[JobStateManager] Queueing ${jobsToQueue.length} job updates for ${hostname}`);
+        jobsToQueue.forEach(update => this.queueUpdate(update, forceSync));
       } else {
         console.log(`[JobStateManager] No jobs returned for ${hostname}`);
         // Still mark as connected even if no jobs
@@ -605,7 +606,8 @@ class JobStateManager {
       this.processUpdateQueue();
     } else if (!this.updateTimer) {
       // Use a very short delay to allow batching but process quickly
-      const delay = get(this.state).jobCache.size === 0 ? 5 : CONFIG.updateStrategy.batchDelay;
+      // For initial load (empty cache), use minimal delay
+      const delay = get(this.state).jobCache.size === 0 ? 0 : CONFIG.updateStrategy.batchDelay;
       this.updateTimer = setTimeout(() => {
         this.processUpdateQueue();
       }, delay);
@@ -796,6 +798,13 @@ class JobStateManager {
   
   public async initialize(): Promise<void> {
     console.log('[JobStateManager] Initializing...');
+    // Clear any existing state first
+    this.state.update(s => ({
+      ...s,
+      jobCache: new Map(),
+      pendingUpdates: [],
+      processingUpdates: false,
+    }));
     // Connect WebSocket first for real-time updates
     this.connectWebSocket();
     // Force immediate sync on initialization

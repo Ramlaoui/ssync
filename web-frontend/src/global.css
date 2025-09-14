@@ -1,18 +1,39 @@
 /* Global styles for SLURM Manager */
 
 :root {
-    --primary: #2c3e50;
-    --secondary: #3498db;
-    --success: #28a745;
-    --danger: #dc3545;
-    --warning: #f39c12;
-    --info: #17a2b8;
-    --light: #f8f9fa;
-    --dark: #343a40;
-    --border-color: #dee2e6;
-    --body-bg: #f9fafb;
-    --body-color: #495057;
-    --font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    /* Ultra-modern minimalist palette */
+    --background: #ffffff;
+    --foreground: #000000;
+    --muted: #666666;
+    --muted-foreground: #999999;
+    --border: #e5e5e5;
+    --input: #fafafa;
+    --ring: #000000;
+    --primary: #000000;
+    --primary-foreground: #ffffff;
+    --secondary: #f5f5f5;
+    --secondary-foreground: #000000;
+    --accent: #0066ff;
+    --accent-foreground: #ffffff;
+    --destructive: #ff3333;
+    --destructive-foreground: #ffffff;
+    --success: #00cc88;
+    --warning: #ffaa00;
+    --card: #ffffff;
+    --card-foreground: #000000;
+    --popover: #ffffff;
+    --popover-foreground: #000000;
+    --radius: 0.375rem;
+    
+    
+    /* Spacing */
+    --spacing-xs: 0.25rem;
+    --spacing-sm: 0.5rem;
+    --spacing-md: 1rem;
+    --spacing-lg: 1.5rem;
+    --spacing-xl: 2rem;
+    --spacing-2xl: 3rem;
+    --spacing-3xl: 4rem;
 
     /* LaunchJob component variables */
     --color-background: #ffffff;
@@ -72,11 +93,14 @@ body {
     margin: 0;
     padding: 0;
     height: 100%;
-    font-family: var(--font-family);
-    font-size: 16px;
-    line-height: 1.5;
-    color: var(--body-color);
-    background-color: var(--body-bg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'Helvetica Neue', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--foreground);
+    background-color: var(--background);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 /* Mobile responsive typography and layout */
@@ -100,22 +124,20 @@ body {
 @media (hover: none) and (pointer: coarse) {
     /* Increase tap targets for mobile */
     button,
-    .clickable {
+    a,
+    .clickable,
+    .touch-target {
         min-height: 44px;
         min-width: 44px;
+        position: relative;
     }
     
-    /* Disable hover effects on touch devices */
-    .tab:hover {
-        background: none !important;
-    }
-    
-    .download-btn:hover {
-        background: #e9ecef !important;
-    }
-    
-    .download-btn.download:hover {
-        background: #007bff !important;
+    /* Add touch feedback */
+    button:active,
+    a:active,
+    .clickable:active {
+        transform: scale(0.98);
+        opacity: 0.9;
     }
 }
 
@@ -148,20 +170,26 @@ button:active::after {
     transition: 0s;
 }
 
-/* Remove focus outlines globally */
-a:focus,
-button:focus,
-input:focus,
-select:focus,
-textarea:focus,
-[tabindex]:focus,
-*:focus {
-    outline: none !important;
+/* Improved focus styles for accessibility */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius);
 }
 
-/* Optional: Use focus-visible for keyboard navigation only */
-*:focus-visible {
-    outline: none !important;
+/* Remove default focus for mouse users */
+a:focus:not(:focus-visible),
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+[tabindex]:focus:not(:focus-visible) {
+    outline: none;
 }
 
 /* Prevent content jumping during loads */

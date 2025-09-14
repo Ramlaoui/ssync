@@ -1073,12 +1073,21 @@
   @media (max-width: 640px) {
     .dialog-container {
       width: 100%;
-      height: 100%;
+      height: 100vh;
       max-width: none;
-      max-height: none;
+      max-height: 100vh;
       border-radius: 0;
+      display: flex;
+      flex-direction: column;
     }
-    
+
+    .dialog-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     .detail-grid {
       grid-template-columns: 1fr;
     }

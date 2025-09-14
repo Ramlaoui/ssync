@@ -3,13 +3,14 @@
   import { onMount } from "svelte";
   import Router, { push, link, location } from "svelte-spa-router";
   import { wrap } from "svelte-spa-router/wrap";
-  import ApiKeyConfig from "./components/ApiKeyConfig.svelte";
   import ErrorBoundary from "./components/ErrorBoundary.svelte";
   import LaunchJob from "./components/LaunchJob.svelte";
   import PerformanceMonitor from "./components/PerformanceMonitor.svelte";
+  import DashboardPage from "./pages/DashboardPage.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
   import JobPage from "./pages/JobPage.svelte";
-  import WatchersPage from "./pages/WatchersPageEnhanced.svelte";
+  import WatchersPage from "./pages/WatchersPageModern.svelte";
+  import SettingsPage from "./pages/SettingsPage.svelte";
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";
   import { 
@@ -24,26 +25,39 @@
   let hosts: HostInfo[] = [];
   let hostsLoading = false;
   let error: string | null = null;
+
+  // Mobile detection
+  let isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   
-  // Define routes
+  // Define routes - on mobile, home redirects to jobs
   const routes = {
-    '/': JobsPage,
+    '/': isMobile ? JobsPage : DashboardPage,
+    '/jobs': JobsPage,
     '/jobs/:id/:host': JobPage,
     '/launch': wrap({
       component: LaunchJob,
       props: { hosts }
     }),
     '/watchers': WatchersPage,
-    '/settings': ApiKeyConfig
+    '/settings': SettingsPage
   };
 
   // Derive active tab from location
-  $: activeTab = $location === '/launch' ? 'launch' : 
-                 $location === '/settings' ? 'settings' : 
+  $: activeTab = $location === '/launch' ? 'launch' :
+                 $location === '/settings' ? 'settings' :
                  $location === '/watchers' ? 'watchers' :
-                 'jobs';
+                 $location === '/jobs' || $location.startsWith('/jobs/') ? 'jobs' :
+                 'home';
+
+  function checkMobile() {
+    isMobile = window.innerWidth < 768;
+  }
 
   onMount(async () => {
+    // Setup mobile detection
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+
     // Try to get API key from config if not already set
     if (!$apiConfig.apiKey) {
       // Try with the known API key from the backend config
@@ -56,7 +70,7 @@
         localStorage.setItem('ssync_api_key', configuredKey);
       }
     }
-    
+
     // Test API connection first
     testConnection().then((connected) => {
       if (connected) {
@@ -66,6 +80,10 @@
         error = "Please configure your API key to use the application";
       }
     });
+
+    return () => {
+      window.removeEventListener('resize', checkMobile);
+    };
   });
 
   async function loadHosts(): Promise<void> {
@@ -95,116 +113,109 @@
     window.location.reload();
   }}
 >
-  <div class="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
-    <!-- Modern Header -->
-    <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50 backdrop-blur-sm bg-white/95 dark:bg-gray-800/95">
-      <div class="px-4 sm:px-6 lg:px-8">
-        <div class="flex h-16 items-center justify-between">
-          <!-- Logo and Brand -->
-          <div class="flex items-center space-x-4">
+  <div class="min-h-screen bg-white flex flex-col">
+    <!-- Minimalist Header -->
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <div class="px-3 sm:px-6 lg:px-8">
+        <div class="flex h-16 md:h-16 items-center justify-between">
+          <!-- Logo and Navigation -->
+          <div class="flex items-center space-x-2 md:space-x-4">
             <button
-              class="text-xl font-bold bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent hover:opacity-80 transition-opacity"
+              class="text-base md:text-lg font-semibold text-black hover:opacity-70 transition-opacity duration-200"
               on:click={() => push('/')}
             >
               ssync
             </button>
-            
+
             <!-- Desktop Navigation -->
             <nav class="hidden md:flex items-center space-x-1">
               <a
-                href="/"
+                href="/jobs"
                 use:link
                 class="nav-link {activeTab === 'jobs' ? 'nav-link-active' : ''}"
               >
-                <Home class="h-4 w-4" />
                 <span>Jobs</span>
               </a>
-              
+
               <a
                 href="/launch"
                 use:link
                 class="nav-link {activeTab === 'launch' ? 'nav-link-active' : ''} {!$apiConfig.authenticated ? 'opacity-50 cursor-not-allowed' : ''}"
               >
-                <Play class="h-4 w-4" />
                 <span>Launch</span>
               </a>
-              
+
               <a
                 href="/watchers"
                 use:link
                 class="nav-link {activeTab === 'watchers' ? 'nav-link-active' : ''} {!$apiConfig.authenticated ? 'opacity-50 cursor-not-allowed' : ''}"
               >
-                <Eye class="h-4 w-4" />
                 <span>Watchers</span>
               </a>
-              
+
               <a
                 href="/settings"
                 use:link
                 class="nav-link {activeTab === 'settings' ? 'nav-link-active' : ''} relative"
               >
-                <Settings class="h-4 w-4" />
                 <span>Settings</span>
                 {#if !$apiConfig.authenticated}
-                  <span class="absolute -top-1 -right-1 h-2 w-2 bg-red-500 rounded-full"></span>
+                  <span class="absolute -top-1 -right-1 h-1.5 w-1.5 bg-red-500 rounded-full"></span>
+                {/if}
+              </a>
+            </nav>
+
+            <!-- Mobile Navigation - inline with logo -->
+            <nav class="md:hidden flex items-center space-x-1">
+              <a
+                href="/jobs"
+                use:link
+                class="mobile-nav-link-inline {activeTab === 'jobs' ? 'mobile-nav-link-inline-active' : ''}"
+              >
+                Jobs
+              </a>
+
+              <a
+                href="/launch"
+                use:link
+                class="mobile-nav-link-inline {activeTab === 'launch' ? 'mobile-nav-link-inline-active' : ''}"
+              >
+                Launch
+              </a>
+
+              <a
+                href="/watchers"
+                use:link
+                class="mobile-nav-link-inline {activeTab === 'watchers' ? 'mobile-nav-link-inline-active' : ''}"
+              >
+                Watchers
+              </a>
+
+              <a
+                href="/settings"
+                use:link
+                class="mobile-nav-link-inline {activeTab === 'settings' ? 'mobile-nav-link-inline-active' : ''} relative"
+              >
+                Settings
+                {#if !$apiConfig.authenticated}
+                  <span class="absolute -top-0.5 -right-0.5 h-1 w-1 bg-red-500 rounded-full"></span>
                 {/if}
               </a>
             </nav>
           </div>
 
-          <!-- Right side stats -->
-          <div class="flex items-center space-x-4">
-            <div class="hidden sm:flex items-center space-x-2 text-sm">
-              <span class="text-gray-500 dark:text-gray-400">Hosts:</span>
-              <span class="font-medium text-gray-900 dark:text-gray-100">{hosts.length}</span>
+          <!-- Right side stats - Desktop only -->
+          {#if !isMobile}
+            <div class="flex items-center space-x-4">
+              {#if $apiConfig.authenticated}
+                <div class="flex items-center space-x-1.5">
+                  <div class="h-1.5 w-1.5 bg-green-500 rounded-full"></div>
+                  <span class="text-xs text-gray-500">Connected</span>
+                </div>
+              {/if}
             </div>
-            
-            {#if $apiConfig.authenticated}
-              <div class="flex items-center space-x-1.5">
-                <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span class="text-sm text-gray-600 dark:text-gray-400">Connected</span>
-              </div>
-            {/if}
-          </div>
+          {/if}
         </div>
-        
-        <!-- Mobile Navigation -->
-        <nav class="md:hidden flex items-center space-x-1 pb-2 overflow-x-auto">
-          <a
-            href="/"
-            use:link
-            class="mobile-nav-link {activeTab === 'jobs' ? 'mobile-nav-link-active' : ''}"
-          >
-            <Home class="h-5 w-5" />
-          </a>
-          
-          <a
-            href="/launch"
-            use:link
-            class="mobile-nav-link {activeTab === 'launch' ? 'mobile-nav-link-active' : ''}"
-          >
-            <Play class="h-5 w-5" />
-          </a>
-          
-          <a
-            href="/watchers"
-            use:link
-            class="mobile-nav-link {activeTab === 'watchers' ? 'mobile-nav-link-active' : ''}"
-          >
-            <Eye class="h-5 w-5" />
-          </a>
-          
-          <a
-            href="/settings"
-            use:link
-            class="mobile-nav-link {activeTab === 'settings' ? 'mobile-nav-link-active' : ''} relative"
-          >
-            <Settings class="h-5 w-5" />
-            {#if !$apiConfig.authenticated}
-              <span class="absolute -top-1 -right-1 h-2 w-2 bg-red-500 rounded-full"></span>
-            {/if}
-          </a>
-        </nav>
       </div>
     </header>
 
@@ -230,7 +241,7 @@
     {/if}
 
     <!-- Main Content -->
-    <main class="flex-1 overflow-hidden">
+    <main class="flex-1 overflow-hidden flex flex-col">
       <Router {routes} />
     </main>
   </div>
@@ -242,45 +253,107 @@
 </ErrorBoundary>
 
 <style>
-  /* Navigation Links */
+  :root {
+    --mobile-nav-height: 64px;
+  }
+
+  /* Minimalist Navigation */
   .nav-link {
-    @apply flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-lg transition-all;
-    @apply text-gray-600 hover:text-gray-900 hover:bg-gray-100;
-    @apply dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-700;
+    padding: 0 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: #666;
+    transition: color 150ms ease;
+    position: relative;
   }
-  
+
+  .nav-link:hover {
+    color: #000;
+  }
+
   .nav-link-active {
-    @apply text-violet-600 bg-violet-50;
-    @apply dark:text-violet-400 dark:bg-violet-900/20;
+    color: #000;
+    font-weight: 500;
+  }
+
+  .nav-link-active::after {
+    content: '';
+    position: absolute;
+    bottom: -17px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #000;
+  }
+
+  /* Mobile Navigation - Inline with logo */
+  .mobile-nav-link-inline {
+    padding: 0.375rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: #9ca3af;
+    transition: color 150ms ease;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-nav-link-inline:hover {
+    color: #6b7280;
+  }
+
+  .mobile-nav-link-inline-active {
+    color: #000;
+    font-weight: 500;
   }
   
-  /* Mobile Navigation */
-  .mobile-nav-link {
-    @apply flex items-center justify-center p-2 rounded-lg transition-all;
-    @apply text-gray-600 hover:text-gray-900 hover:bg-gray-100;
-    @apply dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-700;
-  }
-  
-  .mobile-nav-link-active {
-    @apply text-violet-600 bg-violet-50;
-    @apply dark:text-violet-400 dark:bg-violet-900/20;
-  }
-  
-  /* Custom scrollbar */
+
+  /* Minimal scrollbar */
   :global(::-webkit-scrollbar) {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
   
   :global(::-webkit-scrollbar-track) {
-    @apply bg-gray-100 dark:bg-gray-800;
+    background: transparent;
   }
-  
+
   :global(::-webkit-scrollbar-thumb) {
-    @apply bg-gray-400 dark:bg-gray-600 rounded-full;
+    background-color: #d1d5db;
+    border-radius: 3px;
   }
   
   :global(::-webkit-scrollbar-thumb:hover) {
-    @apply bg-gray-500 dark:bg-gray-500;
+    background-color: #9ca3af;
+  }
+
+  /* Global animation classes */
+  :global(.animate-in) {
+    animation: fade-in 0.3s ease-out;
+  }
+
+  :global(.slide-in) {
+    animation: slide-in 0.3s ease-out;
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slide-in {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
   }
 </style>

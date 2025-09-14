@@ -44,11 +44,34 @@ export interface JobLaunchState {
   success: string | null;
 }
 
+// LocalStorage utilities
+const LAST_SOURCE_DIR_KEY = 'ssync-last-source-dir';
+
+function getStoredSourceDir(): string {
+  if (typeof localStorage === 'undefined') return '';
+  try {
+    return localStorage.getItem(LAST_SOURCE_DIR_KEY) || '';
+  } catch (error) {
+    console.warn('Failed to retrieve stored source directory:', error);
+    return '';
+  }
+}
+
+function storeSourceDir(dir: string): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (dir && dir.trim()) {
+      localStorage.setItem(LAST_SOURCE_DIR_KEY, dir);
+    }
+  } catch (error) {
+    console.warn('Failed to store source directory:', error);
+  }
+}
 
 // Initial state
 const initialConfig: JobLaunchConfig = {
   selectedHost: '',
-  sourceDir: '',
+  sourceDir: getStoredSourceDir(),
   scriptSource: 'editor',
   scriptContent: '#!/bin/bash\n\n#LOGIN_SETUP_BEGIN\n# Environment setup commands (run on login node)\n# Example: conda activate myenv\n# Example: pip install -r requirements.txt\n#LOGIN_SETUP_END\n\n# Main job commands (run on compute node)\necho "Job started on $(hostname)"\necho "Hello from ssync!"\n',
   localScriptPath: '',
@@ -186,6 +209,9 @@ export const jobLaunchActions = {
   },
 
   setSourceDir: (dir: string) => {
+    // Persist the directory to localStorage
+    storeSourceDir(dir);
+
     update(state => ({
       ...state,
       config: { ...state.config, sourceDir: dir }

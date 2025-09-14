@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { JobInfo } from '../types/api';
+  import { jobUtils } from '../lib/jobUtils';
   
   export let jobs: JobInfo[] = [];
   export let title = "Select a Job";
@@ -62,18 +63,7 @@
     return states[state] || state;
   }
   
-  function getStateColor(state: string): string {
-    const colors: Record<string, string> = {
-      'R': '#10b981',
-      'PD': '#f59e0b',
-      'CG': '#3b82f6',
-      'CD': '#6b7280',
-      'F': '#ef4444',
-      'TO': '#dc2626',
-      'CA': '#94a3b8'
-    };
-    return colors[state] || '#6b7280';
-  }
+  // Use centralized job utilities
   
   function formatTime(dateString: string | undefined): string {
     if (!dateString) return 'N/A';
@@ -159,7 +149,7 @@
                           <span class="job-id">#{job.job_id}</span>
                           <span 
                             class="job-state"
-                            style="background-color: {getStateColor(job.state)}20; color: {getStateColor(job.state)}"
+                            style="background-color: {jobUtils.getStateColor(job.state)}20; color: {jobUtils.getStateColor(job.state)}"
                           >
                             {formatJobState(job.state)}
                           </span>

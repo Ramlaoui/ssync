@@ -2,9 +2,12 @@
   import { api } from "../services/api";
   import type { AxiosError } from "axios";
   import { createEventDispatcher } from "svelte";
+  import { Search, Home, Folder, FolderOpen, File, ArrowUp, Loader2, AlertCircle, Key } from "lucide-svelte";
+  import Button from "../lib/components/ui/Button.svelte";
 
   const dispatch = createEventDispatcher<{
     pathSelected: string;
+    directoryChanged: string;
   }>();
 
   export let sourceDir = "";
@@ -12,26 +15,120 @@
 
   // Browser state
   let localEntries: { name: string; path: string; is_dir: boolean }[] = [];
+  let filteredEntries: { name: string; path: string; is_dir: boolean }[] = [];
   let currentLocalPath = "/";
-  let maxEntries = 50;
+  let maxEntries = 100;
   let showHiddenFiles = false;
   let showFilesInBrowser = false;
   let loading = false;
   let error: string | null = null;
+  let searchQuery = "";
+
+  // Fuzzy search functionality
+  function fuzzyMatch(query: string, target: string): { score: number; matches: number[] } {
+    if (!query) return { score: 1, matches: [] };
+
+    const queryLower = query.toLowerCase();
+    const targetLower = target.toLowerCase();
+
+    // Exact match gets highest score
+    if (targetLower.includes(queryLower)) {
+      const startIndex = targetLower.indexOf(queryLower);
+      return {
+        score: 100 - startIndex,
+        matches: Array.from({ length: query.length }, (_, i) => startIndex + i)
+      };
+    }
+
+    // Fuzzy matching
+    let queryIndex = 0;
+    let matches: number[] = [];
+    let score = 0;
+
+    for (let i = 0; i < target.length && queryIndex < queryLower.length; i++) {
+      if (targetLower[i] === queryLower[queryIndex]) {
+        matches.push(i);
+        score += (target.length - i) / target.length * 10; // Earlier matches score higher
+        queryIndex++;
+      }
+    }
+
+    if (queryIndex === queryLower.length) {
+      return { score, matches };
+    }
+
+    return { score: 0, matches: [] };
+  }
+
+  function filterEntries() {
+    if (!searchQuery.trim()) {
+      filteredEntries = localEntries;
+      return;
+    }
+
+    const results = localEntries
+      .map(entry => ({
+        ...entry,
+        matchResult: fuzzyMatch(searchQuery, entry.name)
+      }))
+      .filter(entry => entry.matchResult.score > 0)
+      .sort((a, b) => {
+        // Sort by type first (dirs, then files), then by score
+        if (a.is_dir !== b.is_dir) {
+          return a.is_dir ? -1 : 1;
+        }
+        return b.matchResult.score - a.matchResult.score;
+      });
+
+    filteredEntries = results;
+  }
+
+  // Reactive filtering
+  $: {
+    // Trigger when either localEntries or searchQuery changes
+    localEntries;
+    searchQuery;
+    filterEntries();
+  }
 
   // Load directory browser in background on mount
   setTimeout(() => {
-    loadLocalPath(initialPath).catch(() => {
-      // Fallback to root if initialPath doesn't exist
-      loadLocalPath("/").catch(() => {
+    // Try initialPath first, but only if it's likely to be allowed
+    const allowedPaths = ["/home", "/Users", "/opt", "/mnt", "/tmp", "/var/tmp"];
+    const isAllowedPath = initialPath && allowedPaths.some(allowed => initialPath.startsWith(allowed));
+
+    if (isAllowedPath) {
+      loadLocalPath(initialPath).catch(() => {
+        // Fallback to user home
+        loadLocalPath("/home").catch(() => {});
       });
-    });
+    } else {
+      // Start with user home directory as it's most likely to work
+      loadLocalPath("/home").catch(() => {
+        // Try other allowed paths
+        tryAllowedPaths();
+      });
+    }
   }, 100);
+
+  // Try different allowed paths to find one that works
+  async function tryAllowedPaths() {
+    const allowedPaths = ["/tmp", "/opt", "/mnt", "/var/tmp"];
+    for (const path of allowedPaths) {
+      try {
+        await loadLocalPath(path);
+        break; // Success, stop trying
+      } catch (error) {
+        continue; // Try next path
+      }
+    }
+  }
 
   // Load entries for a server-local path using backend API
   async function loadLocalPath(path: string): Promise<void> {
     loading = true;
     error = null;
+    searchQuery = ""; // Clear search when navigating
 
     try {
       const response = await api.get('/api/local/list', {
@@ -42,12 +139,31 @@
           dirs_only: !showFilesInBrowser,
         },
       });
-      localEntries = response.data.entries;
-      currentLocalPath = response.data.path;
+      localEntries = response.data.entries || [];
+      currentLocalPath = response.data.path || path;
+      // Immediately update filtered entries
+      filteredEntries = localEntries;
 
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
-      error = `Failed to list local path: ${axiosError.message}`;
+
+      if (axiosError.response?.status === 401) {
+        error = "Authentication required. Please configure your API key in settings.";
+      } else if (axiosError.response?.status === 403) {
+        const responseText = axiosError.response?.data?.detail || '';
+        if (responseText.includes('Access denied') || responseText.includes('Path must be under')) {
+          error = `Access denied. For security, only these directories are allowed: /home, /Users, /opt, /mnt, /tmp, /var/tmp, and your user directory.`;
+        } else {
+          error = "Access forbidden. Please configure your API key in settings.";
+        }
+      } else if (axiosError.response?.status === 404) {
+        error = `Directory not found: ${path}`;
+      } else {
+        error = `Failed to list directory: ${axiosError.message || 'Unknown error'}`;
+      }
+
+      localEntries = [];
+      filteredEntries = [];
     } finally {
       loading = false;
     }
@@ -69,12 +185,7 @@
   }
 
   function goToHome(): void {
-    const homePath = "/home";
-    loadLocalPath(homePath);
-  }
-
-  function goToRoot(): void {
-    loadLocalPath("/");
+    loadLocalPath("/home");
   }
 
   function handleDirectoryClick(entryPath: string): void {
@@ -86,191 +197,305 @@
       loadLocalPath(currentLocalPath);
     }
   }
+
+  // Quick path navigation (only allowed paths) - disabled for now
+  const quickPaths = [];
 </script>
 
 <div class="file-browser">
-  <div class="browser-nav">
-    <button type="button" on:click={goToRoot} class="nav-btn">Root</button>
-    <button type="button" on:click={goToHome} class="nav-btn">Home</button>
-    <button
-      type="button"
-      on:click={navigateUp}
-      disabled={currentLocalPath === "/"}
-      class="nav-btn">Up</button
-    >
-    <button
-      type="button"
-      on:click={() => loadLocalPath(currentLocalPath)}
-      disabled={!currentLocalPath}
-      class="nav-btn">Refresh</button
-    >
+  <!-- Simplified Header -->
+  <div class="browser-header">
+    <!-- Search and Navigation bar -->
+    <div class="search-nav-bar">
+      <div class="search-container">
+        <div class="search-icon-button">
+          <Search class="search-icon" />
+        </div>
+        <div class="search-input-wrapper">
+          <input
+            bind:value={searchQuery}
+            placeholder="Search in {currentLocalPath || '/'}"
+            class="search-input-native"
+            disabled={loading}
+          />
+        </div>
+      </div>
+      <div class="nav-buttons">
+        <button
+          class="nav-btn"
+          on:click={navigateUp}
+          disabled={currentLocalPath === "/" || loading}
+          title="Go up one level"
+        >
+          <ArrowUp class="w-4 h-4" />
+        </button>
+        <button
+          class="nav-btn"
+          on:click={goToHome}
+          disabled={loading}
+          title="Go to home"
+        >
+          <Home class="w-4 h-4" />
+        </button>
+        <button
+          class="select-btn"
+          on:click={selectCurrentLocalPath}
+          disabled={!currentLocalPath || loading}
+        >
+          Select Directory
+        </button>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="options-section">
+      <label class="option-checkbox">
+        <input
+          type="checkbox"
+          bind:checked={showHiddenFiles}
+          on:change={handleOptionsChange}
+          disabled={loading}
+        />
+        <span>Show hidden files</span>
+      </label>
+
+      <label class="option-checkbox">
+        <input
+          type="checkbox"
+          bind:checked={showFilesInBrowser}
+          on:change={handleOptionsChange}
+          disabled={loading}
+        />
+        <span>Show files</span>
+      </label>
+
+      <div class="entry-count">
+        {#if searchQuery}
+          {filteredEntries.length} matches
+        {:else}
+          {localEntries.length} entries
+        {/if}
+      </div>
+    </div>
   </div>
 
-  <div class="browser-path">
-    <strong>Current:</strong>
-    {currentLocalPath || "/"}
-    <button
-      type="button"
-      on:click={selectCurrentLocalPath}
-      disabled={!currentLocalPath}
-      class="select-btn"
-    >
-      Select This Directory
-    </button>
-  </div>
-
-  <div class="browser-options">
-    <label class="checkbox-label">
-      <input
-        type="checkbox"
-        bind:checked={showHiddenFiles}
-        on:change={handleOptionsChange}
-      />
-      Show hidden files
-    </label>
-    <label class="checkbox-label">
-      <input
-        type="checkbox"
-        bind:checked={showFilesInBrowser}
-        on:change={handleOptionsChange}
-      />
-      Show files (directories only by default)
-    </label>
-    <div class="limit-info">Showing max {maxEntries} entries</div>
-  </div>
-
+  <!-- Error display -->
   {#if error}
-    <div class="browser-error">
-      <span>{error}</span>
-      <button
-        type="button"
+    <div class="error-section">
+      <AlertCircle class="w-5 h-5 text-red-500" />
+      <div class="error-content">
+        <p class="error-message">{error}</p>
+        {#if error.includes('Authentication') || error.includes('API key')}
+          <Button
+            variant="outline"
+            size="sm"
+            on:click={() => window.location.hash = '#/settings'}
+            class="mt-2"
+          >
+            <Key class="w-4 h-4 mr-2" />
+            Configure API Key
+          </Button>
+        {/if}
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
         on:click={() => loadLocalPath(currentLocalPath)}
-        class="retry-btn">Retry</button
+        disabled={loading}
       >
+        Retry
+      </Button>
     </div>
   {/if}
 
-  <ul class="browser-list" class:loading>
+  <!-- Directory listing -->
+  <div class="browser-content">
     {#if loading}
-      <li class="browser-entry loading-entry">
-        <div class="loading-spinner"></div>
-        Loading directory...
-      </li>
-    {:else if localEntries && localEntries.length > 0}
-      {#each localEntries as entry}
-        <li
-          class="browser-entry"
-          class:dir={entry.is_dir}
-          class:file={!entry.is_dir}
-        >
-          {#if entry.is_dir}
-            <button
-              type="button"
-              class="dir-button"
-              on:click={() => handleDirectoryClick(entry.path)}
-            >
-              <svg class="folder-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path
-                  d="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"
-                />
-              </svg>
-              {entry.name}/
-            </button>
-          {:else}
-            <div class="file-entry">
-              <svg class="file-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path
-                  d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"
-                />
-              </svg>
-              <span class="file-name">{entry.name}</span>
+      <div class="loading-section">
+        <Loader2 class="w-5 h-5 animate-spin text-blue-600" />
+        <span>Loading directory...</span>
+      </div>
+    {:else if filteredEntries.length > 0}
+      <div class="entries-list">
+        {#each filteredEntries as entry}
+          <button
+            class="entry-item"
+            class:directory={entry.is_dir}
+            class:file={!entry.is_dir}
+            on:click={() => entry.is_dir ? handleDirectoryClick(entry.path) : null}
+            disabled={!entry.is_dir}
+          >
+            <div class="entry-icon">
+              {#if entry.is_dir}
+                <Folder class="w-4 h-4 text-blue-600" />
+              {:else}
+                <File class="w-4 h-4 text-gray-500" />
+              {/if}
             </div>
-          {/if}
-        </li>
-      {/each}
-    {:else}
-      <li class="browser-entry empty-entry">
-        <svg class="empty-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path
-            d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9Z"
-          />
-        </svg>
-        No entries found
-      </li>
+
+            <div class="entry-details">
+              <span class="entry-name">
+                {#if searchQuery && entry.matchResult}
+                  {#each entry.name.split('') as char, i}
+                    <span class:highlight={entry.matchResult.matches.includes(i)}>
+                      {char}
+                    </span>
+                  {/each}
+                {:else}
+                  {entry.name}
+                {/if}
+              </span>
+              {#if entry.is_dir}
+                <span class="entry-type">Directory</span>
+              {:else}
+                <span class="entry-type">File</span>
+              {/if}
+            </div>
+
+            {#if entry.is_dir}
+              <div class="entry-action">
+                <span class="action-text">Open</span>
+              </div>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {:else if !loading && !error}
+      <div class="empty-section">
+        <Folder class="w-8 h-8 text-gray-400" />
+        <span class="empty-message">
+          {searchQuery ? 'No matching directories found' : 'No directories found'}
+        </span>
+        {#if searchQuery}
+          <Button
+            variant="ghost"
+            size="sm"
+            on:click={() => searchQuery = ''}
+            class="mt-2"
+          >
+            Clear search
+          </Button>
+        {/if}
+      </div>
     {/if}
-  </ul>
+  </div>
 </div>
 
 <style>
   .file-browser {
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    overflow: hidden;
-    background: white;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    --border-color: #e2e8f0;
+    --hover-color: #f8fafc;
+    --text-primary: #1f2937;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    background: transparent;
+    border: none;
+    padding: 0;
   }
 
-  .browser-nav {
+  .browser-header {
     display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #e5e7eb;
+    margin-bottom: 0.75rem;
+  }
+
+  .search-nav-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    justify-content: space-between;
+  }
+
+  .search-container {
+    flex: 1;
+    max-width: 400px;
+    display: flex;
+    align-items: center;
     gap: 0.5rem;
-    padding: 1rem;
-    border-bottom: 1px solid #f3f4f6;
-    background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%);
-    flex-wrap: wrap;
+  }
+
+  .search-icon-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.375rem;
+    color: #6b7280;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+
+  .search-icon-button:hover {
+    background: #f9fafb;
+    border-color: #d1d5db;
+  }
+
+  .search-input-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+  }
+
+  .nav-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .nav-btn {
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
+    padding: 0.375rem;
     background: white;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.375rem;
+    color: #6b7280;
     cursor: pointer;
-    color: #374151;
-    font-weight: 500;
-    transition: all 0.2s ease;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
   }
 
   .nav-btn:hover:not(:disabled) {
-    background: #f9fafb;
-    border-color: #9ca3af;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    background: #f3f4f6;
+    color: #111827;
   }
 
   .nav-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
-    transform: none;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   }
 
-  .browser-path {
-    padding: 0.75rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #ffffff;
-    border-bottom: 1px solid #e5e7eb;
-    font-size: 0.9rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
+
+  .path-text {
+    font-size: 0.875rem;
+    color: #374151;
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-weight: 500;
   }
 
   .select-btn {
-    padding: 0.4rem 0.8rem;
-    font-size: 0.85rem;
-    background: #3498db;
+    padding: 0.375rem 0.875rem;
+    background: #3b82f6;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 0.375rem;
+    font-size: 0.813rem;
+    font-weight: 500;
     cursor: pointer;
-    transition: background-color 0.2s ease;
+    transition: all 0.15s;
+    white-space: nowrap;
   }
 
   .select-btn:hover:not(:disabled) {
-    background: #2980b9;
+    background: #2563eb;
   }
 
   .select-btn:disabled {
@@ -278,241 +503,272 @@
     cursor: not-allowed;
   }
 
-  .browser-options {
-    padding: 0.5rem 0.75rem;
-    background: #ffffff;
-    border-bottom: 1px solid #e5e7eb;
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-    font-size: 0.85rem;
-    flex-wrap: wrap;
-  }
 
-  .checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    font-size: 0.85rem;
-    color: #6c757d;
-    margin: 0;
-    cursor: pointer;
-  }
-
-  .checkbox-label input[type="checkbox"] {
-    margin: 0;
-    cursor: pointer;
-  }
-
-  .limit-info {
-    color: #6c757d;
-    font-size: 0.8rem;
-    margin-left: auto;
-  }
-
-  .browser-error {
-    padding: 0.75rem;
-    background: #fef2f2;
-    color: #dc2626;
-    border-bottom: 1px solid #fecaca;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.9rem;
-  }
-
-  .retry-btn {
-    padding: 0.25rem 0.5rem;
-    background: #dc2626;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    transition: background-color 0.2s ease;
-  }
-
-  .retry-btn:hover {
-    background: #b91c1c;
-  }
-
-  .browser-list {
-    max-height: 300px;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    background: white;
-  }
-
-  .browser-entry {
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #f3f4f6;
-    transition: background-color 0.2s ease;
-  }
-
-  .browser-entry:last-child {
-    border-bottom: none;
-  }
-
-  .browser-entry.dir {
-    background: #f8fafc;
-  }
-
-  .browser-entry.file {
-    background: #ffffff;
-    color: #6c757d;
-  }
-
-  .browser-entry:hover {
-    background: #f1f5f9;
-  }
-
-  .dir-button {
-    background: none;
-    border: none;
-    color: #3498db;
-    cursor: pointer;
-    font-size: 0.9rem;
-    padding: 0;
-    text-align: left;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    transition: color 0.2s ease;
-  }
-
-  .dir-button:hover {
-    color: #2980b9;
-  }
-
-  .file-entry {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: #6c757d;
-  }
-
-  .folder-icon,
-  .file-icon,
-  .empty-icon {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-  }
-
-  .folder-icon {
-    color: #f59e0b;
-  }
-
-  .file-icon {
+  .search-icon {
+    width: 1rem;
+    height: 1rem;
     color: #6b7280;
   }
 
-  .empty-icon {
-    color: #9ca3af;
+  .search-input-native {
+    padding: 0.375rem 0.75rem;
+    width: 100%;
+    border-radius: 0.375rem;
+    border: 1px solid #e5e7eb;
+    font-size: 0.875rem;
+    background: white;
+    transition: all 0.15s;
+    height: 32px;
+    line-height: 1.5;
+    box-sizing: border-box;
   }
 
-  .file-name {
-    font-size: 0.9rem;
+  .search-input-native:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
-  .loading-entry {
+  .search-input-native:disabled {
+    background: #f9fafb;
+    cursor: not-allowed;
+  }
+  .selected-indicator {
+    font-size: 0.75rem;
+    color: #16a34a;
+    font-weight: 600;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .path-text {
+    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :global(.select-btn) {
+    flex-shrink: 0;
+  }
+
+  .options-section {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    color: #6c757d;
-    font-style: italic;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.875rem;
   }
 
-  .loading-spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid #f3f4f6;
-    border-top: 2px solid #3498db;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-
-  .empty-entry {
+  .option-checkbox {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    color: #9ca3af;
-    font-style: italic;
+    cursor: pointer;
+    color: var(--text-secondary);
+  }
+
+  .option-checkbox input {
+    margin: 0;
+    cursor: pointer;
+  }
+
+  .entry-count {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-left: auto;
+  }
+
+  .error-section {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: #fef2f2;
+    border-bottom: 1px solid #fecaca;
+    color: #dc2626;
+  }
+
+  .error-content {
+    flex: 1;
+  }
+
+  .error-message {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .browser-content {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .loading-section {
+    display: flex;
+    align-items: center;
     justify-content: center;
-    padding: 1.5rem 0.75rem;
+    gap: 0.75rem;
+    padding: 2rem;
+    color: var(--text-secondary);
+    font-style: italic;
   }
 
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
+  .entries-list {
+    padding: 0.5rem;
   }
 
-  /* Mobile responsive improvements */
+  .entry-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: none;
+    background: none;
+    text-align: left;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+  }
+
+  .entry-item:hover:not(:disabled) {
+    background: var(--hover-color);
+  }
+
+  .entry-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .entry-item.directory:hover:not(:disabled) {
+    background: #f8fafc;
+  }
+
+  .entry-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .entry-details {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .entry-name {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .entry-name .highlight {
+    background: #fbbf24;
+    color: #92400e;
+    padding: 0.125rem 0.25rem;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  .entry-type {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .entry-action {
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .entry-item:hover .entry-action {
+    opacity: 1;
+  }
+
+  .action-text {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .empty-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    color: var(--text-muted);
+    gap: 0.75rem;
+  }
+
+  .empty-message {
+    font-style: italic;
+    text-align: center;
+  }
+
+  /* Mobile responsive */
   @media (max-width: 768px) {
-    .browser-nav {
+    .browser-header {
+      padding: 0.75rem;
+    }
+
+    .nav-section {
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .quick-nav {
+      gap: 0.25rem;
+    }
+
+    :global(.quick-nav-btn) {
       padding: 0.5rem;
-      flex-wrap: wrap;
-      gap: 0.375rem;
+      font-size: 0.75rem;
     }
 
-    .nav-btn {
-      padding: 0.375rem 0.625rem;
-      font-size: 0.8rem;
+    .nav-text {
+      display: none;
     }
 
-    .browser-path {
-      padding: 0.625rem;
+    .path-section {
+      flex-direction: column;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+
+    .options-section {
       flex-direction: column;
       align-items: flex-start;
       gap: 0.5rem;
     }
 
-    .select-btn {
-      align-self: stretch;
-      text-align: center;
-    }
-
-    .browser-options {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.5rem;
-    }
-
-    .limit-info {
+    .entry-count {
       margin-left: 0;
     }
 
-    .browser-list {
-      max-height: 200px;
+    .browser-content {
+      max-height: 300px;
     }
 
-    .browser-entry {
-      padding: 0.625rem 0.5rem;
+    .entry-item {
+      padding: 1rem 0.75rem;
     }
-  }
 
-  /* Improved scrollbar for browser list */
-  .browser-list::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  .browser-list::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .browser-list::-webkit-scrollbar-thumb {
-    background: rgba(156, 163, 175, 0.4);
-    border-radius: 3px;
-  }
-
-  .browser-list::-webkit-scrollbar-thumb:hover {
-    background: rgba(156, 163, 175, 0.6);
+    .entry-action {
+      opacity: 1;
+    }
   }
 </style>

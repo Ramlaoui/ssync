@@ -1,12 +1,17 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
+  import { slide, fade } from 'svelte/transition';
   import { api } from '../services/api';
   import type { JobInfo } from '../types/api';
-  
+  import { jobUtils } from '../lib/jobUtils';
+  import { X, History, FileText, Calendar, Server, Hash, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-svelte';
+
   const dispatch = createEventDispatcher();
-  
+
   export let isOpen = false;
   export let currentHost: string | null = null;
+  export let embedded = false; // New prop to indicate if embedded in another component
+  export let isMobile = false;
   
   interface ScriptHistoryItem {
     job_id: string;
@@ -29,14 +34,21 @@
   let previewContent = '';
   let errorMessage = '';
   
-  // Pagination
-  const ITEMS_PER_PAGE = 10;
-  let currentPage = 1;
-  $: totalPages = Math.ceil(filteredScripts.length / ITEMS_PER_PAGE);
-  $: paginatedScripts = filteredScripts.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  // Infinite scroll
+  let displayCount = 20;
+  let scrollContainer: HTMLElement;
+  $: displayedScripts = filteredScripts.slice(0, displayCount);
+
+  function handleScroll(event: Event) {
+    const element = event.target as HTMLElement;
+    const threshold = 100; // Load more when within 100px of bottom
+
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < threshold) {
+      if (displayCount < filteredScripts.length) {
+        displayCount = Math.min(displayCount + 20, filteredScripts.length);
+      }
+    }
+  }
   
   async function loadScriptHistory() {
     console.log('=== Loading script history ===');
@@ -44,11 +56,34 @@
     loading = true;
     errorMessage = '';
     try {
-      // Fetch recent jobs from all hosts or specific host
-      const hosts = currentHost ? [currentHost] : ['jz', 'adastra', 'entalpic'];
+      // Fetch available hosts dynamically
+      let hosts = [];
+      if (currentHost) {
+        hosts = [currentHost];
+      } else {
+        try {
+          console.log('Fetching available hosts...');
+          const hostsResponse = await api.get('/api/hosts');
+          hosts = hostsResponse.data.map(host => host.hostname);
+          console.log('Available hosts:', hosts);
+        } catch (e) {
+          console.warn('Failed to fetch hosts, using fallback:', e);
+          // Fallback to hardcoded hosts if API fails
+          hosts = ['jz', 'adastra', 'entalpic'];
+        }
+      }
+
       console.log('Will check hosts:', hosts);
+
+      if (hosts.length === 0) {
+        console.warn('No hosts available to check for script history');
+        errorMessage = 'No SLURM hosts are configured or available';
+        scripts = [];
+        return;
+      }
+
       const allScripts: ScriptHistoryItem[] = [];
-      
+
       for (const host of hosts) {
         try {
           console.log(`\nFetching jobs from ${host}...`);
@@ -122,7 +157,7 @@
       console.log('After sorting, scripts array:', scripts);
       filterScripts();
       console.log('After filtering, filteredScripts:', filteredScripts);
-      console.log('Paginated scripts:', paginatedScripts);
+      console.log('Displayed scripts:', displayedScripts);
     } catch (err) {
       console.error('Failed to load script history:', err);
       errorMessage = `Failed to load script history: ${err.message || 'Unknown error'}`;
@@ -147,8 +182,10 @@
         if (!matches) return false;
       }
       
-      // Host filter
-      if (filterHost !== 'all' && script.hostname !== filterHost) {
+      // Host filter - when embedded, only show jobs from currentHost
+      if (embedded && currentHost && script.hostname !== currentHost) {
+        return false;
+      } else if (!embedded && filterHost !== 'all' && script.hostname !== filterHost) {
         return false;
       }
       
@@ -161,7 +198,6 @@
     });
     
     console.log(`Filtered to ${filteredScripts.length} scripts from ${scripts.length} total`);
-    currentPage = 1;
   }
   
   function selectScript(script: ScriptHistoryItem) {
@@ -199,16 +235,7 @@
     });
   }
   
-  function getStateColor(state: string): string {
-    switch(state) {
-      case 'R': return '#10b981';
-      case 'PD': return '#f59e0b';
-      case 'CD': return '#3b82f6';
-      case 'F': return '#ef4444';
-      case 'CA': return '#6b7280';
-      default: return '#6b7280';
-    }
-  }
+  // Use centralized job utilities
   
   function getStateName(state: string): string {
     switch(state) {
@@ -235,21 +262,30 @@
   
   // Re-filter whenever search or filters change
   $: searchTerm, filterHost, filterState, filterScripts();
+
+  // Reset display count when filters change
+  $: if (searchTerm || filterHost || filterState) {
+    displayCount = 20;
+  }
 </script>
 
 {#if isOpen}
-<div class="modal-overlay" on:click={close}>
-  <div class="modal-container" on:click|stopPropagation>
-    <div class="modal-header">
+<!-- Overlay for mobile/desktop -->
+<div class="sidebar-overlay" on:click|preventDefault|stopPropagation={close} transition:fade={{ duration: 200 }}></div>
+
+<!-- Sidebar -->
+<div class="sidebar-container {isMobile ? 'mobile' : 'desktop'}" on:click|stopPropagation transition:slide={{ duration: 300, axis: 'x' }}>
+  <div class="sidebar-header">
+    <div class="sidebar-title">
+      <History class="w-5 h-5" />
       <h2>Script History</h2>
-      <button class="close-btn" on:click={close}>
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-        </svg>
-      </button>
     </div>
+    <button class="close-btn" on:click={close}>
+      <X class="w-5 h-5" />
+    </button>
+  </div>
     
-    <div class="modal-filters">
+    <div class="sidebar-filters">
       <input 
         type="text"
         placeholder="Search scripts..."
@@ -257,13 +293,15 @@
         class="search-input"
       />
       
-      <select bind:value={filterHost} class="filter-select">
-        <option value="all">All Hosts</option>
-        <option value="jz">Jean Zay</option>
-        <option value="adastra">Adastra</option>
-        <option value="entalpic">Entalpic</option>
-        <option value="mbp">Local</option>
-      </select>
+      {#if !embedded}
+        <select bind:value={filterHost} class="filter-select">
+          <option value="all">All Hosts</option>
+          <option value="jz">Jean Zay</option>
+          <option value="adastra">Adastra</option>
+          <option value="entalpic">Entalpic</option>
+          <option value="mbp">Local</option>
+        </select>
+      {/if}
       
       <select bind:value={filterState} class="filter-select">
         <option value="all">All States</option>
@@ -275,7 +313,7 @@
       </select>
     </div>
     
-    <div class="modal-body">
+    <div class="sidebar-body" bind:this={scrollContainer} on:scroll={handleScroll}>
       {#if loading}
         <div class="loading">
           <div class="spinner"></div>
@@ -287,14 +325,20 @@
           <small>{errorMessage}</small>
           <button class="retry-btn" on:click={loadScriptHistory}>Retry</button>
         </div>
-      {:else if paginatedScripts.length === 0}
+      {:else if displayedScripts.length === 0}
         <div class="empty-state">
           <p>No scripts found</p>
-          <small>Try adjusting your filters or submit some jobs first</small>
+          <small>
+            {#if scripts.length === 0}
+              No job scripts are available from the configured hosts. Try submitting some jobs first, or check if your hosts are accessible.
+            {:else}
+              Try adjusting your filters to see more results.
+            {/if}
+          </small>
         </div>
       {:else}
         <div class="scripts-grid">
-          {#each paginatedScripts as script}
+          {#each displayedScripts as script}
             <div 
               class="script-card"
               class:selected={selectedScript?.job_id === script.job_id}
@@ -304,12 +348,27 @@
                 <div class="script-info">
                   <h3>{script.job_name}</h3>
                   <div class="script-meta">
-                    <span class="job-id">#{script.job_id}</span>
-                    <span class="hostname">{script.hostname}</span>
-                    <span 
+                    <span class="job-id">
+                      <Hash class="w-3 h-3" style="display: inline; vertical-align: middle;"/> {script.job_id}
+                    </span>
+                    {#if !embedded}
+                      <span class="hostname">
+                        <Server class="w-3 h-3" style="display: inline; vertical-align: middle;"/> {script.hostname}
+                      </span>
+                    {/if}
+                    <span
                       class="state"
-                      style="color: {getStateColor(script.state)}"
+                      style="color: {jobUtils.getStateColor(script.state)}"
                     >
+                      {#if script.state === 'CD'}
+                        <CheckCircle class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
+                      {:else if script.state === 'F'}
+                        <XCircle class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
+                      {:else if script.state === 'R'}
+                        <Clock class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
+                      {:else}
+                        <AlertCircle class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
+                      {/if}
                       {getStateName(script.state)}
                     </span>
                   </div>
@@ -330,26 +389,11 @@
             </div>
           {/each}
         </div>
-        
-        {#if totalPages > 1}
-          <div class="pagination">
-            <button 
-              on:click={() => currentPage--}
-              disabled={currentPage === 1}
-              class="page-btn"
-            >
-              Previous
-            </button>
-            <span class="page-info">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button 
-              on:click={() => currentPage++}
-              disabled={currentPage === totalPages}
-              class="page-btn"
-            >
-              Next
-            </button>
+
+        {#if displayCount < filteredScripts.length}
+          <div class="loading-more">
+            <div class="spinner"></div>
+            <p>Scroll for more...</p>
           </div>
         {/if}
       {/if}
@@ -369,9 +413,9 @@
       </div>
     {/if}
     
-    <div class="modal-footer">
+    <div class="sidebar-footer">
       <button class="cancel-btn" on:click={close}>Cancel</button>
-      <button 
+      <button
         class="use-btn"
         disabled={!selectedScript?.script_content}
         on:click={useScript}
@@ -379,127 +423,113 @@
         Use This Script
       </button>
     </div>
-  </div>
 </div>
 {/if}
 
 <style>
-  .modal-overlay {
+  .sidebar-overlay {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.2s;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(2px);
+    z-index: 999;
   }
-  
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  
-  .modal-container {
-    background: var(--color-bg-primary);
-    border-radius: 12px;
-    width: 90%;
-    max-width: 900px;
-    max-height: 80vh;
+
+  .sidebar-container {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: 480px;
+    max-width: 90%;
+    background: white;
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
     display: flex;
     flex-direction: column;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    animation: slideUp 0.3s;
+    z-index: 1000;
+    overflow: hidden;
   }
   
-  @keyframes slideUp {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-  
-  .modal-header {
+  .sidebar-header {
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid #e5e7eb;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 1.5rem;
-    border-bottom: 1px solid var(--color-border);
+    justify-content: space-between;
+    background: white;
   }
-  
-  .modal-header h2 {
+
+  .sidebar-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: #111827;
+  }
+
+  .sidebar-title h2 {
     margin: 0;
-    font-size: 1.25rem;
-    color: var(--color-text-primary);
+    font-size: 1.125rem;
+    font-weight: 600;
   }
   
   .close-btn {
-    width: 32px;
-    height: 32px;
+    background: none;
+    border: none;
+    color: #6b7280;
+    cursor: pointer;
+    padding: 0.5rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: transparent;
-    border: none;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    border-radius: 6px;
+    border-radius: 0.5rem;
     transition: all 0.2s;
   }
-  
+
   .close-btn:hover {
-    background: var(--color-bg-secondary);
+    background: #f3f4f6;
+    color: #111827;
   }
   
-  .close-btn svg {
-    width: 20px;
-    height: 20px;
-  }
-  
-  .modal-filters {
+  .sidebar-filters {
     display: flex;
     gap: 1rem;
     padding: 1rem 1.5rem;
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border);
+    background: #f9fafb;
+    border-bottom: 1px solid #e5e7eb;
   }
   
   .search-input {
     flex: 1;
     padding: 0.5rem 1rem;
-    border: 1px solid var(--color-border);
+    border: 1px solid #e5e7eb;
     border-radius: 6px;
     font-size: 0.875rem;
-    background: var(--color-bg-primary);
+    background: #f9fafb;
   }
   
   .search-input:focus {
     outline: none;
-    border-color: var(--color-primary);
+    border-color: #6366f1;
   }
   
   .filter-select {
     padding: 0.5rem 1rem;
-    border: 1px solid var(--color-border);
+    border: 1px solid #e5e7eb;
     border-radius: 6px;
     font-size: 0.875rem;
-    background: var(--color-bg-primary);
+    background: #f9fafb;
     cursor: pointer;
   }
   
   .filter-select:focus {
     outline: none;
-    border-color: var(--color-primary);
+    border-color: #6366f1;
   }
   
-  .modal-body {
+  .sidebar-body {
     flex: 1;
     overflow-y: auto;
     padding: 1.5rem;
@@ -511,14 +541,14 @@
     align-items: center;
     justify-content: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: #6b7280;
   }
   
   .spinner {
     width: 40px;
     height: 40px;
-    border: 3px solid var(--color-border);
-    border-top-color: var(--color-primary);
+    border: 3px solid #e5e7eb;
+    border-top-color: #6366f1;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 1rem;
@@ -531,7 +561,7 @@
   .empty-state {
     text-align: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: #6b7280;
   }
   
   .empty-state p {
@@ -542,7 +572,7 @@
   .error-state {
     text-align: center;
     padding: 3rem;
-    color: var(--color-error);
+    color: #ef4444;
   }
   
   .error-state p {
@@ -554,12 +584,12 @@
   .error-state small {
     display: block;
     margin-bottom: 1rem;
-    color: var(--color-text-secondary);
+    color: #6b7280;
   }
   
   .retry-btn {
     padding: 0.5rem 1rem;
-    background: var(--color-primary);
+    background: #6366f1;
     color: white;
     border: none;
     border-radius: 6px;
@@ -570,19 +600,19 @@
   }
   
   .retry-btn:hover {
-    background: var(--color-primary-dark);
+    background: #4f46e5;
     transform: translateY(-2px);
   }
   
   .scripts-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
   
   .script-card {
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
     padding: 1rem;
     cursor: pointer;
@@ -590,13 +620,13 @@
   }
   
   .script-card:hover {
-    border-color: var(--color-primary);
+    border-color: #6366f1;
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
   
   .script-card.selected {
-    border-color: var(--color-primary);
+    border-color: #6366f1;
     background: rgba(59, 130, 246, 0.05);
   }
   
@@ -610,7 +640,7 @@
   .script-info h3 {
     margin: 0 0 0.5rem 0;
     font-size: 0.875rem;
-    color: var(--color-text-primary);
+    color: #111827;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -627,7 +657,7 @@
   .state {
     font-size: 0.75rem;
     padding: 0.125rem 0.375rem;
-    background: var(--color-bg-primary);
+    background: rgba(0, 0, 0, 0.03);
     border-radius: 4px;
   }
   
@@ -650,9 +680,9 @@
     justify-content: space-between;
     align-items: center;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid #e5e7eb;
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: #6b7280;
   }
   
   .cached {
@@ -663,46 +693,29 @@
     font-size: 0.625rem;
   }
   
-  .pagination {
+  .loading-more {
     display: flex;
-    justify-content: center;
+    flex-direction: column;
     align-items: center;
-    gap: 1rem;
-    margin-top: 1.5rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--color-border);
+    justify-content: center;
+    padding: 2rem;
+    color: #6b7280;
   }
-  
-  .page-btn {
-    padding: 0.5rem 1rem;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    color: var(--color-text-primary);
+
+  .loading-more .spinner {
+    width: 24px;
+    height: 24px;
+    margin-bottom: 0.5rem;
+  }
+
+  .loading-more p {
     font-size: 0.875rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  
-  .page-btn:hover:not(:disabled) {
-    background: var(--color-primary);
-    color: white;
-    border-color: var(--color-primary);
-  }
-  
-  .page-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  
-  .page-info {
-    color: var(--color-text-secondary);
-    font-size: 0.875rem;
+    color: #9ca3af;
   }
   
   .preview-section {
-    background: var(--color-bg-secondary);
-    border-top: 1px solid var(--color-border);
+    background: #f9fafb;
+    border-top: 1px solid #e5e7eb;
     max-height: 200px;
     display: flex;
     flex-direction: column;
@@ -713,13 +726,13 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1.5rem;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid #e5e7eb;
   }
   
   .preview-header h3 {
     margin: 0;
     font-size: 0.875rem;
-    color: var(--color-text-primary);
+    color: #111827;
   }
   
   .collapse-btn {
@@ -730,14 +743,14 @@
     justify-content: center;
     background: transparent;
     border: none;
-    color: var(--color-text-secondary);
+    color: #6b7280;
     cursor: pointer;
     border-radius: 4px;
     transition: all 0.2s;
   }
   
   .collapse-btn:hover {
-    background: var(--color-bg-primary);
+    background: #f9fafb;
   }
   
   .collapse-btn svg {
@@ -753,18 +766,18 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.75rem;
     line-height: 1.5;
-    color: var(--color-text-primary);
+    color: #111827;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-all;
   }
   
-  .modal-footer {
+  .sidebar-footer {
     display: flex;
     justify-content: flex-end;
     gap: 1rem;
     padding: 1.5rem;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid #e5e7eb;
   }
   
   .cancel-btn,
@@ -779,22 +792,22 @@
   
   .cancel-btn {
     background: transparent;
-    border: 1px solid var(--color-border);
-    color: var(--color-text-primary);
+    border: 1px solid #e5e7eb;
+    color: #111827;
   }
   
   .cancel-btn:hover {
-    background: var(--color-bg-secondary);
+    background: #f9fafb;
   }
   
   .use-btn {
-    background: var(--color-primary);
+    background: #6366f1;
     border: none;
     color: white;
   }
   
   .use-btn:hover:not(:disabled) {
-    background: var(--color-primary-dark);
+    background: #4f46e5;
   }
   
   .use-btn:disabled {
@@ -803,18 +816,22 @@
   }
   
   @media (max-width: 768px) {
-    .modal-container {
-      width: 100%;
-      height: 100%;
-      max-width: none;
-      max-height: none;
-      border-radius: 0;
+    .sidebar-overlay {
+      right: 75%;
+      background: rgba(0, 0, 0, 0.2);
     }
-    
-    .modal-filters {
+
+    .sidebar-container {
+      width: 75%;
+      max-width: 320px;
+      left: 25%;
+      right: auto;
+    }
+
+    .sidebar-filters {
       flex-direction: column;
     }
-    
+
     .scripts-grid {
       grid-template-columns: 1fr;
     }

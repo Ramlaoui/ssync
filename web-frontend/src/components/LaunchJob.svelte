@@ -12,8 +12,8 @@
   import SyncSettings from "./SyncSettings.svelte";
   import ConfirmationDialog from "./ConfirmationDialog.svelte";
   import ScriptHistory from "./ScriptHistory.svelte";
-  import MobileJobLauncher from "./mobile/MobileJobLauncher.svelte";
   import JobEditor from "./JobEditor.svelte";
+  import ModernJobLauncher from "./ModernJobLauncher.svelte";
   // Import store and actions
   import {
     config,
@@ -45,16 +45,16 @@
   let directoryStats: { file_count: number; size_mb: number; dangerous_path: boolean; gitignore_applied?: boolean } | null = null;
   let pendingLaunchRequest: LaunchJobRequest | null = null;
 
-  // Tab state (unified for both mobile and desktop)
-  let activeTab: 'config' | 'browser' | 'sync' | 'script' = 'script';
-  let previousTab: 'config' | 'browser' | 'sync' | 'script' = 'config';
-  let isMobile = false;
+  // Simplified state management
   
   // Resubmit info
   let resubmitInfo: { originalJobId: string; hasSubmitLine?: boolean } | null = null;
   
   // Script history dialog
   let showScriptHistory = false;
+
+  // Mobile detection
+  let isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   
   function handleScriptHistorySelect(event: CustomEvent) {
     const { script, jobName, hostname } = event.detail;
@@ -70,35 +70,6 @@
     showScriptHistory = false;
   }
 
-  // Check if mobile
-  function checkMobile() {
-    isMobile = window.innerWidth <= 768;
-  }
-  
-  // Handle tab switching with data preservation
-  function switchTab(newTab: typeof activeTab) {
-    if (activeTab === newTab) return;
-    
-    // Save any pending changes before switching
-    if (activeTab === 'script') {
-      // Trigger save in ScriptPreview if there are unsaved changes
-      // The component will handle this through its auto-save mechanism
-    }
-    
-    previousTab = activeTab;
-    activeTab = newTab;
-  }
-
-  onMount(() => {
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-  });
-
-  onDestroy(() => {
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('resize', checkMobile);
-    }
-  });
 
   onMount(async () => {
     // Check for resubmit data first
@@ -145,10 +116,7 @@
           jobParameters.setParameterValue('job_name', `${resubmitData.jobName}_rerun_${timestamp}`);
         }
         
-        // Switch to script tab to show the loaded script
-        if (!isMobile) {
-          activeTab = 'script';
-        }
+        // Script is now always visible in unified interface
       } else if (!$config.selectedHost) {
         // Auto-select first host if none selected
         jobLaunchActions.setSelectedHost(hosts[0].hostname);
@@ -198,10 +166,7 @@
           jobParameters.setParameterValue('job_name', `${resubmitData.jobName}_rerun_${timestamp}`);
         }
         
-        // Switch to script tab to show the loaded script
-        if (!isMobile) {
-          activeTab = 'script';
-        }
+        // Script is now always visible in unified interface
       }
     }
     
@@ -533,9 +498,11 @@
   }
 </script>
 
-<div class="launch-container">
-  {#if $error}
-    <div class="error-message" role="alert">
+<div class="launch-page-wrapper">
+<div class="launch-container-modern">
+  <div class="launch-notifications">
+    {#if $error}
+      <div class="error-message" role="alert">
       <div class="error-icon">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path
@@ -586,54 +553,34 @@
       </button>
     </div>
   {/if}
+  </div>
 
-
-  <!-- Content Area -->
-  <div class="content-area" class:mobile-layout={isMobile}>
-    {#if isMobile}
-      <!-- Enhanced Mobile Layout -->
-      <MobileJobLauncher
-        script={$jobParameters.scriptContent || $generatedScript}
-        launching={$launching}
-        hosts={$hostsStore.map(h => h.hostname)}
-        selectedHost={$config.selectedHost}
-        canLaunch={$isValid}
-        validationMessage={$validationDetails?.message || ''}
-        on:launch={handleLaunchJob}
-        on:scriptUpdate={(e) => handleScriptChange(e.detail.script)}
-        on:hostChange={(e) => {
-          jobLaunchActions.setSelectedHost(e.detail.host);
-          const selectedHost = $hostsStore.find(h => h.hostname === e.detail.host);
-          if (selectedHost) {
-            jobParameters.applyHostDefaults(selectedHost);
-          }
-        }}
-      />
-    {:else}
-      <!-- Desktop Layout - Full Screen Editor -->
-      <JobEditor
-        script={$jobParameters.scriptContent || $generatedScript}
-        launching={$launching}
-        hosts={$hostsStore}
-        selectedHost={$config.selectedHost}
-        loading={$loading}
-        validationDetails={$validationDetails}
-        config={$config}
-        on:launch={handleLaunchJob}
-        on:scriptChanged={handleScriptChange}
-        on:configChanged={handleConfigFromEditor}
-        on:pathSelected={handlePathSelected}
-        on:syncSettingsChanged={handleSyncSettingsChange}
-        on:openHistory={() => showScriptHistory = true}
-      />
-    {/if}
+  <!-- Modern Unified Interface -->
+  <div class="launch-content">
+    <ModernJobLauncher
+    script={$jobParameters.scriptContent || $generatedScript}
+    launching={$launching}
+    hosts={$hostsStore}
+    selectedHost={$config.selectedHost}
+    loading={$loading}
+    validationDetails={$validationDetails}
+    config={$config}
+    on:launch={handleLaunchJob}
+    on:scriptChanged={handleScriptChange}
+    on:configChanged={handleConfigFromEditor}
+    on:pathSelected={handlePathSelected}
+    on:syncSettingsChanged={handleSyncSettingsChange}
+    on:openHistory={() => showScriptHistory = true}
+  />
   </div>
 </div>
+</div>
 
-<!-- Script History Dialog -->
-<ScriptHistory 
+<!-- Script History Sidebar -->
+<ScriptHistory
   bind:isOpen={showScriptHistory}
   currentHost={$config.selectedHost}
+  {isMobile}
   on:select={handleScriptHistorySelect}
   on:close={() => showScriptHistory = false}
 />
@@ -652,172 +599,35 @@
 />
 
 <style>
-  /* Clean Tab System */
-  .content-controls {
-    width: 100%;
-    padding: 1rem 2rem;
-    background: white;
-    border-bottom: 1px solid #e2e8f0;
-  }
-  
-  .view-selection {
-    display: flex;
-    gap: 0.25rem;
-  }
-  
-  .view-tab {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.625rem 1rem;
-    border: none;
-    background: transparent;
-    border-radius: 8px;
-    color: #64748b;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    outline: none !important;
-  }
-  
-  .view-tab:focus {
-    outline: none !important;
-    box-shadow: none !important;
-  }
-  
-  .view-tab svg {
-    width: 16px;
-    height: 16px;
-  }
-  
-  .view-tab:hover {
-    background: #f1f5f9;
-    color: #475569;
-  }
-  
-  .view-tab.active {
-    background: #3b82f6;
-    color: white;
-    box-shadow: 0 1px 3px rgba(59, 130, 246, 0.2);
-  }
-  
-  .tab-label {
-    font-weight: 500;
-  }
-  
-  .content-area {
-    flex: 1;
-    overflow: hidden;
+  .launch-page-wrapper {
+    height: 100%;
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 60px); /* Account for any headers */
-    width: 100%;
     position: relative;
   }
-  
-  /* Full screen modern editor on desktop */
-  .content-area > :global(.modern-editor) {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
+
+  .launch-container-modern {
     width: 100%;
-    height: 100%;
-  }
-  
-  .desktop-content {
+    flex: 1;
     display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
-  
-  .content-panel {
-    flex: 1;
-    overflow-y: auto;
-    padding: 2rem;
-  }
-  
-  .content-panel.full-width {
-    flex: none;
-    width: 100%;
-  }
-  
-  .script-panel {
-    width: 400px;
-    border-left: 1px solid #e2e8f0;
-    overflow-y: auto;
+    flex-direction: column;
     background: #f8fafc;
-  }
-  
-  .mobile-content {
-    flex: 1;
-    overflow-y: auto;
-  }
-  
-  .tab-content {
-    padding: 1rem;
-    overflow-y: auto;
-  }
-
-  .launch-container {
-    width: 100%;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  }
-
-  .main-layout {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 0;
+    overflow: hidden; /* Prevent scrollbars on the container */
+    position: relative;
     min-height: 0;
+  }
+
+  .launch-notifications {
+    flex-shrink: 0; /* Don't allow notifications to shrink */
+  }
+
+  .launch-content {
+    flex: 1;
+    min-height: 0; /* Allow content to shrink */
     overflow: hidden;
-  }
-  
-  /* Desktop tabs - similar to watchers page */
-  .desktop-tabs {
     display: flex;
-    gap: 0.5rem;
-    border-bottom: 1px solid #e2e8f0;
-    padding: 1rem 1.5rem 0;
-    background: white;
-  }
-  
-  .desktop-tabs .tab-button {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.25rem;
-    background: transparent;
-    border: none;
-    border-bottom: 3px solid transparent;
-    color: var(--color-text-secondary, #6c757d);
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    margin-bottom: -1px;
-  }
-  
-  .desktop-tabs .tab-button svg {
-    width: 18px;
-    height: 18px;
-  }
-  
-  .desktop-tabs .tab-button:hover {
-    color: var(--color-primary-600, #4299e1);
-    background: rgba(66, 153, 225, 0.05);
-  }
-  
-  .desktop-tabs .tab-button.active {
-    color: var(--color-primary, #3182ce);
-    border-bottom-color: var(--color-primary, #3182ce);
-    background: transparent;
+    flex-direction: column;
+    position: relative;
   }
 
   .error-message,
@@ -827,7 +637,8 @@
     gap: 0.75rem;
     padding: 1rem 1.25rem;
     border-radius: 10px;
-    margin: 1.5rem 1.5rem 0;
+    margin: 0; /* Remove margins that add to height */
+    flex-shrink: 0; /* Don't shrink these messages */
     font-size: 0.9rem;
     font-weight: 500;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);

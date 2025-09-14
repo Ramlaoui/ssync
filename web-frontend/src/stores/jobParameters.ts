@@ -197,7 +197,7 @@ function createJobParametersStore() {
   function updateScriptWithParameters(script: string, parameters: Map<string, JobParameter>): string {
     const lines = script.split('\n');
     const processedParams = new Set<string>();
-    const paramLineMap = new Map<number, string>(); // Track which lines to update
+    const linesToRemove = new Set<number>();
 
     // First pass: identify existing SBATCH lines and mark for update/removal
     for (let i = 0; i < lines.length; i++) {
@@ -232,17 +232,15 @@ function createJobParametersStore() {
             lines[i] = generateSbatchLine(param);
             processedParams.add(mappedKey);
           } else {
-            // Remove this line (parameter disabled)
-            paramLineMap.set(i, '');
+            // Mark this line for removal (parameter disabled)
+            linesToRemove.add(i);
           }
         }
       }
     }
 
-    // Apply removals
-    for (const [lineNum, replacement] of paramLineMap) {
-      lines[lineNum] = replacement;
-    }
+    // Filter out removed lines
+    const filteredLines = lines.filter((_, idx) => !linesToRemove.has(idx));
 
     // Collect new SBATCH lines for parameters not in script
     const newLines: string[] = [];
@@ -257,32 +255,31 @@ function createJobParametersStore() {
       let insertIndex = -1;
 
       // Try to insert after existing SBATCH lines
-      for (let i = lines.length - 1; i >= 0; i--) {
-        if (lines[i].trim().startsWith('#SBATCH')) {
+      for (let i = filteredLines.length - 1; i >= 0; i--) {
+        if (filteredLines[i].trim().startsWith('#SBATCH')) {
           insertIndex = i + 1;
           break;
         }
       }
 
-      // If no SBATCH lines, insert after shebang
+      // If no SBATCH lines, insert after shebang with a blank line
       if (insertIndex === -1) {
-        const shebangIndex = lines.findIndex(l => l.startsWith('#!'));
-        insertIndex = shebangIndex >= 0 ? shebangIndex + 1 : 0;
+        const shebangIndex = filteredLines.findIndex(l => l.startsWith('#!'));
+        if (shebangIndex >= 0) {
+          insertIndex = shebangIndex + 1;
+          // Only add blank line if next line isn't already blank
+          if (insertIndex < filteredLines.length && filteredLines[insertIndex].trim() !== '') {
+            newLines.unshift('');
+          }
+        } else {
+          insertIndex = 0;
+        }
       }
 
-      // Add blank line before new directives if needed
-      if (insertIndex > 0 && lines[insertIndex - 1].trim() !== '' && !lines[insertIndex - 1].trim().startsWith('#SBATCH')) {
-        newLines.unshift('');
-      }
-
-      lines.splice(insertIndex, 0, ...newLines);
+      filteredLines.splice(insertIndex, 0, ...newLines);
     }
 
-    // Clean up empty lines
-    return lines.filter((line, idx) => {
-      // Keep non-empty lines and don't create multiple blank lines
-      return line !== '' || (idx > 0 && lines[idx - 1] !== '');
-    }).join('\n');
+    return filteredLines.join('\n');
   }
 
   // Check if script has SBATCH directives
