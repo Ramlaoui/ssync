@@ -256,7 +256,6 @@
 </script>
 
 <div class="dashboard-container">
-  <!-- Header -->
   <div class="dashboard-header">
     <div class="header-left">
       <div class="header-stats">
@@ -340,7 +339,6 @@
           on:jobSelect={(e) => handleJobSelect(e.detail)}
         />
 
-        <!-- Divider -->
         <div class="divider"></div>
 
         <!-- Watchers Section -->

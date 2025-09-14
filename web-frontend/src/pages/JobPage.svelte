@@ -13,11 +13,9 @@
   import { Info, Terminal, AlertTriangle, Code, ArrowLeft } from 'lucide-svelte';
   import { navigationState, navigationActions } from '../stores/navigation';
 
-  // Props
   export let params: any = {};
   export let showSidebarOnly: boolean = false;
 
-  // State
   let job: JobInfo | null = null;
   let loading = false;
   let error: string | null = null;

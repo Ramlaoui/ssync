@@ -83,7 +83,6 @@
 </script>
 
 <div class="bg-white rounded-lg shadow-sm mb-4">
-  <!-- Header -->
   <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
     <h3 class="text-gray-700 flex items-center gap-3 font-medium">
       <svg class="w-5 h-5 text-gray-600" viewBox="0 0 24 24" fill="currentColor">

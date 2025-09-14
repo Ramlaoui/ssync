@@ -5,8 +5,7 @@
 
   const dispatch = createEventDispatcher();
 
-  // Props
-  export let title: string = '';  // Made optional
+  export let title: string = '';
   export let subtitle: string = '';
   export let count: number | undefined = undefined;
   export let countLabel: string = 'total';
@@ -15,7 +14,6 @@
   export let showBackButton: boolean = true;
   export let customActions: boolean = false; // Slot for custom actions
 
-  // Get back navigation info
   $: backLabel = customBackLabel || getBackLabel($navigationState);
 
   function getBackLabel(navState: typeof $navigationState): string {
@@ -31,16 +29,13 @@
     return 'Home';
   }
 
-  // Check if parent component is listening for back events
   export let customBackHandler: boolean = false;
   export let customBackLabel: string = '';
 
   function handleBackClick() {
     if (customBackHandler) {
-      // Parent component will handle the back navigation
       dispatch('back');
     } else {
-      // Use default navigation
       navigationActions.goBack();
     }
   }
@@ -109,6 +104,3 @@
   </div>
 </header>
 
-<style>
-  /* Component-specific styles can go here if needed */
-</style>

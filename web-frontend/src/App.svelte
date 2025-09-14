@@ -54,24 +54,12 @@
   }
 
   onMount(async () => {
-    // Setup mobile detection
     checkMobile();
     window.addEventListener('resize', checkMobile);
 
-    // Try to get API key from config if not already set
     if (!$apiConfig.apiKey) {
-      // Try with the known API key from the backend config
-      const configuredKey = 'T_O4bkV5JYmz8T-MdMqgoCvwAFEz12GzmMPuY0_e5DA';
-      if (configuredKey) {
-        apiConfig.update(c => ({
-          ...c,
-          apiKey: configuredKey
-        }));
-        localStorage.setItem('ssync_api_key', configuredKey);
-      }
     }
 
-    // Test API connection first
     testConnection().then((connected) => {
       if (connected) {
         loadHosts();

@@ -119,7 +119,6 @@
     </div>
   {/if}
   
-  <!-- Host Selection -->
   <section class="form-section">
     <div class="section-header">
       <h3>Target Host</h3>
@@ -140,7 +139,6 @@
     </div>
   </section>
 
-  <!-- Source Directory -->
   <section class="form-section">
     <div class="section-header">
       <h3>Source Directory</h3>
@@ -166,7 +164,6 @@
     </div>
   </section>
 
-  <!-- Basic SLURM Parameters -->
   <section class="form-section">
     <div class="section-header">
       <h3>Basic Configuration</h3>
@@ -207,7 +204,6 @@
     </div>
   </section>
 
-  <!-- Resource Configuration -->
   <section class="form-section">
     <div class="section-header">
       <h3>Resource Allocation</h3>
@@ -292,7 +288,6 @@
     </div>
   </section>
 
-  <!-- GPU and Specialized Resources -->
   <section class="form-section">
     <div class="section-header">
       <h3>GPU & Specialized Resources</h3>
@@ -327,7 +322,6 @@
     </div>
   </section>
 
-  <!-- Output Configuration -->
   <section class="form-section">
     <div class="section-header">
       <h3>Output & Environment</h3>

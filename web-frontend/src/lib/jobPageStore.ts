@@ -25,7 +25,6 @@ export const currentJob: Readable<JobInfo | null> = derived(
 export const outputData = writable<JobOutputResponse | null>(null);
 export const scriptData = writable<JobScriptResponse | null>(null);
 
-// Loading states
 export const loadingStates = writable({
   job: false,
   output: false,
@@ -33,14 +32,12 @@ export const loadingStates = writable({
   moreOutput: false
 });
 
-// Error states
 export const errorStates = writable({
   job: null as string | null,
   output: null as string | null,
   script: null as string | null
 });
 
-// Active tab
 export const activeTab = writable<'info' | 'output' | 'errors' | 'script'>('info');
 
 // Progressive loading state
@@ -97,7 +94,6 @@ export const hasError = derived(
   ($errorStates) => Object.values($errorStates).some(Boolean)
 );
 
-// Reset functions
 export function resetOutputData() {
   outputData.set(null);
   errorStates.update(state => ({ ...state, output: null }));
@@ -117,12 +113,10 @@ export function resetAllData() {
   progressiveLoading.set({ loadedChunks: 0, hasMoreOutput: false, totalLines: 0 });
 }
 
-// Helper to update loading state for specific operation
 export function setLoadingState(operation: keyof typeof loadingStates, loading: boolean) {
   loadingStates.update(state => ({ ...state, [operation]: loading }));
 }
 
-// Helper to update error state for specific operation
 export function setErrorState(operation: keyof typeof errorStates, error: string | null) {
   errorStates.update(state => ({ ...state, [operation]: error }));
 }

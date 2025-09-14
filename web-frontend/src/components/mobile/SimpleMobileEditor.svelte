@@ -50,7 +50,6 @@
 </script>
 
 <div class="mobile-editor">
-  <!-- Header -->
   <div class="editor-header">
     <h3>Launch Script</h3>
     <div class="header-buttons">

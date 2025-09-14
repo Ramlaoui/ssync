@@ -52,7 +52,6 @@
     };
   });
 
-  // State
   let activeTab: 'watchers' | 'events' = 'watchers';
   let viewMode: 'grid' | 'grouped' = 'grid';
   let searchQuery = '';

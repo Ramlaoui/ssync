@@ -498,7 +498,6 @@
 
 <div class="dialog-overlay" on:click={handleClose} on:keydown={() => {}}>
   <div class="dialog-container" on:click|stopPropagation on:keydown={() => {}}>
-    <!-- Header -->
     <div class="dialog-header">
       <div class="header-content">
         <h2>{isMobile ? `Watcher: Job #${jobId}` : `Create Watcher for Job #${jobId}`}</h2>

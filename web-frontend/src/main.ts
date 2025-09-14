@@ -2,7 +2,6 @@ import App from './App.svelte';
 import './global.css';
 import './app.css';
 
-// Configure axios for better error handling
 import axios, { type AxiosResponse, type AxiosError } from 'axios';
 
 axios.interceptors.response.use(
