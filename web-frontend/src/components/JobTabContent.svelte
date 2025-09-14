@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { JobInfo, OutputData, ScriptData } from "../types/api";
-  import EnhancedOutputViewer from "./EnhancedOutputViewer.svelte";
-  import EnhancedScriptViewer from "./EnhancedScriptViewer.svelte";
+  import OutputViewer from "./OutputViewer.svelte";
+  import ScriptViewer from "./ScriptViewer.svelte";
 
   export let job: JobInfo | null = null;
   export let activeTab: string = 'details';
@@ -29,7 +29,7 @@
         <button class="retry-btn" on:click={onRetryLoadOutput}>Retry</button>
       </div>
     {:else}
-      <EnhancedOutputViewer
+      <OutputViewer
         content={outputData?.stdout || ''}
         isLoading={loadingOutput}
         hasMoreContent={loadingMoreOutput}
@@ -50,7 +50,7 @@
         <button class="retry-btn" on:click={onRetryLoadOutput}>Retry</button>
       </div>
     {:else}
-      <EnhancedOutputViewer
+      <OutputViewer
         content={outputData?.stderr || ''}
         isLoading={loadingOutput}
         hasMoreContent={loadingMoreOutput}
@@ -71,7 +71,7 @@
         <button class="retry-btn" on:click={onRetryLoadScript}>Retry</button>
       </div>
     {:else}
-      <EnhancedScriptViewer
+      <ScriptViewer
         content={scriptData?.script_content || ''}
         isLoading={loadingScript}
         onDownload={onDownloadScript}

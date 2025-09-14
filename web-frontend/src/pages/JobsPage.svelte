@@ -305,12 +305,12 @@
           {/if}
         </div>
 
-        <!-- Refresh button with fixed spacing -->
+        <!-- Refresh button -->
         <button
           on:click={handleManualRefresh}
           disabled={loading}
           class="refresh-btn"
-          style="margin-left: 1rem; flex-shrink: 0;"
+          style="flex-shrink: 0;"
           title="{loading || progressiveLoading ? 'Loading from hosts...' : 'Refresh'}"
         >
           <RefreshCw class="icon {loading || progressiveLoading ? 'animate-spin' : ''}" />
@@ -356,7 +356,6 @@
   .mobile-header-row {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
     min-height: 40px;
     white-space: nowrap;
   }

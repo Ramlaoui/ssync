@@ -9,7 +9,7 @@
   import DashboardPage from "./pages/DashboardPage.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
   import JobPage from "./pages/JobPage.svelte";
-  import WatchersPage from "./pages/WatchersPageModern.svelte";
+  import WatchersPage from "./pages/WatchersPage.svelte";
   import SettingsPage from "./pages/SettingsPage.svelte";
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";

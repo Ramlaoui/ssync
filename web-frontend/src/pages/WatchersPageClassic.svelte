@@ -23,7 +23,7 @@
   import WatcherEvents from '../components/WatcherEvents.svelte';
   import WatcherTimeline from '../components/WatcherTimeline.svelte';
   import WatcherMetrics from '../components/WatcherMetrics.svelte';
-  import AttachWatchersDialog from '../components/AttachWatchersDialogEnhanced.svelte';
+  import AttachWatchersDialog from '../components/AttachWatchersDialog.svelte';
   import JobSelectionDialog from '../components/JobSelectionDialog.svelte';
   
   // UI Components
@@ -445,7 +445,7 @@
 
   <!-- Desktop Header -->
   {#if !isMobile}
-    <div class="w-full p-4 lg:px-8 bg-background/95 backdrop-blur border-b border-border relative z-10" transition:slide={{ duration: 300 }}>
+    <div class="w-full p-4 lg:px-8 bg-white border-b border-gray-200 relative z-10" transition:slide={{ duration: 300 }}>
       <!-- Navigation Header -->
       <div class="flex justify-between items-center mb-4">
         <div class="flex items-center gap-3">
@@ -557,7 +557,7 @@
       </div>
   {:else}
     <!-- Mobile Header -->
-    <div class="mobile-header border-b border-border">
+    <div class="mobile-header border-b border-gray-200">
       <!-- Top row: Back button, tabs, and actions -->
       <div class="mobile-header-row">
         <!-- Back Button -->

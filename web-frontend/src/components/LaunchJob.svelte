@@ -13,7 +13,7 @@
   import ConfirmationDialog from "./ConfirmationDialog.svelte";
   import ScriptHistory from "./ScriptHistory.svelte";
   import JobEditor from "./JobEditor.svelte";
-  import ModernJobLauncher from "./ModernJobLauncher.svelte";
+  import JobLauncher from "./JobLauncher.svelte";
   // Import store and actions
   import {
     config,
@@ -557,7 +557,7 @@
 
   <!-- Modern Unified Interface -->
   <div class="launch-content">
-    <ModernJobLauncher
+    <JobLauncher
     script={$jobParameters.scriptContent || $generatedScript}
     launching={$launching}
     hosts={$hostsStore}

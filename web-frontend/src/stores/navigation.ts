@@ -1,5 +1,8 @@
-import { writable, get } from 'svelte/store';
+import { writable } from 'svelte/store';
 import { push } from 'svelte-spa-router';
+
+// Storage key for persistence
+const NAVIGATION_STORAGE_KEY = 'ssync_navigation_state';
 
 interface NavigationState {
   previousRoute?: string;
@@ -12,7 +15,35 @@ interface NavigationState {
   }>;
 }
 
-export const navigationState = writable<NavigationState>({});
+// Load initial state from localStorage if available
+function loadFromStorage(): NavigationState {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const stored = localStorage.getItem(NAVIGATION_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Save state to localStorage
+function saveToStorage(state: NavigationState) {
+  if (typeof window === 'undefined') return;
+
+  try {
+    localStorage.setItem(NAVIGATION_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export const navigationState = writable<NavigationState>(loadFromStorage());
+
+// Subscribe to store changes and persist them
+navigationState.subscribe(state => {
+  saveToStorage(state);
+});
 
 export const navigationActions = {
   // Track when we navigate to a page with context
@@ -21,13 +52,17 @@ export const navigationActions = {
     hostname?: string;
     previousRoute?: string;
   }) {
-    navigationState.update(state => ({
-      ...state,
-      context,
-      previousRoute: metadata?.previousRoute || state.previousRoute,
-      jobId: metadata?.jobId,
-      hostname: metadata?.hostname
-    }));
+    navigationState.update(state => {
+      const newState = {
+        ...state,
+        context,
+        previousRoute: metadata?.previousRoute || state.previousRoute,
+        jobId: metadata?.jobId,
+        hostname: metadata?.hostname
+      };
+      console.log('Navigation setContext:', newState);
+      return newState;
+    });
   },
 
   // Set previous route for back navigation
@@ -45,20 +80,19 @@ export const navigationActions = {
 
   // Smart back navigation based on context
   goBack() {
-    const currentState = get(navigationState);
-
-    console.log('Navigation goBack called with state:', currentState);
+    const stored = loadFromStorage();
+    console.log('Navigation goBack called with stored state:', stored);
 
     // If we have a previous route, use it
-    if (currentState.previousRoute) {
-      console.log('Using previousRoute:', currentState.previousRoute);
-      push(currentState.previousRoute);
+    if (stored.previousRoute) {
+      console.log('Using previousRoute:', stored.previousRoute);
+      push(stored.previousRoute);
       return;
     }
 
     // Fallback based on context
-    console.log('Using context fallback:', currentState.context);
-    switch (currentState.context) {
+    console.log('Using context fallback:', stored.context);
+    switch (stored.context) {
       case 'watcher':
         push('/watchers');
         break;
@@ -76,26 +110,31 @@ export const navigationActions = {
   // Clear navigation state
   clear() {
     navigationState.set({});
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(NAVIGATION_STORAGE_KEY);
+    }
   },
 
   // Get smart back label based on context
   getBackLabel(): string {
-    let label = 'Home';
-    navigationState.subscribe(state => {
-      switch (state.context) {
-        case 'job':
-          label = 'Back to Job';
-          break;
-        case 'watcher':
-          label = 'Watchers';
-          break;
-        case 'launch':
-          label = state.previousRoute?.includes('/job/') ? 'Back to Job' : 'Home';
-          break;
-        default:
-          label = 'Home';
-      }
-    })();
-    return label;
+    const stored = loadFromStorage();
+
+    if (stored.previousRoute) {
+      if (stored.previousRoute === '/jobs') return 'Jobs';
+      if (stored.previousRoute === '/watchers') return 'Watchers';
+      if (stored.previousRoute === '/launch') return 'Launch';
+      if (stored.previousRoute === '/') return 'Home';
+    }
+
+    switch (stored.context) {
+      case 'job':
+        return 'Jobs';
+      case 'watcher':
+        return 'Watchers';
+      case 'launch':
+        return 'Launch';
+      default:
+        return 'Home';
+    }
   }
 };

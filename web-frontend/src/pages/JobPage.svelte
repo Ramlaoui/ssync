@@ -8,7 +8,7 @@
   import JobHeader from "../components/JobHeader.svelte";
   import JobDetailsView from "../components/JobDetailsView.svelte";
   import JobTabContent from "../components/JobTabContent.svelte";
-  import AttachWatchersDialog from "../components/AttachWatchersDialogImproved.svelte";
+  import WatcherAttachmentDialog from "../components/WatcherAttachmentDialog.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
   import { Info, Terminal, AlertTriangle, Code, ArrowLeft } from 'lucide-svelte';
   import { navigationState, navigationActions } from '../stores/navigation';
@@ -393,7 +393,7 @@
 </div>
 
 {#if showAttachWatchersDialog && job}
-  <AttachWatchersDialog
+  <WatcherAttachmentDialog
     jobId={job.job_id}
     hostname={params.host}
     on:close={() => showAttachWatchersDialog = false}
