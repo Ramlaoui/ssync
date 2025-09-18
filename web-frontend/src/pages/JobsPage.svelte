@@ -210,7 +210,7 @@
   });
 </script>
 
-<div class="h-full flex flex-col bg-white">
+<div class="h-full flex flex-col bg-gradient-to-br from-gray-50 to-slate-50">
   {#if !isMobile}
     <NavigationHeader
       showRefresh={true}
@@ -342,11 +342,12 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 1.5rem;
-    background: white;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    background: linear-gradient(to bottom, white, rgba(248, 250, 252, 0.95));
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
     gap: 2rem;
     position: relative;
     z-index: 60;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.03);
   }
 
   .mobile-header {

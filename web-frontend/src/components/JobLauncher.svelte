@@ -54,7 +54,8 @@
     Shield,
     Code,
     Terminal,
-    ChevronLeft
+    ChevronLeft,
+    Download
   } from 'lucide-svelte';
 
   const dispatch = createEventDispatcher();
@@ -74,6 +75,24 @@ echo "Starting job..."
   export let selectedHost = '';
   export let loading = false;
   export let validationDetails: any = { isValid: false };
+
+  // Script Templates
+  interface ScriptTemplate {
+    id: string;
+    name: string;
+    description?: string;
+    script_content: string;
+    parameters: any;
+    tags?: string[];
+    created_at: string;
+    last_used?: string;
+    use_count: number;
+  }
+
+  let scriptTemplates: ScriptTemplate[] = loadScriptTemplates();
+  let showSaveTemplateDialog = false;
+  let templateName = '';
+  let templateDescription = '';
 
   // Simple shared state for parameters - this is the single source of truth
   let parameters = {
@@ -97,6 +116,7 @@ echo "Starting job..."
   let showAdvanced = false;
   let showPresets = false; // Keep for mobile dropdown compatibility
   let showHistory = false;
+  let showTemplates = false;
   let showEditorOptions = false;
   let showFileBrowser = false;
   let showSyncSettings = false;
@@ -699,6 +719,91 @@ echo "Starting job..."
     }
   }
 
+  // Script Template Functions
+  function loadScriptTemplates(): ScriptTemplate[] {
+    try {
+      const stored = localStorage.getItem('scriptTemplates');
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error('Failed to load script templates:', e);
+    }
+    return [];
+  }
+
+  function saveScriptTemplates() {
+    try {
+      localStorage.setItem('scriptTemplates', JSON.stringify(scriptTemplates));
+    } catch (e) {
+      console.error('Failed to save script templates:', e);
+    }
+  }
+
+  function saveAsTemplate() {
+    if (!templateName.trim()) {
+      alert('Please enter a template name');
+      return;
+    }
+
+    const template: ScriptTemplate = {
+      id: `template_${Date.now()}`,
+      name: templateName.trim(),
+      description: templateDescription.trim(),
+      script_content: script,
+      parameters: {
+        ...parameters,
+        selectedHost,
+        sourceDir: parameters.sourceDir
+      },
+      tags: [],
+      created_at: new Date().toISOString(),
+      use_count: 0
+    };
+
+    scriptTemplates = [template, ...scriptTemplates];
+    saveScriptTemplates();
+
+    // Reset dialog
+    showSaveTemplateDialog = false;
+    templateName = '';
+    templateDescription = '';
+
+    // Show success message (you could make this a toast)
+    console.log('Template saved:', template.name);
+  }
+
+  function loadTemplate(template: ScriptTemplate) {
+    // Update script
+    script = template.script_content;
+    handleScriptEdit(script);
+
+    // Update parameters
+    if (template.parameters) {
+      // Load job parameters
+      const { selectedHost: savedHost, sourceDir: savedDir, ...jobParams } = template.parameters;
+      Object.assign(parameters, jobParams);
+
+      // Load host and directory if saved
+      if (savedHost) selectedHost = savedHost;
+      if (savedDir) parameters.sourceDir = savedDir;
+
+      handleConfigChange();
+    }
+
+    // Update last used and use count
+    template.last_used = new Date().toISOString();
+    template.use_count = (template.use_count || 0) + 1;
+    saveScriptTemplates();
+  }
+
+  function deleteTemplate(templateId: string) {
+    if (confirm('Are you sure you want to delete this template?')) {
+      scriptTemplates = scriptTemplates.filter(t => t.id !== templateId);
+      saveScriptTemplates();
+    }
+  }
+
   function handleHistoryClick() {
     showHistory = !showHistory;
     dispatch('openHistory');
@@ -1270,6 +1375,206 @@ echo "Starting job..."
     </div>
   {/if}
 
+  <!-- Template Browser Dialog -->
+  {#if showTemplates}
+    <div class="modal-backdrop" on:click={() => showTemplates = false}>
+      <div class="template-browser-dialog" on:click|stopPropagation>
+        <div class="dialog-header">
+          <h3>Script Templates</h3>
+          <button
+            class="close-btn"
+            on:click={() => showTemplates = false}
+          >
+            <X class="w-5 h-5" />
+          </button>
+        </div>
+
+        <div class="dialog-content">
+          {#if scriptTemplates.length === 0}
+            <div class="empty-state">
+              <FileText class="w-12 h-12 text-gray-400 mx-auto mb-3" />
+              <p class="text-gray-600 mb-2">No templates saved yet</p>
+              <p class="text-sm text-gray-500">Save your frequently used scripts as templates for quick reuse</p>
+            </div>
+          {:else}
+            <div class="template-grid">
+              {#each scriptTemplates as template}
+                <div class="template-card">
+                  <div class="template-header">
+                    <h4 class="template-name">{template.name}</h4>
+                    <div class="template-actions">
+                      <button
+                        class="template-action-btn"
+                        on:click={() => {
+                          loadTemplate(template);
+                          showTemplates = false;
+                        }}
+                        title="Load template"
+                      >
+                        <Download class="w-4 h-4" />
+                      </button>
+                      <button
+                        class="template-action-btn delete"
+                        on:click={() => {
+                          deleteTemplate(template.id);
+                        }}
+                        title="Delete template"
+                      >
+                        <Trash2 class="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {#if template.description}
+                    <p class="template-description">{template.description}</p>
+                  {/if}
+
+                  <div class="template-details">
+                    <div class="detail-row">
+                      <span class="detail-label">Created:</span>
+                      <span class="detail-value">
+                        {new Date(template.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    {#if template.last_used}
+                      <div class="detail-row">
+                        <span class="detail-label">Last used:</span>
+                        <span class="detail-value">
+                          {new Date(template.last_used).toLocaleDateString()}
+                        </span>
+                      </div>
+                    {/if}
+                    <div class="detail-row">
+                      <span class="detail-label">Used:</span>
+                      <span class="detail-value">{template.use_count} times</span>
+                    </div>
+                  </div>
+
+                  <div class="template-preview">
+                    <pre>{template.script_content.split('\n').slice(0, 5).join('\n')}...</pre>
+                  </div>
+
+                  <div class="template-params">
+                    <span class="param-chip">
+                      {template.parameters.time || '60'}m
+                    </span>
+                    <span class="param-chip">
+                      {template.parameters.memory || '4'}GB
+                    </span>
+                    <span class="param-chip">
+                      {template.parameters.cpus || '1'}CPU
+                    </span>
+                    {#if template.parameters.gpus}
+                      <span class="param-chip">
+                        {template.parameters.gpus}GPU
+                      </span>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Save Template Dialog -->
+  {#if showSaveTemplateDialog}
+    <div class="modal-backdrop" on:click={() => showSaveTemplateDialog = false}>
+      <div class="save-template-dialog" on:click|stopPropagation>
+        <div class="dialog-header">
+          <h3>Save as Template</h3>
+          <button
+            class="close-btn"
+            on:click={() => showSaveTemplateDialog = false}
+          >
+            <X class="w-5 h-5" />
+          </button>
+        </div>
+
+        <div class="dialog-content">
+          <div class="form-group">
+            <label for="template-name">Template Name *</label>
+            <input
+              id="template-name"
+              type="text"
+              bind:value={templateName}
+              placeholder="e.g., GPU Training Script"
+              class="form-input"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="template-description">Description (optional)</label>
+            <textarea
+              id="template-description"
+              bind:value={templateDescription}
+              placeholder="Describe what this script does..."
+              class="form-textarea"
+              rows="3"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>Script Preview</label>
+            <div class="script-preview">
+              <pre>{script.split('\n').slice(0, 10).join('\n')}...</pre>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Saved Parameters</label>
+            <div class="saved-params">
+              <div class="param-row">
+                <span class="param-label">Host:</span>
+                <span class="param-value">{selectedHost || 'Not selected'}</span>
+              </div>
+              <div class="param-row">
+                <span class="param-label">Directory:</span>
+                <span class="param-value">{parameters.sourceDir || 'Not selected'}</span>
+              </div>
+              <div class="param-row">
+                <span class="param-label">Time:</span>
+                <span class="param-value">{parameters.time || '60'} minutes</span>
+              </div>
+              <div class="param-row">
+                <span class="param-label">Memory:</span>
+                <span class="param-value">{parameters.memory || '4'}GB</span>
+              </div>
+              <div class="param-row">
+                <span class="param-label">CPUs:</span>
+                <span class="param-value">{parameters.cpus || '1'}</span>
+              </div>
+              {#if parameters.gpus}
+                <div class="param-row">
+                  <span class="param-label">GPUs:</span>
+                  <span class="param-value">{parameters.gpus}</span>
+                </div>
+              {/if}
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-footer">
+          <button
+            class="btn-secondary"
+            on:click={() => showSaveTemplateDialog = false}
+          >
+            Cancel
+          </button>
+          <button
+            class="btn-primary"
+            on:click={saveAsTemplate}
+            disabled={!templateName.trim()}
+          >
+            Save Template
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if !isMobile}
     <!-- Desktop only content starts here -->
     <!-- Desktop Navigation Header -->
@@ -1342,6 +1647,16 @@ echo "Starting job..."
       </button>
 
 
+      <!-- Script Templates -->
+      <button
+        class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+        on:click={() => showTemplates = !showTemplates}
+        title="Script Templates"
+      >
+        <FileText class="w-4 h-4" />
+        <span class="hidden sm:inline">Templates</span>
+      </button>
+
       <!-- Script History -->
       <button
         class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1350,6 +1665,17 @@ echo "Starting job..."
       >
         <History class="w-4 h-4" />
         <span class="hidden sm:inline">History</span>
+      </button>
+
+      <!-- Save as Template -->
+      <button
+        class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+        on:click={() => showSaveTemplateDialog = true}
+        title="Save current script as template"
+        disabled={!script || script.trim() === ''}
+      >
+        <Save class="w-4 h-4" />
+        <span class="hidden sm:inline">Save Template</span>
       </button>
 
 
@@ -4179,5 +4505,337 @@ echo "Starting job..."
     box-shadow:
       0 5px 10px -3px rgba(99, 102, 241, 0.3),
       0 3px 6px -2px rgba(139, 92, 246, 0.15);
+  }
+
+  /* Template Dialogs */
+  .modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .template-browser-dialog,
+  .save-template-dialog {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    max-width: 800px;
+    width: 90%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease;
+  }
+
+  .save-template-dialog {
+    max-width: 500px;
+  }
+
+  .dialog-header {
+    padding: 1.5rem;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .dialog-header h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #111827;
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    padding: 0.5rem;
+    border-radius: 6px;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .close-btn:hover {
+    background: #f3f4f6;
+    color: #111827;
+  }
+
+  .dialog-content {
+    padding: 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 3rem 1.5rem;
+  }
+
+  .template-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+  }
+
+  .template-card {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem;
+    transition: all 0.2s;
+  }
+
+  .template-card:hover {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+  }
+
+  .template-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+
+  .template-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #111827;
+    margin: 0;
+  }
+
+  .template-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .template-action-btn {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 0.375rem;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .template-action-btn:hover {
+    background: #f3f4f6;
+    color: #111827;
+    border-color: #d1d5db;
+  }
+
+  .template-action-btn.delete:hover {
+    background: #fef2f2;
+    color: #dc2626;
+    border-color: #fecaca;
+  }
+
+  .template-description {
+    font-size: 0.85rem;
+    color: #6b7280;
+    margin: 0 0 0.75rem 0;
+    line-height: 1.4;
+  }
+
+  .template-details {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin-bottom: 0.75rem;
+  }
+
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+  }
+
+  .detail-label {
+    font-weight: 500;
+  }
+
+  .detail-value {
+    color: #9ca3af;
+  }
+
+  .template-preview {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+  }
+
+  .template-preview pre {
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.75rem;
+    color: #4b5563;
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .template-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .param-chip {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+
+  /* Save Template Dialog Specific Styles */
+  .form-group {
+    margin-bottom: 1.25rem;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+    margin-bottom: 0.5rem;
+  }
+
+  .form-input,
+  .form-textarea {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    transition: all 0.2s;
+  }
+
+  .form-input:focus,
+  .form-textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+
+  .form-textarea {
+    resize: vertical;
+    font-family: inherit;
+  }
+
+  .script-preview {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 1rem;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .script-preview pre {
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.8rem;
+    color: #4b5563;
+    margin: 0;
+  }
+
+  .saved-params {
+    background: #f9fafb;
+    border-radius: 6px;
+    padding: 1rem;
+  }
+
+  .param-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .param-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .param-label {
+    font-weight: 500;
+    color: #374151;
+  }
+
+  .param-value {
+    color: #6b7280;
+  }
+
+  .dialog-footer {
+    padding: 1.5rem;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-primary {
+    background: #3b82f6;
+    color: white;
+    border: none;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #2563eb;
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    background: white;
+    color: #374151;
+    border: 1px solid #d1d5db;
+  }
+
+  .btn-secondary:hover {
+    background: #f9fafb;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
 </style>

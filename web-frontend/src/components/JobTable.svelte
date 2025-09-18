@@ -367,16 +367,18 @@
 
 <style>
   .table-container {
-    width: 100%;
-    background: linear-gradient(145deg, #ffffff 0%, #fafafa 100%);
+    width: calc(100% - 3rem);
+    margin: 1.5rem auto;
+    background: linear-gradient(145deg, #ffffff 0%, #f8f9fa 100%);
     border-radius: 1rem;
     box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.03),
-      0 2px 4px rgba(0, 0, 0, 0.04),
-      0 12px 24px rgba(0, 0, 0, 0.04),
-      0 24px 48px rgba(0, 0, 0, 0.02);
+      0 0 0 1px rgba(0, 0, 0, 0.05),
+      0 2px 4px rgba(0, 0, 0, 0.06),
+      0 12px 24px rgba(0, 0, 0, 0.06),
+      0 24px 48px rgba(0, 0, 0, 0.04);
     position: relative;
     overflow: hidden; /* Contain the table content */
+    border: 1px solid rgba(0, 0, 0, 0.08);
   }
   
   .table-container::before {
@@ -396,8 +398,8 @@
   /* Active filters bar */
   .active-filters {
     padding: 0.875rem 1rem;
-    background: rgba(248, 250, 252, 0.8);
-    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    background: rgba(243, 244, 246, 0.9);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -468,9 +470,9 @@
   
   thead {
     background: linear-gradient(180deg,
-      rgba(249, 250, 251, 1) 0%,
-      rgba(243, 244, 246, 1) 100%);
-    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      rgba(241, 243, 245, 1) 0%,
+      rgba(229, 231, 235, 1) 100%);
+    border-bottom: 1px solid rgba(107, 114, 128, 0.25);
     position: sticky;
     top: 0;
     z-index: 10;
@@ -478,16 +480,16 @@
   }
   
   th {
-    padding: 0.625rem 0.875rem;
+    padding: 0.75rem 1rem;
     text-align: left;
     font-weight: 600;
-    color: #475569;
+    color: #334155;
     white-space: nowrap;
     user-select: none;
-    height: 42px;
+    height: 44px;
     font-size: 0.75rem;
     text-transform: none;
-    letter-spacing: normal;
+    letter-spacing: 0.025em;
     position: relative;
   }
   
@@ -495,12 +497,12 @@
     content: '';
     position: absolute;
     right: 0;
-    top: 25%;
-    bottom: 25%;
+    top: 20%;
+    bottom: 20%;
     width: 1px;
-    background: linear-gradient(180deg, 
-      transparent 0%, 
-      rgba(0, 0, 0, 0.06) 50%, 
+    background: linear-gradient(180deg,
+      transparent 0%,
+      rgba(0, 0, 0, 0.1) 50%,
       transparent 100%);
   }
   
@@ -613,26 +615,28 @@
   tbody tr {
     position: relative;
     transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-    height: 42px;
+    height: 44px;
+    background: white;
   }
   
   tbody tr::after {
     content: '';
     position: absolute;
-    left: 0.75rem;
-    right: 0.75rem;
+    left: 1rem;
+    right: 1rem;
     bottom: 0;
     height: 1px;
-    background: linear-gradient(90deg, 
-      transparent 0%, 
-      rgba(0, 0, 0, 0.04) 10%, 
-      rgba(0, 0, 0, 0.04) 90%, 
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(0, 0, 0, 0.06) 10%,
+      rgba(0, 0, 0, 0.06) 90%,
       transparent 100%);
   }
   
   tbody tr:hover {
-    background: rgba(59, 130, 246, 0.03);
+    background: rgba(59, 130, 246, 0.04);
     cursor: pointer;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
   }
   
   tbody tr:hover::after {
@@ -644,18 +648,19 @@
   }
   
   tbody tr:nth-child(odd) {
-    background: rgba(249, 250, 251, 0.3);
+    background: rgba(248, 250, 252, 0.5);
   }
   
   tbody tr:nth-child(odd):hover {
-    background: rgba(59, 130, 246, 0.04);
+    background: rgba(59, 130, 246, 0.05);
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
   }
   
   td {
-    padding: 0.625rem 0.875rem;
+    padding: 0.75rem 1rem;
     color: #0f172a;
-    height: 42px;
-    max-height: 42px;
+    height: 44px;
+    max-height: 44px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -666,9 +671,9 @@
   .job-id {
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Consolas', monospace;
     font-size: 0.75rem;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.025em;
-    color: #64748b;
+    color: #475569;
   }
   
   .job-name {
@@ -683,7 +688,7 @@
   }
   
   .job-name-text {
-    font-weight: 500;
+    font-weight: 600;
     color: #0f172a;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -695,23 +700,25 @@
   }
   
   .job-user {
-    color: #6b7280;
+    color: #475569;
+    font-weight: 500;
   }
   
   .job-host {
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Consolas', monospace;
     font-size: 0.65rem;
-    font-weight: 600;
-    color: #64748b;
-    background: #f1f5f9;
-    padding: 0.125rem 0.375rem;
+    font-weight: 700;
+    color: #475569;
+    background: linear-gradient(135deg, #e0e7ff, #dbeafe);
+    padding: 0.125rem 0.5rem;
     border-radius: 0.25rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #c7d2fe;
     text-align: center;
     min-width: fit-content;
+    letter-spacing: 0.05em;
   }
   
   .status-badge {
@@ -791,8 +798,9 @@
   }
   
   .job-time, .job-duration {
-    color: #6b7280;
+    color: #475569;
     font-size: 0.75rem;
+    font-weight: 500;
     text-align: right;
     white-space: nowrap;
   }
@@ -868,6 +876,8 @@
   /* Mobile optimization */
   @media (max-width: 768px) {
     .table-container {
+      width: calc(100% - 2rem);
+      margin: 1rem auto;
       border-radius: 0.75rem;
     }
 
@@ -883,6 +893,8 @@
   /* Very small screens: Further optimization */
   @media (max-width: 480px) {
     .table-container {
+      width: calc(100% - 1rem);
+      margin: 0.5rem auto;
       border-radius: 0.5rem;
     }
 
