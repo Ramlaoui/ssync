@@ -117,6 +117,8 @@ echo "Starting job..."
   let showPresets = false; // Keep for mobile dropdown compatibility
   let showHistory = false;
   let showTemplates = false;
+  let showTemplateDetail = false;
+  let selectedTemplate: ScriptTemplate | null = null;
   let showEditorOptions = false;
   let showFileBrowser = false;
   let showSyncSettings = false;
@@ -1378,11 +1380,11 @@ echo "Starting job..."
     </div>
   {/if}
 
-  <!-- Template Browser Dialog -->
+  <!-- Template Sidebar -->
   {#if showTemplates}
-    <div class="modal-backdrop" on:click={() => showTemplates = false}>
-      <div class="template-browser-dialog" on:click|stopPropagation>
-        <div class="dialog-header">
+    <div class="template-sidebar-backdrop" on:click={() => showTemplates = false} transition:fade={{ duration: 200 }}>
+      <div class="template-sidebar" on:click|stopPropagation transition:fly={{ x: 400, duration: 300, opacity: 0.8 }}>
+        <div class="sidebar-header">
           <h3>Script Templates</h3>
           <button
             class="close-btn"
@@ -1392,7 +1394,7 @@ echo "Starting job..."
           </button>
         </div>
 
-        <div class="dialog-content">
+        <div class="sidebar-content">
           {#if scriptTemplates.length === 0}
             <div class="empty-state">
               <FileText class="w-12 h-12 text-gray-400 mx-auto mb-3" />
@@ -1400,12 +1402,15 @@ echo "Starting job..."
               <p class="text-sm text-gray-500">Save your frequently used scripts as templates for quick reuse</p>
             </div>
           {:else}
-            <div class="template-grid">
+            <div class="template-list">
               {#each scriptTemplates as template}
-                <div class="template-card">
-                  <div class="template-header">
-                    <h4 class="template-name">{template.name}</h4>
-                    <div class="template-actions">
+                <div class="template-list-item" on:click={() => {
+                  selectedTemplate = template;
+                  showTemplateDetail = true;
+                }}>
+                  <div class="template-item-header">
+                    <h4 class="template-item-name">{template.name}</h4>
+                    <div class="template-item-actions" on:click|stopPropagation>
                       <button
                         class="template-action-btn"
                         on:click={() => {
@@ -1414,7 +1419,7 @@ echo "Starting job..."
                         }}
                         title="Load template"
                       >
-                        <Download class="w-4 h-4" />
+                        <Download class="w-3.5 h-3.5" />
                       </button>
                       <button
                         class="template-action-btn delete"
@@ -1423,60 +1428,159 @@ echo "Starting job..."
                         }}
                         title="Delete template"
                       >
-                        <Trash2 class="w-4 h-4" />
+                        <Trash2 class="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
 
                   {#if template.description}
-                    <p class="template-description">{template.description}</p>
+                    <p class="template-item-description">{template.description}</p>
                   {/if}
 
-                  <div class="template-details">
-                    <div class="detail-row">
-                      <span class="detail-label">Created:</span>
-                      <span class="detail-value">
-                        {new Date(template.created_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                    {#if template.last_used}
-                      <div class="detail-row">
-                        <span class="detail-label">Last used:</span>
-                        <span class="detail-value">
-                          {new Date(template.last_used).toLocaleDateString()}
-                        </span>
-                      </div>
-                    {/if}
-                    <div class="detail-row">
-                      <span class="detail-label">Used:</span>
-                      <span class="detail-value">{template.use_count} times</span>
-                    </div>
-                  </div>
-
-                  <div class="template-preview">
-                    <pre>{template.script_content.split('\n').slice(0, 5).join('\n')}...</pre>
-                  </div>
-
-                  <div class="template-params">
-                    <span class="param-chip">
-                      {template.parameters.time || '60'}m
-                    </span>
-                    <span class="param-chip">
-                      {template.parameters.memory || '4'}GB
-                    </span>
-                    <span class="param-chip">
-                      {template.parameters.cpus || '1'}CPU
-                    </span>
+                  <div class="template-item-meta">
+                    <span class="meta-chip">{template.parameters.time || '60'}m</span>
+                    <span class="meta-chip">{template.parameters.memory || '4'}GB</span>
+                    <span class="meta-chip">{template.parameters.cpus || '1'}CPU</span>
                     {#if template.parameters.gpus}
-                      <span class="param-chip">
-                        {template.parameters.gpus}GPU
-                      </span>
+                      <span class="meta-chip">{template.parameters.gpus}GPU</span>
                     {/if}
+                    <span class="meta-usage">Used {template.use_count} times</span>
+                  </div>
+
+                  <div class="template-item-preview">
+                    <code>{template.script_content.split('\n')[0] || '#!/bin/bash'}...</code>
                   </div>
                 </div>
               {/each}
             </div>
           {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Template Detail Popup -->
+  {#if showTemplateDetail && selectedTemplate}
+    <div class="template-detail-backdrop" on:click={() => showTemplateDetail = false} transition:fade={{ duration: 200 }}>
+      <div class="template-detail-popup" on:click|stopPropagation transition:fly={{ y: 50, duration: 300, opacity: 0.8 }}>
+        <div class="detail-popup-header">
+          <h3>{selectedTemplate.name}</h3>
+          <button
+            class="close-btn"
+            on:click={() => showTemplateDetail = false}
+          >
+            <X class="w-5 h-5" />
+          </button>
+        </div>
+
+        <div class="detail-popup-content">
+          {#if selectedTemplate.description}
+            <div class="detail-section">
+              <h4>Description</h4>
+              <p class="template-detail-description">{selectedTemplate.description}</p>
+            </div>
+          {/if}
+
+          <div class="detail-section">
+            <h4>Script Content</h4>
+            <div class="script-content-preview">
+              <pre><code>{selectedTemplate.script_content}</code></pre>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h4>Parameters</h4>
+            <div class="parameter-grid">
+              <div class="param-item">
+                <span class="param-label">Host</span>
+                <span class="param-value">{selectedTemplate.parameters.selectedHost || 'Not set'}</span>
+              </div>
+              <div class="param-item">
+                <span class="param-label">Directory</span>
+                <span class="param-value">{selectedTemplate.parameters.sourceDir || 'Not set'}</span>
+              </div>
+              <div class="param-item">
+                <span class="param-label">Time</span>
+                <span class="param-value">{selectedTemplate.parameters.time || '60'} minutes</span>
+              </div>
+              <div class="param-item">
+                <span class="param-label">Memory</span>
+                <span class="param-value">{selectedTemplate.parameters.memory || '4'}GB</span>
+              </div>
+              <div class="param-item">
+                <span class="param-label">CPUs</span>
+                <span class="param-value">{selectedTemplate.parameters.cpus || '1'}</span>
+              </div>
+              {#if selectedTemplate.parameters.gpus}
+                <div class="param-item">
+                  <span class="param-label">GPUs</span>
+                  <span class="param-value">{selectedTemplate.parameters.gpus}</span>
+                </div>
+              {/if}
+              {#if selectedTemplate.parameters.partition}
+                <div class="param-item">
+                  <span class="param-label">Partition</span>
+                  <span class="param-value">{selectedTemplate.parameters.partition}</span>
+                </div>
+              {/if}
+              {#if selectedTemplate.parameters.account}
+                <div class="param-item">
+                  <span class="param-label">Account</span>
+                  <span class="param-value">{selectedTemplate.parameters.account}</span>
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h4>Usage Statistics</h4>
+            <div class="stats-grid">
+              <div class="stat-item">
+                <span class="stat-label">Created</span>
+                <span class="stat-value">{new Date(selectedTemplate.created_at).toLocaleDateString()}</span>
+              </div>
+              {#if selectedTemplate.last_used}
+                <div class="stat-item">
+                  <span class="stat-label">Last Used</span>
+                  <span class="stat-value">{new Date(selectedTemplate.last_used).toLocaleDateString()}</span>
+                </div>
+              {/if}
+              <div class="stat-item">
+                <span class="stat-label">Times Used</span>
+                <span class="stat-value">{selectedTemplate.use_count}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-popup-footer">
+          <button
+            class="btn-secondary"
+            on:click={() => showTemplateDetail = false}
+          >
+            Close
+          </button>
+          <button
+            class="btn-danger"
+            on:click={() => {
+              deleteTemplate(selectedTemplate.id);
+              showTemplateDetail = false;
+            }}
+          >
+            <Trash2 class="w-4 h-4" />
+            Delete
+          </button>
+          <button
+            class="btn-primary"
+            on:click={() => {
+              loadTemplate(selectedTemplate);
+              showTemplateDetail = false;
+              showTemplates = false;
+            }}
+          >
+            <Download class="w-4 h-4" />
+            Load Template
+          </button>
         </div>
       </div>
     </div>
@@ -4510,6 +4614,277 @@ echo "Starting job..."
       0 3px 6px -2px rgba(139, 92, 246, 0.15);
   }
 
+  /* Template Sidebar */
+  .template-sidebar-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 9999;
+  }
+
+  .template-sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 400px;
+    max-width: 90vw;
+    background: white;
+    box-shadow: -4px 0 15px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    z-index: 10000;
+  }
+
+  .sidebar-header {
+    padding: 1.5rem;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: white;
+  }
+
+  .sidebar-header h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #111827;
+    margin: 0;
+  }
+
+  .sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+  }
+
+  .template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .template-list-item {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .template-list-item:hover {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
+
+  .template-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  .template-item-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #111827;
+    margin: 0;
+  }
+
+  .template-item-actions {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .template-item-description {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin: 0 0 0.5rem 0;
+    line-height: 1.4;
+  }
+
+  .template-item-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .meta-chip {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 0.125rem 0.375rem;
+    font-size: 0.7rem;
+    color: #6b7280;
+  }
+
+  .meta-usage {
+    font-size: 0.7rem;
+    color: #9ca3af;
+    margin-left: auto;
+  }
+
+  .template-item-preview {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 0.5rem;
+  }
+
+  .template-item-preview code {
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.7rem;
+    color: #4b5563;
+  }
+
+  /* Template Detail Popup */
+  .template-detail-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+  }
+
+  .template-detail-popup {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    max-width: 700px;
+    width: 90%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .detail-popup-header {
+    padding: 1.5rem;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .detail-popup-header h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #111827;
+    margin: 0;
+  }
+
+  .detail-popup-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.5rem;
+  }
+
+  .detail-section {
+    margin-bottom: 1.5rem;
+  }
+
+  .detail-section:last-child {
+    margin-bottom: 0;
+  }
+
+  .detail-section h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #111827;
+    margin: 0 0 0.75rem 0;
+  }
+
+  .template-detail-description {
+    color: #6b7280;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .script-content-preview {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .script-content-preview pre {
+    margin: 0;
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: #374151;
+  }
+
+  .parameter-grid,
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .param-item,
+  .stat-item {
+    background: #f9fafb;
+    border-radius: 6px;
+    padding: 0.75rem;
+  }
+
+  .param-label,
+  .stat-label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #6b7280;
+    margin-bottom: 0.25rem;
+  }
+
+  .param-value,
+  .stat-value {
+    font-size: 0.9rem;
+    color: #111827;
+    font-weight: 500;
+  }
+
+  .detail-popup-footer {
+    padding: 1.5rem;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+  }
+
+  .btn-danger {
+    background: #dc2626;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .btn-danger:hover {
+    background: #b91c1c;
+  }
+
   /* Template Dialogs */
   .modal-backdrop {
     position: fixed;
@@ -4525,21 +4900,16 @@ echo "Starting job..."
     animation: fadeIn 0.2s ease;
   }
 
-  .template-browser-dialog,
   .save-template-dialog {
     background: white;
     border-radius: 12px;
     box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    max-width: 800px;
+    max-width: 500px;
     width: 90%;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;
-  }
-
-  .save-template-dialog {
-    max-width: 500px;
   }
 
   .dialog-header {
@@ -4582,44 +4952,6 @@ echo "Starting job..."
     padding: 3rem 1.5rem;
   }
 
-  .template-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1rem;
-  }
-
-  .template-card {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 1rem;
-    transition: all 0.2s;
-  }
-
-  .template-card:hover {
-    background: #f3f4f6;
-    border-color: #d1d5db;
-  }
-
-  .template-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.75rem;
-  }
-
-  .template-name {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #111827;
-    margin: 0;
-  }
-
-  .template-actions {
-    display: flex;
-    gap: 0.5rem;
-  }
-
   .template-action-btn {
     background: white;
     border: 1px solid #e5e7eb;
@@ -4640,66 +4972,6 @@ echo "Starting job..."
     background: #fef2f2;
     color: #dc2626;
     border-color: #fecaca;
-  }
-
-  .template-description {
-    font-size: 0.85rem;
-    color: #6b7280;
-    margin: 0 0 0.75rem 0;
-    line-height: 1.4;
-  }
-
-  .template-details {
-    font-size: 0.8rem;
-    color: #6b7280;
-    margin-bottom: 0.75rem;
-  }
-
-  .detail-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 0.25rem;
-  }
-
-  .detail-label {
-    font-weight: 500;
-  }
-
-  .detail-value {
-    color: #9ca3af;
-  }
-
-  .template-preview {
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    padding: 0.75rem;
-    margin-bottom: 0.75rem;
-    overflow: hidden;
-  }
-
-  .template-preview pre {
-    font-family: 'Monaco', 'Courier New', monospace;
-    font-size: 0.75rem;
-    color: #4b5563;
-    margin: 0;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-  }
-
-  .template-params {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .param-chip {
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    color: #6b7280;
   }
 
   /* Save Template Dialog Specific Styles */

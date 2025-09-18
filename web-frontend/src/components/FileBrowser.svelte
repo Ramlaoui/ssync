@@ -202,27 +202,27 @@
   const quickPaths = [];
 </script>
 
-<div class="file-browser">
+<div class="flex flex-col h-full bg-white rounded-lg border border-gray-200">
   <!-- Simplified Header -->
-  <div class="browser-header">
+  <div class="flex-shrink-0 p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
     <!-- Search and Navigation bar -->
-    <div class="search-nav-bar">
-      <div class="search-container">
-        <div class="search-icon-button">
-          <Search class="search-icon" />
+    <div class="flex items-center gap-3 mb-3">
+      <div class="flex-1 relative">
+        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <Search class="w-4 h-4 text-gray-400" />
         </div>
-        <div class="search-input-wrapper">
+        <div class="w-full">
           <input
             bind:value={searchQuery}
             placeholder="Search in {currentLocalPath || '/'}"
-            class="search-input-native"
+            class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
             disabled={loading}
           />
         </div>
       </div>
-      <div class="nav-buttons">
+      <div class="flex items-center gap-2">
         <button
-          class="nav-btn"
+          class="inline-flex items-center justify-center p-2 border border-gray-300 rounded-md shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
           on:click={navigateUp}
           disabled={currentLocalPath === "/" || loading}
           title="Go up one level"
@@ -230,7 +230,7 @@
           <ArrowUp class="w-4 h-4" />
         </button>
         <button
-          class="nav-btn"
+          class="inline-flex items-center justify-center p-2 border border-gray-300 rounded-md shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
           on:click={goToHome}
           disabled={loading}
           title="Go to home"
@@ -238,7 +238,7 @@
           <Home class="w-4 h-4" />
         </button>
         <button
-          class="select-btn"
+          class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
           on:click={selectCurrentLocalPath}
           disabled={!currentLocalPath || loading}
         >
@@ -248,28 +248,32 @@
     </div>
 
     <!-- Options -->
-    <div class="options-section">
-      <label class="option-checkbox">
-        <input
-          type="checkbox"
-          bind:checked={showHiddenFiles}
-          on:change={handleOptionsChange}
-          disabled={loading}
-        />
-        <span>Show hidden files</span>
-      </label>
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <label class="flex items-center gap-2 text-sm text-gray-600">
+          <input
+            type="checkbox"
+            bind:checked={showHiddenFiles}
+            on:change={handleOptionsChange}
+            disabled={loading}
+            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
+          />
+          <span>Show hidden files</span>
+        </label>
 
-      <label class="option-checkbox">
-        <input
-          type="checkbox"
-          bind:checked={showFilesInBrowser}
-          on:change={handleOptionsChange}
-          disabled={loading}
-        />
-        <span>Show files</span>
-      </label>
+        <label class="flex items-center gap-2 text-sm text-gray-600">
+          <input
+            type="checkbox"
+            bind:checked={showFilesInBrowser}
+            on:change={handleOptionsChange}
+            disabled={loading}
+            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
+          />
+          <span>Show files</span>
+        </label>
+      </div>
 
-      <div class="entry-count">
+      <div class="text-sm text-gray-500 font-medium">
         {#if searchQuery}
           {filteredEntries.length} matches
         {:else}

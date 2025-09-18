@@ -232,23 +232,23 @@
   <div class="flex-1 overflow-auto">
     {#if isMobile && !activeSection}
       <!-- Mobile: Settings list -->
-      <div class="mobile-settings-list">
+      <div>
         <button
-          class="settings-item"
+          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
           on:click={() => activeSection = 'api'}
         >
-          <div class="item-icon">
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Key class="w-5 h-5" />
           </div>
-          <div class="item-content">
-            <div class="item-title">API Authentication</div>
-            <div class="item-subtitle">
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 mb-1">API Authentication</div>
+            <div class="text-sm text-gray-500">
               {#if $apiConfig.authenticated}
-                <span class="status-badge success">Connected</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Connected</span>
               {:else if isConfigured}
-                <span class="status-badge warning">Not authenticated</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Not authenticated</span>
               {:else}
-                <span class="status-badge">Not configured</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Not configured</span>
               {/if}
             </div>
           </div>
@@ -256,92 +256,92 @@
         </button>
 
         <button
-          class="settings-item"
+          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
           on:click={() => activeSection = 'display'}
         >
-          <div class="item-icon">
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Monitor class="w-5 h-5" />
           </div>
-          <div class="item-content">
-            <div class="item-title">Display Preferences</div>
-            <div class="item-subtitle">Theme, layout, and appearance</div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 mb-1">Display Preferences</div>
+            <div class="text-sm text-gray-500">Theme, layout, and appearance</div>
           </div>
           <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
-          class="settings-item"
+          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
           on:click={() => activeSection = 'sync'}
         >
-          <div class="item-icon">
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <RefreshCw class="w-5 h-5" />
           </div>
-          <div class="item-content">
-            <div class="item-title">Sync Settings</div>
-            <div class="item-subtitle">File patterns and filters</div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 mb-1">Sync Settings</div>
+            <div class="text-sm text-gray-500">File patterns and filters</div>
           </div>
           <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
-          class="settings-item"
+          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
           on:click={() => activeSection = 'notifications'}
         >
-          <div class="item-icon">
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Bell class="w-5 h-5" />
           </div>
-          <div class="item-content">
-            <div class="item-title">Notifications</div>
-            <div class="item-subtitle">Alerts and sounds</div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 mb-1">Notifications</div>
+            <div class="text-sm text-gray-500">Alerts and sounds</div>
           </div>
           <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
-          class="settings-item"
+          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
           on:click={() => activeSection = 'cache'}
         >
-          <div class="item-icon">
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Database class="w-5 h-5" />
           </div>
-          <div class="item-content">
-            <div class="item-title">Cache Management</div>
-            <div class="item-subtitle">{cacheStats.size} used</div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 mb-1">Cache Management</div>
+            <div class="text-sm text-gray-500">{cacheStats.size} used</div>
           </div>
           <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
-          class="settings-item"
+          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
           on:click={() => activeSection = 'data'}
         >
-          <div class="item-icon">
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Shield class="w-5 h-5" />
           </div>
-          <div class="item-content">
-            <div class="item-title">Data & Privacy</div>
-            <div class="item-subtitle">Export and import settings</div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 mb-1">Data & Privacy</div>
+            <div class="text-sm text-gray-500">Export and import settings</div>
           </div>
           <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
       </div>
     {:else}
       <!-- Desktop: Grid layout / Mobile: Section view -->
-      <div class="settings-container" class:mobile-section={isMobile}>
+      <div class="p-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3 {isMobile ? 'grid-cols-1' : ''}">
         {#if !isMobile || activeSection === 'api'}
           <!-- API Authentication Section -->
-          <div class="settings-section">
-            <div class="section-header">
-              <div class="section-title">
+          <div class="bg-white border border-gray-200 rounded-xl p-6 {activeSection === 'sync' ? 'lg:col-span-2 xl:col-span-3' : ''}">
+            <div class="flex justify-between items-center mb-6 pb-4 border-b border-gray-100">
+              <div class="flex items-center gap-3">
                 <Key class="w-5 h-5" />
-                <h2>API Authentication</h2>
+                <h2 class="text-lg font-semibold text-gray-900 m-0">API Authentication</h2>
               </div>
               {#if $apiConfig.authenticated}
-                <span class="status-badge success">Connected</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Connected</span>
               {:else if isConfigured}
-                <span class="status-badge warning">Not authenticated</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Not authenticated</span>
               {:else}
-                <span class="status-badge">Not configured</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Not configured</span>
               {/if}
             </div>
 

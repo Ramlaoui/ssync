@@ -308,8 +308,8 @@
 
     <!-- Mobile Sidebar for Jobs Page -->
     {#if isMobile && showMobileSidebar}
-      <div class="mobile-sidebar-overlay" class:closing={isClosingSidebar} on:click={handleMobileSidebarClose} on:keydown={() => {}}>
-        <div on:click|stopPropagation on:keydown={() => {}}>
+      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" on:click={handleMobileSidebarClose} on:keydown={() => {}}>
+        <div role="dialog" on:click|stopPropagation on:keydown={() => {}}>
           <JobSidebar
             currentJobId=""
             currentHost=""
@@ -325,8 +325,8 @@
   {:else}
     <!-- Regular Job Detail Page -->
     {#if isMobile && showMobileSidebar}
-      <div class="mobile-sidebar-overlay" class:closing={isClosingSidebar} on:click={handleMobileSidebarClose} on:keydown={() => {}}>
-        <div on:click|stopPropagation on:keydown={() => {}}>
+      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" on:click={handleMobileSidebarClose} on:keydown={() => {}}>
+        <div role="dialog" on:click|stopPropagation on:keydown={() => {}}>
           <JobSidebar
             currentJobId={params.id || ''}
             currentHost={params.host || ''}
@@ -520,69 +520,5 @@
     border-bottom-color: #3b82f6;
   }
 
-  .mobile-sidebar-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 50;
-    display: flex;
-    animation: fadeInOverlay 0.3s ease-out forwards;
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-  }
-
-  .mobile-sidebar-overlay.closing {
-    animation: fadeOutOverlay 0.3s ease-in forwards;
-  }
-
-  @keyframes fadeInOverlay {
-    0% {
-      opacity: 0;
-      backdrop-filter: blur(0px);
-      -webkit-backdrop-filter: blur(0px);
-    }
-    100% {
-      opacity: 1;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-    }
-  }
-
-  @keyframes fadeOutOverlay {
-    0% {
-      opacity: 1;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-    }
-    100% {
-      opacity: 0;
-      backdrop-filter: blur(0px);
-      -webkit-backdrop-filter: blur(0px);
-    }
-  }
-
-  .mobile-toggle-btn {
-    position: fixed;
-    bottom: 1rem;
-    right: 1rem;
-    background: #1f2937;
-    color: white;
-    padding: 0.75rem 1rem;
-    border-radius: 0.5rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    z-index: 60;
-  }
-
-  .mobile-toggle-btn svg {
-    width: 1rem;
-    height: 1rem;
-  }
 
 </style>

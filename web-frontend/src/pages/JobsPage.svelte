@@ -218,17 +218,17 @@
       on:refresh={handleManualRefresh}
     >
       <div slot="left" class="flex items-center gap-4">
-        <div class="header-stats">
-          <div class="stat-item">
-            <span class="stat-value">{hosts.length}</span>
-            <span class="stat-label">hosts</span>
+        <div class="flex gap-4 flex-shrink-0 items-center">
+          <div class="flex items-center gap-1 whitespace-nowrap">
+            <span class="text-base font-semibold text-slate-900">{hosts.length}</span>
+            <span class="text-xs text-slate-500">hosts</span>
           </div>
-          <div class="stat-item">
-            <span class="stat-value">{totalJobs}</span>
-            <span class="stat-label">jobs</span>
+          <div class="flex items-center gap-1 whitespace-nowrap">
+            <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
+            <span class="text-xs text-slate-500">jobs</span>
           </div>
           {#if dataFromCache}
-            <div class="stat-item cache-indicator">
+            <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-gray-200 ml-4">
               <Clock class="h-4 w-4 text-muted-foreground" />
               <Badge variant="secondary">Cached</Badge>
             </div>
@@ -236,20 +236,20 @@
         </div>
 
         <!-- Search Bar -->
-        <div class="header-search">
-          <div class="search-bar">
-            <div class="search-icon">
+        <div class="flex-1 max-w-md">
+          <div class="relative w-full">
+            <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none flex items-center justify-center">
               <Search size={16} />
             </div>
             <input
               type="text"
-              class="search-input"
+              class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
               placeholder="Search jobs..."
               bind:value={search}
               on:input={handleFilterChange}
             />
             {#if search}
-              <button class="clear-btn" on:click={() => { search = ''; handleFilterChange(); }}>
+              <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" on:click={() => { search = ''; handleFilterChange(); }}>
                 <X size={14} />
               </button>
             {/if}
@@ -259,33 +259,33 @@
     </NavigationHeader>
   {:else}
     <!-- Mobile header -->
-    <div class="header mobile-header">
-      <div class="mobile-header-row">
+    <div class="flex justify-between items-center p-3 bg-gradient-to-b from-white to-slate-50/95 border-b border-black/8 relative z-50 shadow-sm">
+      <div class="flex items-center min-h-[40px] whitespace-nowrap">
         <!-- Stats on the left -->
-        <div class="header-stats">
-          <div class="stat-item">
-            <span class="stat-value">{hosts.length}</span>
-            <span class="stat-label">hosts</span>
+        <div class="flex gap-4 flex-shrink-0 items-center">
+          <div class="flex items-center gap-1 whitespace-nowrap">
+            <span class="text-base font-semibold text-slate-900">{hosts.length}</span>
+            <span class="text-xs text-slate-500">hosts</span>
           </div>
-          <div class="stat-item">
-            <span class="stat-value">{totalJobs}</span>
-            <span class="stat-label">jobs</span>
+          <div class="flex items-center gap-1 whitespace-nowrap">
+            <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
+            <span class="text-xs text-slate-500">jobs</span>
           </div>
         </div>
 
         <!-- Flexible spacer to push search and refresh to the right -->
-        <div style="flex: 1; min-width: 2rem;"></div>
+        <div class="flex-1 min-w-8"></div>
 
         <!-- Expandable search -->
-        <div class="mobile-search-container {searchExpanded ? 'expanded' : ''}">
+        <div class="flex items-center justify-center transition-all duration-300 ease-out overflow-hidden flex-shrink-0 {searchExpanded ? 'w-[180px] max-w-[180px]' : 'w-8'}">
           {#if searchExpanded}
-            <div class="search-bar expanded">
-              <div class="search-icon">
+            <div class="relative w-full animate-in slide-in-from-right-2 duration-300">
+              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none flex items-center justify-center">
                 <Search size={16} />
               </div>
               <input
                 type="text"
-                class="search-input"
+                class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
                 placeholder="Search jobs..."
                 bind:value={search}
                 on:input={handleFilterChange}
@@ -293,13 +293,13 @@
                 bind:this={searchInput}
               />
               {#if search}
-                <button class="clear-btn" on:click={() => { search = ''; handleFilterChange(); }}>
+                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" on:click={() => { search = ''; handleFilterChange(); }}>
                   <X size={14} />
                 </button>
               {/if}
             </div>
           {:else}
-            <button class="search-toggle-btn" on:click={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
+            <button class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-gray-500 cursor-pointer transition-all hover:bg-gray-100 hover:text-gray-700" on:click={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
               <Search size={16} />
             </button>
           {/if}
@@ -309,11 +309,10 @@
         <button
           on:click={handleManualRefresh}
           disabled={loading}
-          class="refresh-btn"
-          style="flex-shrink: 0;"
+          class="flex items-center justify-center w-8 h-8 bg-white border border-black/8 rounded-lg text-sm font-medium text-slate-600 cursor-pointer transition-all flex-shrink-0 hover:bg-slate-50 hover:border-black/12 disabled:opacity-50 disabled:cursor-not-allowed"
           title="{loading || progressiveLoading ? 'Loading from hosts...' : 'Refresh'}"
         >
-          <RefreshCw class="icon {loading || progressiveLoading ? 'animate-spin' : ''}" />
+          <RefreshCw class="w-4 h-4 {loading || progressiveLoading ? 'animate-spin' : ''}" />
         </button>
       </div>
     </div>
@@ -337,258 +336,9 @@
 </div>
 
 <style>
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 1.5rem;
-    background: linear-gradient(to bottom, white, rgba(248, 250, 252, 0.95));
-    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-    gap: 2rem;
-    position: relative;
-    z-index: 60;
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.03);
-  }
-
-  .mobile-header {
-    padding: 0.75rem 1rem;
-  }
-
-  .mobile-header-row {
-    display: flex;
-    align-items: center;
-    min-height: 40px;
-    white-space: nowrap;
-  }
-
-  .header-stats {
-    display: flex;
-    gap: 1rem;
-    flex-shrink: 0;
-    align-items: center;
-  }
-
-  .stat-item {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    white-space: nowrap;
-  }
-
-  .stat-value {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #0f172a;
-  }
-
-  .stat-label {
-    font-size: 0.75rem;
-    color: #64748b;
-  }
-
-  .cache-indicator {
-    padding-left: 1rem;
-    border-left: 1px solid #e5e7eb;
-    margin-left: 1rem;
-  }
-
-  .header-search {
-    flex: 1;
-    max-width: 400px;
-  }
-
-  .mobile-search-container {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    overflow: hidden;
-    flex-shrink: 0;
-  }
-
-  .mobile-search-container:not(.expanded) {
-    width: 32px;
-    flex-shrink: 0;
-  }
-
-  .mobile-search-container.expanded {
-    width: 180px;
-    max-width: 180px;
-    flex-shrink: 0;
-  }
-
-  .search-toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: #6b7280;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .search-toggle-btn:hover {
-    background: #f3f4f6;
-    color: #374151;
-  }
-
-  .search-bar {
-    position: relative;
-    width: 100%;
-  }
-
-  .search-bar.expanded {
-    width: 100%;
-    animation: searchExpand 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-  }
-
-  @keyframes searchExpand {
-    from {
-      width: 32px;
-      opacity: 0;
-    }
-    to {
-      width: 100%;
-      opacity: 1;
-    }
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #9ca3af;
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .search-input {
-    width: 100%;
-    padding: 0.5rem 2.5rem;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    transition: all 0.15s;
-    background: #f9fafb;
-  }
-
-  .search-input:focus {
-    outline: none;
-    border-color: #3b82f6;
-    background: white;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  }
-
-  .search-input::placeholder {
-    color: #9ca3af;
-  }
-
-  .clear-btn {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    padding: 0.25rem;
-    background: none;
-    border: none;
-    color: #6b7280;
-    cursor: pointer;
-    border-radius: 0.25rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-  }
-
-  .clear-btn:hover {
-    background: #f3f4f6;
-    color: #ef4444;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-shrink: 0;
-  }
-
-  .refresh-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.375rem;
-    padding: 0.5rem;
-    width: 32px;
-    height: 32px;
-    background: white;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    border-radius: 0.5rem;
-    font-size: 0.813rem;
-    font-weight: 500;
-    color: #475569;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .refresh-btn:hover:not(:disabled) {
-    background: #f8fafc;
-    border-color: rgba(0, 0, 0, 0.12);
-  }
-
-  .refresh-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .icon {
-    width: 1rem;
-    height: 1rem;
-  }
-
-  .animate-spin {
-    animation: spin 1s linear infinite;
-  }
-
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-  }
-
-  /* Mobile responsive */
-  @media (max-width: 768px) {
-    .header-search {
-      max-width: none;
-      margin: 0;
-      width: 100%;
-    }
-
-    .header-stats {
-      gap: 1rem;
-      justify-content: center;
-    }
-
-    .stat-value {
-      font-size: 1rem;
-    }
-
-    .stat-label {
-      font-size: 0.75rem;
-    }
-
-    .refresh-btn {
-      padding: 0.5rem;
-    }
-
-    .refresh-btn span {
-      display: none;
-    }
   }
 </style>
 

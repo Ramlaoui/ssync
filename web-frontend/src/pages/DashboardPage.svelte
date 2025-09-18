@@ -259,12 +259,12 @@
   <div class="flex items-center justify-between px-6 py-4 bg-white border-b border-gray-200">
     <div class="flex items-center">
       <div class="flex items-center gap-6">
-        <div class="text-center">
-          <span class="block text-2xl font-bold text-gray-900">{hosts.length}</span>
+        <div class="flex items-baseline gap-2">
+          <span class="text-2xl font-bold text-gray-900">{hosts.length}</span>
           <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">hosts</span>
         </div>
-        <div class="text-center">
-          <span class="block text-2xl font-bold text-gray-900">{totalJobs}</span>
+        <div class="flex items-baseline gap-2">
+          <span class="text-2xl font-bold text-gray-900">{totalJobs}</span>
           <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">jobs</span>
         </div>
       </div>
@@ -300,7 +300,7 @@
       >
         <RefreshCw class="w-4 h-4 {loading || progressiveLoading || watchersLoading ? 'animate-spin' : ''}" />
         {#if !isMobile}
-          <span>{loading || progressiveLoading || watchersLoading ? "Refreshing" : "Refresh"}</span>
+          <span class="ml-2">{loading || progressiveLoading || watchersLoading ? "Refreshing" : "Refresh"}</span>
         {/if}
       </button>
     </div>

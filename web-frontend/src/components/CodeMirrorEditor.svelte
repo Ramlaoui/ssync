@@ -59,13 +59,19 @@
     const mobileFont = '"SF Mono", "Monaco", "Menlo", "Consolas", "Courier New", monospace';
     const desktopFont = '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace';
 
+    // Unified font metrics for perfect alignment
+    const fontFamily = isMobile ? mobileFont : desktopFont;
+    const lineHeight = 1.5;
+    const baseFontSize = `${fontSize}px`;
+
     return EditorView.theme({
       '&': {
         height: '100%',
-        fontSize: `${fontSize}px`,
-        fontFamily: isMobile ? mobileFont : desktopFont,
+        fontSize: baseFontSize,
+        fontFamily: fontFamily,
         backgroundColor,
         color: foregroundColor,
+        lineHeight: lineHeight,
       },
       '.cm-content': {
         padding: isMobile ? '0.75rem' : '1.5rem',
@@ -74,14 +80,11 @@
         minHeight: '100%',
         backgroundColor: 'transparent',
         color: foregroundColor,
-        fontSize: `${fontSize}px !important`,
-        fontFamily: isMobile ? mobileFont : desktopFont,
+        fontSize: baseFontSize,
+        fontFamily: fontFamily,
         caretColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
-        lineHeight: '1.5',
+        lineHeight: lineHeight,
         letterSpacing: isMobile ? '0.01em' : 'normal',
-        border: 'none',
-        margin: '0',
-        boxSizing: 'border-box',
       },
       '.cm-focused': {
         outline: 'none',
@@ -91,9 +94,9 @@
         backgroundColor: 'transparent',
       },
       '.cm-scroller': {
-        fontFamily: isMobile ? mobileFont : desktopFont,
-        fontSize: `${fontSize}px !important`,
-        lineHeight: '1.5',
+        fontFamily: fontFamily,
+        fontSize: baseFontSize,
+        lineHeight: lineHeight,
       },
       '.cm-cursor': {
         borderColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
@@ -112,38 +115,21 @@
         backgroundColor: isDark ? 'rgba(0, 0, 0, 0.1)' : 'transparent',
         color: isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(156, 163, 175, 0.8)',
         border: 'none',
-        fontSize: `${fontSize}px`,
+        fontSize: baseFontSize,
+        fontFamily: fontFamily,
         borderRight: isDark ? '1px solid rgba(255, 255, 255, 0.05)' : 'none',
         minWidth: isMobile ? '2.5rem' : '3rem',
-        lineHeight: '1.5',
+        lineHeight: lineHeight,
+        paddingTop: isMobile ? '1rem' : '1.5rem',
       },
       '.cm-lineNumbers': {
         color: isDark ? 'rgba(255, 255, 255, 0.4)' : (isMobile ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.4)'),
         paddingRight: isMobile ? '0.75rem' : '1rem',
         paddingLeft: isMobile ? '0.5rem' : '0.75rem',
-        minWidth: isMobile ? '2.5rem' : '3rem',
-        fontSize: `${fontSize}px`,
-        fontFamily: isMobile ? mobileFont : desktopFont,
-        lineHeight: '1.5',
+        fontSize: baseFontSize,
+        fontFamily: fontFamily,
+        lineHeight: lineHeight,
         textAlign: 'right',
-      },
-      '.cm-lineNumbers .cm-gutterElement': {
-        padding: '0',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'flex-end',
-        minHeight: `calc(${fontSize}px * 1.5)`,
-        lineHeight: '1.5',
-        paddingTop: '0',
-        verticalAlign: 'top',
-        boxSizing: 'border-box',
-      },
-      '.cm-gutters': {
-        paddingTop: isMobile ? '1rem' : '1.5rem',
-        backgroundColor: 'transparent',
-        border: 'none',
-        margin: '0',
-        boxSizing: 'border-box',
       },
       '.cm-foldGutter': {
         color: isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)',
@@ -153,14 +139,9 @@
         fontStyle: 'italic',
       },
       '.cm-line': {
-        fontSize: `${fontSize}px !important`,
-        fontFamily: isMobile ? mobileFont : desktopFont,
-        paddingLeft: isMobile ? '0.125rem' : '0',
-        lineHeight: '1.5',
-        minHeight: `calc(${fontSize}px * 1.5)`,
-        verticalAlign: 'top',
-        boxSizing: 'border-box',
-        margin: '0',
+        fontSize: baseFontSize,
+        fontFamily: fontFamily,
+        lineHeight: lineHeight,
       },
       // Syntax highlighting with mobile-optimized colors
       '.cm-keyword': {
@@ -562,56 +543,6 @@
       border: 2px solid rgba(255, 255, 255, 0.3);
     }
     
-    :global(.cm-content) {
-      font-size: 14px !important;
-      line-height: 1.5 !important;
-      -webkit-text-size-adjust: none;
-      padding-top: 1rem !important;
-      padding-bottom: 1rem !important;
-      border: none !important;
-      margin: 0 !important;
-      box-sizing: border-box !important;
-    }
-
-    :global(.cm-line) {
-      padding: 0 !important;
-      line-height: 1.5 !important;
-      min-height: calc(14px * 1.5) !important;
-      font-size: 14px !important;
-      vertical-align: top !important;
-      box-sizing: border-box !important;
-      margin: 0 !important;
-    }
-
-    :global(.cm-lineNumbers .cm-gutterElement) {
-      padding: 0 !important;
-      display: flex !important;
-      align-items: flex-start !important;
-      justify-content: flex-end !important;
-      min-height: calc(14px * 1.5) !important;
-      line-height: 1.5 !important;
-      font-size: 14px !important;
-      text-align: right !important;
-      vertical-align: top !important;
-      box-sizing: border-box !important;
-    }
-
-    :global(.cm-gutters) {
-      min-width: 3rem !important;
-      padding-top: 1rem !important;
-      border: none !important;
-      margin: 0 !important;
-      box-sizing: border-box !important;
-    }
-
-    :global(.cm-lineNumbers) {
-      min-width: 2.5rem !important;
-      padding-right: 0.75rem !important;
-      padding-left: 0.5rem !important;
-      line-height: 1.5 !important;
-      font-size: 14px !important;
-      text-align: right !important;
-    }
     
     :global(.cm-scroller) {
       font-family: "SF Mono", "Monaco", "Courier New", monospace !important;
