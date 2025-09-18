@@ -43,15 +43,14 @@
   }
 </script>
 
-<div class="status-card">
-  <div class="status-main">
+<div class="bg-gradient-to-br from-white to-slate-50 border border-slate-200/20 rounded-2xl p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.8),0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.9),0_4px_6px_rgba(0,0,0,0.05),0_10px_25px_rgba(0,0,0,0.08)]">
+  <div class="flex items-center gap-4 mb-4">
     <!-- Animated Status Indicator -->
-    <div class="status-indicator" style="--status-color: {statusColor}">
+    <div class="relative w-16 h-16 flex-shrink-0" style="color: {statusColor}">
       {#if progress > 0 && job.state === 'R'}
         <!-- Progress ring for running jobs -->
-        <svg class="progress-ring" viewBox="0 0 36 36">
+        <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36">
           <path
-            class="progress-ring-bg"
             d="M18 2.0845
               a 15.9155 15.9155 0 0 1 0 31.831
               a 15.9155 15.9155 0 0 1 0 -31.831"
@@ -61,7 +60,6 @@
             stroke-opacity="0.1"
           />
           <path
-            class="progress-ring-fill"
             d="M18 2.0845
               a 15.9155 15.9155 0 0 1 0 31.831
               a 15.9155 15.9155 0 0 1 0 -31.831"
@@ -75,15 +73,15 @@
       {:else}
         <!-- Pulse animation for active states -->
         {#if isActive}
-          <div class="pulse-rings">
-            <div class="pulse-ring"></div>
-            <div class="pulse-ring delay-1"></div>
+          <div class="absolute inset-0">
+            <div class="absolute inset-0 border-2 border-current rounded-full animate-pulse opacity-60"></div>
+            <div class="absolute inset-0 border-2 border-current rounded-full animate-pulse opacity-60 [animation-delay:1s]"></div>
           </div>
         {/if}
       {/if}
       
       <!-- Status Icon -->
-      <div class="status-icon">
+      <div class="absolute inset-0 flex items-center justify-center bg-white rounded-full shadow-md">
         {#if job.state === 'R'}
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
@@ -113,115 +111,57 @@
     </div>
 
     <!-- Status Details -->
-    <div class="status-details">
-      <h3 class="status-title">{statusLabel}</h3>
-      <p class="status-subtitle">{getStatusSubtitle(job)}</p>
+    <div class="flex-1 min-w-0">
+      <h3 class="text-xl font-bold text-slate-900 mb-1 tracking-tight">{statusLabel}</h3>
+      <p class="text-sm text-slate-600 mb-0 font-medium">{getStatusSubtitle(job)}</p>
       
       {#if job.state === 'PD'}
-        <p class="queue-position">{getQueuePosition(job)}</p>
+        <p class="text-xs text-slate-400 mt-1 font-medium">{getQueuePosition(job)}</p>
       {:else if job.state === 'R' && timeRemaining !== 'N/A'}
-        <p class="time-remaining">{timeRemaining} remaining</p>
+        <p class="text-xs text-slate-400 mt-1 font-medium">{timeRemaining} remaining</p>
       {/if}
     </div>
   </div>
 
   <!-- Progress Bar for Running Jobs -->
   {#if job.state === 'R' && progress > 0}
-    <div class="progress-bar-container">
-      <div class="progress-bar">
-        <div 
-          class="progress-fill" 
+    <div class="flex items-center gap-3 mb-4">
+      <div class="flex-1 h-2 bg-black/5 rounded-full overflow-hidden">
+        <div
+          class="h-full rounded-full transition-[width] duration-300 bg-gradient-to-r from-current to-current/80"
           style="width: {progress * 100}%; background-color: {statusColor}"
         ></div>
       </div>
-      <span class="progress-text">{Math.round(progress * 100)}%</span>
+      <span class="text-xs font-semibold text-slate-600 min-w-[3rem] text-right">{Math.round(progress * 100)}%</span>
     </div>
   {/if}
 
   <!-- Quick Stats -->
-  <div class="quick-stats">
+  <div class="flex gap-6 pt-4 border-t border-slate-200/30">
     {#if job.runtime}
-      <div class="stat">
-        <span class="stat-label">Runtime</span>
-        <span class="stat-value">{jobUtils.formatDuration(job.runtime)}</span>
+      <div class="flex flex-col items-center text-center">
+        <span class="text-[0.6875rem] text-slate-400 font-medium uppercase tracking-wider mb-1">Runtime</span>
+        <span class="text-sm font-semibold text-slate-900">{jobUtils.formatDuration(job.runtime)}</span>
       </div>
     {/if}
     {#if job.cpus}
-      <div class="stat">
-        <span class="stat-label">CPUs</span>
-        <span class="stat-value">{job.cpus}</span>
+      <div class="flex flex-col items-center text-center">
+        <span class="text-[0.6875rem] text-slate-400 font-medium uppercase tracking-wider mb-1">CPUs</span>
+        <span class="text-sm font-semibold text-slate-900">{job.cpus}</span>
       </div>
     {/if}
     {#if job.memory}
-      <div class="stat">
-        <span class="stat-label">Memory</span>
-        <span class="stat-value">{job.memory}</span>
+      <div class="flex flex-col items-center text-center">
+        <span class="text-[0.6875rem] text-slate-400 font-medium uppercase tracking-wider mb-1">Memory</span>
+        <span class="text-sm font-semibold text-slate-900">{job.memory}</span>
       </div>
     {/if}
   </div>
 </div>
 
 <style>
-  .status-card {
-    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 16px;
-    padding: 1.5rem;
-    box-shadow: 
-      0 0 0 1px rgba(255, 255, 255, 0.8),
-      0 1px 3px rgba(0, 0, 0, 0.04),
-      0 4px 12px rgba(0, 0, 0, 0.04);
-    transition: all 0.3s ease;
-  }
-
-  .status-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 
-      0 0 0 1px rgba(255, 255, 255, 0.9),
-      0 4px 6px rgba(0, 0, 0, 0.05),
-      0 10px 25px rgba(0, 0, 0, 0.08);
-  }
-
-  .status-main {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  .status-indicator {
-    position: relative;
-    width: 64px;
-    height: 64px;
-    color: var(--status-color);
-    flex-shrink: 0;
-  }
-
-  .progress-ring {
-    width: 100%;
-    height: 100%;
-    transform: rotate(-90deg);
-  }
-
-  .pulse-rings {
-    position: absolute;
-    inset: 0;
-  }
-
-  .pulse-ring {
-    position: absolute;
-    inset: 0;
-    border: 2px solid currentColor;
-    border-radius: 50%;
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    opacity: 0.6;
-  }
-
-  .pulse-ring.delay-1 {
-    animation-delay: 1s;
-  }
-
-  @keyframes pulse {
+  /* Custom animations for pulse effect */
+  @keyframes custom-pulse {
     0% {
       transform: scale(0.95);
       opacity: 0.8;
@@ -236,130 +176,24 @@
     }
   }
 
-  .status-icon {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: white;
-    border-radius: 50%;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  /* Apply custom pulse animation to override Tailwind's default */
+  :global(.animate-pulse) {
+    animation: custom-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
   }
 
-  .status-icon svg {
-    width: 24px;
-    height: 24px;
+  /* SVG icon sizing */
+  svg {
+    @apply w-6 h-6;
   }
 
-  .status-details {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .status-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #0f172a;
-    margin: 0 0 0.25rem 0;
-    letter-spacing: -0.025em;
-  }
-
-  .status-subtitle {
-    font-size: 0.875rem;
-    color: #64748b;
-    margin: 0;
-    font-weight: 500;
-  }
-
-  .queue-position,
-  .time-remaining {
-    font-size: 0.75rem;
-    color: #94a3b8;
-    margin: 0.25rem 0 0 0;
-    font-weight: 500;
-  }
-
-  .progress-bar-container {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 1rem;
-  }
-
-  .progress-bar {
-    flex: 1;
-    height: 8px;
-    background: rgba(0, 0, 0, 0.06);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    border-radius: 4px;
-    transition: width 0.3s ease;
-    background: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 80%, white) 100%);
-  }
-
-  .progress-text {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #64748b;
-    min-width: 3rem;
-    text-align: right;
-  }
-
-  .quick-stats {
-    display: flex;
-    gap: 1.5rem;
-    padding-top: 1rem;
-    border-top: 1px solid rgba(148, 163, 184, 0.15);
-  }
-
-  .stat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-  }
-
-  .stat-label {
-    font-size: 0.6875rem;
-    color: #94a3b8;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.25rem;
-  }
-
-  .stat-value {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #0f172a;
-  }
-
+  /* Mobile responsive adjustments */
   @media (max-width: 640px) {
-    .status-card {
-      padding: 1rem;
+    .relative.w-16.h-16 {
+      @apply w-12 h-12;
     }
 
-    .status-indicator {
-      width: 48px;
-      height: 48px;
-    }
-
-    .status-icon svg {
-      width: 20px;
-      height: 20px;
-    }
-
-    .status-title {
-      font-size: 1.125rem;
-    }
-
-    .quick-stats {
-      gap: 1rem;
+    svg {
+      @apply w-5 h-5;
     }
   }
 </style>

@@ -774,9 +774,12 @@ echo "Starting job..."
   }
 
   function loadTemplate(template: ScriptTemplate) {
-    // Update script
+    // Update script - just set the value, don't call handleScriptEdit
+    // The editor will pick up the change through reactive binding
     script = template.script_content;
-    handleScriptEdit(script);
+
+    // Parse SBATCH directives from the loaded script
+    parseSbatchFromScript(script);
 
     // Update parameters
     if (template.parameters) {
@@ -2386,7 +2389,7 @@ echo "Starting job..."
       currentHost={selectedHost}
       on:select={(e) => {
         script = e.detail.content || e.detail.script || e.detail.script_content || '';
-        handleScriptEdit(script);
+        parseSbatchFromScript(script);
         showHistory = false;
       }}
       on:close={() => showHistory = false}

@@ -38,8 +38,8 @@
   {...$$restProps}
   class={cn(
     "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-black disabled:pointer-events-none disabled:opacity-40",
-    variants[variant],
-    sizes[size],
+    variant ? variants[variant] : '',
+    size ? sizes[size] : '',
     loading && "cursor-wait opacity-70",
     className
   )}
