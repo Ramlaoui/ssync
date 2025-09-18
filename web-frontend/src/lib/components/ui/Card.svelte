@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { cn } from "../../utils";
+  import { cn } from "../../cn";
   
   export let className: string = "";
   export { className as class };

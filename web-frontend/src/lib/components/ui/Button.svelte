@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { cn } from "../../utils";
+  import { cn } from "../../cn";
   import type { HTMLButtonAttributes } from "svelte/elements";
   
   type $$Props = HTMLButtonAttributes & {

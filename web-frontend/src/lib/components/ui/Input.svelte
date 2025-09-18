@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { cn } from "../../utils";
+  import { cn } from "../../cn";
   import type { HTMLInputAttributes } from "svelte/elements";
   
   type $$Props = HTMLInputAttributes & {

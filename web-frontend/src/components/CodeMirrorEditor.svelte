@@ -257,19 +257,26 @@
     const currentContent = editorView.state.doc.toString();
     if (currentContent !== newValue) {
       isInternalChange = true;
-      
-      // Store cursor position
+
+      // Store cursor position and clamp it to the new document length
       const selection = editorView.state.selection;
-      
+      const newDocLength = newValue.length;
+
+      // Create a safe selection that won't exceed the new document bounds
+      const safeSelection = {
+        anchor: Math.min(selection.main.anchor, newDocLength),
+        head: Math.min(selection.main.head, newDocLength)
+      };
+
       editorView.dispatch({
         changes: {
           from: 0,
           to: editorView.state.doc.length,
           insert: newValue,
         },
-        selection: selection, // Restore cursor position
+        selection: { anchor: safeSelection.anchor, head: safeSelection.head },
       });
-      
+
       previousValue = newValue;
       isInternalChange = false;
     }

@@ -252,7 +252,7 @@
   }
 </script>
 
-<div class="watcher-card {pulseClass}" class:expanded={isExpanded} on:click={() => isExpanded = !isExpanded} role="button" tabindex="0" on:keydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
+<div class="bg-white border border-gray-200 rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 {pulseClass} {isExpanded ? 'expanded' : ''}" on:click={() => isExpanded = !isExpanded} role="button" tabindex="0" on:keydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 
@@ -264,14 +264,14 @@
   {/if}
   
   <!-- Header with state indicator -->
-  <div class="card-header">
-    <div class="header-left">
-      <span class="state-indicator" style="color: {getStateColor(watcher.state)}">
+  <div class="flex justify-between items-start mb-1.5 gap-2">
+    <div class="flex items-start gap-2 flex-1 min-w-0">
+      <span class="text-xl leading-none mt-0.5 flex-shrink-0" style="color: {getStateColor(watcher.state)}">
         {getStateIcon(watcher.state)}
       </span>
-      <div class="watcher-info">
-        <div class="name-row">
-          <h3 class="watcher-name">{watcher.name}</h3>
+      <div class="flex flex-col gap-0.5 min-w-0 flex-1">
+        <div class="flex items-center gap-2 flex-wrap">
+          <h3 class="m-0 text-sm font-semibold text-gray-900 overflow-hidden text-ellipsis whitespace-nowrap">{watcher.name}</h3>
         </div>
 {#if showJobLink && jobInfo}
           <button class="job-link" on:click={navigateToJob}>
@@ -289,7 +289,7 @@
       </div>
     </div>
     
-    <div class="header-actions">
+    <div class="flex items-start gap-2 flex-shrink-0">
       {#if watcher.timer_mode_enabled}
         <div class="timer-indicator" class:active={watcher.timer_mode_active} title="Timer Mode {watcher.timer_mode_active ? 'Active' : 'Enabled'}">
           <svg viewBox="0 0 24 24" fill="currentColor">

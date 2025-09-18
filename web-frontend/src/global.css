@@ -26,62 +26,19 @@
     --radius: 0.375rem;
     
     
-    /* Spacing */
-    --spacing-xs: 0.25rem;
-    --spacing-sm: 0.5rem;
-    --spacing-md: 1rem;
-    --spacing-lg: 1.5rem;
-    --spacing-xl: 2rem;
-    --spacing-2xl: 3rem;
-    --spacing-3xl: 4rem;
+    /* Status colors - maintained for legacy components */
+    --color-success: #10b981;
+    --color-error: #ef4444;
+    --color-warning: #f59e0b;
+    --color-info: #3b82f6;
+    --color-primary: #3b82f6;
 
-    /* LaunchJob component variables */
-    --color-background: #ffffff;
-    --color-surface: #ffffff;
-    --color-surface-hover: #f8f9fa;
-    --color-border: #dee2e6;
-    --color-text-primary: #212529;
-    --color-text-secondary: #6c757d;
-    --color-accent: #3498db;
-    --color-accent-hover: #2980b9;
-    --color-accent-alpha: rgba(52, 152, 219, 0.15);
-    
-    /* Status colors */
-    --color-success: #28a745;
-    --color-success-bg: #d4edda;
-    --color-success-border: #c3e6cb;
-    --color-error: #dc3545;
-    --color-error-bg: #f8d7da;
-    --color-error-border: #f5c6cb;
-    --color-warning: #f39c12;
-    --color-warning-bg: #fff3cd;
-    --color-info: #17a2b8;
-    --color-info-bg: #d1ecf1;
-    --color-primary: #3498db;
-    --color-primary-dark: #2980b9;
+    /* Legacy component support - gradually remove as components migrate to Tailwind */
     --color-bg-primary: #ffffff;
     --color-bg-secondary: #f8f9fa;
-    
-    /* Component-specific theme variables */
-    --bg-primary: #ffffff;
-    --bg-secondary: #f8f9fa;
-    --bg-tertiary: #e9ecef;
-    --text-primary: #212529;
-    --text-secondary: #6c757d;
-    --text-tertiary: #adb5bd;
-    --accent-color: #3498db;
-    --accent-hover: #2980b9;
-    --button-primary-bg: #3498db;
-    --button-primary-text: #ffffff;
-    --button-primary-hover: #2980b9;
-    --input-bg: #ffffff;
-    --input-border: #ced4da;
-    --error-bg: #f8d7da;
-    --error-text: #721c24;
-    --error-border: #f5c6cb;
-    --success-bg: #d4edda;
-    --success-text: #155724;
-    --success-border: #c3e6cb;
+    --color-border: #e5e7eb;
+    --color-text-primary: #111827;
+    --color-text-secondary: #6b7280;
 }
 
 * {
