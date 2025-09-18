@@ -255,50 +255,50 @@
   });
 </script>
 
-<div class="dashboard-container">
-  <div class="dashboard-header">
-    <div class="header-left">
-      <div class="header-stats">
-        <div class="stat-item">
-          <span class="stat-value">{hosts.length}</span>
-          <span class="stat-label">hosts</span>
+<div class="flex flex-col h-screen bg-gray-50">
+  <div class="flex items-center justify-between px-6 py-4 bg-white border-b border-gray-200">
+    <div class="flex items-center">
+      <div class="flex items-center gap-6">
+        <div class="text-center">
+          <span class="block text-2xl font-bold text-gray-900">{hosts.length}</span>
+          <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">hosts</span>
         </div>
-        <div class="stat-item">
-          <span class="stat-value">{totalJobs}</span>
-          <span class="stat-label">jobs</span>
+        <div class="text-center">
+          <span class="block text-2xl font-bold text-gray-900">{totalJobs}</span>
+          <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">jobs</span>
         </div>
       </div>
     </div>
 
     <!-- Search Bar -->
-    <div class="header-search">
-      <div class="search-bar">
-        <div class="search-icon">
-          <Search size={16} />
+    <div class="flex-1 max-w-md mx-8">
+      <div class="relative">
+        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <Search class="w-4 h-4 text-gray-400" />
         </div>
         <input
           type="text"
-          class="search-input"
+          class="block w-full pl-10 pr-8 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
           placeholder="Search jobs..."
           bind:value={search}
           on:input={handleFilterChange}
         />
         {#if search}
-          <button class="clear-btn" on:click={() => { search = ''; handleFilterChange(); }}>
-            <X size={14} />
+          <button class="absolute inset-y-0 right-0 pr-3 flex items-center" on:click={() => { search = ''; handleFilterChange(); }}>
+            <X class="w-3.5 h-3.5 text-gray-400 hover:text-gray-600" />
           </button>
         {/if}
       </div>
     </div>
 
-    <div class="header-actions">
+    <div class="flex items-center gap-3">
       <button
         on:click={handleManualRefresh}
         disabled={loading || watchersLoading}
-        class="refresh-btn"
+        class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
         title="{loading || progressiveLoading || watchersLoading ? 'Loading...' : 'Refresh'}"
       >
-        <RefreshCw class="icon {loading || progressiveLoading || watchersLoading ? 'animate-spin' : ''}" />
+        <RefreshCw class="w-4 h-4 {loading || progressiveLoading || watchersLoading ? 'animate-spin' : ''}" />
         {#if !isMobile}
           <span>{loading || progressiveLoading || watchersLoading ? "Refreshing" : "Refresh"}</span>
         {/if}
@@ -307,18 +307,18 @@
   </div>
 
   {#if error}
-    <div class="error-banner">
-      <p>{error}</p>
+    <div class="bg-red-50 border-l-4 border-red-400 p-4">
+      <p class="text-red-700">{error}</p>
     </div>
   {/if}
 
   <!-- Filters removed since search is now in header -->
   
   <!-- Main Content Area -->
-  <div class="dashboard-content">
+  <div class="flex-1 flex overflow-hidden">
     {#if isMobile}
       <!-- Mobile: Jobs only -->
-      <div class="jobs-section mobile">
+      <div class="flex-1 overflow-auto">
         <JobsSection
           jobs={filteredJobs}
           loading={initialLoading || (loading && filteredJobs.length === 0)}
@@ -327,7 +327,7 @@
       </div>
     {:else}
       <!-- Desktop: Split view -->
-      <div class="split-view">
+      <div class="flex flex-1 overflow-hidden">
         <!-- Jobs Section -->
         <JobsSection
           jobs={filteredJobs}
@@ -335,7 +335,7 @@
           on:jobSelect={(e) => handleJobSelect(e.detail)}
         />
 
-        <div class="divider"></div>
+        <div class="w-px bg-gray-200 flex-shrink-0"></div>
 
         <!-- Watchers Section -->
         <WatchersSection
@@ -350,272 +350,4 @@
 </div>
 
 <style>
-  .dashboard-container {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    background: #fafafa;
-  }
-  
-  .dashboard-header {
-    display: flex;
-    align-items: center;
-    padding: 1rem 1.5rem;
-    background: white;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-    gap: 2rem;
-  }
-
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 0;
-    flex-shrink: 0;
-  }
-
-  .home-label {
-    color: #6b7280;
-    font-size: 0.875rem;
-    font-weight: 500;
-    margin-right: 0.75rem;
-  }
-
-  .header-divider {
-    width: 1px;
-    height: 20px;
-    background: #d1d5db;
-    flex-shrink: 0;
-    margin-right: 1rem;
-  }
-  
-  .header-stats {
-    display: flex;
-    gap: 2rem;
-  }
-  
-  .stat-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .stat-value {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #0f172a;
-  }
-  
-  .stat-label {
-    font-size: 0.875rem;
-    color: #64748b;
-  }
-  
-  .header-search {
-    max-width: 400px;
-    margin: 0;
-  }
-
-  .search-bar {
-    position: relative;
-    width: 100%;
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #9ca3af;
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .search-input {
-    width: 100%;
-    padding: 0.5rem 2.5rem;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    transition: all 0.15s;
-    background: #f9fafb;
-  }
-
-  .search-input:focus {
-    outline: none;
-    border-color: #3b82f6;
-    background: white;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  }
-
-  .search-input::placeholder {
-    color: #9ca3af;
-  }
-
-  .clear-btn {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    padding: 0.25rem;
-    background: none;
-    border: none;
-    color: #6b7280;
-    cursor: pointer;
-    border-radius: 0.25rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-  }
-
-  .clear-btn:hover {
-    background: #f3f4f6;
-    color: #ef4444;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-left: auto;
-  }
-  
-  
-  .refresh-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.5rem 0.875rem;
-    background: white;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    border-radius: 0.5rem;
-    font-size: 0.813rem;
-    font-weight: 500;
-    color: #475569;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  
-  .refresh-btn:hover:not(:disabled) {
-    background: #f8fafc;
-    border-color: rgba(0, 0, 0, 0.12);
-  }
-  
-  .refresh-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  
-  .icon {
-    width: 1rem;
-    height: 1rem;
-  }
-  
-  .icon-small {
-    width: 0.875rem;
-    height: 0.875rem;
-  }
-  
-  .animate-spin {
-    animation: spin 1s linear infinite;
-  }
-  
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-  
-  .error-banner {
-    padding: 0.75rem 1.5rem;
-    background: #fee2e2;
-    border-bottom: 1px solid #fecaca;
-  }
-  
-  .error-banner p {
-    margin: 0;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #dc2626;
-  }
-  
-  .dashboard-content {
-    flex: 1;
-    overflow: hidden;
-  }
-
-  /* Desktop split view */
-  .split-view {
-    display: flex;
-    position: relative;
-    gap: 0;
-    min-height: 0; /* Enable flex shrinking */
-    flex: 1; /* Take available space from parent */
-  }
-
-  .divider {
-    width: 1px;
-    background: rgba(0, 0, 0, 0.08);
-    flex-shrink: 0;
-  }
-  
-  /* Mobile styles */
-  .jobs-section.mobile,
-  .watchers-section.mobile {
-    height: 100%;
-    overflow: auto;
-  }
-  
-  .watchers-grid {
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  /* Responsive behavior */
-  @media (max-width: 1200px) {
-    .watchers-section {
-      flex: 0 0 320px; /* Smaller on medium screens */
-    }
-    .jobs-section {
-      min-width: 400px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    .dashboard-header {
-      padding: 0.75rem 1rem;
-      flex-direction: column;
-      gap: 1rem;
-    }
-    .header-left {
-      width: 100%;
-      justify-content: flex-start;
-    }
-
-    .header-search {
-      max-width: none;
-      margin: 0;
-      width: 100%;
-    }
-
-    .header-stats {
-      gap: 1rem;
-    }
-
-    .stat-value {
-      font-size: 1rem;
-    }
-
-    .stat-label {
-      font-size: 0.75rem;
-    }
-
-    /* Mobile switches to single view, no desktop split */
-    .split-view {
-      display: none;
-    }
-  }
 </style>

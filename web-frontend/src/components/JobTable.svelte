@@ -193,45 +193,45 @@
   $: hasActiveFilters = hostFilter || statusFilter || userFilter;
 </script>
 
-<div class="table-container">
+<div class="relative overflow-hidden bg-white rounded-lg border border-gray-200">
   {#if hasActiveFilters}
-    <div class="active-filters">
-      <span class="filter-label">Active filters:</span>
+    <div class="flex flex-wrap items-center gap-2 p-4 bg-gray-50 border-b border-gray-200">
+      <span class="text-sm font-medium text-gray-600">Active filters:</span>
       {#if hostFilter}
-        <span class="filter-chip">
+        <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           Host: {hostFilter}
-          <button on:click={() => hostFilter = ''} class="remove-filter">×</button>
+          <button on:click={() => hostFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
         </span>
       {/if}
       {#if statusFilter}
-        <span class="filter-chip">
+        <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           Status: {jobUtils.getStateLabel(statusFilter)}
-          <button on:click={() => statusFilter = ''} class="remove-filter">×</button>
+          <button on:click={() => statusFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
         </span>
       {/if}
       {#if userFilter}
-        <span class="filter-chip">
+        <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           User: {userFilter}
-          <button on:click={() => userFilter = ''} class="remove-filter">×</button>
+          <button on:click={() => userFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
         </span>
       {/if}
-      <button class="reset-filters" on:click={resetFilters}>Reset all</button>
+      <button class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50" on:click={resetFilters}>Reset all</button>
     </div>
   {/if}
   
-  <table class="job-table">
-    <thead>
+  <table class="w-full border-collapse">
+    <thead class="bg-gray-50">
       <tr>
-        <th class="sortable" on:click|stopPropagation={() => handleSort('job_id')}>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" on:click|stopPropagation={() => handleSort('job_id')}>
           <span>Job ID</span>
           {#if sortBy === 'job_id'}
-            <span class="sort-icon">{sortDesc ? '↓' : '↑'}</span>
+            <span class="ml-1 text-gray-400">{sortDesc ? '↓' : '↑'}</span>
           {/if}
         </th>
-        <th class="sortable" on:click|stopPropagation={() => handleSort('name')}>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" on:click|stopPropagation={() => handleSort('name')}>
           <span>Name</span>
           {#if sortBy === 'name'}
-            <span class="sort-icon">{sortDesc ? '↓' : '↑'}</span>
+            <span class="ml-1 text-gray-400">{sortDesc ? '↓' : '↑'}</span>
           {/if}
         </th>
         <th class="filter-dropdown">
