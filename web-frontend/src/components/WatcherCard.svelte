@@ -198,7 +198,7 @@
   }
   
   function copyWatcher() {
-    // Create watcher config
+    // Create watcher config including job info
     const watcherConfig = {
       name: watcher.name,
       pattern: watcher.pattern,
@@ -207,7 +207,10 @@
       condition: watcher.condition,
       actions: watcher.actions || [],
       timer_mode_enabled: watcher.timer_mode_enabled || false,
-      timer_interval_seconds: watcher.timer_interval_seconds || 30
+      timer_interval_seconds: watcher.timer_interval_seconds || 30,
+      // Include original job info for better copy experience
+      job_id: watcher.job_id,
+      hostname: watcher.hostname
     };
     
     // Store in localStorage as backup
@@ -1027,23 +1030,23 @@
     .control-btn,
     .expand-btn,
     .edit-btn {
-      width: 32px;
-      height: 32px;
-      min-width: 32px;
-      min-height: 32px;
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
     }
 
     .edit-btn svg {
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
     }
-    
+
     .copy-btn {
       padding: 0;
-      width: 32px;
-      height: 32px;
-      min-width: 32px;
-      min-height: 32px;
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
       font-size: 0.625rem;
     }
 
@@ -1052,8 +1055,8 @@
     }
 
     .copy-btn svg {
-      width: 16px;
-      height: 16px;
+      width: 12px;
+      height: 12px;
     }
     
     

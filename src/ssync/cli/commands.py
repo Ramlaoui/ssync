@@ -128,12 +128,16 @@ class SyncCommand(BaseCommand):
             # Initialize SLURM manager
             slurm_manager = SlurmManager(self.slurm_hosts, use_ssh_config=True)
 
+            # Get path restrictions from config
+            from ..utils.config import config
+
             # Initialize sync manager
             sync_manager = SyncManager(
                 slurm_manager=slurm_manager,
                 source_dir=source_dir,
                 use_gitignore=not no_gitignore,
                 max_depth=max_depth,
+                path_restrictions=config.path_restrictions,
             )
 
             # Filter hosts if specific host requested

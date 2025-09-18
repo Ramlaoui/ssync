@@ -8,18 +8,51 @@
   export let jobId: string;
   export let hostname: string;
   export let isVisible = false;
+  export let copiedWatcherConfig: any = null;
 
   const dispatch = createEventDispatcher();
 
+  // Debug logging
+  $: console.log('WatcherCreator props:', { jobId, hostname, isVisible, copiedWatcherConfig });
+
   // Smart defaults for immediate creation
-  let watcherName = `Watcher for Job ${jobId}`;
+  let watcherName = '';
   let pattern = '';
   let interval = 30;
   let watcherOutputType: 'stdout' | 'stderr' | 'both' = 'stdout';
+
+  // Update watcher name reactively when jobId changes
+  $: if (jobId && !copiedWatcherConfig) {
+    watcherName = `Watcher for Job ${jobId}`;
+  }
   let actions: WatcherAction[] = [{
     type: 'log_event',
     params: { message: 'Pattern matched in job output' }
   }];
+
+  // Ensure all actions have params initialized
+  $: actions = actions.map(action => ({
+    ...action,
+    params: action.params || {}
+  }));
+
+  // Initialize from copied configuration if provided
+  $: if (copiedWatcherConfig && isVisible) {
+    watcherName = copiedWatcherConfig.name || `Copy of ${copiedWatcherConfig.name}`;
+    pattern = copiedWatcherConfig.pattern || '';
+    captures = copiedWatcherConfig.captures || [];
+    interval = copiedWatcherConfig.interval_seconds || 30;
+    watcherOutputType = copiedWatcherConfig.output_type || 'stdout';
+    maxTriggers = copiedWatcherConfig.max_triggers || 10;
+    timerModeEnabled = copiedWatcherConfig.timer_mode_enabled || false;
+    timerInterval = copiedWatcherConfig.timer_interval_seconds || 30;
+    if (copiedWatcherConfig.actions) {
+      actions = [...copiedWatcherConfig.actions];
+    }
+    if (copiedWatcherConfig.condition) {
+      condition = copiedWatcherConfig.condition;
+    }
+  }
 
   // Progressive disclosure states
   let showAdvanced = false;
@@ -32,11 +65,13 @@
   let condition = '';
   let maxTriggers = 10;
   let timerModeEnabled = false;
+  let useSeparateTimerInterval = false;
   let timerInterval = 30;
 
   // UI state
   let isSubmitting = false;
   let error: string | null = null;
+  let success: string | null = null;
   let jobOutput = '';
   let loadingOutput = false;
 
@@ -78,12 +113,22 @@
       const response = await api.get(`/api/jobs/${jobId}/output`, {
         params: {
           host: hostname,
-          type: watcherOutputType,
           lines: 50
         }
       });
-      jobOutput = response.data.content || 'No output available';
+      // Get the appropriate output based on the selected type
+      let output = '';
+      if (watcherOutputType === 'stdout') {
+        output = response.data.stdout || '';
+      } else if (watcherOutputType === 'stderr') {
+        output = response.data.stderr || '';
+      } else {
+        // 'both' - combine stdout and stderr
+        output = (response.data.stdout || '') + '\n' + (response.data.stderr || '');
+      }
+      jobOutput = output || 'No output available';
     } catch (err) {
+      console.error('Failed to fetch job output:', err);
       jobOutput = 'Failed to load job output';
     } finally {
       loadingOutput = false;
@@ -93,8 +138,46 @@
   function addSimpleAction() {
     actions = [...actions, {
       type: 'log_event',
-      params: { message: 'New action triggered' }
+      params: { message: '' }
     }];
+  }
+
+  // Initialize params when action type changes
+  function updateActionType(index: number, newType: string) {
+    const action = actions[index];
+    action.type = newType;
+
+    // Initialize params based on type
+    switch(newType) {
+      case 'log_event':
+        action.params = { message: '' };
+        break;
+      case 'store_metric':
+        action.params = { metric_name: '', value: '' };
+        break;
+      case 'run_command':
+        action.params = { command: '' };
+        break;
+      case 'notify_email':
+        action.params = { to: '', subject: '', message: '' };
+        break;
+      case 'notify_slack':
+        action.params = { webhook: '', message: '' };
+        break;
+      case 'cancel_job':
+        action.params = { reason: '' };
+        break;
+      case 'resubmit':
+        action.params = { delay: 0 };
+        break;
+      case 'pause_watcher':
+        action.params = {};
+        break;
+      default:
+        action.params = {};
+    }
+
+    actions = actions; // Trigger reactivity
   }
 
   function removeAction(index: number) {
@@ -102,13 +185,97 @@
   }
 
   async function createWatcher() {
+    console.log('createWatcher called');
+
+    // Validate required fields
+    if (!watcherName.trim()) {
+      error = 'Watcher name is required';
+      return;
+    }
+
     if (!pattern.trim()) {
       error = 'Pattern is required';
+      console.log('Pattern validation failed');
       return;
+    }
+
+    if (interval < 1 || interval > 3600) {
+      error = 'Check interval must be between 1 and 3600 seconds';
+      return;
+    }
+
+    if (maxTriggers < 1 || maxTriggers > 1000) {
+      error = 'Max triggers must be between 1 and 1000';
+      return;
+    }
+
+    if (timerModeEnabled && useSeparateTimerInterval && (timerInterval < 1 || timerInterval > 3600)) {
+      error = 'Timer interval must be between 1 and 3600 seconds';
+      return;
+    }
+
+    // Validate actions
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      const params = action.params || {};
+
+      switch (action.type) {
+        case 'store_metric':
+          if (!params.metric_name || !params.metric_name.trim()) {
+            error = `Action ${i + 1}: Metric name is required`;
+            return;
+          }
+          if (!params.value || !params.value.trim()) {
+            error = `Action ${i + 1}: Value expression is required`;
+            return;
+          }
+          break;
+        case 'notify_email':
+          if (!params.to || !params.to.trim()) {
+            error = `Action ${i + 1}: Email address is required`;
+            return;
+          }
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(params.to)) {
+            error = `Action ${i + 1}: Invalid email address`;
+            return;
+          }
+          if (!params.subject || !params.subject.trim()) {
+            error = `Action ${i + 1}: Email subject is required`;
+            return;
+          }
+          break;
+        case 'notify_slack':
+          if (!params.webhook || !params.webhook.trim()) {
+            error = `Action ${i + 1}: Slack webhook URL is required`;
+            return;
+          }
+          try {
+            const url = new URL(params.webhook);
+            if (!params.webhook.startsWith('https://hooks.slack.com/services/')) {
+              error = `Action ${i + 1}: Invalid Slack webhook URL format`;
+              return;
+            }
+          } catch {
+            error = `Action ${i + 1}: Invalid URL`;
+            return;
+          }
+          break;
+        case 'resubmit':
+          if (params.delay !== undefined && params.delay !== null) {
+            const delay = Number(params.delay);
+            if (isNaN(delay) || delay < 0 || delay > 86400) {
+              error = `Action ${i + 1}: Delay must be between 0 and 86400 seconds`;
+              return;
+            }
+          }
+          break;
+      }
     }
 
     isSubmitting = true;
     error = null;
+    success = null;
 
     try {
       const watcherData = {
@@ -123,22 +290,63 @@
         max_triggers: maxTriggers,
         output_type: watcherOutputType,
         timer_mode_enabled: timerModeEnabled,
-        timer_interval_seconds: timerInterval
+        // Send timer_interval_seconds when timer mode is enabled
+        ...(timerModeEnabled ? {
+          timer_interval_seconds: useSeparateTimerInterval ? timerInterval : interval
+        } : {})
       };
 
-      await api.post('/api/watchers', watcherData);
-      dispatch('created');
-      close();
+      console.log('Sending watcher data:', watcherData);
+      const response = await api.post('/api/watchers', watcherData);
+      console.log('Watcher created successfully:', response.data);
+
+      // Show success message
+      success = 'Watcher created successfully!';
+      isSubmitting = false;
+
+      // Wait a bit for user to see the success message
+      setTimeout(() => {
+        dispatch('created');
+        close();
+      }, 1500);
     } catch (err: any) {
+      console.error('Failed to create watcher:', err);
       error = err.response?.data?.detail || 'Failed to create watcher';
-    } finally {
       isSubmitting = false;
     }
   }
 
+  let overlayElement: HTMLElement;
+  let mouseDownInsideDialog = false;
+
   function close() {
-    isVisible = false;
     dispatch('close');
+  }
+
+  function handleOverlayMouseDown(event: MouseEvent) {
+    // Check if mousedown started on the overlay itself
+    mouseDownInsideDialog = event.target !== overlayElement;
+  }
+
+  function handleOverlayClick(event: MouseEvent) {
+    // Don't close if:
+    // 1. Click started inside the dialog
+    // 2. Text is selected
+    // 3. Click target is not the overlay
+
+    const selection = window.getSelection();
+    const hasSelection = selection && selection.toString().length > 0;
+
+    if (mouseDownInsideDialog || hasSelection || event.target !== overlayElement) {
+      return;
+    }
+
+    close();
+  }
+
+  function handleDialogMouseDown(event: MouseEvent) {
+    mouseDownInsideDialog = true;
+    event.stopPropagation();
   }
 
   // Auto-fetch job output when output viewer is opened
@@ -148,11 +356,18 @@
 </script>
 
 {#if isVisible}
-  <div class="watcher-creator" transition:slide={{ duration: 300 }}>
+  <div class="watcher-creator-overlay" bind:this={overlayElement} on:mousedown={handleOverlayMouseDown} on:click={handleOverlayClick}>
+    <div class="watcher-creator" on:mousedown={handleDialogMouseDown} on:click|stopPropagation transition:slide={{ duration: 300 }}>
     <div class="creator-header">
       <div class="header-info">
-        <h3>Create Watcher</h3>
-        <span class="job-info">Job #{jobId} on {hostname}</span>
+        <h3>{copiedWatcherConfig ? 'Copy Watcher' : 'Create Watcher'}</h3>
+        <span class="job-info">
+          {#if jobId && hostname}
+            Job #{jobId} on {hostname}
+          {:else}
+            Selecting job...
+          {/if}
+        </span>
       </div>
       <button class="close-btn" on:click={close}>
         <X class="w-4 h-4" />
@@ -162,6 +377,12 @@
     {#if error}
       <div class="error-message" transition:slide={{ duration: 200 }}>
         {error}
+      </div>
+    {/if}
+
+    {#if success}
+      <div class="success-message" transition:slide={{ duration: 200 }}>
+        {success}
       </div>
     {/if}
 
@@ -226,6 +447,9 @@
               <option value={30}>30 seconds</option>
               <option value={60}>1 minute</option>
               <option value={300}>5 minutes</option>
+              <option value={600}>10 minutes</option>
+              <option value={1800}>30 minutes</option>
+              <option value={3600}>1 hour</option>
             </select>
           </div>
           <div class="form-group">
@@ -301,20 +525,48 @@
                   min="1"
                   max="1000"
                   class="form-input"
+                  on:input={(e) => {
+                    const value = Number(e.target.value);
+                    if (!isNaN(value)) {
+                      maxTriggers = Math.max(1, Math.min(1000, value));
+                    }
+                  }}
                 />
               </div>
               <div class="form-group">
-                <label>
+                <label title="After first pattern match, switch to periodic execution mode">
                   <input type="checkbox" bind:checked={timerModeEnabled} />
-                  Timer Mode
+                  Timer Mode (execute periodically after first match)
                 </label>
                 {#if timerModeEnabled}
-                  <input
-                    type="number"
-                    bind:value={timerInterval}
-                    placeholder="Timer interval (seconds)"
-                    class="form-input mt-2"
-                  />
+                  <div class="timer-mode-options">
+                    <label class="checkbox-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={useSeparateTimerInterval}
+                      />
+                      Use different interval for timer mode
+                    </label>
+                    {#if useSeparateTimerInterval}
+                      <input
+                        type="number"
+                        bind:value={timerInterval}
+                        placeholder="Timer interval (seconds)"
+                        class="form-input mt-2"
+                        min="1"
+                        max="3600"
+                        on:input={(e) => {
+                          const value = Number(e.target.value);
+                          if (!isNaN(value)) {
+                            timerInterval = Math.max(1, Math.min(3600, value));
+                          }
+                        }}
+                      />
+                      <span class="form-hint">Timer will execute every {timerInterval}s after first match</span>
+                    {:else}
+                      <span class="form-hint">Timer will use the same {interval}s interval</span>
+                    {/if}
+                  </div>
                 {/if}
               </div>
             </div>
@@ -331,31 +583,49 @@
 
               {#each actions as action, i}
                 <div class="action-item">
-                  <select bind:value={action.type} class="action-type-select">
+                  <select
+                    value={action.type}
+                    on:change={(e) => updateActionType(i, e.target.value)}
+                    class="action-type-select">
                     <option value="log_event">Log Event</option>
                     <option value="store_metric">Store Metric</option>
+                    <option value="run_command">Run Command</option>
                     <option value="notify_email">Send Email</option>
+                    <option value="notify_slack">Send Slack</option>
+                    <option value="cancel_job">Cancel Job</option>
+                    <option value="resubmit">Resubmit Job</option>
+                    <option value="pause_watcher">Pause Watcher</option>
                   </select>
 
                   {#if action.type === 'log_event'}
                     <input
                       type="text"
                       bind:value={action.params.message}
-                      placeholder="Log message"
+                      placeholder="Log message (can use $1, $2 for captures)"
                       class="action-input"
                     />
                   {:else if action.type === 'store_metric'}
                     <input
                       type="text"
                       bind:value={action.params.metric_name}
-                      placeholder="Metric name"
+                      placeholder="Metric name (e.g., gpu_usage)"
                       class="action-input"
+                      pattern="^[a-zA-Z_][a-zA-Z0-9_]*$"
+                      title="Must start with letter or underscore, followed by letters, numbers, or underscores"
+                      class:invalid={action.params.metric_name && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(action.params.metric_name)}
                     />
                     <input
                       type="text"
                       bind:value={action.params.value}
-                      placeholder="Value expression"
+                      placeholder="Value (e.g., $1 or float($1))"
                       class="action-input"
+                    />
+                  {:else if action.type === 'run_command'}
+                    <input
+                      type="text"
+                      bind:value={action.params.command}
+                      placeholder="Command (e.g., wandb sync, python script.py)"
+                      class="action-input wide"
                     />
                   {:else if action.type === 'notify_email'}
                     <input
@@ -363,6 +633,8 @@
                       bind:value={action.params.to}
                       placeholder="Email address"
                       class="action-input"
+                      pattern="^[^\s@]+@[^\s@]+\.[^\s@]+$"
+                      class:invalid={action.params.to && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(action.params.to)}
                     />
                     <input
                       type="text"
@@ -370,6 +642,45 @@
                       placeholder="Subject"
                       class="action-input"
                     />
+                  {:else if action.type === 'notify_slack'}
+                    <input
+                      type="url"
+                      bind:value={action.params.webhook}
+                      placeholder="Slack webhook URL"
+                      class="action-input wide"
+                      pattern="^https://hooks\.slack\.com/services/.+"
+                      class:invalid={action.params.webhook && !action.params.webhook.startsWith('https://hooks.slack.com/services/')}
+                    />
+                    <input
+                      type="text"
+                      bind:value={action.params.message}
+                      placeholder="Message"
+                      class="action-input"
+                    />
+                  {:else if action.type === 'cancel_job'}
+                    <input
+                      type="text"
+                      bind:value={action.params.reason}
+                      placeholder="Cancellation reason (optional)"
+                      class="action-input wide"
+                    />
+                  {:else if action.type === 'resubmit'}
+                    <input
+                      type="number"
+                      bind:value={action.params.delay}
+                      placeholder="Delay in seconds"
+                      class="action-input"
+                      min="0"
+                      max="86400"
+                      on:input={(e) => {
+                        const value = Number(e.target.value);
+                        if (!isNaN(value)) {
+                          action.params.delay = Math.max(0, Math.min(86400, value));
+                        }
+                      }}
+                    />
+                  {:else if action.type === 'pause_watcher'}
+                    <span class="action-desc">This watcher will pause after triggering</span>
                   {/if}
 
                   <button
@@ -405,16 +716,32 @@
       </div>
     </div>
   </div>
+  </div>
 {/if}
 
 <style>
+  .watcher-creator-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+  }
   .watcher-creator {
     background: white;
     border: 1px solid #e5e7eb;
     border-radius: 8px;
-    margin-bottom: 1rem;
-    overflow: hidden;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    max-width: 600px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
   }
 
   .creator-header {
@@ -465,6 +792,16 @@
     border-radius: 6px;
     font-size: 0.875rem;
     border: 1px solid #fecaca;
+  }
+
+  .success-message {
+    background: #f0fdf4;
+    color: #16a34a;
+    padding: 0.75rem;
+    margin: 0 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    border: 1px solid #bbf7d0;
   }
 
   .quick-form {
@@ -754,6 +1091,18 @@
     font-size: 0.75rem;
   }
 
+  .action-input.wide {
+    min-width: 250px;
+  }
+
+  .action-desc {
+    flex: 1;
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-style: italic;
+    padding: 0.25rem 0.5rem;
+  }
+
   .remove-action-btn {
     background: #dc2626;
     color: white;
@@ -818,6 +1167,29 @@
     cursor: not-allowed;
   }
 
+  /* Timer mode styles */
+  .timer-mode-options {
+    margin-top: 0.5rem;
+    padding-left: 1.5rem;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: #4b5563;
+    margin-bottom: 0.5rem;
+  }
+
+  .form-hint {
+    display: block;
+    font-size: 0.75rem;
+    color: #6b7280;
+    margin-top: 0.25rem;
+    font-style: italic;
+  }
+
   /* Mobile responsiveness */
   @media (max-width: 768px) {
     .form-row {
@@ -842,5 +1214,22 @@
       font-size: 0.6875rem;
       max-height: 150px;
     }
+  }
+
+  /* Validation styles */
+  .action-input.invalid {
+    border-color: #ef4444;
+  }
+
+  .action-input:invalid {
+    border-color: #ef4444;
+  }
+
+  .form-input.invalid {
+    border-color: #ef4444;
+  }
+
+  .form-input:invalid {
+    border-color: #ef4444;
   }
 </style>

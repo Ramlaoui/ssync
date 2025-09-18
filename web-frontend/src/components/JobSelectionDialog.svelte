@@ -1,17 +1,49 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import type { JobInfo } from '../types/api';
   import { jobUtils } from '../lib/jobUtils';
-  
-  export let jobs: JobInfo[] = [];
+  import { jobStateManager } from '../lib/JobStateManager';
+  import { get } from 'svelte/store';
+
   export let title = "Select a Job";
   export let description = "Choose a job to attach watchers to";
-  
+  export let initialJobs: JobInfo[] = [];
+  export let fetchJobsOnMount = true;
+
   const dispatch = createEventDispatcher();
   
   let selectedJob: JobInfo | null = null;
   let searchTerm = '';
-  
+  let jobs: JobInfo[] = initialJobs;
+  let isLoading = false;
+
+  // Subscribe to job updates
+  const jobsStore = jobStateManager.getAllJobs();
+
+  // Reactive subscription to job store - update jobs whenever store changes
+  $: {
+    const allJobs = $jobsStore;
+    const runningJobs = allJobs.filter(job => job.state === 'R' || job.state === 'PD');
+    // Only update if we have new jobs or if jobs list is empty
+    if (runningJobs.length > 0 || (jobs.length === 0 && !isLoading)) {
+      jobs = runningJobs;
+    }
+  }
+
+  onMount(async () => {
+    // Fetch fresh jobs in background if requested
+    if (fetchJobsOnMount) {
+      isLoading = true;
+      try {
+        await jobStateManager.syncAllHosts();
+      } catch (err) {
+        console.error('Failed to fetch fresh jobs:', err);
+      } finally {
+        isLoading = false;
+      }
+    }
+  });
+
   // Filter jobs based on search
   $: filteredJobs = jobs.filter(job => {
     if (!searchTerm) return true;
@@ -101,7 +133,13 @@
     </div>
     
     <div class="dialog-body">
-      {#if jobs.length === 0}
+      {#if isLoading && jobs.length === 0}
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <h3>Loading Jobs...</h3>
+          <p>Fetching running and pending jobs from all hosts</p>
+        </div>
+      {:else if jobs.length === 0}
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="currentColor" class="empty-icon">
             <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M14,6L8,18H10L16,6H14Z"/>
@@ -121,6 +159,12 @@
             bind:value={searchTerm}
             class="search-input"
           />
+          {#if isLoading}
+            <div class="loading-indicator">
+              <div class="small-spinner"></div>
+              <span>Updating...</span>
+            </div>
+          {/if}
         </div>
         
         <!-- Jobs list -->
@@ -341,6 +385,63 @@
     margin: 0;
     color: #6b7280;
     font-size: 0.875rem;
+  }
+
+  /* Loading state */
+  .loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    text-align: center;
+  }
+
+  .loading-state h3 {
+    margin: 1rem 0 0.5rem 0;
+    font-size: 1.25rem;
+    color: #374151;
+  }
+
+  .loading-state p {
+    margin: 0;
+    color: #6b7280;
+    font-size: 0.875rem;
+  }
+
+  .spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid #e5e7eb;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  .small-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #e5e7eb;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .loading-indicator {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: #6b7280;
   }
   
   /* Search bar */

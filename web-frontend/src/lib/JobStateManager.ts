@@ -24,6 +24,7 @@ interface JobUpdate {
   source: DataSource;
   timestamp: number;
   priority: UpdatePriority;
+  messageType?: string; // Track message type for better deduplication
 }
 
 interface JobCacheEntry {
@@ -46,22 +47,24 @@ interface ManagerState {
   // Core data
   jobCache: Map<string, JobCacheEntry>;      // cacheKey -> job data
   hostStates: Map<string, HostState>;        // hostname -> host state
-  
+
   // Connection state
   dataSource: DataSource;
   wsConnected: boolean;
   wsHealthy: boolean;
   pollingActive: boolean;
-  
+  wsInitialDataReceived: boolean;  // Track if we've received initial WS data
+  wsInitialDataTimestamp: number;   // When we received initial WS data
+
   // Activity tracking
   lastActivity: number;
   isTabActive: boolean;
   isPaused: boolean;
-  
+
   // Update queue
   pendingUpdates: JobUpdate[];
   processingUpdates: boolean;
-  
+
   // Performance metrics
   metrics: PerformanceMetrics;
 }
@@ -87,7 +90,7 @@ const CONFIG = {
     batchSize: 50,
     batchDelay: 100,
     batchDelayImmediate: 0, // For forced refreshes
-    deduplicateWindow: 50,
+    deduplicateWindow: 500, // Increased from 50ms to catch updates from different sources
   },
   
   // Cache lifetimes based on job state
@@ -126,6 +129,8 @@ class JobStateManager {
     wsConnected: false,
     wsHealthy: false,
     pollingActive: false,
+    wsInitialDataReceived: false,
+    wsInitialDataTimestamp: 0,
     lastActivity: Date.now(),
     isTabActive: true,
     isPaused: false,
@@ -153,6 +158,11 @@ class JobStateManager {
   // ========================================================================
   
   constructor() {
+    // Bind methods to ensure proper context
+    this.processUpdateQueue = this.processUpdateQueue.bind(this);
+    this.queueUpdate = this.queueUpdate.bind(this);
+    this.handleWebSocketMessage = this.handleWebSocketMessage.bind(this);
+
     this.setupEventListeners();
     this.startHealthMonitoring();
   }
@@ -231,13 +241,15 @@ class JobStateManager {
     };
     
     this.ws.onclose = () => {
-      this.updateState({ 
-        wsConnected: false, 
+      this.updateState({
+        wsConnected: false,
         wsHealthy: false,
         dataSource: 'api',
+        wsInitialDataReceived: false,  // Reset initial data flag
+        wsInitialDataTimestamp: 0,
       });
       this.startPolling();
-      
+
       // Reconnect after delay
       setTimeout(() => this.connectWebSocket(), CONFIG.health.retryDelay);
     };
@@ -247,19 +259,43 @@ class JobStateManager {
     };
   }
   
+  private currentViewJobId: string | null = null;
+  private currentViewHostname: string | null = null;
+
+  /**
+   * Set the currently viewed job for priority updates
+   */
+  public setCurrentViewJob(jobId: string | null, hostname: string | null): void {
+    this.currentViewJobId = jobId;
+    this.currentViewHostname = hostname;
+    console.log(`[JobStateManager] Current view job set to ${jobId} on ${hostname}`);
+  }
+
   private handleWebSocketMessage(data: any): void {
     if (data.type === 'pong') return;
-    
+
     console.log('[JobStateManager] WebSocket message received:', data.type, data);
-    
+
     // Track WebSocket messages
     this.updateMetric('wsMessages', 1);
-    
+
     // Handle different message formats
     if (data.type === 'initial' && data.jobs) {
       // Handle initial data load with jobs grouped by hostname
       console.log(`[JobStateManager] Processing initial data with ${data.total || 0} total jobs`);
-      
+
+      // Mark that we've received initial WebSocket data
+      this.updateState({
+        wsInitialDataReceived: true,
+        wsInitialDataTimestamp: Date.now()
+      });
+
+      // Clear existing cache to prevent duplicates from stale data
+      this.state.update(s => {
+        s.jobCache.clear();
+        return s;
+      });
+
       for (const [hostname, jobs] of Object.entries(data.jobs)) {
         if (Array.isArray(jobs)) {
           console.log(`[JobStateManager] Processing ${jobs.length} jobs for ${hostname}`);
@@ -276,12 +312,17 @@ class JobStateManager {
                 source: 'websocket',
                 timestamp: Date.now(),
                 priority: 'high',
+                messageType: 'initial',
               }, true); // Immediate for initial data
             }
           });
         }
       }
     } else if (data.type === 'job_update' || data.type === 'state_change') {
+      // Check if this is the currently viewed job
+      const isCurrentJob = this.currentViewJobId === data.job_id &&
+                          this.currentViewHostname === data.hostname;
+
       this.queueUpdate({
         jobId: data.job_id,
         hostname: data.hostname,
@@ -289,7 +330,8 @@ class JobStateManager {
         source: 'websocket',
         timestamp: Date.now(),
         priority: 'realtime',
-      }, false); // Normal delay for updates
+        messageType: data.type,
+      }, isCurrentJob); // Immediate for current job, normal delay for others
     } else if (data.type === 'batch_update') {
       data.updates.forEach((update: any) => {
         this.queueUpdate({
@@ -299,6 +341,7 @@ class JobStateManager {
           source: 'websocket',
           timestamp: Date.now(),
           priority: 'high',
+          messageType: 'batch_update',
         }, false); // Normal delay for batch updates
       });
     } else if (Array.isArray(data)) {
@@ -313,6 +356,7 @@ class JobStateManager {
             source: 'websocket',
             timestamp: Date.now(),
             priority: 'high',
+            messageType: 'array',
           }, true); // Immediate for direct array
         }
       });
@@ -328,6 +372,7 @@ class JobStateManager {
             source: 'websocket',
             timestamp: Date.now(),
             priority: 'high',
+            messageType: 'jobs_array',
           }, true); // Immediate for jobs array
         }
       });
@@ -372,14 +417,21 @@ class JobStateManager {
   public async syncAllHosts(forceSync = false): Promise<void> {
     const state = get(this.state);
     if (!forceSync && state.isPaused) return;
-    
+
+    // Skip API sync if we just received WebSocket initial data
+    if (!forceSync && state.wsInitialDataReceived &&
+        (Date.now() - state.wsInitialDataTimestamp < 5000)) {
+      console.log('[JobStateManager] Skipping API sync - WebSocket initial data is fresh');
+      return;
+    }
+
     try {
       console.log('[JobStateManager] Starting sync for all hosts' + (forceSync ? ' (forced)' : ''));
       // Get list of hosts
       const hostsResponse = await api.get<HostInfo[]>('/api/hosts');
       const hosts = hostsResponse.data || [];
       console.log(`[JobStateManager] Found ${hosts.length} hosts:`, hosts.map(h => h.hostname));
-      
+
       if (hosts.length === 0) {
         console.warn('[JobStateManager] No hosts returned from API');
         // Try fetching from /api/status directly if no hosts
@@ -510,6 +562,7 @@ class JobStateManager {
                 source: 'api',
                 timestamp: now,
                 priority: 'normal',
+                messageType: 'api_sync',
               });
             });
             
@@ -574,25 +627,31 @@ class JobStateManager {
     this.state.update(s => {
       // Add to queue
       s.pendingUpdates.push(update);
-      
-      // Deduplicate within window
+
+      // Enhanced deduplication within window
       if (s.pendingUpdates.length > 1) {
         const cutoff = Date.now() - CONFIG.updateStrategy.deduplicateWindow;
         const recent = s.pendingUpdates.filter(u => u.timestamp > cutoff);
-        
-        // Keep only latest update per job
+
+        // Keep only latest update per job, with source priority
         const latestByJob = new Map<string, JobUpdate>();
         recent.forEach(u => {
           const key = `${u.hostname}:${u.jobId}`;
           const existing = latestByJob.get(key);
-          if (!existing || u.timestamp > existing.timestamp) {
+
+          // WebSocket updates take priority over API updates
+          const shouldReplace = !existing ||
+            (u.source === 'websocket' && existing.source === 'api') ||
+            (u.source === existing.source && u.timestamp > existing.timestamp);
+
+          if (shouldReplace) {
             latestByJob.set(key, u);
           }
         });
-        
+
         s.pendingUpdates = Array.from(latestByJob.values());
       }
-      
+
       return s;
     });
     
@@ -615,35 +674,47 @@ class JobStateManager {
   }
   
   private processUpdateQueue(): void {
+    // Safety check for undefined state
+    if (!this.state) {
+      console.error('[JobStateManager] State is undefined in processUpdateQueue');
+      return;
+    }
+
     const state = get(this.state);
-    if (state.processingUpdates || state.pendingUpdates.length === 0) return;
-    
+    if (!state || state.processingUpdates || state.pendingUpdates.length === 0) return;
+
     const startTime = performance.now();
-    
+
     // Get batch to process
     const batch = state.pendingUpdates.slice(0, CONFIG.updateStrategy.batchSize);
     const remaining = state.pendingUpdates.slice(CONFIG.updateStrategy.batchSize);
-    
+
     console.log(`[JobStateManager] Processing ${batch.length} updates, ${remaining.length} remaining`);
-    
+
     // Update state with processed jobs
     this.state.update(s => {
       s.processingUpdates = true;
       s.pendingUpdates = remaining;
-      
+
       // Create a new Map to trigger Svelte reactivity
       const newCache = new Map(s.jobCache);
-      
+
       batch.forEach((update) => {
         const cacheKey = `${update.hostname}:${update.jobId}`;
         const existing = newCache.get(cacheKey);
-        
-        // Determine if we should update based on source priority
-        const shouldUpdate = !existing || 
-                            update.source === 'websocket' ||
-                            update.timestamp > existing.lastUpdated;
-        
+
+        // Enhanced update logic with source priority
+        const shouldUpdate = !existing ||
+                            (update.source === 'websocket' && existing.lastSource !== 'websocket') ||
+                            (update.source === existing.lastSource && update.timestamp > existing.lastUpdated) ||
+                            (existing.job.state !== update.job.state); // Always update on state change
+
         if (shouldUpdate) {
+          // Check for state transitions - log for debugging
+          if (existing && existing.job.state !== update.job.state) {
+            console.log(`[JobStateManager] Job ${cacheKey} state change: ${existing.job.state} -> ${update.job.state}`);
+          }
+
           newCache.set(cacheKey, {
             job: update.job,
             lastUpdated: update.timestamp,
@@ -651,12 +722,14 @@ class JobStateManager {
             output: existing?.output,
             outputTimestamp: existing?.outputTimestamp,
           });
-          
+
           // Track metrics
           s.metrics.totalUpdates++;
+        } else {
+          console.log(`[JobStateManager] Skipping duplicate update for ${cacheKey} from ${update.source}`);
         }
       });
-      
+
       // Replace the entire Map to trigger reactivity
       s.jobCache = newCache;
       s.processingUpdates = false;
@@ -804,11 +877,18 @@ class JobStateManager {
       jobCache: new Map(),
       pendingUpdates: [],
       processingUpdates: false,
+      wsInitialDataReceived: false,
+      wsInitialDataTimestamp: 0,
     }));
     // Connect WebSocket first for real-time updates
     this.connectWebSocket();
-    // Force immediate sync on initialization
-    await this.forceInitialSync();
+    // Wait a bit for WebSocket to connect and send initial data
+    await new Promise(resolve => setTimeout(resolve, 500));
+    // Only sync if WebSocket hasn't provided data
+    const state = get(this.state);
+    if (!state.wsInitialDataReceived) {
+      await this.forceInitialSync();
+    }
   }
   
   public destroy(): void {
@@ -821,7 +901,24 @@ class JobStateManager {
   public forceRefresh(): Promise<void> {
     return this.syncAllHosts(true);
   }
-  
+
+  public hasRecentData(maxAge: number = 30000): boolean {
+    // Check if we have recent data from any host (within maxAge milliseconds)
+    const now = Date.now();
+    const hosts = get(this.hostConfigs);
+
+    for (const host of hosts) {
+      const hostState = this.hostStates.get(host.host);
+      if (hostState && (now - hostState.lastSync) < maxAge) {
+        console.log(`[JobStateManager] Host ${host.host} has recent data (${Math.round((now - hostState.lastSync) / 1000)}s old)`);
+        return true;
+      }
+    }
+
+    console.log('[JobStateManager] No recent data found, refresh needed');
+    return false;
+  }
+
   private async forceInitialSync(): Promise<void> {
     console.log('[JobStateManager] Forcing initial sync...');
     // Force sync all hosts immediately
@@ -920,15 +1017,25 @@ class JobStateManager {
   
   public getAllJobs(): Readable<JobInfo[]> {
     return derived(this.state, $state => {
-      const jobs = Array.from($state.jobCache.values())
-        .map(entry => entry.job)
+      // Create a Map to ensure unique jobs by hostname:job_id
+      const uniqueJobs = new Map<string, JobInfo>();
+
+      // Process all cached jobs
+      $state.jobCache.forEach((entry, cacheKey) => {
+        // Only include jobs with valid data
+        if (entry.job && entry.job.job_id && entry.job.hostname) {
+          uniqueJobs.set(cacheKey, entry.job);
+        }
+      });
+
+      const jobs = Array.from(uniqueJobs.values())
         .sort((a, b) => {
           const timeA = new Date(a.submit_time || 0).getTime();
           const timeB = new Date(b.submit_time || 0).getTime();
           return timeB - timeA;
         });
-      
-      console.log(`[JobStateManager] getAllJobs returning ${jobs.length} jobs from cache of ${$state.jobCache.size}`);
+
+      console.log(`[JobStateManager] getAllJobs returning ${jobs.length} unique jobs from cache of ${$state.jobCache.size}`);
       return jobs;
     });
   }
@@ -943,17 +1050,65 @@ class JobStateManager {
     return derived(this.state, $state => {
       const hostState = $state.hostStates.get(hostname);
       if (!hostState) return [];
-      
+
       const jobs: JobInfo[] = [];
       hostState.jobs.forEach((cacheKey) => {
         const entry = $state.jobCache.get(cacheKey);
         if (entry) jobs.push(entry.job);
       });
-      
+
       return jobs;
     });
   }
-  
+
+  /**
+   * Get a reactive store for a single job
+   * Returns null if job not found
+   */
+  public getJob(jobId: string, hostname: string): Readable<JobInfo | null> {
+    const cacheKey = `${hostname}:${jobId}`;
+    return derived(this.state, $state => {
+      const entry = $state.jobCache.get(cacheKey);
+      return entry?.job || null;
+    });
+  }
+
+  /**
+   * Fetch a single job, prioritizing updates for current view
+   */
+  public async fetchSingleJob(jobId: string, hostname: string, forceRefresh = false): Promise<JobInfo | null> {
+    const cacheKey = `${hostname}:${jobId}`;
+    const state = get(this.state);
+    const cached = state.jobCache.get(cacheKey);
+
+    // Return from cache if valid and not forcing
+    if (!forceRefresh && cached && this.isJobCacheValid(cacheKey)) {
+      return cached.job;
+    }
+
+    // Fetch from API
+    try {
+      this.updateMetric('apiCalls', 1);
+      const response = await api.get<JobInfo>(`/api/jobs/${jobId}?host=${hostname}${forceRefresh ? '&force=true' : ''}`);
+      const job = response.data;
+
+      // Update cache immediately for current job (bypass batch delay)
+      this.queueUpdate({
+        jobId,
+        hostname,
+        job,
+        source: 'api',
+        timestamp: Date.now(),
+        priority: 'realtime',
+      }, true); // Immediate processing
+
+      return job;
+    } catch (error) {
+      console.error(`[JobStateManager] Failed to fetch job ${jobId} on ${hostname}:`, error);
+      return cached?.job || null; // Return cached if available
+    }
+  }
+
   public getConnectionStatus(): Readable<{
     source: DataSource;
     connected: boolean;

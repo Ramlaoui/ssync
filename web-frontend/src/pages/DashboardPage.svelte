@@ -267,10 +267,6 @@
           <span class="stat-value">{totalJobs}</span>
           <span class="stat-label">jobs</span>
         </div>
-        <div class="stat-item">
-          <span class="stat-value">{activeWatchers.length}</span>
-          <span class="stat-label">watchers</span>
-        </div>
       </div>
     </div>
 
@@ -346,6 +342,7 @@
           {watchers}
           {selectedJobId}
           {selectedJobWatchers}
+          on:refresh={loadWatchersData}
         />
       </div>
     {/if}

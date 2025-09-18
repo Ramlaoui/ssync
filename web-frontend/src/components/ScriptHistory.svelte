@@ -53,6 +53,12 @@
   async function loadScriptHistory() {
     console.log('=== Loading script history ===');
     console.log('Current host:', currentHost);
+    console.log('isOpen:', isOpen);
+
+    // Debug localStorage
+    const localStorageData = localStorage.getItem('scriptHistory');
+    console.log('localStorage scriptHistory raw:', localStorageData);
+
     loading = true;
     errorMessage = '';
     try {
@@ -144,9 +150,26 @@
         }
       }
       
-      console.log(`\n=== Total scripts loaded: ${allScripts.length} ===`);
+      console.log(`\n=== Total scripts loaded from API: ${allScripts.length} ===`);
+
+      // Always also check localStorage (not just when API returns 0)
+      console.log('Checking localStorage for additional scripts...');
+      try {
+        const localHistory = JSON.parse(localStorage.getItem('scriptHistory') || '[]');
+        console.log(`Found ${localHistory.length} scripts in localStorage`);
+
+        // Add localStorage scripts that aren't already in allScripts
+        const existingIds = new Set(allScripts.map(s => s.job_id));
+        const newScripts = localHistory.filter(s => !existingIds.has(s.job_id));
+        console.log(`Adding ${newScripts.length} unique scripts from localStorage`);
+        allScripts.push(...newScripts);
+      } catch (e) {
+        console.error('Failed to load from localStorage:', e);
+      }
+
+      console.log(`Total scripts after localStorage: ${allScripts.length}`);
       console.log('All scripts:', allScripts);
-      
+
       // Sort by submit time (newest first)
       scripts = allScripts.sort((a, b) => {
         const dateA = new Date(a.submit_time || 0).getTime();
@@ -256,7 +279,8 @@
   });
   
   // Watch for changes to isOpen and load history when opened
-  $: if (isOpen && loading && scripts.length === 0) {
+  $: if (isOpen) {
+    console.log('ScriptHistory isOpen changed, loading scripts...');
     loadScriptHistory();
   }
   

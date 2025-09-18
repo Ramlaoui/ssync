@@ -138,8 +138,13 @@ class LaunchManager:
 
             if sync_enabled and source_dir:
                 logger.info("Syncing source directory to remote host...")
+                # Get path restrictions from config
+                from .utils.config import config
                 sync_manager = SyncManager(
-                    self.slurm_manager, source_dir, use_gitignore=not no_gitignore
+                    self.slurm_manager,
+                    source_dir,
+                    use_gitignore=not no_gitignore,
+                    path_restrictions=config.path_restrictions
                 )
 
                 sync_success = await loop.run_in_executor(
@@ -335,7 +340,38 @@ class LaunchManager:
 
                 return job
             else:
-                error_msg = f"Failed to submit job to {slurm_host.host.hostname}. Check SLURM configuration and script syntax."
+                # Get more details about why submission failed
+                submission_errors = []
+
+                # Try to gather diagnostic information
+                try:
+                    conn = self.slurm_manager._get_connection(slurm_host.host)
+
+                    # Check if SLURM is available
+                    test_result = conn.run("sinfo -h -o '%P'" , hide=True, warn=True, timeout=5)
+                    if test_result.return_code != 0:
+                        submission_errors.append("Cannot query SLURM partitions. SLURM may be down or inaccessible.")
+                    else:
+                        available_partitions = test_result.stdout.strip()
+                        if available_partitions:
+                            logger.debug(f"Available partitions: {available_partitions}")
+
+                    # Check user's default account
+                    account_result = conn.run("sacctmgr -n -P show user $USER format=account", hide=True, warn=True, timeout=5)
+                    if account_result.ok and account_result.stdout.strip():
+                        logger.debug(f"User accounts: {account_result.stdout.strip()}")
+                    else:
+                        submission_errors.append("Could not verify user's SLURM account.")
+
+                except Exception as diag_error:
+                    submission_errors.append(f"Could not gather diagnostic info: {str(diag_error)}")
+
+                error_msg = f"Failed to submit job to {slurm_host.host.hostname}."
+                if submission_errors:
+                    error_msg += " Issues found: " + " ".join(submission_errors)
+                else:
+                    error_msg += " Check SLURM configuration, script syntax, and cluster availability."
+
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
 
@@ -384,10 +420,6 @@ class LaunchManager:
             has_partition = "#SBATCH --partition" in script_header
             has_time = "#SBATCH --time" in script_header
             has_cpus = "#SBATCH --cpus" in script_header
-            has_gpus = (
-                "#SBATCH --gpus" in script_header
-                or "#SBATCH --gres=gpu" in script_header
-            )
 
             # If script has key SBATCH directives, use minimal command line params
             # to avoid conflicts (command line overrides script directives)
@@ -448,11 +480,6 @@ class LaunchManager:
             watchers = []
             try:
                 # Read the local script to extract watchers
-                local_script_path = (
-                    remote_script_path  # This assumes the script was copied
-                )
-                # We need to read from the original local script instead
-                # Find the original script path from earlier in the method
                 result_read = conn.run(f"cat {remote_script_path}", hide=True)
                 script_content = result_read.stdout
 
@@ -465,8 +492,19 @@ class LaunchManager:
             except Exception as e:
                 logger.warning(f"Failed to extract watchers: {e}")
 
-            result = conn.run(full_cmd, hide=False)
-            job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
+            result = conn.run(full_cmd, hide=False, warn=True)
+
+            # Capture both stdout and stderr for better debugging
+            stdout = result.stdout.strip() if result.stdout else ""
+            stderr = result.stderr.strip() if result.stderr else ""
+
+            # Log the raw output for debugging
+            if stdout:
+                logger.debug(f"sbatch stdout: {stdout}")
+            if stderr:
+                logger.debug(f"sbatch stderr: {stderr}")
+
+            job_id_match = re.search(r"Submitted batch job (\d+)", stdout)
             if job_id_match:
                 job_id = job_id_match.group(1)
                 job = Job(job_id, slurm_host, self.slurm_manager)
@@ -546,9 +584,69 @@ class LaunchManager:
 
                 return job
             else:
-                logger.error(f"Could not parse job ID from: {result.stdout}")
+                # Provide detailed error information
+                error_details = []
+
+                # Check for common SLURM errors in stderr
+                if stderr:
+                    error_details.append(f"SLURM Error: {stderr}")
+
+                    # Check for specific error patterns
+                    if "Invalid account" in stderr or "Invalid user" in stderr:
+                        error_details.append("Account or user validation failed. Check your SLURM account settings.")
+                    elif "Invalid partition" in stderr:
+                        error_details.append("Invalid partition specified. Check available partitions with 'sinfo'.")
+                    elif "Requested node configuration is not available" in stderr:
+                        error_details.append("Requested resources not available. Check node availability and resource limits.")
+                    elif "Batch script contains DOS line breaks" in stderr:
+                        error_details.append("Script has Windows line endings. Convert to Unix format.")
+                    elif "unable to resolve" in stderr.lower():
+                        error_details.append("Script references undefined variables or modules.")
+                    elif "permission denied" in stderr.lower():
+                        error_details.append("Permission denied. Check script permissions and path access.")
+                    elif "No such file or directory" in stderr:
+                        error_details.append("Script or referenced file not found.")
+
+                # Check stdout for other error patterns
+                if stdout and "error" in stdout.lower():
+                    error_details.append(f"Output: {stdout}")
+
+                # Check the exit code
+                if result.return_code != 0:
+                    error_details.append(f"sbatch exited with code {result.return_code}")
+
+                # Build comprehensive error message
+                if error_details:
+                    error_msg = "Failed to submit job. " + " ".join(error_details)
+                else:
+                    error_msg = f"Could not parse job ID from sbatch output. stdout: '{stdout}', stderr: '{stderr}'"
+
+                logger.error(error_msg)
+                logger.error(f"Full sbatch command was: {full_cmd}")
                 return None
 
         except Exception as e:
-            logger.error(f"Failed to submit job from {work_dir}: {e}")
+            # Provide more context about the exception
+            error_msg = f"Failed to submit job from {work_dir}: {str(e)}"
+
+            # Add specific handling for common exceptions
+            if "Connection" in str(e):
+                error_msg += " - SSH connection issue. Check network and SSH configuration."
+            elif "Timeout" in str(e):
+                error_msg += " - Command timed out. The cluster may be slow or unresponsive."
+            elif "Permission" in str(e):
+                error_msg += " - Permission denied. Check your access rights on the cluster."
+
+            logger.error(error_msg)
+
+            # Try to get more information about the environment
+            try:
+                test_result = conn.run("which sbatch", hide=True, warn=True)
+                if test_result.return_code != 0:
+                    logger.error("sbatch command not found. SLURM may not be installed or not in PATH.")
+                else:
+                    logger.debug(f"sbatch location: {test_result.stdout.strip()}")
+            except Exception:
+                pass
+
             return None

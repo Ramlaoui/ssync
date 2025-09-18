@@ -11,6 +11,7 @@
   import NavigationHeader from './NavigationHeader.svelte';
   import FileBrowser from './FileBrowser.svelte';
   import SyncSettings from './SyncSettings.svelte';
+  import ScriptHistory from './ScriptHistory.svelte';
   import type { HostInfo } from '../types/api';
 
   // Icons
@@ -59,7 +60,15 @@
   const dispatch = createEventDispatcher();
 
   // Props
-  export let script = '';
+  export let script = `#!/bin/bash
+#SBATCH --job-name=my_job
+#SBATCH --time=1:00:00
+#SBATCH --mem=4G
+#SBATCH --cpus-per-task=1
+
+# Your commands here
+echo "Starting job..."
+`;
   export let launching = false;
   export let hosts: HostInfo[] = [];
   export let selectedHost = '';
@@ -523,6 +532,13 @@
 
   $: canLaunch = validationDetails.isValid && selectedHost;
 
+  // Get specific message about what's preventing launch
+  $: launchDisabledReason = !selectedHost
+    ? 'Select a host to continue'
+    : !validationDetails.isValid
+    ? (validationDetails.missingText || 'Complete required fields')
+    : '';
+
   function handleScriptChange(event: CustomEvent) {
     handleScriptEdit(event.detail.content);
     dispatch('scriptChanged', { content: event.detail.content });
@@ -651,11 +667,40 @@
 
   function handleLaunch() {
     if (canLaunch) {
+      // Save script to localStorage for history
+      saveScriptToLocalHistory();
       dispatch('launch');
     }
   }
 
+  function saveScriptToLocalHistory() {
+    try {
+      const history = JSON.parse(localStorage.getItem('scriptHistory') || '[]');
+      const entry = {
+        script_content: script,
+        job_name: parameters.jobName || 'Unnamed Job',
+        hostname: selectedHost || 'unknown',
+        submit_time: new Date().toISOString(),
+        state: 'PENDING',
+        job_id: `local_${Date.now()}`
+      };
+
+      // Add to beginning of history
+      history.unshift(entry);
+
+      // Keep only last 50 scripts
+      if (history.length > 50) {
+        history.length = 50;
+      }
+
+      localStorage.setItem('scriptHistory', JSON.stringify(history));
+    } catch (e) {
+      console.error('Failed to save script to history:', e);
+    }
+  }
+
   function handleHistoryClick() {
+    showHistory = !showHistory;
     dispatch('openHistory');
   }
 
@@ -702,7 +747,23 @@
   const tabSizeOptions = [2, 4, 8];
 
   // Initialize component - ensure FileBrowser uses persisted directory
-  onMount(() => {
+  onMount(async () => {
+    // Load hosts if not provided or empty
+    if (!hosts || hosts.length === 0) {
+      try {
+        const { api } = await import('../services/api');
+        const response = await api.get('/api/hosts');
+        hosts = response.data;
+
+        // Auto-select first host if none selected
+        if (hosts.length > 0 && !selectedHost) {
+          selectedHost = hosts[0].hostname;
+        }
+      } catch (error) {
+        console.error('Failed to load hosts:', error);
+      }
+    }
+
     // If we have a persisted sourceDir but FileBrowser isn't showing it, update the initialPath
     if (parameters.sourceDir && parameters.sourceDir.trim()) {
       // The FileBrowser will use the initialPath from the parameters.sourceDir automatically
@@ -720,11 +781,18 @@
     checkMobile();
     window.addEventListener('resize', checkMobile);
 
-    // Click outside handler for host dropdown
+    // Click outside handler for dropdowns
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
+
+      // Check for host dropdown
       if (!target.closest('.host-dropdown-container') && showHostDropdown) {
         showHostDropdown = false;
+      }
+
+      // Check for editor options dropdown
+      if (!target.closest('.editor-options-dropdown') && showEditorOptions) {
+        showEditorOptions = false;
       }
     };
 
@@ -1291,6 +1359,7 @@
         disabled={!canLaunch || launching}
         class="launch-header-button"
         size="default"
+        title={!canLaunch ? launchDisabledReason : ''}
       >
         {#if launching}
           <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
@@ -1752,26 +1821,36 @@
       {/if}
 
       <!-- Status Card -->
-      {#if selectedHost}
-        <Card>
-          <div class="status-card-content">
+      <Card>
+        <div class="status-card-content">
+          {#if canLaunch}
             <div class="flex items-center gap-2">
               <div class="status-indicator">
-                <div class="pulse-dot"></div>
+                <div class="pulse-dot valid"></div>
               </div>
-              <p class="text-sm text-gray-600">
-                Ready to submit to <span class="font-medium text-gray-900">{selectedHost}</span>
+              <p class="text-sm text-green-600 font-medium">
+                Ready to launch on {selectedHost}
               </p>
             </div>
-            {#if !canLaunch}
-              <p class="text-sm text-amber-600 mt-2">
-                <AlertCircle class="w-4 h-4 inline mr-1" />
-                Complete required fields to launch
+          {:else}
+            <div class="flex items-center gap-2">
+              <AlertCircle class="w-4 h-4 text-amber-500" />
+              <p class="text-sm text-amber-600 font-medium">
+                {launchDisabledReason}
+              </p>
+            </div>
+            {#if !selectedHost}
+              <p class="text-xs text-gray-500 mt-1 ml-5">
+                Choose a SLURM cluster from the dropdown above
+              </p>
+            {:else if !validationDetails.isValid}
+              <p class="text-xs text-gray-500 mt-1 ml-5">
+                Check the script editor for missing SBATCH directives
               </p>
             {/if}
-          </div>
-        </Card>
-      {/if}
+          {/if}
+        </div>
+      </Card>
     </div>
   </div>
 
@@ -1972,6 +2051,20 @@
         <Play class="w-5 h-5" />
       {/if}
     </button>
+  {/if}
+
+  <!-- Script History Modal -->
+  {#if showHistory}
+    <ScriptHistory
+      isOpen={true}
+      currentHost={selectedHost}
+      on:select={(e) => {
+        script = e.detail.content || e.detail.script || e.detail.script_content || '';
+        handleScriptEdit(script);
+        showHistory = false;
+      }}
+      on:close={() => showHistory = false}
+    />
   {/if}
 </div>
 
@@ -2186,12 +2279,31 @@
     animation: fade-in 0.3s;
   }
 
+  /* Launch button wrapper */
+  .launch-button-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .launch-disabled-reason {
+    font-size: 0.75rem;
+    color: #ef4444;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
   .pulse-dot {
     width: 8px;
     height: 8px;
     background: #10b981;
     border-radius: 50%;
     position: relative;
+  }
+
+  .pulse-dot.valid {
+    background: #10b981;
   }
 
   .pulse-dot::before {

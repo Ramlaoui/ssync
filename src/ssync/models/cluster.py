@@ -6,6 +6,37 @@ from typing import Optional
 
 
 @dataclass
+class PathRestrictions:
+    """Path restriction configuration for sync operations."""
+
+    enabled: bool = False
+    allowed_paths: list[str] = None  # List of allowed path patterns
+    forbidden_paths: list[str] = None  # List of forbidden path patterns
+    max_size_gb: float = 10.0  # Maximum size in GB for sync operations
+    allow_home: bool = True  # Allow syncing from user's home directory
+    allow_tmp: bool = True  # Allow syncing from /tmp
+    allow_absolute: bool = False  # Allow syncing from absolute paths outside home
+
+    def __post_init__(self):
+        if self.allowed_paths is None:
+            self.allowed_paths = []
+        if self.forbidden_paths is None:
+            # Default forbidden paths for safety
+            self.forbidden_paths = [
+                "/etc",
+                "/sys",
+                "/proc",
+                "/dev",
+                "/boot",
+                "/root",
+                "/.ssh",
+                "/.gnupg"
+            ]
+        if self.max_size_gb < 0.001:
+            self.max_size_gb = 0.001  # Minimum 1 MB
+
+
+@dataclass
 class CacheSettings:
     """Cache configuration settings."""
 

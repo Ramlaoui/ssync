@@ -20,6 +20,9 @@
   let loading = false;
   let hamburgerToX = false;
   let isClosing = false;
+  let searchQuery = '';
+  let searchFocused = false;
+  let showSearch = false;
   
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
@@ -27,9 +30,66 @@
   const pendingJobs = jobStateManager.getJobsByState('PD');
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
-  
-  // Compute recent jobs (terminal states)
-  $: recentJobs = $allJobs.filter(j => jobUtils.isTerminalState(j.state)).slice(0, 50);
+
+  // Compute recent jobs (terminal states) - store them in a variable to avoid reactive loops
+  let recentJobs: JobInfo[] = [];
+  $: {
+    // Only update recentJobs when allJobs changes, not when search changes
+    recentJobs = $allJobs.filter(j => jobUtils.isTerminalState(j.state)).slice(0, 50);
+  }
+
+  // Filter jobs based on search query - use function calls to avoid reactive chains
+  function getFilteredRunningJobs(jobs: JobInfo[], query: string): JobInfo[] {
+    return query ? jobs.filter(job => matchesSearch(job, query)) : jobs;
+  }
+
+  function getFilteredPendingJobs(jobs: JobInfo[], query: string): JobInfo[] {
+    return query ? jobs.filter(job => matchesSearch(job, query)) : jobs;
+  }
+
+  function getFilteredRecentJobs(jobs: JobInfo[], query: string): JobInfo[] {
+    return query ? jobs.filter(job => matchesSearch(job, query)) : jobs;
+  }
+
+  // Use function calls in the template instead of reactive variables
+  $: filteredRunningJobs = getFilteredRunningJobs($runningJobs, searchQuery);
+  $: filteredPendingJobs = getFilteredPendingJobs($pendingJobs, searchQuery);
+  $: filteredRecentJobs = getFilteredRecentJobs(recentJobs, searchQuery);
+
+  $: hasSearchResults = filteredRunningJobs.length > 0 ||
+                        filteredPendingJobs.length > 0 ||
+                        filteredRecentJobs.length > 0;
+
+  function matchesSearch(job: JobInfo, query: string): boolean {
+    const searchLower = query.toLowerCase();
+    return (
+      job.job_id.toLowerCase().includes(searchLower) ||
+      job.name?.toLowerCase().includes(searchLower) ||
+      job.hostname?.toLowerCase().includes(searchLower) ||
+      job.partition?.toLowerCase().includes(searchLower) ||
+      jobUtils.getStateName(job.state).toLowerCase().includes(searchLower)
+    );
+  }
+
+  function toggleSearch() {
+    showSearch = !showSearch;
+    if (showSearch) {
+      // Focus the input after animation
+      setTimeout(() => {
+        const input = document.querySelector('.sidebar-search-input') as HTMLInputElement;
+        if (input) input.focus();
+      }, 300);
+    } else {
+      searchQuery = '';
+      searchFocused = false;
+    }
+  }
+
+  function clearSearch() {
+    searchQuery = '';
+    const input = document.querySelector('.sidebar-search-input') as HTMLInputElement;
+    if (input) input.focus();
+  }
   
   // Track loading state
   $: isLoading = Array.from($managerState.hostStates.values()).some(h => h.status === 'loading');
@@ -127,7 +187,21 @@
     {#if !actuallyCollapsed}
     <h3>Jobs</h3>
     <div class="header-actions">
-      <button class="refresh-btn" on:click={() => loadJobs(true)} disabled={loading || isLoading} aria-label="Refresh jobs">
+      <!-- Search button -->
+      <button
+        class="icon-btn search-toggle"
+        class:active={showSearch}
+        on:click={toggleSearch}
+        aria-label="Search jobs"
+        title="Search jobs"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+        </svg>
+      </button>
+
+      <!-- Refresh button -->
+      <button class="icon-btn" on:click={() => loadJobs(true)} disabled={loading || isLoading} aria-label="Refresh jobs">
         <svg viewBox="0 0 24 24" fill="currentColor" class:spinning={loading || isLoading}>
           <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
         </svg>
@@ -151,7 +225,37 @@
     </div>
     {/if}
   </div>
-  
+
+  <!-- Animated Search Bar -->
+  {#if !actuallyCollapsed && showSearch}
+    <div class="search-container" class:focused={searchFocused}>
+      <div class="search-wrapper">
+        <svg viewBox="0 0 24 24" fill="currentColor" class="search-icon">
+          <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+        </svg>
+        <input
+          type="text"
+          class="sidebar-search-input"
+          placeholder="Search jobs..."
+          bind:value={searchQuery}
+          on:focus={() => searchFocused = true}
+          on:blur={() => searchFocused = false}
+        />
+        {#if searchQuery}
+          <button
+            class="clear-btn"
+            on:click={clearSearch}
+            aria-label="Clear search"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+            </svg>
+          </button>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   {#if !actuallyCollapsed}
   <div class="sidebar-content">
     {#if loading && $allJobs.length === 0}
@@ -160,16 +264,16 @@
       </div>
     {:else}
       <!-- Running Jobs -->
-      {#if $runningJobs.length > 0}
+      {#if filteredRunningJobs.length > 0}
         <div class="job-section">
           <h4 class="section-title">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
             </svg>
-            Running ({$runningJobs.length})
+            Running ({filteredRunningJobs.length}{#if searchQuery && $runningJobs.length !== filteredRunningJobs.length} <span class="search-count">of {$runningJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
-            {#each $runningJobs as job (job.job_id + job.hostname)}
+            {#each filteredRunningJobs as job (job.job_id + job.hostname)}
               <button 
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
@@ -203,16 +307,16 @@
       {/if}
       
       <!-- Pending Jobs -->
-      {#if $pendingJobs.length > 0}
+      {#if filteredPendingJobs.length > 0}
         <div class="job-section">
           <h4 class="section-title">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z" />
             </svg>
-            Pending ({$pendingJobs.length})
+            Pending ({filteredPendingJobs.length}{#if searchQuery && $pendingJobs.length !== filteredPendingJobs.length} <span class="search-count">of {$pendingJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
-            {#each $pendingJobs as job (job.job_id + job.hostname)}
+            {#each filteredPendingJobs as job (job.job_id + job.hostname)}
               <button 
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
@@ -246,16 +350,16 @@
       {/if}
       
       <!-- Recent Jobs -->
-      {#if recentJobs.length > 0}
+      {#if filteredRecentJobs.length > 0}
         <div class="job-section">
           <h4 class="section-title">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M13.5,8H12V13L16.28,15.54L17,14.33L13.5,12.25V8M13,3A9,9 0 0,0 4,12H1L4.96,16.03L9,12H6A7,7 0 0,1 13,5A7,7 0 0,1 20,12A7,7 0 0,1 13,19C11.07,19 9.32,18.21 8.06,16.94L6.64,18.36C8.27,20 10.5,21 13,21A9,9 0 0,0 22,12A9,9 0 0,0 13,3" />
             </svg>
-            Recent ({recentJobs.length})
+            Recent ({filteredRecentJobs.length}{#if searchQuery && recentJobs.length !== filteredRecentJobs.length} <span class="search-count">of {recentJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
-            {#each recentJobs as job (job.job_id + job.hostname)}
+            {#each filteredRecentJobs as job (job.job_id + job.hostname)}
               <button 
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
@@ -844,5 +948,177 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Search functionality styles */
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    transition: all 0.2s;
+    color: var(--text-secondary);
+  }
+
+  .icon-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .icon-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .icon-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .search-toggle {
+    position: relative;
+  }
+
+  .search-toggle.active {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .search-toggle.active:hover {
+    background: #2563eb;
+  }
+
+  /* Animated search container */
+  .search-container {
+    overflow: hidden;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .search-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    transition: all 0.2s;
+  }
+
+  .search-container.focused .search-wrapper {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 0.75rem;
+    width: 16px;
+    height: 16px;
+    color: var(--text-secondary);
+    pointer-events: none;
+  }
+
+  .sidebar-search-input {
+    flex: 1;
+    padding: 0.5rem 2rem 0.5rem 2.5rem;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+  }
+
+  .sidebar-search-input::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  .clear-btn {
+    position: absolute;
+    right: 0.5rem;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    color: var(--text-secondary);
+    transition: all 0.2s;
+  }
+
+  .clear-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .clear-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* No search results state */
+  .no-search-results {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    text-align: center;
+  }
+
+  .no-results-icon {
+    width: 48px;
+    height: 48px;
+    color: var(--text-tertiary);
+    opacity: 0.5;
+    margin-bottom: 1rem;
+  }
+
+  .no-search-results p {
+    margin: 0 0 1rem 0;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+  }
+
+  .clear-search-btn {
+    padding: 0.375rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .clear-search-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: #3b82f6;
+  }
+
+  /* Search count in section headers */
+  .search-count {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    font-weight: 400;
+  }
+
+  /* Mobile adjustments */
+  .job-sidebar.mobile .search-container {
+    padding: 0 0.5rem;
+  }
+
+  .job-sidebar.mobile .sidebar-search-input {
+    font-size: 0.875rem;
   }
 </style>

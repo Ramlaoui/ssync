@@ -19,6 +19,8 @@
   export let onScrollToBottom: () => void = () => {};
   export let onRetryLoadScript: () => void = () => {};
   export let onDownloadScript: () => void = () => {};
+  export let onRefreshOutput: () => void = () => {};
+  export let refreshingOutput: boolean = false;
 </script>
 
 {#if activeTab === 'output'}
@@ -38,6 +40,8 @@
         onScrollToBottom={onScrollToBottom}
         type="output"
         isStreaming={job?.state === 'R'}
+        onRefresh={onRefreshOutput}
+        refreshing={refreshingOutput}
       />
     {/if}
   </div>
@@ -59,6 +63,8 @@
         onScrollToBottom={onScrollToBottom}
         type="error"
         isStreaming={job?.state === 'R'}
+        onRefresh={onRefreshOutput}
+        refreshing={refreshingOutput}
       />
     {/if}
   </div>

@@ -4,7 +4,7 @@
   import Router, { push, link, location } from "svelte-spa-router";
   import { wrap } from "svelte-spa-router/wrap";
   import ErrorBoundary from "./components/ErrorBoundary.svelte";
-  import LaunchJob from "./components/LaunchJob.svelte";
+  import JobLauncher from "./components/JobLauncher.svelte";
   import PerformanceMonitor from "./components/PerformanceMonitor.svelte";
   import DashboardPage from "./pages/DashboardPage.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
@@ -35,7 +35,7 @@
     '/jobs': JobsPage,
     '/jobs/:id/:host': JobPage,
     '/launch': wrap({
-      component: LaunchJob,
+      component: JobLauncher,
       props: { hosts }
     }),
     '/watchers': WatchersPage,

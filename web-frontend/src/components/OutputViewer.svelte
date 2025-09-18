@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
-  import { Settings, Type, Hash, WrapText } from 'lucide-svelte';
+  import { Settings, Type, Hash, WrapText, RefreshCw } from 'lucide-svelte';
   
   export let content: string = '';
   export let isLoading: boolean = false;
@@ -11,6 +11,8 @@
   export let onScrollToBottom: (() => void) | null = null;
   export let type: 'output' | 'error' = 'output';
   export let isStreaming: boolean = false;
+  export let onRefresh: (() => void) | null = null;
+  export let refreshing: boolean = false;
   
   let outputElement: HTMLPreElement;
   let lineNumbersElement: HTMLDivElement;
@@ -309,16 +311,20 @@
     </div>
     
     <div class="viewer-controls">
-      <!-- Streaming Indicator -->
-      {#if isStreaming}
-        <div class="streaming-indicator" title="Live output streaming">
-          <div class="streaming-dot"></div>
-          <span>Live</span>
-        </div>
+      <!-- Streaming Indicator (removed) -->
+
+      <!-- Refresh Button -->
+      {#if onRefresh}
+        <button
+          class="control-btn"
+          on:click={onRefresh}
+          disabled={refreshing}
+          title="Refresh {type}"
+        >
+          <RefreshCw class="w-3.5 h-3.5 {refreshing ? 'animate-spin' : ''}" />
+        </button>
       {/if}
-      
-      
-      
+
       <!-- Scroll Controls -->
       <button class="control-btn" on:click={handleScrollToTop} title="Scroll to top">
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -559,7 +565,8 @@
     gap: 0.5rem;
   }
 
-  .streaming-indicator {
+  /* Streaming indicator styles removed */
+  /* .streaming-indicator {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -583,7 +590,7 @@
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
-  }
+  } */
 
   .control-btn {
     display: flex;
@@ -849,9 +856,9 @@
       height: 14px;
     }
 
-    .streaming-indicator {
+    /* .streaming-indicator {
       display: none;
-    }
+    } */
 
     .control-label {
       display: none;

@@ -4,6 +4,8 @@
   import type { AxiosError } from "axios";
   import { api, apiConfig } from "../services/api";
   import type { JobInfo, OutputData, ScriptData } from "../types/api";
+  import { jobStateManager } from "../lib/JobStateManager";
+  import type { Readable } from "svelte/store";
   import JobSidebar from "../components/JobSidebar.svelte";
   import JobHeader from "../components/JobHeader.svelte";
   import JobDetailsView from "../components/JobDetailsView.svelte";
@@ -17,7 +19,9 @@
   export let showSidebarOnly: boolean = false;
 
   let job: JobInfo | null = null;
+  let jobStore: Readable<JobInfo | null> | null = null;
   let loading = false;
+  let initialLoadComplete = false;
   let error: string | null = null;
   let activeTab = 'details';
   let sidebarCollapsed = false;
@@ -31,6 +35,7 @@
   let outputError: string | null = null;
   let loadingOutput = false;
   let loadingMoreOutput = false;
+  let refreshingOutput = false;
 
   // Script related state
   let scriptData: ScriptData | null = null;
@@ -59,20 +64,28 @@
     isClosingSidebar = false;
   }
 
-  // Load job data
+  // Load job data using JobStateManager
   async function loadJob(forceRefresh = false) {
     if (!params.id || !params.host) {
       error = "Invalid job parameters";
       return;
     }
 
-    loading = true;
+    // For initial load or force refresh, show loading state
+    if (!initialLoadComplete || forceRefresh) {
+      loading = true;
+    }
     error = null;
 
     try {
-      const forceParam = forceRefresh ? '&force=true' : '';
-      const response = await api.get<JobInfo>(`/api/jobs/${params.id}?host=${params.host}${forceParam}`);
-      job = response.data;
+      // Fetch the job data (will update the store automatically)
+      const jobData = await jobStateManager.fetchSingleJob(params.id, params.host, forceRefresh);
+
+      if (!jobData) {
+        error = "Job not found";
+      }
+
+      initialLoadComplete = true;
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
       if (axiosError.response?.status === 404) {
@@ -100,6 +113,24 @@
       outputError = `Failed to load output: ${axiosError.message}`;
     } finally {
       loadingOutput = false;
+    }
+  }
+
+  // Refresh output data
+  async function refreshOutput() {
+    if (!job) return;
+
+    refreshingOutput = true;
+    outputError = null;
+
+    try {
+      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}&force=true`);
+      outputData = response.data;
+    } catch (err: unknown) {
+      const axiosError = err as AxiosError;
+      outputError = `Failed to refresh output: ${axiosError.message}`;
+    } finally {
+      refreshingOutput = false;
     }
   }
 
@@ -132,6 +163,7 @@
 
     try {
       await api.post(`/api/jobs/${params.id}/cancel?host=${params.host}`);
+      // Force refresh through JobStateManager
       await loadJob(true);
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
@@ -153,19 +185,30 @@
     navigationActions.goBack();
   }
 
-  // Load job data when params change
+  // Set up reactive job store when params change
   $: if (params.id && params.host && !showSidebarOnly) {
     // Clear previous data when switching jobs
-    job = null;
     outputData = null;
     scriptData = null;
     outputError = null;
     scriptError = null;
     error = null;
     activeTab = 'details';
+    initialLoadComplete = false;
 
-    // Load the new job
+    // Get reactive store for this job
+    jobStore = jobStateManager.getJob(params.id, params.host);
+
+    // Set current view for priority updates
+    jobStateManager.setCurrentViewJob(params.id, params.host);
+
+    // Load the job data
     loadJob();
+  }
+
+  // Subscribe to job updates from the store
+  $: if (jobStore) {
+    job = $jobStore;
   }
 
   // Load data when tab changes
@@ -188,11 +231,17 @@
         jobId: params.id,
         hostname: params.host
       });
+
+      // Set current view for priority updates
+      jobStateManager.setCurrentViewJob(params.id, params.host);
     }
   });
 
   onDestroy(() => {
     window.removeEventListener("resize", checkMobile);
+
+    // Clear current view job
+    jobStateManager.setCurrentViewJob(null, null);
   });
 </script>
 
@@ -379,6 +428,8 @@
                   onScrollToBottom={() => {}}
                   onRetryLoadScript={loadScript}
                   onDownloadScript={() => {}}
+                  onRefreshOutput={refreshOutput}
+                  {refreshingOutput}
                   />
                 </div>
               {/if}

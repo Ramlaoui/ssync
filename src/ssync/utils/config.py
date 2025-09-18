@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from ..models.cluster import CacheSettings, Host, SlurmDefaults, SlurmHost
+from ..models.cluster import CacheSettings, Host, PathRestrictions, SlurmDefaults, SlurmHost
 
 XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME", os.environ.get("SSYNC_CONFIG", ""))
 XDG_CACHE = os.environ.get("XDG_CACHE_HOME", os.environ.get("SSYNC_CACHE", ""))
@@ -24,6 +24,7 @@ class Config:
         self.config = self.load_config()
         self.cache_settings = self.load_cache_settings()
         self.api_key = self.load_api_key()
+        self.path_restrictions = self.load_path_restrictions()
 
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
@@ -240,6 +241,56 @@ class Config:
             api_key = os.getenv("SSYNC_API_KEY")
 
         return api_key
+
+    def load_path_restrictions(self) -> PathRestrictions:
+        """Load path restrictions from config file with environment variable overrides."""
+        # Default settings
+        settings = PathRestrictions()
+
+        # Try to load from config file
+        config_path = Path(self.config_path)
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    content = f.read()
+                    # Environment variable substitution
+                    content = re.sub(
+                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
+                    )
+                    data = yaml.safe_load(content)
+
+                if data and "path_restrictions" in data:
+                    restrictions_config = data["path_restrictions"]
+                    settings = PathRestrictions(
+                        enabled=restrictions_config.get("enabled", settings.enabled),
+                        allowed_paths=restrictions_config.get("allowed_paths", settings.allowed_paths),
+                        forbidden_paths=restrictions_config.get("forbidden_paths", settings.forbidden_paths),
+                        max_size_gb=restrictions_config.get("max_size_gb", settings.max_size_gb),
+                        allow_home=restrictions_config.get("allow_home", settings.allow_home),
+                        allow_tmp=restrictions_config.get("allow_tmp", settings.allow_tmp),
+                        allow_absolute=restrictions_config.get("allow_absolute", settings.allow_absolute),
+                    )
+            except Exception:
+                # If there's any error loading path restrictions, use defaults
+                pass
+
+        # Environment variable overrides
+        if os.getenv("SSYNC_PATH_RESTRICTIONS_ENABLED"):
+            settings.enabled = os.getenv("SSYNC_PATH_RESTRICTIONS_ENABLED", "false").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if os.getenv("SSYNC_MAX_SYNC_SIZE_GB"):
+            settings.max_size_gb = float(os.getenv("SSYNC_MAX_SYNC_SIZE_GB"))
+        if os.getenv("SSYNC_ALLOW_ABSOLUTE_PATHS"):
+            settings.allow_absolute = os.getenv("SSYNC_ALLOW_ABSOLUTE_PATHS", "false").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+
+        return settings
 
 
 config = Config()

@@ -1920,21 +1920,60 @@ async def launch_job(
         logger.error(f"Error launching job: {e}")
         # Include the actual error message for better debugging
         error_message = str(e)
-        if "Connection" in error_message:
+
+        # Parse and enhance error messages based on common patterns
+        if "Failed to submit job" in error_message:
+            # Extract the specific SLURM errors if present
+            if "SLURM Error:" in error_message:
+                # The error already has detailed SLURM information
+                raise HTTPException(status_code=500, detail=error_message)
+            else:
+                # Generic submission failure - add context
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Job submission failed: {error_message}. Check cluster availability, SLURM configuration, and resource limits."
+                )
+        elif "Connection" in error_message or "SSH" in error_message:
             raise HTTPException(
-                status_code=503, detail=f"Connection error: {error_message}"
+                status_code=503,
+                detail=f"Cannot connect to cluster: {error_message}. Check network connectivity and SSH configuration."
             )
         elif "Permission" in error_message:
             raise HTTPException(
-                status_code=403, detail=f"Permission denied: {error_message}"
+                status_code=403,
+                detail=f"Access denied: {error_message}. Verify your cluster credentials and account permissions."
+            )
+        elif "Invalid partition" in error_message:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid partition specified: {error_message}. Check available partitions on the cluster."
+            )
+        elif "Invalid account" in error_message:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid SLURM account: {error_message}. Verify your account is active and has access."
             )
         elif "not found" in error_message.lower():
             raise HTTPException(
-                status_code=404, detail=f"Resource not found: {error_message}"
+                status_code=404,
+                detail=f"Resource not found: {error_message}"
+            )
+        elif "Timeout" in error_message:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Operation timed out: {error_message}. The cluster may be overloaded or unresponsive."
+            )
+        elif "sbatch" in error_message.lower() and "not found" in error_message.lower():
+            raise HTTPException(
+                status_code=503,
+                detail="SLURM commands not available on the cluster. Verify SLURM is installed and accessible."
             )
         else:
-            # Don't add "Failed to launch job:" prefix - the error message is already descriptive
-            raise HTTPException(status_code=500, detail=error_message)
+            # For any other errors, return the full error message with a generic prefix
+            raise HTTPException(
+                status_code=500,
+                detail=f"Job launch failed: {error_message}"
+            )
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -1999,8 +2038,9 @@ async def get_job_watchers(
         with cache._get_connection() as conn:
             query = """
                 SELECT id, job_id, hostname, name, pattern, interval_seconds,
-                       captures_json, condition, actions_json, state, 
-                       trigger_count, last_check, last_position, created_at
+                       captures_json, condition, actions_json, state,
+                       trigger_count, last_check, last_position, created_at,
+                       timer_mode_enabled, timer_interval_seconds, timer_mode_active
                 FROM job_watchers
                 WHERE job_id = ?
             """
@@ -2029,6 +2069,24 @@ async def get_job_watchers(
                     "last_position": row["last_position"],
                     "created_at": row["created_at"],
                 }
+
+                # Add timer fields with safe fallbacks for older databases
+                row_dict = dict(row)
+                if "timer_mode_enabled" in row_dict:
+                    watcher["timer_mode_enabled"] = bool(row_dict["timer_mode_enabled"])
+                else:
+                    watcher["timer_mode_enabled"] = False
+
+                if "timer_interval_seconds" in row_dict:
+                    watcher["timer_interval_seconds"] = row_dict["timer_interval_seconds"]
+                else:
+                    watcher["timer_interval_seconds"] = 30
+
+                if "timer_mode_active" in row_dict:
+                    watcher["timer_mode_active"] = bool(row_dict["timer_mode_active"])
+                else:
+                    watcher["timer_mode_active"] = False
+
                 watchers.append(watcher)
 
         return {"job_id": job_id, "watchers": watchers, "count": len(watchers)}
@@ -2089,6 +2147,17 @@ async def get_all_watchers(
                 # Set a default name if it's None
                 if watcher_dict.get("name") is None:
                     watcher_dict["name"] = f"Watcher {watcher_dict['id']}"
+
+                # Add timer fields if they exist
+                if "timer_mode_enabled" in watcher_dict:
+                    watcher_dict["timer_mode_enabled"] = bool(watcher_dict["timer_mode_enabled"])
+                else:
+                    watcher_dict["timer_mode_enabled"] = False
+
+                if "timer_mode_active" in watcher_dict:
+                    watcher_dict["timer_mode_active"] = bool(watcher_dict["timer_mode_active"])
+                else:
+                    watcher_dict["timer_mode_active"] = False
 
                 watchers.append(watcher_dict)
 
@@ -2515,6 +2584,357 @@ async def resume_watcher(
         raise HTTPException(status_code=500, detail="Failed to resume watcher")
 
 
+@app.post("/api/watchers")
+async def create_watcher(
+    watcher_config: Dict[str, Any] = Body(...),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Create a new watcher."""
+    try:
+        import json
+        from datetime import datetime
+        from ..models.watcher import WatcherState
+
+        cache = get_cache()
+
+        # Validate required fields
+        required_fields = ["job_id", "hostname", "name", "pattern"]
+        for field in required_fields:
+            if field not in watcher_config:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+
+        with cache._get_connection() as conn:
+            # Check if job exists (optional validation)
+            # You might want to validate the job exists on the host
+
+            # Prepare watcher data
+            name = watcher_config["name"]
+            pattern = watcher_config["pattern"]
+            job_id = watcher_config["job_id"]
+            hostname = watcher_config["hostname"]
+            interval_seconds = watcher_config.get("interval_seconds", 30)
+            # Handle both 'captures' and 'capture_groups' field names for compatibility
+            captures_list = watcher_config.get("captures", watcher_config.get("capture_groups", []))
+            captures_json = json.dumps(captures_list)
+            condition = watcher_config.get("condition")
+            state = watcher_config.get("state", "active")
+            timer_mode_enabled = watcher_config.get("timer_mode_enabled", False)
+            # Use the same interval for timer mode by default unless explicitly specified
+            timer_interval_seconds = watcher_config.get("timer_interval_seconds", interval_seconds)
+
+            # Format actions for storage
+            actions = watcher_config.get("actions", [])
+            formatted_actions = []
+            for action in actions:
+                formatted_action = {
+                    "type": action["type"],
+                }
+                if action.get("condition"):
+                    formatted_action["condition"] = action["condition"]
+                if action.get("config"):
+                    formatted_action["params"] = action["config"]
+                formatted_actions.append(formatted_action)
+            actions_json = json.dumps(formatted_actions)
+
+            # Insert the watcher
+            cursor = conn.execute(
+                """
+                INSERT INTO job_watchers (
+                    job_id, hostname, name, pattern, interval_seconds,
+                    captures_json, condition, actions_json, state,
+                    last_check, last_position, trigger_count, created_at,
+                    timer_mode_enabled, timer_interval_seconds, timer_mode_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id, hostname, name, pattern, interval_seconds,
+                    captures_json, condition, actions_json, state,
+                    None, 0, 0, datetime.now().isoformat(),
+                    1 if timer_mode_enabled else 0, timer_interval_seconds, 0  # timer_mode_active starts as 0
+                )
+            )
+            watcher_id = cursor.lastrowid
+            conn.commit()
+
+            # Start monitoring if active
+            if state == "active":
+                try:
+                    from ..watchers import get_watcher_engine
+                    engine = get_watcher_engine()
+
+                    if hasattr(engine, "active_tasks"):
+                        task = asyncio.create_task(
+                            engine._monitor_watcher(watcher_id, job_id, hostname)
+                        )
+                        engine.active_tasks[watcher_id] = task
+                except Exception as engine_error:
+                    logger.debug(f"Could not start watcher monitoring: {engine_error}")
+
+            # Return the created watcher
+            cursor = conn.execute(
+                "SELECT * FROM job_watchers WHERE id = ?", (watcher_id,)
+            )
+            created_row = cursor.fetchone()
+
+            # Convert Row to dict for easier access
+            row_dict = dict(created_row)
+
+            response = {
+                "id": row_dict["id"],
+                "job_id": row_dict["job_id"],
+                "hostname": row_dict["hostname"],
+                "name": row_dict["name"],
+                "pattern": row_dict["pattern"],
+                "interval_seconds": row_dict["interval_seconds"],
+                "state": row_dict["state"],
+                "last_check": row_dict["last_check"],
+                "last_position": row_dict["last_position"],
+                "trigger_count": row_dict["trigger_count"],
+                "created_at": row_dict["created_at"],
+                "timer_mode_enabled": bool(row_dict.get("timer_mode_enabled", 0)),
+                "timer_mode_active": bool(row_dict.get("timer_mode_active", 0)),
+                "timer_interval_seconds": row_dict.get("timer_interval_seconds", 30),
+            }
+
+            # Parse JSON fields
+            if row_dict.get("captures_json"):
+                response["captures"] = json.loads(row_dict["captures_json"])
+
+            if row_dict.get("condition"):
+                response["condition"] = row_dict["condition"]
+
+            if row_dict.get("actions_json"):
+                actions = json.loads(row_dict["actions_json"])
+                # Convert from internal format to API format
+                formatted_actions = []
+                for action in actions:
+                    formatted_action = {
+                        "type": action["type"],
+                    }
+                    if action.get("condition"):
+                        formatted_action["condition"] = action["condition"]
+                    if action.get("params"):
+                        formatted_action["config"] = action["params"]
+                    formatted_actions.append(formatted_action)
+                response["actions"] = formatted_actions
+
+            return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating watcher: {e}")
+        logger.error(f"Watcher config received: {json.dumps(watcher_config)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create watcher: {str(e)}")
+
+
+@app.put("/api/watchers/{watcher_id}")
+async def update_watcher(
+    watcher_id: int,
+    watcher_update: Dict[str, Any] = Body(...),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Update a watcher configuration."""
+    try:
+        import json
+        from ..models.watcher import WatcherState
+
+        cache = get_cache()
+
+        with cache._get_connection() as conn:
+            # First check if watcher exists
+            cursor = conn.execute(
+                "SELECT * FROM job_watchers WHERE id = ?", (watcher_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Watcher not found")
+
+            # Convert Row to dict for easier access
+            row_dict = dict(row)
+
+            # Prepare update fields
+            update_fields = []
+            update_values = []
+
+            # Handle each field that can be updated
+            if "name" in watcher_update:
+                update_fields.append("name = ?")
+                update_values.append(watcher_update["name"])
+
+            if "pattern" in watcher_update:
+                update_fields.append("pattern = ?")
+                update_values.append(watcher_update["pattern"])
+
+            if "interval_seconds" in watcher_update:
+                update_fields.append("interval_seconds = ?")
+                update_values.append(watcher_update["interval_seconds"])
+
+            if "capture_groups" in watcher_update:
+                update_fields.append("captures_json = ?")
+                update_values.append(json.dumps(watcher_update["capture_groups"]))
+
+            if "condition" in watcher_update:
+                update_fields.append("condition = ?")
+                update_values.append(watcher_update["condition"])
+
+            if "actions" in watcher_update:
+                # Format actions for storage
+                formatted_actions = []
+                for action in watcher_update["actions"]:
+                    formatted_action = {
+                        "type": action["type"],
+                    }
+                    if action.get("condition"):
+                        formatted_action["condition"] = action["condition"]
+                    if action.get("config"):
+                        formatted_action["params"] = action["config"]
+                    formatted_actions.append(formatted_action)
+                update_fields.append("actions_json = ?")
+                update_values.append(json.dumps(formatted_actions))
+
+            if "timer_mode_enabled" in watcher_update:
+                # Update timer_mode_enabled field
+                update_fields.append("timer_mode_enabled = ?")
+                update_values.append(1 if watcher_update["timer_mode_enabled"] else 0)
+
+            if "timer_interval_seconds" in watcher_update:
+                update_fields.append("timer_interval_seconds = ?")
+                update_values.append(watcher_update["timer_interval_seconds"])
+
+            # Perform the update if there are fields to update
+            if update_fields:
+                update_values.append(watcher_id)  # Add watcher_id for WHERE clause
+                query = f"UPDATE job_watchers SET {', '.join(update_fields)} WHERE id = ?"
+                conn.execute(query, update_values)
+                conn.commit()
+
+            # Fetch updated watcher
+            cursor = conn.execute(
+                "SELECT * FROM job_watchers WHERE id = ?", (watcher_id,)
+            )
+            updated_row = cursor.fetchone()
+
+            # Convert Row to dict for consistent access
+            updated_row_dict = dict(updated_row)
+
+            # Format response
+            response = {
+                "id": updated_row_dict["id"],
+                "job_id": updated_row_dict["job_id"],
+                "hostname": updated_row_dict["hostname"],
+                "name": updated_row_dict["name"],
+                "pattern": updated_row_dict["pattern"],
+                "interval_seconds": updated_row_dict["interval_seconds"],
+                "state": updated_row_dict["state"],
+                "last_check": updated_row_dict["last_check"],
+                "last_position": updated_row_dict["last_position"],
+                "trigger_count": updated_row_dict["trigger_count"],
+            }
+
+            # Handle optional fields that might not exist in older database schemas
+            # Now we can use .get() since we converted to dict
+            response["timer_mode_enabled"] = bool(updated_row_dict.get("timer_mode_enabled", 0))
+            response["timer_mode_active"] = bool(updated_row_dict.get("timer_mode_active", 0))
+            response["timer_interval_seconds"] = updated_row_dict.get("timer_interval_seconds", 30)
+
+            # Parse JSON fields
+            if updated_row_dict.get("captures_json"):
+                response["captures"] = json.loads(updated_row_dict["captures_json"])
+
+            if updated_row_dict.get("condition"):
+                response["condition"] = updated_row_dict["condition"]
+
+            if updated_row_dict.get("actions_json"):
+                actions = json.loads(updated_row_dict["actions_json"])
+                # Convert from internal format to API format
+                formatted_actions = []
+                for action in actions:
+                    formatted_action = {
+                        "type": action["type"],
+                    }
+                    if action.get("condition"):
+                        formatted_action["condition"] = action["condition"]
+                    if action.get("params"):
+                        formatted_action["config"] = action["params"]
+                    formatted_actions.append(formatted_action)
+                response["actions"] = formatted_actions
+
+            # If the watcher state was changed, update the monitoring task
+            if row_dict["state"] != updated_row_dict["state"]:
+                try:
+                    from ..watchers import get_watcher_engine
+                    engine = get_watcher_engine()
+
+                    # Handle state changes
+                    if updated_row_dict["state"] == "active" and row_dict["state"] == "paused":
+                        # Restart monitoring
+                        if hasattr(engine, "active_tasks"):
+                            task = asyncio.create_task(
+                                engine._monitor_watcher(watcher_id, updated_row_dict["job_id"], updated_row_dict["hostname"])
+                            )
+                            engine.active_tasks[watcher_id] = task
+                    elif updated_row_dict["state"] == "paused" and row_dict["state"] == "active":
+                        # Stop monitoring
+                        if hasattr(engine, "active_tasks") and watcher_id in engine.active_tasks:
+                            engine.active_tasks[watcher_id].cancel()
+                            del engine.active_tasks[watcher_id]
+                except Exception as engine_error:
+                    logger.debug(f"Could not update watcher engine: {engine_error}")
+
+            return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating watcher {watcher_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update watcher")
+
+
+@app.delete("/api/watchers/{watcher_id}")
+async def delete_watcher(
+    watcher_id: int,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Delete a watcher."""
+    try:
+        cache = get_cache()
+
+        with cache._get_connection() as conn:
+            # Check if watcher exists
+            cursor = conn.execute(
+                "SELECT state FROM job_watchers WHERE id = ?", (watcher_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Watcher not found")
+
+            # Cancel the monitoring task if active
+            if row["state"] == "active":
+                try:
+                    from ..watchers import get_watcher_engine
+                    engine = get_watcher_engine()
+
+                    if hasattr(engine, "active_tasks") and watcher_id in engine.active_tasks:
+                        engine.active_tasks[watcher_id].cancel()
+                        del engine.active_tasks[watcher_id]
+                except Exception as engine_error:
+                    logger.debug(f"Could not cancel watcher task: {engine_error}")
+
+            # Delete the watcher and its events
+            conn.execute("DELETE FROM watcher_events WHERE watcher_id = ?", (watcher_id,))
+            conn.execute("DELETE FROM job_watchers WHERE id = ?", (watcher_id,))
+            conn.commit()
+
+        return {"message": f"Watcher {watcher_id} deleted successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting watcher {watcher_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete watcher")
+
+
 @app.post("/api/jobs/{job_id}/watchers")
 async def attach_watchers_to_job(
     job_id: str,
@@ -2586,7 +3006,8 @@ async def attach_watchers_to_job(
                 interval_seconds=w.get(
                     "interval_seconds", 60
                 ),  # Default 60s instead of 30s
-                captures=w.get("capture_groups", []),
+                # Handle both 'captures' and 'capture_groups' field names for compatibility
+                captures=w.get("captures", w.get("capture_groups", [])),
                 condition=w.get("condition"),
                 actions=actions,
                 max_triggers=w.get("max_triggers", 10),

@@ -4,6 +4,7 @@
   import Button from "../lib/components/ui/Button.svelte";
   import { ArrowLeft, Menu, Play, Square, Trash2, Plus, MoreHorizontal, RefreshCw, RotateCcw, Download, FileText } from 'lucide-svelte';
   import { resubmitStore } from '../stores/resubmit.ts';
+  import { api } from '../services/api';
 
   export let job: JobInfo | null = null;
   export let isMobile: boolean = false;
@@ -45,13 +46,20 @@
     if (!job) return;
 
     try {
-      // Fetch the script content from the job
-      const response = await fetch(`/api/jobs/${job.job_id}/script?host=${job.hostname}`);
-      const scriptData = await response.json();
+      // Use the api service for proper authentication
+      const response = await api.get(`/api/jobs/${job.job_id}/script?host=${job.hostname}`);
+      const scriptData = response.data;
+
+      console.log('Fetched script for resubmit:', scriptData);
+
+      // Ensure we have script content
+      if (!scriptData.script_content) {
+        throw new Error('No script content returned from API');
+      }
 
       // Store resubmit data
       resubmitStore.setResubmitData({
-        scriptContent: scriptData.script_content || '',
+        scriptContent: scriptData.script_content,
         hostname: job.hostname,
         workDir: job.work_dir,
         originalJobId: job.job_id,
@@ -61,8 +69,10 @@
 
       // Navigate to job launcher
       push('/launch');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to prepare resubmit:', error);
+      // Show user-friendly error
+      alert(`Failed to fetch job script: ${error.message || 'Unknown error'}`);
     }
 
     showDropdown = false;
@@ -83,8 +93,8 @@
     if (!job) return;
 
     try {
-      const response = await fetch(`/api/jobs/${job.job_id}/output?host=${job.hostname}`);
-      const data = await response.json();
+      const response = await api.get(`/api/jobs/${job.job_id}/output?host=${job.hostname}`);
+      const data = response.data;
 
       // Create a blob with the output content
       const blob = new Blob([data.stdout || ''], { type: 'text/plain' });
@@ -109,8 +119,8 @@
     if (!job) return;
 
     try {
-      const response = await fetch(`/api/jobs/${job.job_id}/script?host=${job.hostname}`);
-      const data = await response.json();
+      const response = await api.get(`/api/jobs/${job.job_id}/script?host=${job.hostname}`);
+      const data = response.data;
 
       // Create a blob with the script content
       const blob = new Blob([data.script_content || ''], { type: 'text/plain' });
@@ -189,10 +199,6 @@
             {/if}
           </div>
 
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {getJobStateColor(job.state)}">
-            {getJobStateName(job.state)}
-          </span>
-
           {#if job.hostname}
             <span class="text-xs md:text-sm text-gray-500 hidden sm:inline">
               on {job.hostname}
@@ -210,20 +216,18 @@
 
   {#if !showSidebarOnly && job}
     <div class="header-right">
+      <!-- Job Status Badge -->
+      <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium {getJobStateColor(job.state)}">
+        {getJobStateName(job.state)}
+      </span>
+
       <!-- Refresh Button -->
       <Button variant="ghost" size="sm" on:click={onRefreshJob} disabled={refreshing}>
         <RefreshCw class="w-4 h-4 {refreshing ? 'animate-spin' : ''}" />
-        {#if !isMobile}Refresh{/if}
+        {#if !isMobile}<span class="ml-1">Refresh</span>{/if}
       </Button>
 
       {#if !isMobile}
-        {#if job.state === 'R' || job.state === 'PD'}
-          <Button variant="destructive" size="sm" on:click={onCancelJob}>
-            <Square class="w-4 h-4" />
-            Cancel
-          </Button>
-        {/if}
-
         <Button variant="outline" size="sm" on:click={onAttachWatchers}>
           <Plus class="w-4 h-4" />
           Watchers
@@ -241,7 +245,7 @@
             <div class="py-1">
               {#if job.state === 'R' || job.state === 'PD'}
                 <button
-                  class="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  class="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50 font-medium"
                   on:click={handleCancelFromMenu}
                 >
                   <Square class="w-4 h-4" />

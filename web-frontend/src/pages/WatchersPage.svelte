@@ -187,8 +187,11 @@
   async function refreshData() {
     error = null; // Clear any existing errors
     try {
-      await jobStateManager.syncAllHosts();
-      await fetchAllWatchers();
+      // Fetch jobs and watchers in parallel for better performance
+      await Promise.all([
+        jobStateManager.syncAllHosts(),
+        fetchAllWatchers()
+      ]);
       // Always fetch events to populate the latest events for each watcher
       await fetchWatcherEvents();
     } catch (err) {
@@ -198,33 +201,31 @@
   }
 
   async function openAttachDialog() {
-    await jobStateManager.forceRefresh();
+    console.log('openAttachDialog called');
+    error = null;
+
+    // Get current cached jobs
     const allJobs = jobStateManager.getAllJobs();
-    const runningJobs = get(allJobs).filter(job =>
+    const cachedJobs = get(allJobs);
+    const runningJobs = cachedJobs.filter(job =>
       job.state === 'R' || job.state === 'PD'
     );
 
-    if (runningJobs.length === 0) {
-      // Show error message to user
-      error = "No running or pending jobs found. Start a job first to create a watcher.";
-      setTimeout(() => {
-        error = null;
-      }, 5000);
-      return;
-    }
-
+    // If we have exactly one job, open the creator directly
     if (runningJobs.length === 1) {
-      error = null; // Clear any existing errors
       selectedJobId = runningJobs[0].job_id;
       selectedHostname = runningJobs[0].hostname;
+      console.log('Single job - setting selectedJobId:', selectedJobId, 'hostname:', selectedHostname);
 
       if (useStreamlinedInterface) {
+        console.log('Opening streamlined creator');
         showStreamlinedCreator = true;
       } else {
         showAttachDialog = true;
       }
     } else {
-      error = null; // Clear any existing errors
+      // Show job selection dialog immediately with whatever jobs we have
+      // The dialog will fetch fresh jobs in the background
       showJobSelectionDialog = true;
     }
   }
@@ -244,7 +245,48 @@
 
   async function handleWatcherCopy(event: CustomEvent) {
     copiedWatcherConfig = event.detail;
-    await openAttachDialog();
+
+    // Get current cached jobs immediately
+    const allJobs = jobStateManager.getAllJobs();
+    const cachedJobs = get(allJobs);
+    const runningJobs = cachedJobs.filter(job =>
+      job.state === 'R' || job.state === 'PD'
+    );
+
+    // If we have a copied config with a job_id and hostname, try to use that job if it's still running
+    let targetJob = null;
+    if (copiedWatcherConfig.job_id && copiedWatcherConfig.hostname) {
+      targetJob = runningJobs.find(job =>
+        job.job_id === copiedWatcherConfig.job_id &&
+        job.hostname === copiedWatcherConfig.hostname
+      );
+    }
+
+    // If we found the original job and it's still running, use it
+    if (targetJob) {
+      selectedJobId = targetJob.job_id;
+      selectedHostname = targetJob.hostname;
+
+      if (useStreamlinedInterface) {
+        showStreamlinedCreator = true;
+      } else {
+        showAttachDialog = true;
+      }
+    } else if (runningJobs.length === 1) {
+      // Only one job running, use it
+      selectedJobId = runningJobs[0].job_id;
+      selectedHostname = runningJobs[0].hostname;
+
+      if (useStreamlinedInterface) {
+        showStreamlinedCreator = true;
+      } else {
+        showAttachDialog = true;
+      }
+    } else {
+      // Multiple jobs or no cached jobs - show selection dialog
+      // The dialog will fetch fresh jobs if needed
+      showJobSelectionDialog = true;
+    }
   }
 
   async function handleAttachSuccess() {
@@ -644,12 +686,14 @@
       <WatcherCreator
         jobId={selectedJobId}
         hostname={selectedHostname}
-        bind:isVisible={showStreamlinedCreator}
+        {copiedWatcherConfig}
+        isVisible={true}
         on:created={handleAttachSuccess}
         on:close={() => {
           showStreamlinedCreator = false;
           selectedJobId = null;
           selectedHostname = null;
+          copiedWatcherConfig = null;
         }}
       />
     {/if}
@@ -659,9 +703,11 @@
 <!-- Dialogs -->
 {#if showJobSelectionDialog}
   <JobSelectionDialog
-    jobs={get(allCurrentJobs).filter(j => j.state === 'R' || j.state === 'PD')}
     on:select={handleJobSelection}
-    on:close={() => showJobSelectionDialog = false}
+    on:close={() => {
+      showJobSelectionDialog = false;
+      copiedWatcherConfig = null;
+    }}
   />
 {/if}
 

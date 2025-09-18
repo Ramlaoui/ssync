@@ -26,7 +26,7 @@ class ScriptProcessor:
     def ensure_shebang(content: str) -> str:
         """Ensure script has proper shebang."""
         if not content.startswith("#!"):
-            return "#!/bin/bash\n\n" + content
+            return "#!/bin/bash\n" + content
         return content
 
     @staticmethod
@@ -199,7 +199,6 @@ class ScriptProcessor:
         watcher = WatcherDefinition()
 
         lines = block_content.strip().split("\n")
-        current_action = None
         in_actions = False
 
         for line in lines:

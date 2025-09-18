@@ -1,10 +1,11 @@
+import fnmatch
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 from .manager import SlurmManager
-from .models.cluster import SlurmHost
+from .models.cluster import PathRestrictions, SlurmHost
 from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -19,11 +20,101 @@ class SyncManager:
         source_dir: Path,
         use_gitignore: bool = True,
         max_depth: int = 3,
+        path_restrictions: PathRestrictions | None = None,
     ):
         self.slurm_manager = slurm_manager
         self.source_dir = source_dir
         self.use_gitignore = use_gitignore
         self.max_depth = max_depth
+        self.path_restrictions = path_restrictions
+
+    def _validate_path(self, path: Path) -> tuple[bool, str]:
+        """Validate a path against restrictions.
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not self.path_restrictions or not self.path_restrictions.enabled:
+            return True, ""
+
+        path = path.resolve()
+        path_str = str(path)
+        home_path = Path.home()
+
+        # Check if path is in forbidden locations first (highest priority)
+        for forbidden in self.path_restrictions.forbidden_paths:
+            if path_str.startswith(forbidden) or fnmatch.fnmatch(path_str, forbidden):
+                return False, f"Path is in forbidden location: {forbidden}"
+
+        # Check if path is explicitly allowed (this takes precedence over other restrictions)
+        if self.path_restrictions.allowed_paths:
+            allowed = False
+            for allowed_path in self.path_restrictions.allowed_paths:
+                # Handle paths that might contain wildcards
+                if '*' in allowed_path:
+                    if fnmatch.fnmatch(path_str, allowed_path):
+                        allowed = True
+                        break
+                else:
+                    # For non-wildcard paths, check if path starts with allowed path
+                    if path_str.startswith(allowed_path.rstrip('/')):
+                        allowed = True
+                        break
+
+            if allowed:
+                # Path is explicitly allowed, skip other checks
+                return True, ""
+            else:
+                # Path is not in allowed list
+                return False, "Path is not in allowed locations"
+
+        # If no allowed_paths specified, check general restrictions
+        # Check if absolute paths are allowed
+        if not self.path_restrictions.allow_absolute:
+            if not path_str.startswith(str(home_path)) and not path_str.startswith("/tmp"):
+                return False, "Absolute paths outside home directory are not allowed"
+
+        # Check home directory restriction
+        if not self.path_restrictions.allow_home:
+            if path_str.startswith(str(home_path)):
+                return False, "Syncing from home directory is not allowed"
+
+        # Check tmp directory restriction
+        if not self.path_restrictions.allow_tmp:
+            if path_str.startswith("/tmp"):
+                return False, "Syncing from /tmp is not allowed"
+
+        return True, ""
+
+    def _check_directory_size(self, path: Path) -> tuple[float, bool, str]:
+        """Check directory size and validate against restrictions.
+
+        Returns:
+            Tuple of (size_gb, is_valid, error_message)
+        """
+        try:
+            # Use du to get directory size
+            result = subprocess.run(
+                ["du", "-sb", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                size_bytes = int(result.stdout.split()[0])
+                size_gb = size_bytes / (1024 ** 3)
+
+                if self.path_restrictions and self.path_restrictions.enabled:
+                    if size_gb > self.path_restrictions.max_size_gb:
+                        return size_gb, False, f"Directory size ({size_gb:.2f} GB) exceeds limit ({self.path_restrictions.max_size_gb} GB)"
+
+                return size_gb, True, ""
+            else:
+                logger.warning(f"Failed to get directory size: {result.stderr}")
+                return 0, True, ""  # Allow sync if we can't determine size
+        except Exception as e:
+            logger.warning(f"Error checking directory size: {e}")
+            return 0, True, ""  # Allow sync if we can't determine size
 
     def _collect_rsync_filter_rules(self, max_depth: int = 3) -> list[str]:
         """
@@ -93,6 +184,20 @@ class SyncManager:
         include_patterns: list[str] | None = None,
     ) -> bool:
         """Sync source directory to a specific SLURM host using rsync over SSH."""
+        # Validate path restrictions
+        is_valid, error_msg = self._validate_path(self.source_dir)
+        if not is_valid:
+            logger.error(f"Path validation failed: {error_msg}")
+            raise ValueError(f"Path validation failed: {error_msg}")
+
+        # Check directory size
+        size_gb, is_valid, error_msg = self._check_directory_size(self.source_dir)
+        if not is_valid:
+            logger.error(f"Directory size check failed: {error_msg}")
+            raise ValueError(f"Directory size check failed: {error_msg}")
+        elif size_gb > 0:
+            logger.info(f"Directory size: {size_gb:.2f} GB")
+
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
         exclude_args = []

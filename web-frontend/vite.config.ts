@@ -9,5 +9,13 @@ export default defineConfig({
     alias: {
       '$lib': path.resolve('./src/lib')
     }
+  },
+  build: {
+    // Disable compressed size reporting for faster builds
+    reportCompressedSize: false,
+    // Use esbuild for faster minification (default in Vite)
+    minify: 'esbuild',
+    // Increase chunk size warning to reduce noise
+    chunkSizeWarningLimit: 1000
   }
 })

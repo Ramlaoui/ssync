@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Activity, Eye } from 'lucide-svelte';
+  import { createEventDispatcher } from 'svelte';
   import WatcherCard from './WatcherCard.svelte';
   import type { Watcher } from '../types/watchers';
 
@@ -7,8 +8,14 @@
   export let selectedJobId: string | null = null;
   export let selectedJobWatchers: Watcher[] = [];
 
+  const dispatch = createEventDispatcher();
+
   $: activeWatchers = watchers.filter(w => w.state === 'active');
   $: pausedWatchers = watchers.filter(w => w.state === 'paused');
+
+  function handleRefresh() {
+    dispatch('refresh');
+  }
 </script>
 
 <div class="watchers-section">
@@ -19,10 +26,6 @@
           <Activity class="header-icon" />
           Watchers
         </h3>
-        <div class="header-stats">
-          <span class="stat-value">{watchers.length}</span>
-          <span class="stat-label">total</span>
-        </div>
       </div>
       <div class="header-actions">
         <div class="status-indicators">
@@ -50,7 +53,7 @@
           <h4 class="group-title highlighted">Watchers for Job #{selectedJobId}</h4>
           <div class="watchers-list">
             {#each selectedJobWatchers as watcher (watcher.id)}
-              <WatcherCard {watcher} showJobLink={false} />
+              <WatcherCard {watcher} showJobLink={false} on:refresh={handleRefresh} />
             {/each}
           </div>
         </div>
@@ -67,6 +70,7 @@
               {watcher}
               showJobLink={true}
               class={selectedJobId && watcher.job_id === selectedJobId ? 'highlighted' : ''}
+              on:refresh={handleRefresh}
             />
           {/each}
         </div>
@@ -82,6 +86,7 @@
               {watcher}
               showJobLink={true}
               class={selectedJobId && watcher.job_id === selectedJobId ? 'highlighted' : ''}
+              on:refresh={handleRefresh}
             />
           {/each}
         </div>

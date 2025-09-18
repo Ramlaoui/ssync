@@ -104,12 +104,6 @@ class RateLimiter:
 class PathValidator:
     """Validate and sanitize file paths to prevent traversal attacks."""
 
-    # Allowed base paths for different operations
-    ALLOWED_BASE_PATHS = {
-        "local": ["/home", "/Users", "/opt", "/mnt", "/tmp", "/var/tmp"],
-        "remote": ["/home", "/scratch", "/work", "/tmp"],
-    }
-
     # Blacklisted path components
     BLACKLISTED_COMPONENTS = {
         "..",
@@ -193,26 +187,9 @@ class PathValidator:
                     status_code=403, detail="Access to sensitive files is forbidden"
                 )
 
-        # Check if path is under allowed base paths
-        allowed_paths = cls.ALLOWED_BASE_PATHS.get(base_type, [])
-        if user_home:
-            allowed_paths = allowed_paths + [str(user_home)]
-
-        is_allowed = False
-        for allowed in allowed_paths:
-            try:
-                resolved_path.relative_to(Path(allowed))
-                is_allowed = True
-                break
-            except ValueError:
-                continue
-
-        if not is_allowed and not (
-            user_home and resolved_path.is_relative_to(user_home)
-        ):
-            raise HTTPException(
-                status_code=403, detail="Path is outside allowed directories"
-            )
+        # Note: Path restrictions are now handled by the backend configuration
+        # in src/ssync/sync.py via PathRestrictions from config.
+        # The API only does basic security validation (no traversal, no sensitive files)
 
         return resolved_path
 

@@ -71,12 +71,10 @@ def attach_watchers(
             --pattern "Loss: ([\\d.]+)" --action RUN_COMMAND
     """
     try:
-        from ..manager import SlurmManager
         from ..utils.config import config
 
-        # Load config and get manager
-        slurm_hosts = config.load_config()
-        manager = SlurmManager(slurm_hosts)
+        # Load config
+        config.load_config()
 
         # Build watcher definitions
         if watcher_file:

@@ -26,15 +26,24 @@
   let editActions: any[] = [];
   let editTimerMode = false;
   let editTimerInterval = 30;
-  
-  // Initialize edit fields when watcher changes
-  $: if (watcher) {
+
+  // Track if we've initialized the edit fields
+  let previousWatcherId: number | null = null;
+
+  // Initialize edit fields only when watcher changes (not on every update)
+  $: if (watcher && watcher.id !== previousWatcherId) {
+    previousWatcherId = watcher.id;
     editName = watcher.name;
     editPattern = watcher.pattern;
     editInterval = watcher.interval_seconds;
     editCaptures = watcher.captures || [];
     editCondition = watcher.condition || '';
-    editActions = watcher.actions || [];
+    // Deep copy actions to preserve config and condition fields
+    editActions = (watcher.actions || []).map(action => ({
+      type: action.type,
+      condition: action.condition || '',
+      config: { ...(action.config || action.params || {}) }
+    }));
     editTimerMode = watcher.timer_mode_enabled || false;
     editTimerInterval = watcher.timer_interval_seconds || 30;
   }
@@ -50,25 +59,60 @@
   }
   
   function getActionDescription(action: any): string {
+    // Support both config and params fields for backward compatibility
+    const params = action.config || action.params || {};
+
     switch (action.type) {
       case 'log_event':
-        return 'Log event to output';
+        return params.message ? `"${params.message}"` : 'Log event to output';
       case 'store_metric':
-        return `Store metric: ${action.config?.metric_name || 'unnamed'}`;
+        const metricName = params.metric_name || params.name;
+        const metricValue = params.value;
+        if (metricName && metricValue) {
+          return `${metricName} = ${metricValue}`;
+        } else if (metricName) {
+          return metricName;
+        }
+        return 'Store metric value';
       case 'run_command':
-        return `Run: ${action.config?.command?.substring(0, 50) || 'command'}...`;
+        return params.command ?
+          `${params.command.substring(0, 80)}${params.command.length > 80 ? '...' : ''}` :
+          'Run command';
       case 'notify_email':
-        return `Email to: ${action.config?.to || 'recipient'}`;
+        const emailParts = [];
+        if (params.to) emailParts.push(`To: ${params.to}`);
+        if (params.subject) emailParts.push(`Subject: ${params.subject}`);
+        return emailParts.length > 0 ? emailParts.join(', ') : 'Send email notification';
       case 'notify_slack':
-        return 'Send Slack notification';
+        return params.webhook ? 'Send to configured Slack' : 'Send Slack notification';
       case 'cancel_job':
-        return `Cancel job${action.config?.reason ? ': ' + action.config.reason : ''}`;
+        return params.reason ? `Reason: ${params.reason}` : 'Cancel job';
       case 'resubmit':
-        return `Resubmit job${action.config?.delay ? ' after ' + action.config.delay + 's' : ''}`;
+        const resubmitParts = [];
+        if (params.delay) resubmitParts.push(`Delay: ${params.delay}s`);
+        if (params.modifications) {
+          const modCount = Object.keys(params.modifications).length;
+          if (modCount > 0) resubmitParts.push(`${modCount} modifications`);
+        }
+        return resubmitParts.length > 0 ? resubmitParts.join(', ') : 'Resubmit job';
       case 'pause_watcher':
         return 'Pause this watcher';
       default:
-        return action.type;
+        return action.type || 'Unknown action';
+    }
+  }
+
+  function getActionTypeLabel(type: string): string {
+    switch (type) {
+      case 'log_event': return 'Log Event';
+      case 'store_metric': return 'Store Metric';
+      case 'run_command': return 'Run Command';
+      case 'notify_email': return 'Send Email';
+      case 'notify_slack': return 'Slack Notification';
+      case 'cancel_job': return 'Cancel Job';
+      case 'resubmit': return 'Resubmit Job';
+      case 'pause_watcher': return 'Pause Watcher';
+      default: return type;
     }
   }
   
@@ -98,11 +142,16 @@
       code += '# actions:\n';
       watcher.actions.forEach(action => {
         let actionStr = `#   - ${action.type}`;
-        if (action.config && Object.keys(action.config).length > 0) {
-          const params = Object.entries(action.config)
+        // Support both config and params fields
+        const params = action.config || action.params || {};
+        if (action.condition) {
+          actionStr += ` if="${action.condition}"`;
+        }
+        if (Object.keys(params).length > 0) {
+          const paramStr = Object.entries(params)
             .map(([k, v]) => `${k}="${v}"`)
             .join(', ');
-          actionStr += `(${params})`;
+          actionStr += `(${paramStr})`;
         }
         code += actionStr + '\n';
       });
@@ -129,26 +178,93 @@
   
   async function saveChanges() {
     if (!watcher) return;
-    
+
+    // Validate required fields
+    if (!editName.trim()) {
+      error = 'Watcher name is required';
+      return;
+    }
+
+    if (!editPattern.trim()) {
+      error = 'Pattern is required';
+      return;
+    }
+
+    if (editInterval < 1 || editInterval > 3600) {
+      error = 'Check interval must be between 1 and 3600 seconds';
+      return;
+    }
+
+    if (editTimerMode && (editTimerInterval < 1 || editTimerInterval > 3600)) {
+      error = 'Timer interval must be between 1 and 3600 seconds';
+      return;
+    }
+
+    // Validate actions
+    for (let i = 0; i < editActions.length; i++) {
+      const action = editActions[i];
+      const fields = getConfigFieldsForType(action.type);
+
+      for (const field of fields) {
+        if (field.required && !action.config?.[field.name]) {
+          error = `Action ${i + 1}: ${field.label} is required`;
+          return;
+        }
+
+        if (field.type === 'email' && action.config?.[field.name]) {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(action.config[field.name])) {
+            error = `Action ${i + 1}: Invalid email address`;
+            return;
+          }
+        }
+
+        if (field.type === 'url' && action.config?.[field.name]) {
+          try {
+            new URL(action.config[field.name]);
+            if (field.pattern) {
+              const pattern = new RegExp(field.pattern);
+              if (!pattern.test(action.config[field.name])) {
+                error = `Action ${i + 1}: Invalid URL format`;
+                return;
+              }
+            }
+          } catch {
+            error = `Action ${i + 1}: Invalid URL`;
+            return;
+          }
+        }
+      }
+    }
+
     isSaving = true;
     error = null;
-    
+
     try {
+      // Format actions for the API - ensure config field is properly set
+      const formattedActions = editActions.map(action => ({
+        type: action.type,
+        condition: action.condition || undefined,
+        config: action.config && Object.keys(action.config).length > 0 ? action.config : undefined
+      }));
+
       const updatedConfig = {
         name: editName,
         pattern: editPattern,
         interval_seconds: editInterval,
         capture_groups: editCaptures.length > 0 ? editCaptures : undefined,
         condition: editCondition || undefined,
-        actions: editActions,
+        actions: formattedActions,
         timer_mode_enabled: editTimerMode,
         timer_interval_seconds: editTimerMode ? editTimerInterval : undefined
       };
-      
+
       // API call to update watcher
       const response = await api.put(`/api/watchers/${watcher.id}`, updatedConfig);
-      
+
       if (response.data) {
+        // Update the watcher object with the response data
+        watcher = response.data;
         dispatch('updated', response.data);
         isEditing = false;
         activeTab = 'view';
@@ -176,34 +292,39 @@
     }
   }
   
-  let isSelecting = false;
-  
+  let overlayElement: HTMLElement;
+  let dialogElement: HTMLElement;
+  let mouseDownInsideDialog = false;
+
   function handleClose() {
-    // Don't close if user is selecting text
-    if (isSelecting) {
-      isSelecting = false;
-      return;
-    }
     dispatch('close');
   }
-  
-  function handleMouseDown() {
-    // Track when user starts selecting
-    const selection = window.getSelection();
-    if (selection && selection.toString().length === 0) {
-      isSelecting = false;
-    }
+
+  function handleOverlayMouseDown(event: MouseEvent) {
+    // Check if mousedown started on the overlay itself (not the dialog)
+    mouseDownInsideDialog = event.target !== overlayElement;
   }
-  
-  function handleMouseUp(event: MouseEvent) {
-    // Check if user has selected text
+
+  function handleOverlayClick(event: MouseEvent) {
+    // Don't close if:
+    // 1. Click started inside the dialog
+    // 2. Text is selected
+    // 3. Click target is not the overlay
+
     const selection = window.getSelection();
-    if (selection && selection.toString().length > 0) {
-      isSelecting = true;
-      // Prevent the click event from firing
-      event.stopPropagation();
-      event.preventDefault();
+    const hasSelection = selection && selection.toString().length > 0;
+
+    if (mouseDownInsideDialog || hasSelection || event.target !== overlayElement) {
+      return;
     }
+
+    handleClose();
+  }
+
+  // Track mouse down inside dialog
+  function handleDialogMouseDown(event: MouseEvent) {
+    mouseDownInsideDialog = true;
+    event.stopPropagation();
   }
   
   function addCapture() {
@@ -220,25 +341,165 @@
   }
   
   function addAction() {
-    editActions = [...editActions, { type: 'log_event', config: {} }];
+    editActions = [...editActions, {
+      type: 'log_event',
+      condition: '',
+      config: getDefaultConfigForType('log_event')
+    }];
   }
-  
+
   function removeAction(index: number) {
     editActions = editActions.filter((_, i) => i !== index);
+  }
+
+  function updateAction(index: number, field: string, value: any) {
+    if (field === 'type') {
+      const oldConfig = editActions[index].config || {};
+      editActions[index].type = value;
+      // Only reset config if the type actually changed, and preserve compatible fields
+      if (editActions[index].type !== value) {
+        const newDefaults = getDefaultConfigForType(value);
+        // Preserve fields that exist in both old and new config
+        const preservedConfig: any = {};
+        for (const key in newDefaults) {
+          if (key in oldConfig) {
+            preservedConfig[key] = oldConfig[key];
+          } else {
+            preservedConfig[key] = newDefaults[key];
+          }
+        }
+        editActions[index].config = preservedConfig;
+      }
+    } else if (field === 'condition') {
+      editActions[index].condition = value;
+    } else if (field.startsWith('config.')) {
+      const configField = field.substring(7);
+      if (!editActions[index].config) {
+        editActions[index].config = {};
+      }
+
+      // Validate based on the field type
+      const fieldInfo = getConfigFieldsForType(editActions[index].type)
+        .find(f => f.name === configField);
+
+      let validatedValue = value;
+      if (fieldInfo) {
+        if (fieldInfo.type === 'number') {
+          // Convert to number and validate
+          const numValue = Number(value);
+          validatedValue = isNaN(numValue) ? 0 : numValue;
+
+          // Apply min/max constraints if defined
+          if (fieldInfo.min !== undefined && validatedValue < fieldInfo.min) {
+            validatedValue = fieldInfo.min;
+          }
+          if (fieldInfo.max !== undefined && validatedValue > fieldInfo.max) {
+            validatedValue = fieldInfo.max;
+          }
+        } else if (fieldInfo.type === 'email') {
+          // Basic email validation
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (value && !emailRegex.test(value)) {
+            // Keep the value but mark it as potentially invalid
+            // We'll add visual feedback later
+          }
+        } else if (fieldInfo.type === 'url') {
+          // Basic URL validation
+          try {
+            if (value && value.trim()) {
+              new URL(value);
+            }
+          } catch {
+            // Keep the value but mark it as potentially invalid
+          }
+        }
+      }
+
+      editActions[index].config = { ...editActions[index].config, [configField]: validatedValue };
+    }
+    editActions = editActions; // Trigger reactivity
+  }
+
+  function getDefaultConfigForType(type: string): any {
+    switch(type) {
+      case 'log_event':
+        return { message: '' };
+      case 'store_metric':
+        return { metric_name: '', value: '' };
+      case 'run_command':
+        return { command: '' };
+      case 'notify_email':
+        return { to: '', subject: '', message: '' };
+      case 'notify_slack':
+        return { webhook: '', message: '' };
+      case 'cancel_job':
+        return { reason: '' };
+      case 'resubmit':
+        return { delay: 0, cancel_previous: true, modifications: {} };
+      case 'pause_watcher':
+        return {};
+      default:
+        return {};
+    }
+  }
+
+  function getConfigFieldsForType(type: string): Array<{name: string, label: string, type: string, placeholder?: string, hint?: string, min?: number, max?: number, pattern?: string, required?: boolean}> {
+    switch(type) {
+      case 'log_event':
+        return [
+          { name: 'message', label: 'Message', type: 'text', placeholder: 'Log message to output', hint: 'Can use captured variables like $1, $2' }
+        ];
+      case 'store_metric':
+        return [
+          { name: 'metric_name', label: 'Metric Name', type: 'text', placeholder: 'e.g., gpu_usage, loss, accuracy', required: true, pattern: '^[a-zA-Z_][a-zA-Z0-9_]*$' },
+          { name: 'value', label: 'Value Expression', type: 'text', placeholder: 'e.g., $1 or float($1)', hint: 'Python expression using captured groups', required: true }
+        ];
+      case 'run_command':
+        return [
+          { name: 'command', label: 'Command', type: 'text',
+            placeholder: 'e.g., wandb sync, python script.py, uv run train.py',
+            hint: 'Supports: echo, ls, cat, cd, python, uv, wandb, and more. Use && to chain commands.' }
+        ];
+      case 'notify_email':
+        return [
+          { name: 'to', label: 'To', type: 'email', placeholder: 'email@example.com', required: true, pattern: '^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$' },
+          { name: 'subject', label: 'Subject', type: 'text', placeholder: 'Alert: Job $JOB_ID', required: true },
+          { name: 'message', label: 'Message', type: 'text', placeholder: 'Watcher triggered for job on $HOSTNAME' }
+        ];
+      case 'notify_slack':
+        return [
+          { name: 'webhook', label: 'Webhook URL', type: 'url', placeholder: 'https://hooks.slack.com/services/...', required: true, pattern: '^https://hooks\\.slack\\.com/services/.+' },
+          { name: 'message', label: 'Message', type: 'text', placeholder: 'Job alert: $1' }
+        ];
+      case 'cancel_job':
+        return [
+          { name: 'reason', label: 'Reason', type: 'text', placeholder: 'e.g., Memory limit exceeded, Training diverged' }
+        ];
+      case 'resubmit':
+        return [
+          { name: 'delay', label: 'Delay (seconds)', type: 'number', placeholder: '0', hint: 'Wait time before resubmitting', min: 0, max: 86400 },
+          { name: 'cancel_previous', label: 'Cancel Previous', type: 'checkbox', placeholder: 'true', hint: 'Cancel the original job before resubmitting' }
+        ];
+      case 'pause_watcher':
+        return [];
+      default:
+        return [];
+    }
   }
 </script>
 
 {#if watcher}
-<div 
-  class="dialog-overlay" 
-  on:click={handleClose}
-  on:mousedown={handleMouseDown}
-  on:mouseup={handleMouseUp}
+<div
+  class="dialog-overlay"
+  bind:this={overlayElement}
+  on:mousedown={handleOverlayMouseDown}
+  on:click={handleOverlayClick}
 >
-  <div 
-    class="dialog-container" 
+  <div
+    class="dialog-container"
+    bind:this={dialogElement}
+    on:mousedown={handleDialogMouseDown}
     on:click|stopPropagation
-    on:mousedown|stopPropagation
   >
     <div class="dialog-header">
       <div class="header-content">
@@ -361,8 +622,13 @@
               <div class="action-card">
                 <span class="action-number">{i + 1}</span>
                 <div class="action-content">
-                  <div class="action-type">{action.type}</div>
+                  <div class="action-type">{getActionTypeLabel(action.type)}</div>
                   <div class="action-desc">{getActionDescription(action)}</div>
+                  {#if action.condition}
+                    <div class="action-condition-view">
+                      <span class="condition-label">If:</span> <code>{action.condition}</code>
+                    </div>
+                  {/if}
                 </div>
               </div>
             {/each}
@@ -393,13 +659,16 @@
           
           <div class="form-group">
             <label for="edit-interval">Check Interval (seconds)</label>
-            <input 
+            <input
               id="edit-interval"
-              type="number" 
+              type="number"
               bind:value={editInterval}
               min="1"
               max="3600"
             />
+            {#if editInterval < 1 || editInterval > 3600}
+              <span class="field-error">Interval must be between 1 and 3600 seconds</span>
+            {/if}
           </div>
           
           <div class="form-group">
@@ -411,13 +680,16 @@
               Timer Mode
             </label>
             {#if editTimerMode}
-              <input 
-                type="number" 
+              <input
+                type="number"
                 bind:value={editTimerInterval}
                 min="1"
                 max="3600"
                 placeholder="Timer interval (seconds)"
               />
+              {#if editTimerInterval < 1 || editTimerInterval > 3600}
+                <span class="field-error">Timer interval must be between 1 and 3600 seconds</span>
+              {/if}
             {/if}
           </div>
           
@@ -439,23 +711,123 @@
           
           <div class="form-group">
             <label for="edit-condition">Condition (Optional)</label>
-            <input 
+            <input
               id="edit-condition"
-              type="text" 
+              type="text"
               bind:value={editCondition}
               placeholder="Python expression"
             />
           </div>
-          
+
+          <div class="form-group">
+            <label>Actions</label>
+            <div class="actions-edit-list">
+              {#each editActions as action, i}
+                <div class="action-edit-card">
+                  <div class="action-header">
+                    <span class="action-number">{i + 1}</span>
+                    <select
+                      value={action.type}
+                      on:change={(e) => updateAction(i, 'type', e.target.value)}
+                    >
+                      <option value="log_event">Log Event</option>
+                      <option value="store_metric">Store Metric</option>
+                      <option value="run_command">Run Command</option>
+                      <option value="notify_email">Send Email</option>
+                      <option value="notify_slack">Send Slack Notification</option>
+                      <option value="cancel_job">Cancel Job</option>
+                      <option value="resubmit">Resubmit Job</option>
+                      <option value="pause_watcher">Pause Watcher</option>
+                    </select>
+                    <button class="remove-action-btn" on:click={() => removeAction(i)}>
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div class="action-condition">
+                    <input
+                      type="text"
+                      value={action.condition || ''}
+                      on:input={(e) => updateAction(i, 'condition', e.target.value)}
+                      placeholder="Condition (optional, e.g., float($1) > 80)"
+                    />
+                  </div>
+
+                  {#if action.type !== 'pause_watcher'}
+                    <div class="action-config">
+                      {#each getConfigFieldsForType(action.type) as field}
+                        <div class="config-field">
+                          <label>{field.label}:</label>
+                          {#if field.type === 'checkbox'}
+                            <input
+                              type="checkbox"
+                              checked={action.config?.[field.name] ?? true}
+                              on:change={(e) => updateAction(i, `config.${field.name}`, e.target.checked)}
+                            />
+                          {:else if field.type === 'number'}
+                            <input
+                              type="number"
+                              value={action.config?.[field.name] || ''}
+                              on:input={(e) => updateAction(i, `config.${field.name}`, e.target.value)}
+                              placeholder={field.placeholder}
+                              min={field.min}
+                              max={field.max}
+                              class:invalid={field.required && !action.config?.[field.name]}
+                            />
+                          {:else if field.type === 'email'}
+                            <input
+                              type="email"
+                              value={action.config?.[field.name] || ''}
+                              on:input={(e) => updateAction(i, `config.${field.name}`, e.target.value)}
+                              placeholder={field.placeholder}
+                              pattern={field.pattern}
+                              required={field.required}
+                              class:invalid={field.required && !action.config?.[field.name]}
+                            />
+                          {:else if field.type === 'url'}
+                            <input
+                              type="url"
+                              value={action.config?.[field.name] || ''}
+                              on:input={(e) => updateAction(i, `config.${field.name}`, e.target.value)}
+                              placeholder={field.placeholder}
+                              pattern={field.pattern}
+                              required={field.required}
+                              class:invalid={field.required && !action.config?.[field.name]}
+                            />
+                          {:else}
+                            <input
+                              type="text"
+                              value={action.config?.[field.name] || ''}
+                              on:input={(e) => updateAction(i, `config.${field.name}`, e.target.value)}
+                              placeholder={field.placeholder}
+                              pattern={field.pattern}
+                              class:invalid={field.required && !action.config?.[field.name]}
+                            />
+                          {/if}
+                          {#if field.hint}
+                            <span class="field-hint">{field.hint}</span>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+            <button class="add-btn" on:click={addAction}>Add Action</button>
+          </div>
+
           <div class="edit-actions">
-            <button 
+            <button
               class="btn-primary"
               on:click={saveChanges}
               disabled={isSaving}
             >
               {isSaving ? 'Saving...' : 'Save Changes'}
             </button>
-            <button 
+            <button
               class="btn-secondary"
               on:click={() => { activeTab = 'view'; isEditing = false; }}
             >
@@ -827,6 +1199,26 @@
     font-size: 0.75rem;
     color: #6b7280;
   }
+
+  .action-condition-view {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .action-condition-view .condition-label {
+    font-weight: 500;
+    color: #374151;
+    margin-right: 0.25rem;
+  }
+
+  .action-condition-view code {
+    background: #f3f4f6;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: #1f2937;
+  }
   
   /* Edit Mode */
   .edit-section {
@@ -889,7 +1281,143 @@
     cursor: pointer;
     align-self: flex-start;
   }
-  
+
+  .add-btn:hover {
+    background: #2563eb;
+  }
+
+  /* Action Edit List */
+  .actions-edit-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .action-edit-card {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem;
+  }
+
+  .action-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .action-header .action-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: #3b82f6;
+    color: white;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .action-header select {
+    flex: 1;
+    padding: 0.5rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    background: white;
+  }
+
+  .remove-action-btn {
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 0.25rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .remove-action-btn:hover {
+    background: #dc2626;
+  }
+
+  .remove-action-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .action-condition {
+    margin-bottom: 0.75rem;
+  }
+
+  .action-condition input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-family: monospace;
+  }
+
+  .action-config {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .config-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .config-field label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #6b7280;
+  }
+
+  .config-field input {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.875rem;
+  }
+
+  .config-field input[type="checkbox"] {
+    width: auto;
+    margin-top: 0.25rem;
+  }
+
+  .field-hint {
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-style: italic;
+    display: block;
+    margin-top: 0.25rem;
+  }
+
+  .field-error {
+    font-size: 0.75rem;
+    color: #dc2626;
+    display: block;
+    margin-top: 0.25rem;
+  }
+
+  .config-field input.invalid {
+    border-color: #ef4444;
+  }
+
+  .config-field input:invalid {
+    border-color: #ef4444;
+  }
+
   .edit-actions {
     display: flex;
     gap: 1rem;
