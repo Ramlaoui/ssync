@@ -25,46 +25,44 @@
   }
 </script>
 
-<div class="host-selector" class:compact={variant === 'compact'}>
-  <div class="section-header">
-    <h3 class="section-title">Hosts</h3>
-    <span class="host-count">{hosts.length}</span>
+<div class="flex flex-col gap-3 {variant === 'compact' ? 'compact' : ''}">
+  <div class="flex justify-between items-center px-0.5">
+    <h3 class="m-0 text-xs font-semibold text-slate-400 uppercase tracking-wider select-none">Hosts</h3>
+    <span class="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-[10px] text-[0.7rem] font-semibold min-w-[20px] text-center">{hosts.length}</span>
   </div>
   
   {#if hosts.length === 0}
-    <div class="empty-state">
-      <svg class="empty-icon" viewBox="0 0 24 24" fill="currentColor">
+    <div class="flex flex-col items-center py-8 px-4 text-slate-400 text-center">
+      <svg class="w-12 h-12 opacity-30 mb-2" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M19,5V19H5V5H19M13.96,12.29L11.21,15.83L9.25,13.47L6.5,17H17.5L13.96,12.29Z" />
       </svg>
-      <p>No hosts configured</p>
+      <p class="m-0 text-sm">No hosts configured</p>
     </div>
   {:else}
-    <div class="host-list">
+    <div class="flex flex-col gap-1.5">
       <!-- All hosts option -->
       <button
-        class="host-item"
-        class:active={selectedHost === ''}
+        class="flex justify-between items-center py-3 px-4 bg-white border border-slate-200 rounded-lg cursor-pointer font-inherit transition-all duration-150 w-full text-left hover:bg-slate-50 hover:border-slate-300 hover:translate-x-0.5 disabled:opacity-50 disabled:cursor-not-allowed {selectedHost === '' ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-600/30' : ''}"
         on:click={() => selectHost('')}
         disabled={loading}
         aria-pressed={selectedHost === ''}
       >
-        <span class="host-name">All Hosts</span>
-        <span class="job-count total">{getTotalJobs()}</span>
+        <span class="text-sm text-slate-700 transition-colors duration-150 {selectedHost === '' ? '!text-white !font-medium' : ''}">All Hosts</span>
+        <span class="bg-emerald-500 text-white px-2.5 py-1 rounded-xl text-xs font-semibold min-w-[28px] text-center transition-all duration-150">{getTotalJobs()}</span>
       </button>
       
       <!-- Individual hosts -->
       {#each hosts as host}
         <button
-          class="host-item"
-          class:active={selectedHost === host.hostname}
+          class="flex justify-between items-center py-3 px-4 bg-white border border-slate-200 rounded-lg cursor-pointer font-inherit transition-all duration-150 w-full text-left hover:bg-slate-50 hover:border-slate-300 hover:translate-x-0.5 disabled:opacity-50 disabled:cursor-not-allowed {selectedHost === host.hostname ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-600/30' : ''}"
           on:click={() => selectHost(host.hostname)}
           disabled={loading}
           aria-pressed={selectedHost === host.hostname}
         >
-          <span class="host-name">{host.hostname}</span>
+          <span class="text-sm text-slate-700 transition-colors duration-150 {selectedHost === host.hostname ? '!text-white !font-medium' : ''}">{host.hostname}</span>
           {#if jobCounts.has(host.hostname)}
             {@const count = jobCounts.get(host.hostname) || 0}
-            <span class="job-count" class:has-jobs={count > 0}>
+            <span class="px-2.5 py-1 rounded-xl text-xs font-semibold min-w-[28px] text-center transition-all duration-150 {count > 0 ? 'bg-amber-400 text-white' : selectedHost === host.hostname ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}">
               {count}
             </span>
           {/if}
@@ -182,44 +180,21 @@
     color: white;
   }
   
-  .host-name {
-    font-size: 0.925rem;
-    color: #334155;
-    transition: color 0.15s ease;
-  }
   
-  .job-count {
-    background: #f1f5f9;
-    color: #64748b;
-    padding: 0.25rem 0.625rem;
-    border-radius: 12px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    min-width: 28px;
-    text-align: center;
-    transition: all 0.15s ease;
+  /* Compact variant adjustments */
+  .compact .flex.justify-between.items-center {
+    @apply py-2 px-3;
   }
-  
-  .job-count.total {
-    background: #10b981;
-    color: white;
+
+  .compact .text-sm {
+    @apply text-xs;
   }
-  
-  .job-count.has-jobs {
-    background: #fbbf24;
-    color: #78350f;
+
+  .compact .px-2\\.5.py-1 {
+    @apply px-2 py-0.5 text-xs min-w-[24px];
   }
-  
-  /* Compact variant - not used but kept for future use */
-  .compact .host-list {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  
-  .compact .host-item {
-    width: auto;
-    padding: 0.5rem 1rem;
-    border-radius: 20px;
+
+  .compact {
+    @apply gap-2;
   }
 </style>

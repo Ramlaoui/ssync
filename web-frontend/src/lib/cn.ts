@@ -73,20 +73,20 @@ export function buildClass(
     [key: string]: any;
   }
 ) {
-  const variantConfig = variants[variant];
-  const classes = [variantConfig.base];
+  const variantConfig = variants[variant] as any;
+  const classes = [variantConfig.base || ''];
 
-  if (options?.variant && 'variant' in variantConfig) {
-    classes.push(variantConfig.variant[options.variant as keyof typeof variantConfig.variant]);
+  if (options?.variant && 'variant' in variantConfig && variantConfig.variant) {
+    classes.push(variantConfig.variant[options.variant] || '');
   }
 
-  if (options?.size && 'size' in variantConfig) {
-    classes.push(variantConfig.size[options.size as keyof typeof variantConfig.size]);
+  if (options?.size && 'size' in variantConfig && variantConfig.size) {
+    classes.push(variantConfig.size[options.size] || '');
   }
 
   if (options?.className) {
     classes.push(options.className);
   }
 
-  return cn(...classes);
+  return cn(...classes.filter(Boolean));
 }

@@ -152,15 +152,15 @@
   }
 </script>
 
-<div class="resource-card">
-  <h3 class="resource-title">Resource Usage</h3>
+<div class="bg-gradient-to-br from-white to-slate-50 border border-slate-200/20 rounded-2xl p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.8),0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)]">
+  <h3 class="text-lg font-bold text-slate-900 mb-6 tracking-tight">Resource Usage</h3>
   
-  <div class="resource-grid">
+  <div class="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-4 mb-6">
     {#each resources as metric}
-      <div class="resource-metric" style="--metric-color: {metric.color}">
+      <div class="bg-white border border-slate-200/10 rounded-xl p-4 text-center transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg" style="color: {metric.color}">
         <!-- Icon and Header -->
-        <div class="metric-header">
-          <div class="metric-icon">
+        <div class="flex flex-col items-center gap-2 mb-4 relative">
+          <div class="w-8 h-8 opacity-90" style="color: {metric.color}">
             {#if metric.icon === 'cpu'}
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <path d="M17,17H7V7H17M21,11V9H19V7C19,5.89 18.1,5 17,5H15V3H13V5H11V3H9V5H7C5.89,5 5,5.89 5,7V9H3V11H5V13H3V15H5V17C5,18.1 5.89,19 7,19H9V21H11V19H13V21H15V19H17C18.1,19 19,18.1 19,17V15H21V13H19V11M15,13H9V9H15"/>
@@ -180,14 +180,14 @@
             {/if}
           </div>
           
-          <div class="metric-info">
-            <h4 class="metric-label">{metric.label}</h4>
-            <span class="metric-value">{metric.value}</span>
+          <div class="text-center">
+            <h4 class="text-sm font-semibold text-gray-700 m-0">{metric.label}</h4>
+            <span class="text-xs text-gray-600 font-medium">{metric.value}</span>
           </div>
           
           <!-- Trend Indicator -->
           {#if metric.trend}
-            <div class="trend-indicator" class:up={metric.trend === 'up'} class:down={metric.trend === 'down'}>
+            <div class="absolute top-0 right-0 w-4 h-4 opacity-70 {metric.trend === 'up' ? 'text-emerald-500' : metric.trend === 'down' ? 'text-red-500' : ''}">
               {#if metric.trend === 'up'}
                 <svg viewBox="0 0 24 24" fill="currentColor">
                   <path d="M15,20H9V12H4.16L12,4.16L19.84,12H15V20Z"/>
@@ -206,8 +206,8 @@
         </div>
         
         <!-- Progress Ring -->
-        <div class="progress-container">
-          <svg class="progress-ring" viewBox="0 0 42 42">
+        <div class="relative w-[60px] h-[60px] mx-auto mb-3">
+          <svg class="w-full h-full -rotate-90" viewBox="0 0 42 42">
             <!-- Background circle -->
             <circle
               cx="21"
@@ -234,14 +234,14 @@
           </svg>
           
           <!-- Usage Percentage -->
-          <div class="usage-percentage">
+          <div class="absolute inset-0 flex items-center justify-center text-xs font-bold" style="color: {metric.color}">
             {Math.round(metric.usage * 100)}%
           </div>
         </div>
         
         <!-- Subtitle -->
         {#if metric.subtitle}
-          <p class="metric-subtitle">{metric.subtitle}</p>
+          <p class="text-[0.6875rem] text-gray-400 m-0 font-medium">{metric.subtitle}</p>
         {/if}
       </div>
     {/each}
@@ -249,221 +249,49 @@
   
   <!-- Node Information -->
   {#if job.node_list && job.node_list !== 'N/A'}
-    <div class="node-info">
-      <div class="node-header">
-        <svg class="node-icon" viewBox="0 0 24 24" fill="currentColor">
+    <div class="bg-indigo-50/40 border border-indigo-200/10 rounded-xl p-4 mt-4">
+      <div class="flex items-center gap-2 mb-2">
+        <svg class="w-[18px] h-[18px] text-indigo-600" viewBox="0 0 24 24" fill="currentColor">
           <path d="M4,1H20A1,1 0 0,1 21,2V6A1,1 0 0,1 20,7H4A1,1 0 0,1 3,6V2A1,1 0 0,1 4,1M4,9H20A1,1 0 0,1 21,10V14A1,1 0 0,1 20,15H4A1,1 0 0,1 3,14V10A1,1 0 0,1 4,9M4,17H20A1,1 0 0,1 21,18V22A1,1 0 0,1 20,23H4A1,1 0 0,1 3,22V18A1,1 0 0,1 4,17M5,3V5H19V3H5M5,11V13H19V11H5M5,19V21H19V19H5Z"/>
         </svg>
-        <h4>Compute Nodes</h4>
+        <h4 class="text-sm font-semibold text-gray-700 m-0">Compute Nodes</h4>
       </div>
-      <p class="node-list">{job.node_list}</p>
+      <p class="text-xs text-gray-600 font-mono m-0 mb-2 break-all">{job.node_list}</p>
       {#if job.partition}
-        <span class="partition-badge">{job.partition}</span>
+        <span class="inline-block bg-indigo-600 text-white text-[0.6875rem] font-medium px-2 py-0.5 rounded-full">{job.partition}</span>
       {/if}
     </div>
   {/if}
 </div>
 
 <style>
-  .resource-card {
-    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 16px;
-    padding: 1.5rem;
-    box-shadow: 
-      0 0 0 1px rgba(255, 255, 255, 0.8),
-      0 1px 3px rgba(0, 0, 0, 0.04),
-      0 4px 12px rgba(0, 0, 0, 0.04);
+  /* SVG sizing for icons */
+  svg {
+    @apply w-full h-full;
   }
 
-  .resource-title {
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: #0f172a;
-    margin: 0 0 1.5rem 0;
-    letter-spacing: -0.025em;
-  }
-
-  .resource-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .resource-metric {
-    background: white;
-    border: 1px solid rgba(148, 163, 184, 0.1);
-    border-radius: 12px;
-    padding: 1rem;
-    text-align: center;
-    transition: all 0.3s ease;
-    color: var(--metric-color);
-  }
-
-  .resource-metric:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  }
-
-  .metric-header {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-    position: relative;
-  }
-
-  .metric-icon {
-    width: 32px;
-    height: 32px;
-    color: var(--metric-color);
-    opacity: 0.9;
-  }
-
-  .metric-icon svg {
-    width: 100%;
-    height: 100%;
-  }
-
-  .trend-indicator {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 16px;
-    height: 16px;
-    opacity: 0.7;
-  }
-
-  .trend-indicator.up {
-    color: #10b981;
-  }
-
-  .trend-indicator.down {
-    color: #ef4444;
-  }
-
-  .trend-indicator svg {
-    width: 100%;
-    height: 100%;
-  }
-
-  .metric-info {
-    text-align: center;
-  }
-
-  .metric-label {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #374151;
-    margin: 0;
-  }
-
-  .metric-value {
-    font-size: 0.75rem;
-    color: #6b7280;
-    font-weight: 500;
-  }
-
-  .progress-container {
-    position: relative;
-    width: 60px;
-    height: 60px;
-    margin: 0 auto 0.75rem auto;
-  }
-
-  .progress-ring {
-    width: 100%;
-    height: 100%;
-    transform: rotate(-90deg);
-  }
-
+  /* Progress ring animation */
   .progress-fill {
     transition: stroke-dasharray 0.6s ease-in-out;
   }
 
-  .usage-percentage {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: var(--metric-color);
-  }
-
-  .metric-subtitle {
-    font-size: 0.6875rem;
-    color: #9ca3af;
-    margin: 0;
-    font-weight: 500;
-  }
-
-  .node-info {
-    background: rgba(99, 102, 241, 0.04);
-    border: 1px solid rgba(99, 102, 241, 0.1);
-    border-radius: 12px;
-    padding: 1rem;
-    margin-top: 1rem;
-  }
-
-  .node-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .node-icon {
-    width: 18px;
-    height: 18px;
-    color: #6366f1;
-  }
-
-  .node-header h4 {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #374151;
-    margin: 0;
-  }
-
-  .node-list {
-    font-size: 0.75rem;
-    color: #6b7280;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    margin: 0 0 0.5rem 0;
-    word-break: break-all;
-  }
-
-  .partition-badge {
-    display: inline-block;
-    background: #6366f1;
-    color: white;
-    font-size: 0.6875rem;
-    font-weight: 500;
-    padding: 0.125rem 0.5rem;
-    border-radius: 9999px;
-  }
-
+  /* Responsive grid adjustments */
   @media (max-width: 640px) {
-    .resource-grid {
+    .grid {
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 0.75rem;
+      @apply gap-3;
     }
 
-    .resource-metric {
-      padding: 0.75rem;
+    .bg-white.border.border-slate-200 {
+      @apply p-3;
     }
 
-    .progress-container {
-      width: 50px;
-      height: 50px;
+    .w-\\[60px\\].h-\\[60px\\] {
+      @apply w-12 h-12;
     }
 
-    .usage-percentage {
-      font-size: 0.6875rem;
+    .text-xs.font-bold {
+      @apply text-[0.6875rem];
     }
   }
 </style>
