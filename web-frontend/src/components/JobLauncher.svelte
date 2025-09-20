@@ -12,7 +12,14 @@
   import FileBrowser from './FileBrowser.svelte';
   import SyncSettings from './SyncSettings.svelte';
   import ScriptHistory from './ScriptHistory.svelte';
+  import TemplateSidebar from './TemplateSidebar.svelte';
+  import TemplateDetailPopup from './TemplateDetailPopup.svelte';
+  import SaveTemplateDialog from './SaveTemplateDialog.svelte';
   import type { HostInfo } from '../types/api';
+  import { resubmitStore } from '../stores/resubmit';
+  import { validateParameters } from '../lib/sbatchUtils';
+  import { api } from '../services/api';
+  import { push } from 'svelte-spa-router';
 
   // Icons
   import {
@@ -74,7 +81,6 @@ echo "Starting job..."
   export let hosts: HostInfo[] = [];
   export let selectedHost = '';
   export let loading = false;
-  export let validationDetails: any = { isValid: false };
 
   // Script Templates
   interface ScriptTemplate {
@@ -91,8 +97,6 @@ echo "Starting job..."
 
   let scriptTemplates: ScriptTemplate[] = loadScriptTemplates();
   let showSaveTemplateDialog = false;
-  let templateName = '';
-  let templateDescription = '';
 
   // Simple shared state for parameters - this is the single source of truth
   let parameters = {
@@ -552,6 +556,9 @@ echo "Starting job..."
   // Combine all presets without distinction
   $: allPresets = [...defaultPresets, ...customPresets];
 
+  // Compute validation details reactively based on parameters
+  $: validationDetails = validateParameters(parameters);
+
   $: canLaunch = validationDetails.isValid && selectedHost;
 
   // Get specific message about what's preventing launch
@@ -687,11 +694,87 @@ echo "Starting job..."
     dispatch('configChanged', { detail: parameters });
   }
 
-  function handleLaunch() {
-    if (canLaunch) {
+  async function handleLaunch() {
+    if (!canLaunch) return;
+
+    launching = true;
+    let launchError = '';
+
+    // Show a more informative loading message
+    const originalScript = script;
+    script = '# Launching job, please wait...\n# This may take a few minutes if the cluster is busy...\n\n' + script;
+
+    try {
       // Save script to localStorage for history
       saveScriptToLocalHistory();
-      dispatch('launch');
+
+      // Prepare the launch request with correct field names for API
+      // Only include fields that have actual values
+      const launchData = {
+        script_content: script,
+        source_dir: parameters.sourceDir,
+        host: selectedHost,
+        job_name: parameters.jobName || 'Unnamed Job'
+      };
+
+      // Only add optional parameters if they have values
+      if (parameters.partition) launchData.partition = parameters.partition;
+      if (parameters.account) launchData.account = parameters.account;
+      if (parameters.constraint) launchData.constraint = parameters.constraint;
+      if (parameters.cpus) launchData.cpus = parameters.cpus;
+      if (parameters.memory) launchData.mem = parameters.memory;  // API expects 'mem'
+      if (parameters.timeLimit) launchData.time = parameters.timeLimit;  // API expects 'time'
+      if (parameters.nodes) launchData.nodes = parameters.nodes;
+      if (parameters.ntasksPerNode) launchData.ntasks_per_node = parameters.ntasksPerNode;
+      if (parameters.gpusPerNode) launchData.gpus_per_node = parameters.gpusPerNode;
+      if (parameters.gres) launchData.gres = parameters.gres;
+      if (parameters.outputFile) launchData.output = parameters.outputFile;  // API expects 'output'
+      if (parameters.errorFile) launchData.error = parameters.errorFile;  // API expects 'error'
+
+      // Call the launch API with extended timeout (5 minutes for launch operations)
+      const response = await api.post('/api/jobs/launch', launchData, {
+        timeout: 300000  // 5 minutes timeout for job launch
+      });
+
+      if (response.data && response.data.job_id) {
+        // Success - navigate to job detail page
+        const jobId = response.data.job_id;
+        const host = response.data.hostname || selectedHost;
+        push(`/jobs/${jobId}/${host}`);
+      } else {
+        throw new Error('Invalid response from server');
+      }
+
+    } catch (error) {
+      console.error('Launch failed:', error);
+      script = originalScript;  // Restore original script on error
+
+      // Better error extraction
+      if (error.response?.data) {
+        // Handle validation errors from 422 response
+        const errorData = error.response.data;
+        if (typeof errorData.detail === 'string') {
+          launchError = errorData.detail;
+        } else if (Array.isArray(errorData.detail)) {
+          // Pydantic validation errors come as array
+          launchError = errorData.detail.map(e => `${e.loc?.join('.')}: ${e.msg}`).join(', ');
+        } else if (typeof errorData.detail === 'object') {
+          launchError = JSON.stringify(errorData.detail);
+        } else if (errorData.message) {
+          launchError = errorData.message;
+        } else {
+          launchError = JSON.stringify(errorData);
+        }
+      } else if (error.message) {
+        launchError = error.message;
+      } else {
+        launchError = 'Failed to launch job. Please try again.';
+      }
+
+      // Show error to user
+      alert(`Launch failed: ${launchError}`);
+    } finally {
+      launching = false;
     }
   }
 
@@ -742,38 +825,6 @@ echo "Starting job..."
     }
   }
 
-  function saveAsTemplate() {
-    if (!templateName.trim()) {
-      alert('Please enter a template name');
-      return;
-    }
-
-    const template: ScriptTemplate = {
-      id: `template_${Date.now()}`,
-      name: templateName.trim(),
-      description: templateDescription.trim(),
-      script_content: script,
-      parameters: {
-        ...parameters,
-        selectedHost,
-        sourceDir: parameters.sourceDir
-      },
-      tags: [],
-      created_at: new Date().toISOString(),
-      use_count: 0
-    };
-
-    scriptTemplates = [template, ...scriptTemplates];
-    saveScriptTemplates();
-
-    // Reset dialog
-    showSaveTemplateDialog = false;
-    templateName = '';
-    templateDescription = '';
-
-    // Show success message (you could make this a toast)
-    console.log('Template saved:', template.name);
-  }
 
   function loadTemplate(template: ScriptTemplate) {
     // Update script - just set the value, don't call handleScriptEdit
@@ -872,6 +923,31 @@ echo "Starting job..."
       } catch (error) {
         console.error('Failed to load hosts:', error);
       }
+    }
+
+    // Check for resubmit data and populate fields
+    const resubmitData = resubmitStore.consumeResubmitData();
+    if (resubmitData) {
+      console.log('Loading resubmit data:', resubmitData);
+
+      // Set script content
+      script = resubmitData.scriptContent;
+
+      // Set hostname
+      selectedHost = resubmitData.hostname;
+
+      // Set working directory if available
+      if (resubmitData.workDir) {
+        parameters.sourceDir = resubmitData.workDir;
+      }
+
+      // Set job name if available
+      if (resubmitData.jobName && resubmitData.jobName !== 'N/A') {
+        parameters.jobName = resubmitData.jobName;
+      }
+
+      // Parse the script to extract SBATCH parameters
+      parseSbatchFromScript(resubmitData.scriptContent);
     }
 
     // If we have a persisted sourceDir but FileBrowser isn't showing it, update the initialPath
@@ -1380,307 +1456,58 @@ echo "Starting job..."
     </div>
   {/if}
 
-  <!-- Template Sidebar -->
-  {#if showTemplates}
-    <div class="template-sidebar-backdrop" on:click={() => showTemplates = false} transition:fade={{ duration: 200 }}>
-      <div class="template-sidebar" on:click|stopPropagation transition:fly={{ x: 400, duration: 300, opacity: 0.8 }}>
-        <div class="sidebar-header">
-          <h3>Script Templates</h3>
-          <button
-            class="close-btn"
-            on:click={() => showTemplates = false}
-          >
-            <X class="w-5 h-5" />
-          </button>
-        </div>
+  <!-- Template Components -->
+  <TemplateSidebar
+    isOpen={showTemplates}
+    {scriptTemplates}
+    on:close={() => showTemplates = false}
+    on:select={(e) => {
+      selectedTemplate = e.detail;
+      showTemplateDetail = true;
+    }}
+    on:load={(e) => {
+      loadTemplate(e.detail);
+      showTemplates = false;
+    }}
+    on:delete={(e) => deleteTemplate(e.detail)}
+  />
 
-        <div class="sidebar-content">
-          {#if scriptTemplates.length === 0}
-            <div class="empty-state">
-              <FileText class="w-12 h-12 text-gray-400 mx-auto mb-3" />
-              <p class="text-gray-600 mb-2">No templates saved yet</p>
-              <p class="text-sm text-gray-500">Save your frequently used scripts as templates for quick reuse</p>
-            </div>
-          {:else}
-            <div class="template-list">
-              {#each scriptTemplates as template}
-                <div class="template-list-item" on:click={() => {
-                  selectedTemplate = template;
-                  showTemplateDetail = true;
-                }}>
-                  <div class="template-item-header">
-                    <h4 class="template-item-name">{template.name}</h4>
-                    <div class="template-item-actions" on:click|stopPropagation>
-                      <button
-                        class="template-action-btn"
-                        on:click={() => {
-                          loadTemplate(template);
-                          showTemplates = false;
-                        }}
-                        title="Load template"
-                      >
-                        <Download class="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        class="template-action-btn delete"
-                        on:click={() => {
-                          deleteTemplate(template.id);
-                        }}
-                        title="Delete template"
-                      >
-                        <Trash2 class="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {#if template.description}
-                    <p class="template-item-description">{template.description}</p>
-                  {/if}
-
-                  <div class="template-item-meta">
-                    <span class="meta-chip">{template.parameters.time || '60'}m</span>
-                    <span class="meta-chip">{template.parameters.memory || '4'}GB</span>
-                    <span class="meta-chip">{template.parameters.cpus || '1'}CPU</span>
-                    {#if template.parameters.gpus}
-                      <span class="meta-chip">{template.parameters.gpus}GPU</span>
-                    {/if}
-                    <span class="meta-usage">Used {template.use_count} times</span>
-                  </div>
-
-                  <div class="template-item-preview">
-                    <code>{template.script_content.split('\n')[0] || '#!/bin/bash'}...</code>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Template Detail Popup -->
-  {#if showTemplateDetail && selectedTemplate}
-    <div class="template-detail-backdrop" on:click={() => showTemplateDetail = false} transition:fade={{ duration: 200 }}>
-      <div class="template-detail-popup" on:click|stopPropagation transition:fly={{ y: 50, duration: 300, opacity: 0.8 }}>
-        <div class="detail-popup-header">
-          <h3>{selectedTemplate.name}</h3>
-          <button
-            class="close-btn"
-            on:click={() => showTemplateDetail = false}
-          >
-            <X class="w-5 h-5" />
-          </button>
-        </div>
-
-        <div class="detail-popup-content">
-          {#if selectedTemplate.description}
-            <div class="detail-section">
-              <h4>Description</h4>
-              <p class="template-detail-description">{selectedTemplate.description}</p>
-            </div>
-          {/if}
-
-          <div class="detail-section">
-            <h4>Script Content</h4>
-            <div class="script-content-preview">
-              <pre><code>{selectedTemplate.script_content}</code></pre>
-            </div>
-          </div>
-
-          <div class="detail-section">
-            <h4>Parameters</h4>
-            <div class="parameter-grid">
-              <div class="param-item">
-                <span class="param-label">Host</span>
-                <span class="param-value">{selectedTemplate.parameters.selectedHost || 'Not set'}</span>
-              </div>
-              <div class="param-item">
-                <span class="param-label">Directory</span>
-                <span class="param-value">{selectedTemplate.parameters.sourceDir || 'Not set'}</span>
-              </div>
-              <div class="param-item">
-                <span class="param-label">Time</span>
-                <span class="param-value">{selectedTemplate.parameters.time || '60'} minutes</span>
-              </div>
-              <div class="param-item">
-                <span class="param-label">Memory</span>
-                <span class="param-value">{selectedTemplate.parameters.memory || '4'}GB</span>
-              </div>
-              <div class="param-item">
-                <span class="param-label">CPUs</span>
-                <span class="param-value">{selectedTemplate.parameters.cpus || '1'}</span>
-              </div>
-              {#if selectedTemplate.parameters.gpus}
-                <div class="param-item">
-                  <span class="param-label">GPUs</span>
-                  <span class="param-value">{selectedTemplate.parameters.gpus}</span>
-                </div>
-              {/if}
-              {#if selectedTemplate.parameters.partition}
-                <div class="param-item">
-                  <span class="param-label">Partition</span>
-                  <span class="param-value">{selectedTemplate.parameters.partition}</span>
-                </div>
-              {/if}
-              {#if selectedTemplate.parameters.account}
-                <div class="param-item">
-                  <span class="param-label">Account</span>
-                  <span class="param-value">{selectedTemplate.parameters.account}</span>
-                </div>
-              {/if}
-            </div>
-          </div>
-
-          <div class="detail-section">
-            <h4>Usage Statistics</h4>
-            <div class="stats-grid">
-              <div class="stat-item">
-                <span class="stat-label">Created</span>
-                <span class="stat-value">{new Date(selectedTemplate.created_at).toLocaleDateString()}</span>
-              </div>
-              {#if selectedTemplate.last_used}
-                <div class="stat-item">
-                  <span class="stat-label">Last Used</span>
-                  <span class="stat-value">{new Date(selectedTemplate.last_used).toLocaleDateString()}</span>
-                </div>
-              {/if}
-              <div class="stat-item">
-                <span class="stat-label">Times Used</span>
-                <span class="stat-value">{selectedTemplate.use_count}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="detail-popup-footer">
-          <button
-            class="btn-secondary"
-            on:click={() => showTemplateDetail = false}
-          >
-            Close
-          </button>
-          <button
-            class="btn-danger"
-            on:click={() => {
-              deleteTemplate(selectedTemplate.id);
-              showTemplateDetail = false;
-            }}
-          >
-            <Trash2 class="w-4 h-4" />
-            Delete
-          </button>
-          <button
-            class="btn-primary"
-            on:click={() => {
-              loadTemplate(selectedTemplate);
-              showTemplateDetail = false;
-              showTemplates = false;
-            }}
-          >
-            <Download class="w-4 h-4" />
-            Load Template
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <TemplateDetailPopup
+    isOpen={showTemplateDetail}
+    template={selectedTemplate}
+    on:close={() => showTemplateDetail = false}
+    on:load={(e) => {
+      loadTemplate(e.detail);
+      showTemplateDetail = false;
+      showTemplates = false;
+    }}
+    on:delete={(e) => {
+      deleteTemplate(e.detail);
+      showTemplateDetail = false;
+    }}
+  />
 
   <!-- Save Template Dialog -->
-  {#if showSaveTemplateDialog}
-    <div class="modal-backdrop" on:click={() => showSaveTemplateDialog = false}>
-      <div class="save-template-dialog" on:click|stopPropagation>
-        <div class="dialog-header">
-          <h3>Save as Template</h3>
-          <button
-            class="close-btn"
-            on:click={() => showSaveTemplateDialog = false}
-          >
-            <X class="w-5 h-5" />
-          </button>
-        </div>
+  <SaveTemplateDialog
+    isOpen={showSaveTemplateDialog}
+    {script}
+    {parameters}
+    {selectedHost}
+    on:close={() => showSaveTemplateDialog = false}
+    on:save={(e) => {
+      const template = {
+        id: `template_${Date.now()}`,
+        ...e.detail,
+        tags: [],
+        created_at: new Date().toISOString(),
+        use_count: 0
+      };
 
-        <div class="dialog-content">
-          <div class="form-group">
-            <label for="template-name">Template Name *</label>
-            <input
-              id="template-name"
-              type="text"
-              bind:value={templateName}
-              placeholder="e.g., GPU Training Script"
-              class="form-input"
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="template-description">Description (optional)</label>
-            <textarea
-              id="template-description"
-              bind:value={templateDescription}
-              placeholder="Describe what this script does..."
-              class="form-textarea"
-              rows="3"
-            />
-          </div>
-
-          <div class="form-group">
-            <label>Script Preview</label>
-            <div class="script-preview">
-              <pre>{script.split('\n').slice(0, 10).join('\n')}...</pre>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label>Saved Parameters</label>
-            <div class="saved-params">
-              <div class="param-row">
-                <span class="param-label">Host:</span>
-                <span class="param-value">{selectedHost || 'Not selected'}</span>
-              </div>
-              <div class="param-row">
-                <span class="param-label">Directory:</span>
-                <span class="param-value">{parameters.sourceDir || 'Not selected'}</span>
-              </div>
-              <div class="param-row">
-                <span class="param-label">Time:</span>
-                <span class="param-value">{parameters.time || '60'} minutes</span>
-              </div>
-              <div class="param-row">
-                <span class="param-label">Memory:</span>
-                <span class="param-value">{parameters.memory || '4'}GB</span>
-              </div>
-              <div class="param-row">
-                <span class="param-label">CPUs:</span>
-                <span class="param-value">{parameters.cpus || '1'}</span>
-              </div>
-              {#if parameters.gpus}
-                <div class="param-row">
-                  <span class="param-label">GPUs:</span>
-                  <span class="param-value">{parameters.gpus}</span>
-                </div>
-              {/if}
-            </div>
-          </div>
-        </div>
-
-        <div class="dialog-footer">
-          <button
-            class="btn-secondary"
-            on:click={() => showSaveTemplateDialog = false}
-          >
-            Cancel
-          </button>
-          <button
-            class="btn-primary"
-            on:click={saveAsTemplate}
-            disabled={!templateName.trim()}
-          >
-            Save Template
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+      scriptTemplates = [template, ...scriptTemplates];
+      saveScriptTemplates();
+      console.log('Template saved:', template.name);
+    }}
+  />
 
   {#if !isMobile}
     <!-- Desktop only content starts here -->
@@ -4614,276 +4441,6 @@ echo "Starting job..."
       0 3px 6px -2px rgba(139, 92, 246, 0.15);
   }
 
-  /* Template Sidebar */
-  .template-sidebar-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
-    z-index: 9999;
-  }
-
-  .template-sidebar {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 400px;
-    max-width: 90vw;
-    background: white;
-    box-shadow: -4px 0 15px rgba(0, 0, 0, 0.1);
-    display: flex;
-    flex-direction: column;
-    z-index: 10000;
-  }
-
-  .sidebar-header {
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: white;
-  }
-
-  .sidebar-header h3 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #111827;
-    margin: 0;
-  }
-
-  .sidebar-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1rem;
-  }
-
-  .template-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .template-list-item {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 1rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .template-list-item:hover {
-    background: #f3f4f6;
-    border-color: #d1d5db;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  }
-
-  .template-item-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-  }
-
-  .template-item-name {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #111827;
-    margin: 0;
-  }
-
-  .template-item-actions {
-    display: flex;
-    gap: 0.25rem;
-  }
-
-  .template-item-description {
-    font-size: 0.8rem;
-    color: #6b7280;
-    margin: 0 0 0.5rem 0;
-    line-height: 1.4;
-  }
-
-  .template-item-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .meta-chip {
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    padding: 0.125rem 0.375rem;
-    font-size: 0.7rem;
-    color: #6b7280;
-  }
-
-  .meta-usage {
-    font-size: 0.7rem;
-    color: #9ca3af;
-    margin-left: auto;
-  }
-
-  .template-item-preview {
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    padding: 0.5rem;
-  }
-
-  .template-item-preview code {
-    font-family: 'Monaco', 'Courier New', monospace;
-    font-size: 0.7rem;
-    color: #4b5563;
-  }
-
-  /* Template Detail Popup */
-  .template-detail-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10001;
-  }
-
-  .template-detail-popup {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    max-width: 700px;
-    width: 90%;
-    max-height: 85vh;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .detail-popup-header {
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .detail-popup-header h3 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #111827;
-    margin: 0;
-  }
-
-  .detail-popup-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1.5rem;
-  }
-
-  .detail-section {
-    margin-bottom: 1.5rem;
-  }
-
-  .detail-section:last-child {
-    margin-bottom: 0;
-  }
-
-  .detail-section h4 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #111827;
-    margin: 0 0 0.75rem 0;
-  }
-
-  .template-detail-description {
-    color: #6b7280;
-    line-height: 1.5;
-    margin: 0;
-  }
-
-  .script-content-preview {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    overflow: hidden;
-  }
-
-  .script-content-preview pre {
-    margin: 0;
-    padding: 1rem;
-    overflow-x: auto;
-    font-family: 'Monaco', 'Courier New', monospace;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    color: #374151;
-  }
-
-  .parameter-grid,
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 0.75rem;
-  }
-
-  .param-item,
-  .stat-item {
-    background: #f9fafb;
-    border-radius: 6px;
-    padding: 0.75rem;
-  }
-
-  .param-label,
-  .stat-label {
-    display: block;
-    font-size: 0.8rem;
-    font-weight: 500;
-    color: #6b7280;
-    margin-bottom: 0.25rem;
-  }
-
-  .param-value,
-  .stat-value {
-    font-size: 0.9rem;
-    color: #111827;
-    font-weight: 500;
-  }
-
-  .detail-popup-footer {
-    padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.75rem;
-  }
-
-  .btn-danger {
-    background: #dc2626;
-    color: white;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .btn-danger:hover {
-    background: #b91c1c;
-  }
 
   /* Template Dialogs */
   .modal-backdrop {
