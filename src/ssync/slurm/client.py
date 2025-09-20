@@ -212,7 +212,8 @@ class SlurmClient:
                                     job_info.stdout_file = stdout_path
                                 if stderr_path:
                                     job_info.stderr_file = stderr_path
-                                if submit_line:
+                                # Only update submit_line if it's not already set
+                                if submit_line and not job_info.submit_line:
                                     job_info.submit_line = submit_line
                                 logger.debug(
                                     f"Got job details from scontrol for {job_info.state} job {job_info.job_id}"
