@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.2.1",
-    "fabric>=3.2.2",
     "pyyaml>=6.0",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
