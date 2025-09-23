@@ -62,6 +62,7 @@
         scriptContent: scriptData.script_content,
         hostname: job.hostname,
         workDir: job.work_dir,
+        localSourceDir: scriptData.local_source_dir,  // Use the local source dir from the API
         originalJobId: job.job_id,
         jobName: job.name,
         submitLine: job.submit_line

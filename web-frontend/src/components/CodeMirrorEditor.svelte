@@ -252,34 +252,53 @@
   }
 
   function updateEditorContent(newValue: string) {
-    if (!editorView || newValue === previousValue) return;
+    if (!editorView) return;
 
     const currentContent = editorView.state.doc.toString();
-    if (currentContent !== newValue) {
-      isInternalChange = true;
 
-      // Store cursor position and clamp it to the new document length
-      const selection = editorView.state.selection;
-      const newDocLength = newValue.length;
-
-      // Create a safe selection that won't exceed the new document bounds
-      const safeSelection = {
-        anchor: Math.min(selection.main.anchor, newDocLength),
-        head: Math.min(selection.main.head, newDocLength)
-      };
-
-      editorView.dispatch({
-        changes: {
-          from: 0,
-          to: editorView.state.doc.length,
-          insert: newValue,
-        },
-        selection: { anchor: safeSelection.anchor, head: safeSelection.head },
-      });
-
+    // Skip update if content is already the same
+    if (currentContent === newValue) {
       previousValue = newValue;
-      isInternalChange = false;
+      return;
     }
+
+    isInternalChange = true;
+
+    // Store scroll position before update
+    const scrollTop = editorView.scrollDOM.scrollTop;
+    const scrollLeft = editorView.scrollDOM.scrollLeft;
+
+    // Store cursor position and clamp it to the new document length
+    const selection = editorView.state.selection;
+    const newDocLength = newValue.length;
+
+    // Create a safe selection that won't exceed the new document bounds
+    const safeSelection = {
+      anchor: Math.min(selection.main.anchor, newDocLength),
+      head: Math.min(selection.main.head, newDocLength)
+    };
+
+    editorView.dispatch({
+      changes: {
+        from: 0,
+        to: editorView.state.doc.length,
+        insert: newValue,
+      },
+      selection: { anchor: safeSelection.anchor, head: safeSelection.head },
+      scrollIntoView: false,  // Prevent automatic scrolling
+    });
+
+    // Restore scroll position after the update
+    // Use requestAnimationFrame to ensure DOM has updated
+    requestAnimationFrame(() => {
+      if (editorView) {
+        editorView.scrollDOM.scrollTop = scrollTop;
+        editorView.scrollDOM.scrollLeft = scrollLeft;
+      }
+    });
+
+    previousValue = newValue;
+    isInternalChange = false;
   }
 
   // Reactive updates

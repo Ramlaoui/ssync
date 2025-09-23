@@ -700,9 +700,8 @@ echo "Starting job..."
     launching = true;
     let launchError = '';
 
-    // Show a more informative loading message
+    // Keep the original script for the actual launch
     const originalScript = script;
-    script = '# Launching job, please wait...\n# This may take a few minutes if the cluster is busy...\n\n' + script;
 
     try {
       // Save script to localStorage for history
@@ -711,7 +710,7 @@ echo "Starting job..."
       // Prepare the launch request with correct field names for API
       // Only include fields that have actual values
       const launchData = {
-        script_content: script,
+        script_content: originalScript,  // Use the original script without the loading message
         source_dir: parameters.sourceDir,
         host: selectedHost,
         job_name: parameters.jobName || 'Unnamed Job'
@@ -747,7 +746,6 @@ echo "Starting job..."
 
     } catch (error) {
       console.error('Launch failed:', error);
-      script = originalScript;  // Restore original script on error
 
       // Better error extraction
       if (error.response?.data) {
@@ -936,9 +934,12 @@ echo "Starting job..."
       // Set hostname
       selectedHost = resubmitData.hostname;
 
-      // Set working directory if available
-      if (resubmitData.workDir) {
-        parameters.sourceDir = resubmitData.workDir;
+      // Use the local source directory if available (not the remote work dir)
+      if (resubmitData.localSourceDir) {
+        parameters.sourceDir = resubmitData.localSourceDir;
+      } else {
+        // Clear source dir so user has to select a new one
+        parameters.sourceDir = '';
       }
 
       // Set job name if available

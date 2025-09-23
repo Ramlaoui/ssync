@@ -9,9 +9,11 @@
   export let description = "Choose a job to attach watchers to";
   export let initialJobs: JobInfo[] = [];
   export let fetchJobsOnMount = true;
+  export let preSelectedJobId: string | null = null;
+  export let preSelectedHostname: string | null = null;
 
   const dispatch = createEventDispatcher();
-  
+
   let selectedJob: JobInfo | null = null;
   let searchTerm = '';
   let jobs: JobInfo[] = initialJobs;
@@ -31,11 +33,32 @@
   }
 
   onMount(async () => {
+    // Pre-select job if specified
+    if (preSelectedJobId && preSelectedHostname) {
+      const preSelected = jobs.find(job =>
+        job.job_id === preSelectedJobId && job.hostname === preSelectedHostname
+      );
+      if (preSelected) {
+        selectedJob = preSelected;
+      }
+    }
+
     // Fetch fresh jobs in background if requested
     if (fetchJobsOnMount) {
       isLoading = true;
       try {
         await jobStateManager.syncAllHosts();
+
+        // Try to pre-select again after fetching fresh jobs
+        if (preSelectedJobId && preSelectedHostname && !selectedJob) {
+          const allJobs = get(jobsStore);
+          const preSelected = allJobs.find(job =>
+            job.job_id === preSelectedJobId && job.hostname === preSelectedHostname
+          );
+          if (preSelected) {
+            selectedJob = preSelected;
+          }
+        }
       } catch (err) {
         console.error('Failed to fetch fresh jobs:', err);
       } finally {

@@ -21,38 +21,64 @@
   let interval = 30;
   let watcherOutputType: 'stdout' | 'stderr' | 'both' = 'stdout';
 
-  // Update watcher name reactively when jobId changes
-  $: if (jobId && !copiedWatcherConfig) {
-    watcherName = `Watcher for Job ${jobId}`;
-  }
-  let actions: WatcherAction[] = [{
-    type: 'log_event',
-    params: { message: 'Pattern matched in job output' }
-  }];
+  // Initialize actions based on whether we're copying or creating new
+  let actions: WatcherAction[] = [];
 
-  // Ensure all actions have params initialized
-  $: actions = actions.map(action => ({
-    ...action,
-    params: action.params || {}
-  }));
+  // Track whether we've already initialized from copy to prevent overwriting user edits
+  let hasInitializedFromCopy = false;
 
   // Initialize from copied configuration if provided
-  $: if (copiedWatcherConfig && isVisible) {
-    watcherName = copiedWatcherConfig.name || `Copy of ${copiedWatcherConfig.name}`;
+  $: if (copiedWatcherConfig && isVisible && !hasInitializedFromCopy) {
+    console.log('Initializing from copied config:', copiedWatcherConfig);
+    watcherName = `Copy of ${copiedWatcherConfig.name}`;
     pattern = copiedWatcherConfig.pattern || '';
     captures = copiedWatcherConfig.captures || [];
-    interval = copiedWatcherConfig.interval_seconds || 30;
+    interval = copiedWatcherConfig.interval_seconds || copiedWatcherConfig.interval || 30;
     watcherOutputType = copiedWatcherConfig.output_type || 'stdout';
     maxTriggers = copiedWatcherConfig.max_triggers || 10;
     timerModeEnabled = copiedWatcherConfig.timer_mode_enabled || false;
     timerInterval = copiedWatcherConfig.timer_interval_seconds || 30;
-    if (copiedWatcherConfig.actions) {
-      actions = [...copiedWatcherConfig.actions];
-    }
     if (copiedWatcherConfig.condition) {
       condition = copiedWatcherConfig.condition;
     }
+    // Copy actions with all their properties
+    if (copiedWatcherConfig.actions && copiedWatcherConfig.actions.length > 0) {
+      console.log('Copying actions:', copiedWatcherConfig.actions);
+      actions = copiedWatcherConfig.actions.map(action => ({
+        type: action.type,
+        params: { ...action.params }
+      }));
+    } else {
+      // Only set default action if no actions to copy
+      actions = [{
+        type: 'log_event',
+        params: { message: 'Pattern matched in job output' }
+      }];
+    }
+    hasInitializedFromCopy = true;
+  } else if (!copiedWatcherConfig && actions.length === 0) {
+    // Only set default action for new watchers (not copies)
+    actions = [{
+      type: 'log_event',
+      params: { message: 'Pattern matched in job output' }
+    }];
   }
+
+  // Reset initialization flag when component is closed or config changes
+  $: if (!isVisible || !copiedWatcherConfig) {
+    hasInitializedFromCopy = false;
+  }
+
+  // Update watcher name reactively when jobId changes (only for new watchers)
+  $: if (jobId && !copiedWatcherConfig && !watcherName) {
+    watcherName = `Watcher for Job ${jobId}`;
+  }
+
+  // Ensure all actions have params initialized (defensive programming)
+  $: actions = actions.map(action => ({
+    ...action,
+    params: action.params || {}
+  }))
 
   // Progressive disclosure states
   let showAdvanced = false;
@@ -441,7 +467,10 @@
 
         <div class="form-row">
           <div class="form-group">
-            <label for="interval">Check Interval</label>
+            <label for="interval">
+              Check Interval
+              <span class="label-hint">{timerModeEnabled ? '(for initial pattern search)' : ''}</span>
+            </label>
             <select id="interval" bind:value={interval} class="form-select">
               <option value={10}>10 seconds</option>
               <option value={30}>30 seconds</option>
@@ -536,19 +565,29 @@
               <div class="form-group">
                 <label title="After first pattern match, switch to periodic execution mode">
                   <input type="checkbox" bind:checked={timerModeEnabled} />
-                  Timer Mode (execute periodically after first match)
+                  Timer Mode
                 </label>
                 {#if timerModeEnabled}
-                  <div class="timer-mode-options">
+                  <div class="timer-mode-explanation">
+                    <p class="explanation-text">
+                      <strong>How Timer Mode Works:</strong><br/>
+                      1. Watcher searches for pattern every {interval}s<br/>
+                      2. When pattern is found, switches to timer mode<br/>
+                      3. Executes actions periodically without pattern matching
+                    </p>
                     <label class="checkbox-label">
                       <input
                         type="checkbox"
                         bind:checked={useSeparateTimerInterval}
                       />
-                      Use different interval for timer mode
+                      Use different interval for timer execution
                     </label>
                     {#if useSeparateTimerInterval}
+                      <label for="timer-interval" class="timer-interval-label">
+                        Timer Execution Interval (seconds)
+                      </label>
                       <input
+                        id="timer-interval"
                         type="number"
                         bind:value={timerInterval}
                         placeholder="Timer interval (seconds)"
@@ -562,11 +601,13 @@
                           }
                         }}
                       />
-                      <span class="form-hint">Timer will execute every {timerInterval}s after first match</span>
+                      <span class="form-hint">After pattern match, actions execute every {timerInterval}s</span>
                     {:else}
-                      <span class="form-hint">Timer will use the same {interval}s interval</span>
+                      <span class="form-hint">After pattern match, actions execute every {interval}s (same as check interval)</span>
                     {/if}
                   </div>
+                {:else}
+                  <span class="form-hint">Watcher will continuously search for pattern every {interval}s</span>
                 {/if}
               </div>
             </div>
@@ -1173,6 +1214,35 @@
     padding-left: 1.5rem;
   }
 
+  .timer-mode-explanation {
+    margin-top: 0.5rem;
+    padding-left: 1.5rem;
+  }
+
+  .explanation-text {
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: #075985;
+  }
+
+  .explanation-text strong {
+    color: #0c4a6e;
+  }
+
+  .timer-interval-label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+    margin-top: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
   .checkbox-label {
     display: flex;
     align-items: center;
@@ -1188,6 +1258,14 @@
     color: #6b7280;
     margin-top: 0.25rem;
     font-style: italic;
+  }
+
+  .label-hint {
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-weight: normal;
+    font-style: italic;
+    margin-left: 0.25rem;
   }
 
   /* Mobile responsiveness */

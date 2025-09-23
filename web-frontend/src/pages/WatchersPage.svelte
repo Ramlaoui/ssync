@@ -253,38 +253,28 @@
       job.state === 'R' || job.state === 'PD'
     );
 
-    // If we have a copied config with a job_id and hostname, try to use that job if it's still running
-    let targetJob = null;
+    // Store the original job info for pre-selection if it's still running
     if (copiedWatcherConfig.job_id && copiedWatcherConfig.hostname) {
-      targetJob = runningJobs.find(job =>
+      const originalJob = runningJobs.find(job =>
         job.job_id === copiedWatcherConfig.job_id &&
         job.hostname === copiedWatcherConfig.hostname
       );
+
+      // Pre-select the original job if it's still running (for the dialog)
+      if (originalJob) {
+        selectedJobId = originalJob.job_id;
+        selectedHostname = originalJob.hostname;
+      }
     }
 
-    // If we found the original job and it's still running, use it
-    if (targetJob) {
-      selectedJobId = targetJob.job_id;
-      selectedHostname = targetJob.hostname;
-
-      if (useStreamlinedInterface) {
-        showStreamlinedCreator = true;
-      } else {
-        showAttachDialog = true;
-      }
-    } else if (runningJobs.length === 1) {
-      // Only one job running, use it
-      selectedJobId = runningJobs[0].job_id;
-      selectedHostname = runningJobs[0].hostname;
-
-      if (useStreamlinedInterface) {
-        showStreamlinedCreator = true;
-      } else {
-        showAttachDialog = true;
-      }
+    // Always show job selection dialog when copying
+    // This allows users to choose whether to copy to the same job or a different one
+    if (runningJobs.length === 0) {
+      // No jobs running, need to inform user
+      error = 'No running jobs available. Please start a job first.';
+      setTimeout(() => error = null, 5000);
     } else {
-      // Multiple jobs or no cached jobs - show selection dialog
-      // The dialog will fetch fresh jobs if needed
+      // Show job selection dialog with pre-selected job (if available)
       showJobSelectionDialog = true;
     }
   }
@@ -578,7 +568,7 @@
           <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
             {#each enhancedWatchers as watcher, i}
               <div
-                class="transition-all duration-200 hover:scale-[1.02]"
+                class="transition-all duration-200 hover:scale-[1.02] min-w-0"
                 in:fly={{ y: 20, duration: 300, delay: i * 50 }}
               >
                 <WatcherCard
@@ -641,7 +631,7 @@
                   <div class="p-6 grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-4" transition:slide={{ duration: 250 }}>
                     {#each jobGroup.watchers as watcher, j}
                       <div
-                        class="transition-all duration-200 hover:scale-[1.02]"
+                        class="transition-all duration-200 hover:scale-[1.02] min-w-0"
                         in:fly={{ x: -20, duration: 200, delay: j * 50 }}
                       >
                         <WatcherCard
@@ -703,10 +693,16 @@
 <!-- Dialogs -->
 {#if showJobSelectionDialog}
   <JobSelectionDialog
+    title={copiedWatcherConfig ? "Select Job for Copied Watcher" : "Select a Job"}
+    description={copiedWatcherConfig ? "Choose which job to attach the copied watcher to" : "Choose a job to attach watchers to"}
+    preSelectedJobId={selectedJobId}
+    preSelectedHostname={selectedHostname}
     on:select={handleJobSelection}
     on:close={() => {
       showJobSelectionDialog = false;
       copiedWatcherConfig = null;
+      selectedJobId = null;
+      selectedHostname = null;
     }}
   />
 {/if}

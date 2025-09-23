@@ -5,6 +5,7 @@
   import { jobStateManager } from '../lib/JobStateManager';
   import { jobUtils } from '../lib/jobUtils';
   import { navigationActions } from '../stores/navigation';
+  import { debounce } from '../lib/debounce';
   import LoadingSpinner from './LoadingSpinner.svelte';
   
   export let currentJobId: string = '';
@@ -20,7 +21,8 @@
   let loading = false;
   let hamburgerToX = false;
   let isClosing = false;
-  let searchQuery = '';
+  let searchInputValue = '';
+  let searchQuery = ''; // This will be the debounced value
   let searchFocused = false;
   let showSearch = false;
   
@@ -33,42 +35,73 @@
 
   // Compute recent jobs (terminal states) - store them in a variable to avoid reactive loops
   let recentJobs: JobInfo[] = [];
+  let allJobsCached: JobInfo[] = [];
+
+  // Update cached jobs only when store changes
+  $: allJobsCached = $allJobs;
+
+  // Compute recent jobs from cached array
+  $: recentJobs = allJobsCached.filter(j => jobUtils.isTerminalState(j.state)).slice(0, 50);
+
+  // Create filtered arrays with optimized computation
+  let filteredRunningJobs: JobInfo[] = [];
+  let filteredPendingJobs: JobInfo[] = [];
+  let filteredRecentJobs: JobInfo[] = [];
+
+  // Debounced search update function
+  const updateSearchQuery = debounce((value: string) => {
+    searchQuery = value;
+  }, 150); // 150ms debounce delay
+
+  // Update search query when input changes
+  $: updateSearchQuery(searchInputValue);
+
+  // Single reactive block to handle all filtering
   $: {
-    // Only update recentJobs when allJobs changes, not when search changes
-    recentJobs = $allJobs.filter(j => jobUtils.isTerminalState(j.state)).slice(0, 50);
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      // Use requestAnimationFrame to prevent blocking the UI
+      requestAnimationFrame(() => {
+        filteredRunningJobs = $runningJobs.filter(job => matchesSearch(job, query));
+        filteredPendingJobs = $pendingJobs.filter(job => matchesSearch(job, query));
+        filteredRecentJobs = recentJobs.filter(job => matchesSearch(job, query));
+      });
+    } else {
+      filteredRunningJobs = $runningJobs;
+      filteredPendingJobs = $pendingJobs;
+      filteredRecentJobs = recentJobs;
+    }
   }
-
-  // Filter jobs based on search query - use function calls to avoid reactive chains
-  function getFilteredRunningJobs(jobs: JobInfo[], query: string): JobInfo[] {
-    return query ? jobs.filter(job => matchesSearch(job, query)) : jobs;
-  }
-
-  function getFilteredPendingJobs(jobs: JobInfo[], query: string): JobInfo[] {
-    return query ? jobs.filter(job => matchesSearch(job, query)) : jobs;
-  }
-
-  function getFilteredRecentJobs(jobs: JobInfo[], query: string): JobInfo[] {
-    return query ? jobs.filter(job => matchesSearch(job, query)) : jobs;
-  }
-
-  // Use function calls in the template instead of reactive variables
-  $: filteredRunningJobs = getFilteredRunningJobs($runningJobs, searchQuery);
-  $: filteredPendingJobs = getFilteredPendingJobs($pendingJobs, searchQuery);
-  $: filteredRecentJobs = getFilteredRecentJobs(recentJobs, searchQuery);
 
   $: hasSearchResults = filteredRunningJobs.length > 0 ||
                         filteredPendingJobs.length > 0 ||
                         filteredRecentJobs.length > 0;
 
   function matchesSearch(job: JobInfo, query: string): boolean {
-    const searchLower = query.toLowerCase();
-    return (
-      job.job_id.toLowerCase().includes(searchLower) ||
-      job.name?.toLowerCase().includes(searchLower) ||
-      job.hostname?.toLowerCase().includes(searchLower) ||
-      job.partition?.toLowerCase().includes(searchLower) ||
-      jobUtils.getStateName(job.state).toLowerCase().includes(searchLower)
-    );
+    // Early return for better performance
+    if (!query) return true;
+
+    // Cache lowercase values
+    const jobIdLower = job.job_id.toLowerCase();
+    if (jobIdLower.includes(query)) return true;
+
+    if (job.name) {
+      const nameLower = job.name.toLowerCase();
+      if (nameLower.includes(query)) return true;
+    }
+
+    if (job.hostname) {
+      const hostnameLower = job.hostname.toLowerCase();
+      if (hostnameLower.includes(query)) return true;
+    }
+
+    if (job.partition) {
+      const partitionLower = job.partition.toLowerCase();
+      if (partitionLower.includes(query)) return true;
+    }
+
+    const stateNameLower = jobUtils.getStateName(job.state).toLowerCase();
+    return stateNameLower.includes(query);
   }
 
   function toggleSearch() {
@@ -80,12 +113,14 @@
         if (input) input.focus();
       }, 300);
     } else {
+      searchInputValue = '';
       searchQuery = '';
       searchFocused = false;
     }
   }
 
   function clearSearch() {
+    searchInputValue = '';
     searchQuery = '';
     const input = document.querySelector('.sidebar-search-input') as HTMLInputElement;
     if (input) input.focus();
@@ -237,11 +272,11 @@
           type="text"
           class="sidebar-search-input"
           placeholder="Search jobs..."
-          bind:value={searchQuery}
+          bind:value={searchInputValue}
           on:focus={() => searchFocused = true}
           on:blur={() => searchFocused = false}
         />
-        {#if searchQuery}
+        {#if searchInputValue}
           <button
             class="clear-btn"
             on:click={clearSearch}

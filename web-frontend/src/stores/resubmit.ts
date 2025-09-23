@@ -3,7 +3,8 @@ import { writable, get } from 'svelte/store';
 export interface ResubmitData {
   scriptContent: string;
   hostname: string;
-  workDir?: string;
+  workDir?: string;  // Remote working directory on cluster
+  localSourceDir?: string;  // Local source directory that was synced
   originalJobId: string;
   jobName?: string;
   submitLine?: string;
