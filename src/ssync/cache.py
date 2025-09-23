@@ -40,6 +40,7 @@ class CachedJobData:
     cached_at: datetime = None
     last_updated: datetime = None
     is_active: bool = True  # Whether job is still running/pending
+    local_source_dir: Optional[str] = None  # The local directory that was synced
 
     def __post_init__(self):
         if self.cached_at is None:
@@ -136,6 +137,10 @@ class JobDataCache:
                 conn.execute(
                     "ALTER TABLE cached_jobs ADD COLUMN stderr_fetched_after_completion BOOLEAN DEFAULT 0"
                 )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE cached_jobs ADD COLUMN local_source_dir TEXT")
             except:
                 pass  # Column already exists
 
@@ -328,6 +333,7 @@ class JobDataCache:
         self,
         job_info: JobInfo,
         script_content: Optional[str] = None,
+        local_source_dir: Optional[str] = None,
     ):
         """
         Cache job information and associated data.
@@ -338,6 +344,7 @@ class JobDataCache:
         Args:
             job_info: JobInfo object to cache
             script_content: Optional script content (if None, preserves existing)
+            local_source_dir: Optional local source directory that was synced
         """
         now = datetime.now()
         is_active = job_info.state in ["PD", "R"]
@@ -349,6 +356,11 @@ class JobDataCache:
                 script_content = existing_cached.script_content
                 logger.debug(
                     f"Preserving existing script content for job {job_info.job_id}"
+                )
+            if local_source_dir is None and existing_cached.local_source_dir:
+                local_source_dir = existing_cached.local_source_dir
+                logger.debug(
+                    f"Preserving existing local source dir for job {job_info.job_id}"
                 )
             # Output preservation is now handled via update_job_outputs_compressed
 
@@ -380,6 +392,7 @@ class JobDataCache:
             hostname=job_info.hostname,
             job_info=job_info,
             script_content=script_content,
+            local_source_dir=local_source_dir,
             # Preserve existing outputs or initialize empty
             stdout_compressed=stdout_compressed,
             stdout_size=stdout_size,
@@ -404,18 +417,19 @@ class JobDataCache:
 
             conn.execute(
                 """
-                INSERT OR REPLACE INTO cached_jobs 
-                (job_id, hostname, job_info_json, script_content, 
+                INSERT OR REPLACE INTO cached_jobs
+                (job_id, hostname, job_info_json, script_content, local_source_dir,
                  stdout_compressed, stdout_size, stdout_compression,
                  stderr_compressed, stderr_size, stderr_compression,
                  cached_at, last_updated, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     cached_data.job_id,
                     cached_data.hostname,
                     json.dumps(job_info_dict),
                     cached_data.script_content,
+                    cached_data.local_source_dir,
                     cached_data.stdout_compressed,
                     cached_data.stdout_size,
                     cached_data.stdout_compression,
@@ -546,11 +560,20 @@ class JobDataCache:
 
         job_info = JobInfo(**job_info_dict)
 
+        # Handle optional local_source_dir column for existing DBs
+        local_source_dir = None
+        try:
+            local_source_dir = row["local_source_dir"]
+        except (KeyError, IndexError):
+            # Column doesn't exist in older databases
+            pass
+
         return CachedJobData(
             job_id=row["job_id"],
             hostname=row["hostname"],
             job_info=job_info,
             script_content=row["script_content"],
+            local_source_dir=local_source_dir,
             stdout_compressed=row["stdout_compressed"],
             stdout_size=row["stdout_size"],
             stdout_compression=row["stdout_compression"],

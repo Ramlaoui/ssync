@@ -51,13 +51,13 @@ class SyncManager:
             allowed = False
             for allowed_path in self.path_restrictions.allowed_paths:
                 # Handle paths that might contain wildcards
-                if '*' in allowed_path:
+                if "*" in allowed_path:
                     if fnmatch.fnmatch(path_str, allowed_path):
                         allowed = True
                         break
                 else:
                     # For non-wildcard paths, check if path starts with allowed path
-                    if path_str.startswith(allowed_path.rstrip('/')):
+                    if path_str.startswith(allowed_path.rstrip("/")):
                         allowed = True
                         break
 
@@ -71,7 +71,9 @@ class SyncManager:
         # If no allowed_paths specified, check general restrictions
         # Check if absolute paths are allowed
         if not self.path_restrictions.allow_absolute:
-            if not path_str.startswith(str(home_path)) and not path_str.startswith("/tmp"):
+            if not path_str.startswith(str(home_path)) and not path_str.startswith(
+                "/tmp"
+            ):
                 return False, "Absolute paths outside home directory are not allowed"
 
         # Check home directory restriction
@@ -95,18 +97,19 @@ class SyncManager:
         try:
             # Use du to get directory size
             result = subprocess.run(
-                ["du", "-sb", str(path)],
-                capture_output=True,
-                text=True,
-                timeout=30
+                ["du", "-sb", str(path)], capture_output=True, text=True, timeout=30
             )
             if result.returncode == 0:
                 size_bytes = int(result.stdout.split()[0])
-                size_gb = size_bytes / (1024 ** 3)
+                size_gb = size_bytes / (1024**3)
 
                 if self.path_restrictions and self.path_restrictions.enabled:
                     if size_gb > self.path_restrictions.max_size_gb:
-                        return size_gb, False, f"Directory size ({size_gb:.2f} GB) exceeds limit ({self.path_restrictions.max_size_gb} GB)"
+                        return (
+                            size_gb,
+                            False,
+                            f"Directory size ({size_gb:.2f} GB) exceeds limit ({self.path_restrictions.max_size_gb} GB)",
+                        )
 
                 return size_gb, True, ""
             else:

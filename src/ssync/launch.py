@@ -140,11 +140,12 @@ class LaunchManager:
                 logger.info("Syncing source directory to remote host...")
                 # Get path restrictions from config
                 from .utils.config import config
+
                 sync_manager = SyncManager(
                     self.slurm_manager,
                     source_dir,
                     use_gitignore=not no_gitignore,
-                    path_restrictions=config.path_restrictions
+                    path_restrictions=config.path_restrictions,
                 )
 
                 sync_success = await loop.run_in_executor(
@@ -315,16 +316,16 @@ class LaunchManager:
 
             await loop.run_in_executor(executor, conn.run, f"cd {remote_work_dir}")
 
-            job = await loop.run_in_executor(
-                executor,
-                self._submit_script_in_workdir,
-                slurm_host,
-                slurm_params,
-                remote_script_path,
-                remote_work_dir,
-            )
+            try:
+                job = await loop.run_in_executor(
+                    executor,
+                    self._submit_script_in_workdir,
+                    slurm_host,
+                    slurm_params,
+                    remote_script_path,
+                    remote_work_dir,
+                )
 
-            if job:
                 logger.info(f"Job submitted successfully with ID: {job.job_id}")
                 try:
                     from .job_data_manager import get_job_data_manager
@@ -339,39 +340,15 @@ class LaunchManager:
                     )
 
                 return job
-            else:
-                # Get more details about why submission failed
-                submission_errors = []
 
-                # Try to gather diagnostic information
-                try:
-                    conn = self.slurm_manager._get_connection(slurm_host.host)
-
-                    # Check if SLURM is available
-                    test_result = conn.run("sinfo -h -o '%P'" , hide=True, warn=True, timeout=5)
-                    if test_result.return_code != 0:
-                        submission_errors.append("Cannot query SLURM partitions. SLURM may be down or inaccessible.")
-                    else:
-                        available_partitions = test_result.stdout.strip()
-                        if available_partitions:
-                            logger.debug(f"Available partitions: {available_partitions}")
-
-                    # Check user's default account
-                    account_result = conn.run("sacctmgr -n -P show user $USER format=account", hide=True, warn=True, timeout=5)
-                    if account_result.ok and account_result.stdout.strip():
-                        logger.debug(f"User accounts: {account_result.stdout.strip()}")
-                    else:
-                        submission_errors.append("Could not verify user's SLURM account.")
-
-                except Exception as diag_error:
-                    submission_errors.append(f"Could not gather diagnostic info: {str(diag_error)}")
-
-                error_msg = f"Failed to submit job to {slurm_host.host.hostname}."
-                if submission_errors:
-                    error_msg += " Issues found: " + " ".join(submission_errors)
-                else:
-                    error_msg += " Check SLURM configuration, script syntax, and cluster availability."
-
+            except RuntimeError as e:
+                # The actual SLURM error is already in the exception message
+                # Just re-raise it with the hostname for context
+                error_msg = str(e)
+                if not error_msg.startswith(
+                    f"Failed to submit job to {slurm_host.host.hostname}"
+                ):
+                    error_msg = f"Failed to submit job to {slurm_host.host.hostname}. {error_msg}"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
 
@@ -412,68 +389,49 @@ class LaunchManager:
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
         try:
-            # Read the script to check for existing SBATCH directives
-            result = conn.run(f"head -50 {remote_script_path}", hide=True)
-            script_header = result.stdout
-
-            # Check if script already has comprehensive SBATCH directives
-            has_partition = "#SBATCH --partition" in script_header
-            has_time = "#SBATCH --time" in script_header
-            has_cpus = "#SBATCH --cpus" in script_header
-
-            # If script has key SBATCH directives, use minimal command line params
-            # to avoid conflicts (command line overrides script directives)
-            is_comprehensive_script = has_partition or (has_time and has_cpus)
-
+            # Build sbatch command with all provided CLI parameters
+            # CLI parameters always take precedence over script directives (standard SLURM behavior)
             cmd = ["sbatch"]
 
-            if is_comprehensive_script:
-                logger.info(
-                    "Script has SBATCH directives, using minimal command-line parameters"
-                )
-                # Only add parameters that are NOT likely to be in the script
-                # and won't conflict with script directives
-                if slurm_params.output and "#SBATCH --output" not in script_header:
-                    cmd.append(f"--output={slurm_params.output}")
-                if slurm_params.error and "#SBATCH --error" not in script_header:
-                    cmd.append(f"--error={slurm_params.error}")
-            else:
-                # Script doesn't have SBATCH directives, use all provided params
-                logger.info(
-                    "Script lacks SBATCH directives, using command-line parameters"
-                )
-                if slurm_params.job_name:
-                    cmd.append(f"--job-name={slurm_params.job_name}")
-                if slurm_params.time_min:
-                    cmd.append(f"--time={slurm_params.time_min}")
-                if slurm_params.cpus_per_task:
-                    cmd.append(f"--cpus-per-task={slurm_params.cpus_per_task}")
-                if slurm_params.mem_gb:
-                    cmd.append(f"--mem={slurm_params.mem_gb}G")
-                if slurm_params.partition:
-                    cmd.append(f"--partition={slurm_params.partition}")
-                if slurm_params.output:
-                    cmd.append(f"--output={slurm_params.output}")
-                if slurm_params.error:
-                    cmd.append(f"--error={slurm_params.error}")
-                if slurm_params.constraint:
-                    cmd.append(f"--constraint={slurm_params.constraint}")
-                if slurm_params.account:
-                    cmd.append(f"--account={slurm_params.account}")
-                if slurm_params.nodes:
-                    cmd.append(f"--nodes={slurm_params.nodes}")
-                if slurm_params.n_tasks_per_node:
-                    cmd.append(f"--ntasks-per-node={slurm_params.n_tasks_per_node}")
-                if slurm_params.gpus_per_node:
-                    cmd.append(f"--gpus-per-node={slurm_params.gpus_per_node}")
-                if slurm_params.gres:
-                    cmd.append(f"--gres={slurm_params.gres}")
+            # Add all provided parameters - they will override any script directives
+            if slurm_params.job_name:
+                cmd.append(f"--job-name={slurm_params.job_name}")
+            if slurm_params.time_min:
+                cmd.append(f"--time={slurm_params.time_min}")
+            if slurm_params.cpus_per_task:
+                cmd.append(f"--cpus-per-task={slurm_params.cpus_per_task}")
+            if slurm_params.mem_gb:
+                cmd.append(f"--mem={slurm_params.mem_gb}G")
+            if slurm_params.partition:
+                cmd.append(f"--partition={slurm_params.partition}")
+            if slurm_params.output:
+                cmd.append(f"--output={slurm_params.output}")
+            if slurm_params.error:
+                cmd.append(f"--error={slurm_params.error}")
+            if slurm_params.constraint:
+                cmd.append(f"--constraint={slurm_params.constraint}")
+            if slurm_params.account:
+                cmd.append(f"--account={slurm_params.account}")
+            if slurm_params.nodes:
+                cmd.append(f"--nodes={slurm_params.nodes}")
+            if slurm_params.n_tasks_per_node:
+                cmd.append(f"--ntasks-per-node={slurm_params.n_tasks_per_node}")
+            if slurm_params.gpus_per_node:
+                cmd.append(f"--gpus-per-node={slurm_params.gpus_per_node}")
+            if slurm_params.gres:
+                cmd.append(f"--gres={slurm_params.gres}")
 
             cmd.append(remote_script_path)
             full_cmd = f"cd {work_dir} && {' '.join(cmd)}"
 
             # Store the sbatch command for caching (without the 'cd' part)
             submit_line = " ".join(cmd)
+
+            # Log which parameters are being passed
+            if len(cmd) > 2:  # More than just "sbatch script.sh"
+                logger.info(
+                    "Submitting with CLI parameters (will override script directives)"
+                )
             logger.info(f"Running: {full_cmd}")
 
             # Extract watchers from the local script before submission
@@ -593,17 +551,29 @@ class LaunchManager:
 
                     # Check for specific error patterns
                     if "Invalid account" in stderr or "Invalid user" in stderr:
-                        error_details.append("Account or user validation failed. Check your SLURM account settings.")
+                        error_details.append(
+                            "Account or user validation failed. Check your SLURM account settings."
+                        )
                     elif "Invalid partition" in stderr:
-                        error_details.append("Invalid partition specified. Check available partitions with 'sinfo'.")
+                        error_details.append(
+                            "Invalid partition specified. Check available partitions with 'sinfo'."
+                        )
                     elif "Requested node configuration is not available" in stderr:
-                        error_details.append("Requested resources not available. Check node availability and resource limits.")
+                        error_details.append(
+                            "Requested resources not available. Check node availability and resource limits."
+                        )
                     elif "Batch script contains DOS line breaks" in stderr:
-                        error_details.append("Script has Windows line endings. Convert to Unix format.")
+                        error_details.append(
+                            "Script has Windows line endings. Convert to Unix format."
+                        )
                     elif "unable to resolve" in stderr.lower():
-                        error_details.append("Script references undefined variables or modules.")
+                        error_details.append(
+                            "Script references undefined variables or modules."
+                        )
                     elif "permission denied" in stderr.lower():
-                        error_details.append("Permission denied. Check script permissions and path access.")
+                        error_details.append(
+                            "Permission denied. Check script permissions and path access."
+                        )
                     elif "No such file or directory" in stderr:
                         error_details.append("Script or referenced file not found.")
 
@@ -613,7 +583,9 @@ class LaunchManager:
 
                 # Check the exit code
                 if result.return_code != 0:
-                    error_details.append(f"sbatch exited with code {result.return_code}")
+                    error_details.append(
+                        f"sbatch exited with code {result.return_code}"
+                    )
 
                 # Build comprehensive error message
                 if error_details:
@@ -623,7 +595,8 @@ class LaunchManager:
 
                 logger.error(error_msg)
                 logger.error(f"Full sbatch command was: {full_cmd}")
-                return None
+                # Raise exception instead of returning None to preserve error details
+                raise RuntimeError(error_msg)
 
         except Exception as e:
             # Provide more context about the exception
@@ -631,11 +604,17 @@ class LaunchManager:
 
             # Add specific handling for common exceptions
             if "Connection" in str(e):
-                error_msg += " - SSH connection issue. Check network and SSH configuration."
+                error_msg += (
+                    " - SSH connection issue. Check network and SSH configuration."
+                )
             elif "Timeout" in str(e):
-                error_msg += " - Command timed out. The cluster may be slow or unresponsive."
+                error_msg += (
+                    " - Command timed out. The cluster may be slow or unresponsive."
+                )
             elif "Permission" in str(e):
-                error_msg += " - Permission denied. Check your access rights on the cluster."
+                error_msg += (
+                    " - Permission denied. Check your access rights on the cluster."
+                )
 
             logger.error(error_msg)
 
@@ -643,10 +622,13 @@ class LaunchManager:
             try:
                 test_result = conn.run("which sbatch", hide=True, warn=True)
                 if test_result.return_code != 0:
-                    logger.error("sbatch command not found. SLURM may not be installed or not in PATH.")
+                    logger.error(
+                        "sbatch command not found. SLURM may not be installed or not in PATH."
+                    )
                 else:
                     logger.debug(f"sbatch location: {test_result.stdout.strip()}")
             except Exception:
                 pass
 
-            return None
+            # Raise exception instead of returning None to preserve error details
+            raise RuntimeError(error_msg)

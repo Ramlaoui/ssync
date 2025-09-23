@@ -233,17 +233,36 @@ class CacheMiddleware:
 
         return None
 
-    async def cache_job_script(self, job_id: str, hostname: str, script_content: str):
+    async def cache_job_script(
+        self,
+        job_id: str,
+        hostname: str,
+        script_content: str,
+        local_source_dir: Optional[str] = None,
+    ):
         """
-        Cache job script content.
+        Cache job script content and optionally the local source directory.
 
         Args:
             job_id: Job ID
             hostname: Hostname
             script_content: Script content to cache
+            local_source_dir: Optional local source directory that was synced
         """
-        # Use the efficient update_job_script method which handles both update and create
+        # First update the script
         self.cache.update_job_script(job_id, hostname, script_content)
+
+        # Then update the local source dir if provided
+        if local_source_dir:
+            # Get existing cached job and update with local source dir
+            cached = self.cache.get_cached_job(job_id, hostname)
+            if cached:
+                self.cache.cache_job(
+                    cached.job_info,
+                    script_content=script_content,
+                    local_source_dir=local_source_dir,
+                )
+
         logger.info(f"Cached script for job {job_id} ({len(script_content)} chars)")
 
     async def get_cached_job_script(
@@ -267,6 +286,7 @@ class CacheMiddleware:
                 "hostname": cached_job.hostname,
                 "script_content": cached_job.script_content,
                 "content_length": len(cached_job.script_content),
+                "local_source_dir": cached_job.local_source_dir,
             }
 
         return None

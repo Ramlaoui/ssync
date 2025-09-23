@@ -30,7 +30,7 @@ class PathRestrictions:
                 "/boot",
                 "/root",
                 "/.ssh",
-                "/.gnupg"
+                "/.gnupg",
             ]
         if self.max_size_gb < 0.001:
             self.max_size_gb = 0.001  # Minimum 1 MB
