@@ -2,6 +2,7 @@
   import type { JobInfo, OutputData, ScriptData } from "../types/api";
   import OutputViewer from "./OutputViewer.svelte";
   import ScriptViewer from "./ScriptViewer.svelte";
+  import WatchersTab from "./WatchersTab.svelte";
 
   export let job: JobInfo | null = null;
   export let activeTab: string = 'details';
@@ -85,6 +86,13 @@
         onScrollToBottom={onScrollToBottom}
         fileName={`job_${job?.job_id || 'unknown'}_script.sh`}
       />
+    {/if}
+  </div>
+
+{:else if activeTab === 'watchers'}
+  <div class="output-section">
+    {#if job}
+      <WatchersTab {job} />
     {/if}
   </div>
 {/if}

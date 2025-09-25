@@ -12,7 +12,7 @@
   import JobTabContent from "../components/JobTabContent.svelte";
   import WatcherAttachmentDialog from "../components/WatcherAttachmentDialog.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
-  import { Info, Terminal, AlertTriangle, Code, ArrowLeft } from 'lucide-svelte';
+  import { Info, Terminal, AlertTriangle, Code, ArrowLeft, Eye } from 'lucide-svelte';
   import { navigationState, navigationActions } from '../stores/navigation';
 
   export let params: any = {};
@@ -400,6 +400,13 @@
                 >
                   <Code class="w-4 h-4" />
                   Script
+                </button>
+                <button
+                  class="tab-button {activeTab === 'watchers' ? 'tab-button-active' : ''}"
+                  on:click={() => handleTabClick('watchers')}
+                >
+                  <Eye class="w-4 h-4" />
+                  Watchers
                 </button>
               </nav>
             </div>

@@ -2061,6 +2061,7 @@ async def get_job_watchers(
 
             cursor = conn.execute(query, params)
 
+            watcher_ids = []
             for row in cursor.fetchall():
                 watcher = {
                     "id": row["id"],
@@ -2099,6 +2100,31 @@ async def get_job_watchers(
                     watcher["timer_mode_active"] = False
 
                 watchers.append(watcher)
+                watcher_ids.append(row["id"])
+
+            # Fetch captured variables for all watchers
+            if watcher_ids:
+                placeholders = ",".join("?" * len(watcher_ids))
+                var_cursor = conn.execute(
+                    f"""
+                    SELECT watcher_id, variable_name, variable_value
+                    FROM watcher_variables
+                    WHERE watcher_id IN ({placeholders})
+                    """,
+                    watcher_ids
+                )
+
+                # Group variables by watcher_id
+                variables_by_watcher = {}
+                for var_row in var_cursor.fetchall():
+                    watcher_id = var_row["watcher_id"]
+                    if watcher_id not in variables_by_watcher:
+                        variables_by_watcher[watcher_id] = {}
+                    variables_by_watcher[watcher_id][var_row["variable_name"]] = var_row["variable_value"]
+
+                # Add variables to each watcher
+                for watcher in watchers:
+                    watcher["variables"] = variables_by_watcher.get(watcher["id"], {})
 
         return {"job_id": job_id, "watchers": watchers, "count": len(watchers)}
 

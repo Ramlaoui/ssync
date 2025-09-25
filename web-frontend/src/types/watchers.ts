@@ -13,6 +13,8 @@ export enum WatcherState {
 export interface WatcherAction {
   type: string;
   params?: Record<string, any>;
+  config?: Record<string, any>;  // Some APIs use config instead of params
+  condition?: string;  // Optional condition for the action
 }
 
 export interface Watcher {
@@ -34,6 +36,8 @@ export interface Watcher {
   timer_mode_enabled?: boolean;
   timer_interval_seconds?: number;
   timer_mode_active?: boolean;
+  // Captured variables
+  variables?: Record<string, string>;
 }
 
 export interface WatcherEvent {

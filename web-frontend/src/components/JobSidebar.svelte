@@ -100,7 +100,7 @@
       if (partitionLower.includes(query)) return true;
     }
 
-    const stateNameLower = jobUtils.getStateName(job.state).toLowerCase();
+    const stateNameLower = jobUtils.getStateLabel(job.state).toLowerCase();
     return stateNameLower.includes(query);
   }
 

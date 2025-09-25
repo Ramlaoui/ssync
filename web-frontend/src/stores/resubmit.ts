@@ -8,6 +8,15 @@ export interface ResubmitData {
   originalJobId: string;
   jobName?: string;
   submitLine?: string;
+  watcherVariables?: Record<string, string>;  // Captured variables from watchers
+  watchers?: Array<{  // Full watcher configurations
+    name: string;
+    type: string;
+    actions: any[];
+    variables?: Record<string, string>;
+    status?: string;
+    created_at?: string;
+  }>;
 }
 
 function createResubmitStore() {

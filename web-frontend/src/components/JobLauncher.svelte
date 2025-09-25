@@ -62,7 +62,10 @@
     Code,
     Terminal,
     ChevronLeft,
-    Download
+    Download,
+    Eye,
+    EyeOff,
+    Copy
   } from 'lucide-svelte';
 
   const dispatch = createEventDispatcher();
@@ -135,6 +138,15 @@ echo "Starting job..."
   let showPresetManager = false;
   let showPresetSidebar = false; // New unified preset sidebar for desktop/mobile
   let editingPreset: Preset | null = null;
+
+  // Resubmit state
+  let isResubmit = false;
+  let originalJobId: string | null = null;
+  let watcherVariables: Record<string, string> = {};
+  let showCapturedVariables = false;
+  let watchers: any[] = [];
+  let showRecentWatchers = false;
+  let allRecentWatchers: any[] = [];  // Store all recent watchers from API
   let newPreset: Partial<Preset> = {
     name: '',
     icon: Zap,
@@ -561,6 +573,11 @@ echo "Starting job..."
 
   $: canLaunch = validationDetails.isValid && selectedHost;
 
+  // Fetch recent watchers when host changes
+  $: if (selectedHost) {
+    fetchRecentWatchers();
+  }
+
   // Get specific message about what's preventing launch
   $: launchDisabledReason = !selectedHost
     ? 'Select a host to continue'
@@ -905,6 +922,63 @@ echo "Starting job..."
   // Tab size options
   const tabSizeOptions = [2, 4, 8];
 
+  // Fetch recent watchers from API
+  async function fetchRecentWatchers() {
+    try {
+      // For now, let's try to get watchers from a few known recent job IDs
+      // This is a temporary solution until we have a proper API endpoint
+      if (selectedHost) {
+        // Try to fetch watchers from some sample job IDs
+        // In a real scenario, we'd get these from localStorage or from the jobs list
+        const sampleJobIds = [];
+
+        // Check if we're in resubmit mode and have a job ID
+        if (isResubmit && originalJobId) {
+          sampleJobIds.push(originalJobId);
+        }
+
+        // Add some hardcoded job IDs for testing (you can replace with actual recent job IDs)
+        // These would normally come from a jobs list API or localStorage
+        if (selectedHost === 'adastra') {
+          sampleJobIds.push('4052339'); // Known job with watchers
+        }
+
+        const watcherPromises = sampleJobIds.map(async (jobId: string) => {
+          try {
+            const watchersResponse = await api.get(`/api/jobs/${jobId}/watchers?host=${selectedHost}`);
+            if (watchersResponse.data && watchersResponse.data.watchers) {
+              return watchersResponse.data.watchers.map((w: any) => ({
+                ...w,
+                job_id: jobId
+              }));
+            }
+          } catch (err) {
+            console.log(`Could not fetch watchers for job ${jobId}:`, err);
+            return [];
+          }
+        });
+
+        const watcherResults = await Promise.all(watcherPromises);
+        const allWatchers = watcherResults.flat();
+
+        // Remove duplicates based on watcher configuration
+        const uniqueWatchers = allWatchers.reduce((acc: any[], watcher: any) => {
+          const key = JSON.stringify(watcher.actions || {});
+          if (!acc.some(w => JSON.stringify(w.actions || {}) === key)) {
+            acc.push(watcher);
+          }
+          return acc;
+        }, []);
+
+        allRecentWatchers = uniqueWatchers.slice(0, 10); // Keep max 10 watchers
+        console.log('Loaded recent watchers:', allRecentWatchers);
+      }
+    } catch (error) {
+      console.log('Could not fetch recent watchers:', error);
+      // Not critical - we can continue without recent watchers
+    }
+  }
+
   // Initialize component - ensure FileBrowser uses persisted directory
   onMount(async () => {
     // Load hosts if not provided or empty
@@ -918,6 +992,10 @@ echo "Starting job..."
         if (hosts.length > 0 && !selectedHost) {
           selectedHost = hosts[0].hostname;
         }
+        // Fetch recent watchers for the selected host
+        if (selectedHost) {
+          await fetchRecentWatchers();
+        }
       } catch (error) {
         console.error('Failed to load hosts:', error);
       }
@@ -927,6 +1005,22 @@ echo "Starting job..."
     const resubmitData = resubmitStore.consumeResubmitData();
     if (resubmitData) {
       console.log('Loading resubmit data:', resubmitData);
+
+      // Set resubmit flags and data
+      isResubmit = true;
+      originalJobId = resubmitData.originalJobId;
+
+      // Set captured variables if available
+      if (resubmitData.watcherVariables) {
+        watcherVariables = resubmitData.watcherVariables;
+        console.log('Loaded captured variables:', watcherVariables);
+      }
+
+      // Set watcher configurations if available
+      if (resubmitData.watchers) {
+        watchers = resubmitData.watchers;
+        console.log('Loaded watcher configurations:', watchers);
+      }
 
       // Set script content
       script = resubmitData.scriptContent;
@@ -1850,6 +1944,143 @@ echo "Starting job..."
           </div>
         {/if}
       </Card>
+
+      <!-- Captured Variables Card (only for resubmission) -->
+      {#if isResubmit && Object.keys(watcherVariables).length > 0}
+        <Card class="mb-4">
+          <div class="section-header">
+            <button
+              class="section-header-toggle {showCapturedVariables ? 'active' : ''}"
+              on:click={() => showCapturedVariables = !showCapturedVariables}
+            >
+              <div class="section-header-content">
+                <h3 class="section-title">
+                  <Database class="w-4 h-4 inline-block mr-2" />
+                  Captured Variables from Job #{originalJobId}
+                </h3>
+                <p class="section-description">Variables captured by watchers from the original job</p>
+              </div>
+              <ChevronDown class="section-toggle-icon {showCapturedVariables ? 'rotate-180' : ''}" />
+            </button>
+          </div>
+
+          {#if showCapturedVariables}
+            <div class="captured-variables-content" transition:slide={{ duration: 200 }}>
+              <div class="variables-grid">
+                {#each Object.entries(watcherVariables) as [key, value]}
+                  <div class="variable-item">
+                    <div class="variable-header">
+                      <span class="variable-name">{key}</span>
+                      <button
+                        class="copy-btn"
+                        on:click={() => navigator.clipboard.writeText(value)}
+                        title="Copy value"
+                      >
+                        <Copy class="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div class="variable-value">{value}</div>
+                  </div>
+                {/each}
+              </div>
+              <div class="variables-info">
+                <AlertCircle class="w-4 h-4 text-blue-500" />
+                <span class="text-sm text-gray-600">
+                  These variables were captured from the output of job #{originalJobId}.
+                  You can reference them in your script using their names.
+                </span>
+              </div>
+            </div>
+          {/if}
+        </Card>
+      {/if}
+
+      <!-- Recent Watchers Card -->
+      {#if allRecentWatchers && allRecentWatchers.length > 0}
+        <Card class="mb-4">
+          <div class="section-header">
+            <button
+              class="section-header-toggle {showRecentWatchers ? 'active' : ''}"
+              on:click={() => showRecentWatchers = !showRecentWatchers}
+            >
+              <div class="section-header-content">
+                <h3 class="section-title">
+                  <Eye class="w-4 h-4 inline-block mr-2" />
+                  Recent Watchers
+                </h3>
+                <p class="section-description">Recently used watcher configurations you can copy and reuse</p>
+              </div>
+              <ChevronDown class="section-toggle-icon {showRecentWatchers ? 'rotate-180' : ''}" />
+            </button>
+          </div>
+
+          {#if showRecentWatchers}
+            <div class="watchers-content" transition:slide={{ duration: 200 }}>
+              <div class="watchers-list">
+                {#each allRecentWatchers as watcher, index}
+                  <div class="watcher-item">
+                    <div class="watcher-header">
+                      <div class="watcher-title">
+                        <Code class="w-4 h-4 text-blue-500" />
+                        <span class="watcher-name">{watcher.name || `Watcher ${index + 1}`}</span>
+                        <span class="watcher-type">{watcher.type}</span>
+                        {#if watcher.job_id}
+                          <span class="watcher-job">Job #{watcher.job_id}</span>
+                        {/if}
+                      </div>
+                      <button
+                        class="copy-watcher-btn"
+                        on:click={() => {
+                          const watcherCode = JSON.stringify(watcher.actions, null, 2);
+                          navigator.clipboard.writeText(watcherCode);
+                        }}
+                        title="Copy watcher configuration"
+                      >
+                        <Copy class="w-3 h-3" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+
+                    <div class="watcher-code">
+                      <pre>{JSON.stringify(watcher.actions, null, 2)}</pre>
+                    </div>
+
+                    {#if watcher.variables && Object.keys(watcher.variables).length > 0}
+                      <div class="watcher-variables">
+                        <div class="variables-label">
+                          <Database class="w-3 h-3" />
+                          <span>Captured Variables:</span>
+                        </div>
+                        <div class="variables-mini-grid">
+                          {#each Object.entries(watcher.variables) as [key, value]}
+                            <span class="var-mini">
+                              <strong>{key}:</strong> {value}
+                            </span>
+                          {/each}
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if watcher.status}
+                      <div class="watcher-status">
+                        <span class="status-badge status-{watcher.status.toLowerCase()}">
+                          {watcher.status}
+                        </span>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+              <div class="watchers-info">
+                <AlertCircle class="w-4 h-4 text-blue-500" />
+                <span class="text-sm text-gray-600">
+                  These are recently used watcher configurations from your recent jobs. You can copy and reuse them for your job submission.
+                </span>
+              </div>
+            </div>
+          {/if}
+        </Card>
+      {/if}
 
       <!-- Sync Settings Card -->
       <Card class="mb-4">
@@ -3264,6 +3495,243 @@ echo "Starting job..."
     padding-top: 1rem;
     border-top: 1px solid #f1f5f9;
     margin-top: 1rem;
+  }
+
+  .captured-variables-content {
+    padding-top: 1rem;
+    border-top: 1px solid #f1f5f9;
+    margin-top: 1rem;
+  }
+
+  .variables-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .variable-item {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    font-family: 'Monaco', 'Courier New', monospace;
+  }
+
+  .variable-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .variable-name {
+    font-weight: 600;
+    color: #059669;
+    font-size: 0.875rem;
+  }
+
+  .copy-btn {
+    background: transparent;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  .copy-btn:hover {
+    background: #e2e8f0;
+    color: #334155;
+  }
+
+  .variable-value {
+    color: #475569;
+    font-size: 0.875rem;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+
+  .variables-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: #f0f9ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 0.5rem;
+  }
+
+  /* Watchers Styles */
+  .watchers-content {
+    padding-top: 1rem;
+    border-top: 1px solid #f1f5f9;
+    margin-top: 1rem;
+  }
+
+  .watchers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .watcher-item {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    padding: 1rem;
+  }
+
+  .watcher-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+  }
+
+  .watcher-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .watcher-name {
+    font-weight: 600;
+    color: #1e293b;
+    font-size: 0.875rem;
+  }
+
+  .watcher-type {
+    background: #dbeafe;
+    color: #1e40af;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .watcher-job {
+    background: #f3e8ff;
+    color: #6b21a8;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .copy-watcher-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.375rem 0.75rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.375rem;
+    color: #64748b;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .copy-watcher-btn:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #334155;
+  }
+
+  .watcher-code {
+    background: #1e293b;
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+    overflow-x: auto;
+  }
+
+  .watcher-code pre {
+    margin: 0;
+    color: #10b981;
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .watcher-variables {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .variables-label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #059669;
+    margin-bottom: 0.375rem;
+  }
+
+  .variables-mini-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .var-mini {
+    background: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-family: monospace;
+    border: 1px solid #d1fae5;
+  }
+
+  .watcher-status {
+    margin-top: 0.5rem;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .status-badge.status-active,
+  .status-badge.status-running {
+    background: #dcfce7;
+    color: #166534;
+  }
+
+  .status-badge.status-completed {
+    background: #dbeafe;
+    color: #1e40af;
+  }
+
+  .status-badge.status-failed {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+
+  .watchers-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: #f0f9ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 0.5rem;
   }
 
   .directory-info {

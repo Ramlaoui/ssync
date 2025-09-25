@@ -57,7 +57,38 @@
         throw new Error('No script content returned from API');
       }
 
-      // Store resubmit data
+      // Fetch watchers and extract captured variables
+      let watcherVariables: Record<string, string> = {};
+      let watcherConfigs: any[] = [];
+      try {
+        const watchersResponse = await api.get(`/api/jobs/${job.job_id}/watchers?host=${job.hostname}`);
+        const watchersData = watchersResponse.data;
+
+        // Store full watcher configurations
+        if (watchersData.watchers && watchersData.watchers.length > 0) {
+          watcherConfigs = watchersData.watchers;
+
+          // Extract all captured variables from all watchers
+          watchersData.watchers.forEach((watcher: any) => {
+            if (watcher.variables) {
+              Object.entries(watcher.variables).forEach(([key, value]) => {
+                // If multiple watchers have the same variable, prefix with watcher name
+                const varKey = watchersData.watchers.length > 1 && watcher.name
+                  ? `${watcher.name}_${key}`
+                  : key;
+                watcherVariables[varKey] = value as string;
+              });
+            }
+          });
+        }
+        console.log('Captured variables from watchers:', watcherVariables);
+        console.log('Watcher configurations:', watcherConfigs);
+      } catch (watcherError) {
+        console.warn('Could not fetch watcher variables:', watcherError);
+        // Continue without watcher variables - they're optional
+      }
+
+      // Store resubmit data with captured variables and watcher configurations
       resubmitStore.setResubmitData({
         scriptContent: scriptData.script_content,
         hostname: job.hostname,
@@ -65,7 +96,9 @@
         localSourceDir: scriptData.local_source_dir,  // Use the local source dir from the API
         originalJobId: job.job_id,
         jobName: job.name,
-        submitLine: job.submit_line
+        submitLine: job.submit_line,
+        watcherVariables: Object.keys(watcherVariables).length > 0 ? watcherVariables : undefined,
+        watchers: watcherConfigs.length > 0 ? watcherConfigs : undefined
       });
 
       // Navigate to job launcher
