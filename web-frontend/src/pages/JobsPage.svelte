@@ -14,6 +14,7 @@
   import Badge from "../lib/components/ui/Badge.svelte";
   import Separator from "../lib/components/ui/Separator.svelte";
   import NavigationHeader from "../components/NavigationHeader.svelte";
+  import WebSocketStatus from "../components/WebSocketStatus.svelte";
 
   let hosts: HostInfo[] = [];
   let loading = false;
@@ -24,7 +25,7 @@
     host: "",
     user: "",
     since: "1d",
-    limit: 100,
+    limit: 50, // Default, will be overridden by preferences
     state: "",
     activeOnly: false,
     completedOnly: false,
@@ -35,6 +36,11 @@
   let searchFocused = false;
   let searchExpanded = false;
   let searchInput: HTMLInputElement;
+
+  // Auto-refresh state
+  let autoRefreshEnabled = false;
+  let autoRefreshInterval = 30; // seconds
+  let autoRefreshTimer: number | null = null;
   
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
@@ -185,6 +191,46 @@
     }
   }
 
+  function setupAutoRefresh(): void {
+    // Clear existing timer
+    if (autoRefreshTimer) {
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+
+    // Set up new timer if enabled
+    if (autoRefreshEnabled && autoRefreshInterval > 0) {
+      autoRefreshTimer = setInterval(() => {
+        if (!loading) {
+          loadJobs(false); // Gentle refresh, no cache clear
+        }
+      }, autoRefreshInterval * 1000);
+    }
+  }
+
+  function handleRefreshSettingsChanged(event: CustomEvent): void {
+    const { autoRefreshEnabled: enabled, autoRefreshInterval: interval } = event.detail;
+    autoRefreshEnabled = enabled;
+    autoRefreshInterval = interval;
+    setupAutoRefresh();
+
+    // Save to localStorage
+    const prefs = JSON.parse(localStorage.getItem('ssync_preferences') || '{}');
+    prefs.autoRefresh = enabled;
+    prefs.refreshInterval = interval;
+    localStorage.setItem('ssync_preferences', JSON.stringify(prefs));
+  }
+
+  function handleJobsPerPageChanged(event: CustomEvent): void {
+    const { jobsPerPage } = event.detail;
+    filters.limit = jobsPerPage;
+  }
+
+  // React to auto-refresh settings changes
+  $: if (typeof autoRefreshEnabled !== 'undefined') {
+    setupAutoRefresh();
+  }
+
   $: totalJobs = filteredJobs.length;
   
 
@@ -202,11 +248,30 @@
     }
     checkMobile();
     window.addEventListener("resize", checkMobile);
+
+    // Load preferences from localStorage
+    const savedPrefs = localStorage.getItem('ssync_preferences');
+    if (savedPrefs) {
+      try {
+        const prefs = JSON.parse(savedPrefs);
+        autoRefreshEnabled = prefs.autoRefresh || false;
+        autoRefreshInterval = prefs.refreshInterval || 30;
+        filters.limit = prefs.jobsPerPage || 50;
+        setupAutoRefresh();
+      } catch (e) {
+        console.error('Failed to load preferences:', e);
+      }
+    }
+
+    // Listen for settings changes
+    window.addEventListener('jobsPerPageChanged', handleJobsPerPageChanged);
   });
 
   onDestroy(() => {
     if (filterChangeTimeout) clearTimeout(filterChangeTimeout);
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
     window.removeEventListener("resize", checkMobile);
+    window.removeEventListener('jobsPerPageChanged', handleJobsPerPageChanged);
   });
 </script>
 
@@ -215,7 +280,10 @@
     <NavigationHeader
       showRefresh={true}
       refreshing={loading || progressiveLoading}
+      {autoRefreshEnabled}
+      {autoRefreshInterval}
       on:refresh={handleManualRefresh}
+      on:refreshSettingsChanged={handleRefreshSettingsChanged}
     >
       <div slot="left" class="flex items-center gap-4">
         <div class="flex gap-4 flex-shrink-0 items-center">
@@ -233,6 +301,11 @@
               <Badge variant="secondary">Cached</Badge>
             </div>
           {/if}
+        </div>
+
+        <!-- WebSocket Status -->
+        <div class="ml-4">
+          <WebSocketStatus compact={true} />
         </div>
 
         <!-- Search Bar -->

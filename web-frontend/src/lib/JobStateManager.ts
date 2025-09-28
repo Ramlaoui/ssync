@@ -8,6 +8,7 @@
 import { writable, derived, get, type Readable } from 'svelte/store';
 import type { JobInfo, HostInfo, JobStatusResponse } from '../types/api';
 import { api } from '../services/api';
+import { notificationService } from '../services/notifications';
 
 // ============================================================================
 // Types
@@ -710,9 +711,29 @@ class JobStateManager {
                             (existing.job.state !== update.job.state); // Always update on state change
 
         if (shouldUpdate) {
-          // Check for state transitions - log for debugging
-          if (existing && existing.job.state !== update.job.state) {
+          // Check for new jobs appearing
+          if (!existing) {
+            console.log(`[JobStateManager] New job detected: ${cacheKey} in state ${update.job.state}`);
+
+            // Notify about new job
+            notificationService.notifyNewJob(
+              update.jobId,
+              update.hostname,
+              update.job.state,
+              update.job.name || 'Unnamed job'
+            );
+          }
+          // Check for state transitions
+          else if (existing.job.state !== update.job.state) {
             console.log(`[JobStateManager] Job ${cacheKey} state change: ${existing.job.state} -> ${update.job.state}`);
+
+            // Send notification for state changes
+            notificationService.notifyJobStateChange(
+              update.jobId,
+              update.hostname,
+              existing.job.state,
+              update.job.state
+            );
           }
 
           newCache.set(cacheKey, {

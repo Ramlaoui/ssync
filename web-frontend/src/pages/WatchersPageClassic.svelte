@@ -555,6 +555,7 @@
           {/if}
         </div>
       </div>
+    </div>
   {:else}
     <!-- Mobile Header -->
     <div class="mobile-header border-b border-gray-200">

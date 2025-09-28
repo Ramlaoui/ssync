@@ -197,6 +197,10 @@ export interface LaunchJobResponse {
   requires_confirmation?: boolean;
 }
 
+// Type aliases for component usage
+export type OutputData = JobOutputResponse;
+export type ScriptData = JobScriptResponse;
+
 // API client types
 export interface ApiClient {
   getHosts(): Promise<HostInfo[]>;

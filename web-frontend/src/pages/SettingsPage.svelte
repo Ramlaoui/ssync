@@ -37,10 +37,10 @@
   // UI Preferences (stored in localStorage)
   let preferences = {
     theme: 'light',
-    autoRefresh: true,
+    autoRefresh: false,
     refreshInterval: 30,
     compactMode: false,
-    showNotifications: true,
+    showNotifications: false,
     soundAlerts: false,
     jobsPerPage: 50,
     defaultJobView: 'table',
@@ -48,12 +48,17 @@
     groupJobsByHost: false
   };
 
+  // Auto-refresh timer
+  let refreshTimer: number | null = null;
+
   // Cache stats
   let cacheStats = {
     size: '0 MB',
     entries: 0,
     lastCleared: null as Date | null
   };
+  let loadingCacheStats = false;
+  let clearingCache = false;
 
   // Active section for mobile
   let activeSection: string | null = null;
@@ -75,6 +80,13 @@
 
     // Load preferences from localStorage
     loadPreferences();
+
+    // Apply theme on mount
+    if (preferences.theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
 
     // Apply compact mode if enabled
     if (preferences.compactMode) {
@@ -109,25 +121,84 @@
     localStorage.setItem('ssync_preferences', JSON.stringify(preferences));
   }
 
-  function handlePreferenceChange(key: string, value: any) {
+  async function handlePreferenceChange(key: string, value: any) {
     preferences[key] = value;
     savePreferences();
 
     // Apply changes immediately
     if (key === 'theme') {
-      document.documentElement.classList.toggle('dark', value === 'dark');
+      document.documentElement.setAttribute('data-theme', value);
     } else if (key === 'compactMode') {
       document.documentElement.classList.toggle('compact-mode', value);
+    } else if (key === 'autoRefresh' || key === 'refreshInterval') {
+      // Broadcast preference change to other components
+      window.dispatchEvent(new CustomEvent('autoRefreshSettingsChanged', {
+        detail: {
+          enabled: preferences.autoRefresh,
+          interval: preferences.refreshInterval
+        }
+      }));
+    } else if (key === 'showNotifications' && value) {
+      // Request notification permission if enabling
+      if ('Notification' in window && Notification.permission === 'default') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          preferences.showNotifications = false;
+          savePreferences();
+        }
+      }
+    }
+
+    // Broadcast notification settings changes
+    if (key === 'showNotifications' || key === 'soundAlerts') {
+      window.dispatchEvent(new CustomEvent('notificationSettingsChanged', {
+        detail: {
+          showNotifications: preferences.showNotifications,
+          soundAlerts: preferences.soundAlerts
+        }
+      }));
+    }
+
+    // Broadcast jobs per page change
+    if (key === 'jobsPerPage') {
+      window.dispatchEvent(new CustomEvent('jobsPerPageChanged', {
+        detail: {
+          jobsPerPage: preferences.jobsPerPage
+        }
+      }));
     }
   }
 
   async function loadCacheStats() {
-    // In a real implementation, this would fetch from the API
-    cacheStats = {
-      size: '12.4 MB',
-      entries: 234,
-      lastCleared: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
-    };
+    loadingCacheStats = true;
+    try {
+      const response = await fetch('/api/cache/stats', {
+        headers: {
+          'X-API-Key': $apiConfig.apiKey || ''
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const stats = data.statistics;
+
+        // Get size in MB (already calculated by backend)
+        const sizeMB = (stats.db_size_mb || 0).toFixed(1);
+
+        // Calculate total entries
+        const totalEntries = (stats.total_jobs || 0) + (stats.date_range_cache?.active_ranges || 0);
+
+        cacheStats = {
+          size: `${sizeMB} MB`,
+          entries: totalEntries,
+          lastCleared: stats.oldest_entry ? new Date(stats.oldest_entry) : null
+        };
+      }
+    } catch (error) {
+      console.error('Failed to load cache stats:', error);
+    } finally {
+      loadingCacheStats = false;
+    }
   }
 
   async function handleTestConnection() {
@@ -161,9 +232,26 @@
 
   async function clearCache() {
     if (confirm('Are you sure you want to clear all cached data? This cannot be undone.')) {
-      // In a real implementation, this would call an API endpoint
-      console.log('Clearing cache...');
-      await loadCacheStats();
+      clearingCache = true;
+      try {
+        const response = await fetch('/api/cache/clear', {
+          method: 'POST',
+          headers: {
+            'X-API-Key': $apiConfig.apiKey || ''
+          }
+        });
+
+        if (response.ok) {
+          // Reload cache stats after clearing
+          await loadCacheStats();
+        } else {
+          console.error('Failed to clear cache');
+        }
+      } catch (error) {
+        console.error('Error clearing cache:', error);
+      } finally {
+        clearingCache = false;
+      }
     }
   }
 
@@ -448,17 +536,23 @@
             </div>
 
             <div class="section-content">
-              <div class="preference-item disabled">
+              <div class="preference-item">
                 <div class="preference-info">
                   <label>Theme</label>
-                  <span class="preference-description">Choose your preferred color scheme (Coming soon)</span>
+                  <span class="preference-description">Choose your preferred color scheme</span>
                 </div>
-                <div class="button-toggle disabled">
-                  <button class="toggle-option disabled">
+                <div class="button-toggle">
+                  <button
+                    class="toggle-option {preferences.theme === 'light' ? 'active' : ''}"
+                    on:click={() => handlePreferenceChange('theme', 'light')}
+                  >
                     <Sun class="w-4 h-4" />
                     Light
                   </button>
-                  <button class="toggle-option disabled">
+                  <button
+                    class="toggle-option {preferences.theme === 'dark' ? 'active' : ''}"
+                    on:click={() => handlePreferenceChange('theme', 'dark')}
+                  >
                     <Moon class="w-4 h-4" />
                     Dark
                   </button>
@@ -480,34 +574,55 @@
                 </label>
               </div>
 
-              <div class="preference-item disabled">
+              <div class="preference-item">
                 <div class="preference-info">
                   <label>Auto Refresh</label>
-                  <span class="preference-description">Automatically update job status (Coming soon)</span>
+                  <span class="preference-description">Automatically update job status</span>
                 </div>
-                <label class="switch disabled">
-                  <input type="checkbox" disabled />
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    bind:checked={preferences.autoRefresh}
+                    on:change={() => handlePreferenceChange('autoRefresh', preferences.autoRefresh)}
+                  />
                   <span class="slider"></span>
                 </label>
               </div>
 
-              <div class="preference-item disabled">
+              <div class="preference-item">
                 <div class="preference-info">
                   <label>Refresh Interval</label>
-                  <span class="preference-description">How often to check for updates (Coming soon)</span>
+                  <span class="preference-description">How often to check for updates</span>
                 </div>
-                <select class="select-field" disabled>
-                  <option>30 seconds</option>
+                <select
+                  class="select-field"
+                  bind:value={preferences.refreshInterval}
+                  on:change={() => handlePreferenceChange('refreshInterval', preferences.refreshInterval)}
+                  disabled={!preferences.autoRefresh}
+                >
+                  <option value={10}>10 seconds</option>
+                  <option value={30}>30 seconds</option>
+                  <option value={60}>1 minute</option>
+                  <option value={120}>2 minutes</option>
+                  <option value={300}>5 minutes</option>
                 </select>
               </div>
 
-              <div class="preference-item disabled">
+              <div class="preference-item">
                 <div class="preference-info">
                   <label>Jobs Per Page</label>
-                  <span class="preference-description">Number of jobs to display (Coming soon)</span>
+                  <span class="preference-description">Number of jobs to display</span>
                 </div>
-                <select class="select-field" disabled>
-                  <option>50</option>
+                <select
+                  class="select-field"
+                  bind:value={preferences.jobsPerPage}
+                  on:change={() => handlePreferenceChange('jobsPerPage', preferences.jobsPerPage)}
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                  <option value={500}>500</option>
                 </select>
               </div>
 
@@ -561,24 +676,33 @@
             </div>
 
             <div class="section-content">
-              <div class="preference-item disabled">
+              <div class="preference-item">
                 <div class="preference-info">
                   <label>Show Notifications</label>
-                  <span class="preference-description">Browser notifications for job status changes (Coming soon)</span>
+                  <span class="preference-description">Browser notifications for job status changes</span>
                 </div>
-                <label class="switch disabled">
-                  <input type="checkbox" disabled />
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    bind:checked={preferences.showNotifications}
+                    on:change={() => handlePreferenceChange('showNotifications', preferences.showNotifications)}
+                  />
                   <span class="slider"></span>
                 </label>
               </div>
 
-              <div class="preference-item disabled">
+              <div class="preference-item">
                 <div class="preference-info">
                   <label>Sound Alerts</label>
-                  <span class="preference-description">Play sound when jobs complete (Coming soon)</span>
+                  <span class="preference-description">Play sound when jobs complete</span>
                 </div>
-                <label class="switch disabled">
-                  <input type="checkbox" disabled />
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    bind:checked={preferences.soundAlerts}
+                    on:change={() => handlePreferenceChange('soundAlerts', preferences.soundAlerts)}
+                    disabled={!preferences.showNotifications}
+                  />
                   <span class="slider"></span>
                 </label>
               </div>
@@ -618,11 +742,16 @@
 
               <button
                 class="btn-danger full-width"
-                disabled
-                title="Cache management coming soon"
+                on:click={clearCache}
+                disabled={clearingCache || !$apiConfig.apiKey}
               >
-                <Trash2 class="w-4 h-4" />
-                Clear All Cache (Coming soon)
+                {#if clearingCache}
+                  <RefreshCw class="w-4 h-4 animate-spin" />
+                  Clearing...
+                {:else}
+                  <Trash2 class="w-4 h-4" />
+                  Clear All Cache
+                {/if}
               </button>
 
               <div class="help-text">

@@ -2,7 +2,10 @@
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import type { JobInfo } from '../types/api';
   import LoadingSpinner from './LoadingSpinner.svelte';
+  import HostStatusIndicator from './HostStatusIndicator.svelte';
   import { jobUtils } from '../lib/jobUtils';
+  import { jobsStore } from '../stores/jobs';
+  import { RefreshCw } from 'lucide-svelte';
   
   export let hostname: string;
   export let jobs: JobInfo[];
@@ -23,6 +26,10 @@
   function selectJob(job: JobInfo): void {
     if (loading) return;
     dispatch('jobSelect', job);
+  }
+
+  async function refreshHost(): Promise<void> {
+    await jobsStore.refreshHost(hostname);
   }
   
   function formatTime(timeStr: string | null): string {
@@ -91,13 +98,15 @@
       {hostname}
       <span class="text-sm font-normal text-gray-600">({jobs.length} jobs)</span>
     </h3>
-    <div class="text-sm text-gray-600 flex items-center gap-2 {loading ? 'text-yellow-600 font-medium' : ''}">
-      {#if loading}
-        <LoadingSpinner size="sm" message="Updating..." centered={false} showMessage={false} />
-        Updating...
-      {:else}
-        Last updated: {formatTime(queryTime)}
-      {/if}
+    <div class="flex items-center gap-3">
+      <HostStatusIndicator {hostname} compact={false} />
+      <button
+        class="p-1.5 rounded hover:bg-gray-200 transition-colors"
+        on:click={refreshHost}
+        title="Refresh jobs for {hostname}"
+      >
+        <RefreshCw class="h-4 w-4 text-gray-600" />
+      </button>
     </div>
   </div>
   

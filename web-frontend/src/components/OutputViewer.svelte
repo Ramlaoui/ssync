@@ -13,7 +13,7 @@
   export let isStreaming: boolean = false;
   export let onRefresh: (() => void) | null = null;
   export let refreshing: boolean = false;
-  
+
   let outputElement: HTMLPreElement;
   let lineNumbersElement: HTMLDivElement;
   let searchQuery: string = '';
@@ -26,21 +26,93 @@
   let showSettingsMenu: boolean = false;
   let fontSize: 'small' | 'medium' | 'large' = 'medium';
   let wordWrap: boolean = true;
+
+  // Progressive loading constants
+  const MAX_INITIAL_SIZE = 2 * 1024 * 1024; // 2MB initial load
+  const CHUNK_SIZE = 500 * 1024; // 500KB per chunk
+  const WINDOW_SIZE = 3 * 1024 * 1024; // 3MB window in DOM
+  const BUFFER_SIZE = 500 * 1024; // 500KB buffer before/after viewport
+  const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // 5MB for warnings
+  const DISABLE_HIGHLIGHTING_THRESHOLD = 1 * 1024 * 1024; // 1MB
+
+  // Progressive loading state
+  let renderedContent: string = '';
+  let windowStart: number = 0; // Start of the rendered window
+  let windowEnd: number = 0; // End of the rendered window
+  let totalContentSize: number = 0;
+  let isLargeFile: boolean = false;
+  let loadingMore: boolean = false;
+  let disableHighlighting: boolean = false;
+  let showSizeWarning: boolean = false;
+  let warningDismissTimer: NodeJS.Timeout | null = null;
+  let userInteractionCount: number = 0;
+  let virtualScrollOffset: number = 0; // Virtual scroll position
+  let scrollPlaceholder: HTMLDivElement; // Placeholder to maintain scroll height
   
   // Line processing
   let lines: string[] = [];
   let filteredLines: { lineNumber: number; content: string; matches: number[] }[] = [];
-  
+
+  // Initialize content when it changes
   $: {
-    lines = content.split('\n');
+    if (content) {
+      initializeContent();
+    }
+  }
+
+  function initializeContent() {
+    totalContentSize = content.length;
+    isLargeFile = totalContentSize > LARGE_FILE_THRESHOLD;
+    showSizeWarning = totalContentSize > LARGE_FILE_THRESHOLD;
+    disableHighlighting = totalContentSize > DISABLE_HIGHLIGHTING_THRESHOLD;
+    userInteractionCount = 0;
+
+    // Auto-dismiss warning after 8 seconds
+    if (showSizeWarning) {
+      if (warningDismissTimer) clearTimeout(warningDismissTimer);
+      warningDismissTimer = setTimeout(() => {
+        showSizeWarning = false;
+      }, 8000);
+    }
+
+    // Load initial chunk
+    if (totalContentSize > MAX_INITIAL_SIZE) {
+      windowStart = 0;
+      windowEnd = MAX_INITIAL_SIZE;
+      renderedContent = content.slice(windowStart, windowEnd);
+    } else {
+      windowStart = 0;
+      windowEnd = totalContentSize;
+      renderedContent = content;
+    }
+
+    updateRenderedContent();
+  }
+
+  async function updateRenderedContent() {
+    lines = renderedContent.split('\n');
+    updateFilteredLines();
+
+    if (searchQuery) {
+      highlightSearchResults();
+    } else if (!disableHighlighting) {
+      highlightedContent = escapeHtml(renderedContent);
+    } else {
+      // Skip highlighting for large files
+      highlightedContent = escapeHtml(renderedContent);
+    }
+  }
+
+  $: {
+    lines = renderedContent.split('\n');
     updateFilteredLines();
   }
-  
+
   $: {
     if (searchQuery) {
       highlightSearchResults();
     } else {
-      highlightedContent = escapeHtml(content);
+      highlightedContent = escapeHtml(renderedContent);
     }
   }
   
@@ -96,20 +168,25 @@
   }
 
   function highlightSearchResults() {
+    // Dismiss warning on search (shows user is actively working)
+    if (searchQuery && showSizeWarning) {
+      dismissWarning();
+    }
+
     if (!searchQuery) {
-      highlightedContent = escapeHtml(content);
+      highlightedContent = escapeHtml(renderedContent);
       searchResults = [];
       currentSearchIndex = -1;
       return;
     }
-    
+
     // Escape special regex characters but preserve the search term
     const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    
+
     try {
       const regex = new RegExp(`(${escapedQuery})`, 'gi');
       // First escape HTML, then apply search highlighting
-      const escaped = escapeHtml(content);
+      const escaped = escapeHtml(renderedContent);
       
       // Count matches to update searchResults
       const matches = escaped.match(regex);
@@ -125,7 +202,7 @@
     } catch (error) {
       // Fallback to escaped content if regex fails
       console.warn('Search highlighting failed:', error);
-      highlightedContent = escapeHtml(content);
+      highlightedContent = escapeHtml(renderedContent);
       searchResults = [];
     }
   }
@@ -170,20 +247,134 @@
   
   
   function checkScrollPosition() {
-    if (!outputElement) return;
+    if (!outputElement || loadingMore) return;
 
     const { scrollTop, scrollHeight, clientHeight } = outputElement;
     isAtBottom = scrollTop + clientHeight >= scrollHeight - 5;
 
-    // Sync line numbers scroll position - make sure it follows
+    // Track user interaction for auto-dismissing warning
+    if (showSizeWarning && scrollTop > 100) {
+      userInteractionCount++;
+      if (userInteractionCount >= 3) {
+        dismissWarning();
+      }
+    }
+
+    // Sync line numbers scroll position
     if (lineNumbersElement && showLineNumbers) {
       lineNumbersElement.scrollTop = scrollTop;
     }
 
-    // Load more content if near bottom and more is available
+    // Calculate the content position based on scroll
+    const scrollRatio = scrollTop / scrollHeight;
+    const estimatedPosition = Math.floor(scrollRatio * totalContentSize);
+
+    // Check if we need to load a different window
+    if (isLargeFile && totalContentSize > WINDOW_SIZE) {
+      updateContentWindow(estimatedPosition, scrollTop, clientHeight);
+    } else {
+      // Simple progressive loading for smaller files
+      const scrollPercentage = (scrollTop + clientHeight) / scrollHeight;
+      if (scrollPercentage > 0.8 && windowEnd < totalContentSize) {
+        loadMoreContentChunk();
+      }
+    }
+
+    // Trigger external load more if available
     if (isAtBottom && hasMoreContent && onLoadMore && !isLoading) {
       loadMoreOutput();
     }
+  }
+
+  function updateContentWindow(estimatedPosition: number, scrollTop: number, clientHeight: number) {
+    // Calculate the ideal window based on current viewport
+    const viewportSize = clientHeight * 3; // Load 3x viewport height
+    let idealStart = Math.max(0, estimatedPosition - viewportSize);
+    let idealEnd = Math.min(totalContentSize, estimatedPosition + viewportSize * 2);
+
+    // Check if we need to update the window
+    const needsUpdate = idealStart < windowStart - BUFFER_SIZE ||
+                       idealEnd > windowEnd + BUFFER_SIZE ||
+                       idealStart > windowStart + BUFFER_SIZE ||
+                       idealEnd < windowEnd - BUFFER_SIZE;
+
+    if (needsUpdate && !loadingMore) {
+      loadContentWindow(idealStart, idealEnd, scrollTop);
+    }
+  }
+
+  async function loadContentWindow(start: number, end: number, preserveScrollTop: number) {
+    loadingMore = true;
+
+    // Calculate actual boundaries
+    const newStart = Math.max(0, start - BUFFER_SIZE);
+    const newEnd = Math.min(totalContentSize, end + BUFFER_SIZE);
+
+    // Ensure window doesn't exceed maximum size
+    if (newEnd - newStart > WINDOW_SIZE) {
+      if (preserveScrollTop > outputElement.scrollHeight / 2) {
+        // User is scrolling down, prioritize content below
+        start = Math.max(0, newEnd - WINDOW_SIZE);
+      } else {
+        // User is scrolling up, prioritize content above
+        end = Math.min(totalContentSize, newStart + WINDOW_SIZE);
+      }
+    }
+
+    // Update window boundaries
+    windowStart = newStart;
+    windowEnd = newEnd;
+
+    // Load new content
+    renderedContent = content.slice(windowStart, windowEnd);
+    virtualScrollOffset = windowStart;
+
+    // Update display
+    await updateRenderedContent();
+
+    // Restore approximate scroll position
+    if (outputElement) {
+      // Calculate where we should be in the new content
+      const contentProgress = (preserveScrollTop / outputElement.scrollHeight);
+      outputElement.scrollTop = contentProgress * outputElement.scrollHeight;
+    }
+
+    loadingMore = false;
+  }
+
+  function dismissWarning() {
+    showSizeWarning = false;
+    if (warningDismissTimer) {
+      clearTimeout(warningDismissTimer);
+      warningDismissTimer = null;
+    }
+  }
+
+  async function loadMoreContentChunk() {
+    if (loadingMore || windowEnd >= totalContentSize) return;
+
+    loadingMore = true;
+
+    // Simulate async loading for smooth UX
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const nextChunkEnd = Math.min(windowEnd + CHUNK_SIZE, totalContentSize);
+    const nextChunk = content.slice(windowEnd, nextChunkEnd);
+
+    // For large files, use windowing; for smaller files, just append
+    if (isLargeFile && renderedContent.length + nextChunk.length > WINDOW_SIZE) {
+      // Shift window down, removing content from beginning
+      const removeSize = nextChunk.length;
+      windowStart += removeSize;
+      renderedContent = content.slice(windowStart, nextChunkEnd);
+      virtualScrollOffset = windowStart;
+    } else {
+      renderedContent += nextChunk;
+    }
+
+    windowEnd = nextChunkEnd;
+    await updateRenderedContent();
+    loadingMore = false;
   }
   
   function loadMoreOutput() {
@@ -209,7 +400,7 @@
   }
   
   // Auto-scroll to bottom when new content arrives (if enabled and user is at bottom)
-  $: if (autoScroll && isAtBottom && outputElement && content) {
+  $: if (autoScroll && isAtBottom && outputElement && renderedContent) {
     setTimeout(() => {
       if (outputElement && isAtBottom) {
         outputElement.scrollTop = outputElement.scrollHeight;
@@ -228,6 +419,9 @@
   onDestroy(() => {
     if (outputElement) {
       outputElement.removeEventListener('scroll', checkScrollPosition);
+    }
+    if (warningDismissTimer) {
+      clearTimeout(warningDismissTimer);
     }
   });
 
@@ -261,6 +455,15 @@
     medium: 'text-sm',
     large: 'text-base'
   }[fontSize];
+
+  // Utility function to format bytes
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
 </script>
 
 <div class="enhanced-output-viewer" on:click={handleClickOutside}>
@@ -396,13 +599,58 @@
     </div>
   </div>
   
+  <!-- Floating Size Warning -->
+  {#if showSizeWarning && !isLoading}
+    <div class="size-warning-floating" class:fade-out={userInteractionCount > 1}>
+      <div class="warning-inner">
+        <svg class="warning-icon" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <div class="warning-content">
+          <span class="warning-text">
+            Large file: {formatBytes(totalContentSize)}
+            {#if disableHighlighting}
+              • Highlighting disabled
+            {/if}
+          </span>
+          {#if windowEnd < totalContentSize}
+            <span class="warning-subtext">
+              Loading progressively as you scroll
+            </span>
+          {/if}
+        </div>
+        <button
+          class="dismiss-btn"
+          on:click={dismissWarning}
+          title="Dismiss"
+        >
+          <svg viewBox="0 0 20 20" fill="currentColor">
+            <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="warning-progress" style="width: {Math.min(100, (windowEnd / totalContentSize) * 100)}%"></div>
+    </div>
+  {/if}
+
   <!-- Output Content -->
   <div class="output-container">
-    {#if isLoading && !content}
+    {#if windowStart > 0 && isLargeFile}
+      <div class="content-indicator top-indicator">
+        <div class="indicator-dots">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+        <span class="indicator-text">{formatBytes(windowStart)} above</span>
+      </div>
+    {/if}
+
+    {#if isLoading && !renderedContent}
       <div class="loading-state">
         <LoadingSpinner message="Loading {type}..." />
       </div>
-    {:else if content}
+    {:else if renderedContent}
       <div class="output-wrapper" class:with-line-numbers={showLineNumbers} class:error-type={type === 'error'}>
         {#if showLineNumbers}
           <div class="line-numbers" bind:this={lineNumbersElement}>
@@ -419,11 +667,39 @@
           on:scroll={() => checkScrollPosition()}
         >{@html highlightedContent}</pre>
       </div>
-      
-      {#if isLoading && hasMoreContent}
+
+      {#if loadingMore}
         <div class="loading-more">
           <div class="loading-spinner small"></div>
-          <span>Loading more {type}...</span>
+          <span>Loading more content...</span>
+        </div>
+      {:else if windowEnd < totalContentSize || windowStart > 0}
+        <div class="load-more-indicator">
+          <span class="indicator-text">
+            {#if windowEnd < totalContentSize}
+              Scroll down to load more...
+            {:else}
+              Content windowed for performance
+            {/if}
+          </span>
+          <span class="indicator-subtext">
+            {#if windowEnd < totalContentSize}
+              {formatBytes(totalContentSize - windowEnd)} remaining
+            {:else}
+              Showing {formatBytes(windowEnd - windowStart)} of {formatBytes(totalContentSize)}
+            {/if}
+          </span>
+        </div>
+      {/if}
+
+      {#if windowEnd < totalContentSize && isLargeFile}
+        <div class="content-indicator bottom-indicator">
+          <div class="indicator-dots">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+          </div>
+          <span class="indicator-text">{formatBytes(totalContentSize - windowEnd)} below</span>
         </div>
       {/if}
     {:else}
@@ -439,8 +715,11 @@
   <!-- Bottom Status Bar -->
   <div class="status-bar">
     <div class="status-info">
-      {#if content}
+      {#if renderedContent}
         <span class="line-count">{lines.length} lines</span>
+        {#if totalContentSize > 0}
+          <span class="size-info">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
+        {/if}
         {#if searchQuery && searchResults.length > 0}
           <span class="search-status">{searchResults.length} matches found</span>
         {/if}
@@ -757,6 +1036,205 @@
     color: #6b7280;
   }
 
+  .load-more-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: #f0f9ff;
+    border-top: 1px solid #bae6fd;
+    font-size: 0.875rem;
+  }
+
+  .indicator-text {
+    color: #0369a1;
+    font-weight: 500;
+  }
+
+  .indicator-subtext {
+    color: #0c4a6e;
+    font-size: 0.75rem;
+    margin-top: 0.25rem;
+  }
+
+  .size-warning-floating {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 100;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 6px 10px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+    animation: slideIn 0.3s ease-out;
+    transition: all 0.3s ease;
+    max-width: 320px;
+  }
+
+  .size-warning-floating.fade-out {
+    opacity: 0.7;
+    transform: scale(0.95);
+  }
+
+  @keyframes slideIn {
+    from {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  .warning-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  }
+
+  .warning-icon {
+    width: 20px;
+    height: 20px;
+    color: #d97706;
+    flex-shrink: 0;
+  }
+
+  .warning-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: 0.125rem;
+  }
+
+  .warning-text {
+    color: #92400e;
+    font-weight: 600;
+    font-size: 0.8125rem;
+    line-height: 1.2;
+  }
+
+  .warning-subtext {
+    color: #78350f;
+    font-size: 0.6875rem;
+    opacity: 0.9;
+  }
+
+  .dismiss-btn {
+    padding: 0.125rem;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: #92400e;
+    transition: all 0.2s;
+    border-radius: 4px;
+    opacity: 0.6;
+  }
+
+  .dismiss-btn:hover {
+    opacity: 1;
+    background: rgba(217, 119, 6, 0.1);
+  }
+
+  .dismiss-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .warning-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+    transition: width 0.3s ease;
+  }
+
+  .size-info {
+    background: #e0f2fe;
+    color: #0369a1;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  .content-indicator {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(229, 231, 235, 0.8);
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: #6b7280;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    z-index: 10;
+    transition: all 0.2s ease;
+    opacity: 0.8;
+  }
+
+  .content-indicator:hover {
+    opacity: 1;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  }
+
+  .top-indicator {
+    top: 0.5rem;
+  }
+
+  .bottom-indicator {
+    bottom: 0.5rem;
+  }
+
+  .indicator-dots {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+  }
+
+  .dot {
+    width: 3px;
+    height: 3px;
+    background: #9ca3af;
+    border-radius: 50%;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .dot:nth-child(1) {
+    animation-delay: 0s;
+  }
+
+  .dot:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .dot:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  @keyframes pulse {
+    0%, 80%, 100% {
+      opacity: 0.3;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+
+  .indicator-text {
+    color: #6b7280;
+    white-space: nowrap;
+  }
+
   .empty-icon {
     width: 48px;
     height: 48px;
@@ -793,6 +1271,25 @@
   }
 
   @media (max-width: 768px) {
+    .size-warning-floating {
+      top: 0.5rem;
+      right: 0.5rem;
+      left: 0.5rem;
+      max-width: none;
+    }
+
+    .warning-inner {
+      padding: 0.625rem 0.75rem;
+    }
+
+    .warning-text {
+      font-size: 0.75rem;
+    }
+
+    .warning-subtext {
+      font-size: 0.625rem;
+    }
+
     .viewer-header {
       padding: 0.5rem;
       gap: 0.5rem;

@@ -1111,7 +1111,7 @@ class JobDataCache:
             with_scripts = cursor.fetchone()["with_scripts"]
 
             cursor = conn.execute(
-                "SELECT COUNT(*) as with_stdout FROM cached_jobs WHERE stdout_content IS NOT NULL"
+                "SELECT COUNT(*) as with_stdout FROM cached_jobs WHERE stdout_compressed IS NOT NULL"
             )
             with_stdout = cursor.fetchone()["with_stdout"]
             cursor = conn.execute(
@@ -1193,6 +1193,34 @@ class JobDataCache:
                 to_mark_completed.append((job_id, hostname))
 
         return to_mark_completed
+
+    def clear_all(self) -> int:
+        """
+        Clear all cache entries from all tables.
+
+        Returns:
+            Total number of entries deleted
+        """
+        deleted_count = 0
+        with self._get_connection() as conn:
+            # Clear cached jobs
+            cursor = conn.execute("DELETE FROM cached_jobs")
+            deleted_count += cursor.rowcount
+
+            # Clear date range cache
+            cursor = conn.execute("DELETE FROM date_range_cache")
+            deleted_count += cursor.rowcount
+
+            # Clear last fetch state
+            cursor = conn.execute("DELETE FROM incremental_fetch_state")
+            deleted_count += cursor.rowcount
+
+            conn.commit()
+            logger.info(
+                f"Cleared all cache entries: {deleted_count} total entries deleted"
+            )
+
+        return deleted_count
 
     def cleanup_by_size(self, max_size_mb: int) -> int:
         """

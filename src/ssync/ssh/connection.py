@@ -150,8 +150,9 @@ class SSHConnection:
 
             # Run with subprocess (allows true parallelism)
             try:
+                # Capture as bytes first to handle non-UTF-8 output
                 result = subprocess.run(
-                    ssh_cmd, capture_output=True, text=True, timeout=timeout or 120
+                    ssh_cmd, capture_output=True, timeout=timeout or 120
                 )
             except subprocess.TimeoutExpired:
                 logger.debug(f"Command timed out after {timeout} seconds")
@@ -164,11 +165,30 @@ class SSHConnection:
                     )
                 )
 
+            # Try to decode the output, handling encoding errors gracefully
+            try:
+                stdout = result.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                # Try with errors='replace' to replace invalid characters
+                logger.debug(
+                    "UTF-8 decode error in stdout, using replacement characters"
+                )
+                stdout = result.stdout.decode("utf-8", errors="replace")
+
+            try:
+                stderr = result.stderr.decode("utf-8")
+            except UnicodeDecodeError:
+                # Try with errors='replace' to replace invalid characters
+                logger.debug(
+                    "UTF-8 decode error in stderr, using replacement characters"
+                )
+                stderr = result.stderr.decode("utf-8", errors="replace")
+
             # Convert to our result format
             ssh_result = SSHResult(
                 success=result.returncode == 0,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                stdout=stdout,
+                stderr=stderr,
                 return_code=result.returncode,
             )
 
@@ -246,9 +266,14 @@ class SSHConnection:
             # Run scp locally, not through SSH
             import subprocess
 
-            result = subprocess.run(scp_cmd, capture_output=True, text=True)
+            result = subprocess.run(scp_cmd, capture_output=True)
             if result.returncode != 0:
-                raise Exception(f"Failed to upload file: {result.stderr}")
+                # Decode stderr for error message
+                try:
+                    stderr = result.stderr.decode("utf-8")
+                except UnicodeDecodeError:
+                    stderr = result.stderr.decode("utf-8", errors="replace")
+                raise Exception(f"Failed to upload file: {stderr}")
         finally:
             # Clean up temp file if we created one
             if temp_file and os.path.exists(temp_file):
@@ -313,9 +338,14 @@ class SSHConnection:
             # Run scp locally, not through SSH
             import subprocess
 
-            result = subprocess.run(scp_cmd, capture_output=True, text=True)
+            result = subprocess.run(scp_cmd, capture_output=True)
             if result.returncode != 0:
-                raise Exception(f"Failed to download file: {result.stderr}")
+                # Decode stderr for error message
+                try:
+                    stderr = result.stderr.decode("utf-8")
+                except UnicodeDecodeError:
+                    stderr = result.stderr.decode("utf-8", errors="replace")
+                raise Exception(f"Failed to download file: {stderr}")
 
             # If it was a file object, write the content back
             if is_file_obj:

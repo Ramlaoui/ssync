@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { navigationState, navigationActions } from '../stores/navigation';
   import { ArrowLeft, RefreshCw } from 'lucide-svelte';
+  import RefreshControl from './RefreshControl.svelte';
 
   const dispatch = createEventDispatcher();
 
@@ -13,6 +14,8 @@
   export let refreshing: boolean = false;
   export let showBackButton: boolean = true;
   export let customActions: boolean = false; // Slot for custom actions
+  export let autoRefreshEnabled: boolean = false;
+  export let autoRefreshInterval: number = 30;
 
   $: backLabel = customBackLabel || getBackLabel($navigationState);
 
@@ -42,6 +45,10 @@
 
   function handleRefresh() {
     dispatch('refresh');
+  }
+
+  function handleRefreshSettingsChanged(event: CustomEvent) {
+    dispatch('refreshSettingsChanged', event.detail);
   }
 </script>
 
@@ -87,14 +94,13 @@
         <slot name="actions" />
 
         {#if showRefresh}
-          <button
-            on:click={handleRefresh}
-            disabled={refreshing}
-            class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw class="w-4 h-4 {refreshing ? 'animate-spin' : ''}" />
-          </button>
+          <RefreshControl
+            {refreshing}
+            {autoRefreshEnabled}
+            {autoRefreshInterval}
+            on:refresh={handleRefresh}
+            on:settingsChanged={handleRefreshSettingsChanged}
+          />
         {/if}
       </div>
     </div>

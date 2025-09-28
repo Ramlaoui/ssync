@@ -624,6 +624,20 @@ async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
         )
 
 
+@app.post("/api/cache/clear")
+async def clear_cache(authenticated: bool = Depends(verify_api_key)):
+    """Clear all cache entries."""
+    try:
+        cache = get_cache()
+        # Clear all cache tables
+        cache.clear_all()
+
+        return {"status": "success", "message": "Cache cleared successfully"}
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear cache")
+
+
 @app.get("/api/cache/fetch-state")
 async def get_fetch_state(
     host: Optional[str] = Query(None, description="Specific host to check"),
@@ -2111,7 +2125,7 @@ async def get_job_watchers(
                     FROM watcher_variables
                     WHERE watcher_id IN ({placeholders})
                     """,
-                    watcher_ids
+                    watcher_ids,
                 )
 
                 # Group variables by watcher_id
@@ -2120,7 +2134,9 @@ async def get_job_watchers(
                     watcher_id = var_row["watcher_id"]
                     if watcher_id not in variables_by_watcher:
                         variables_by_watcher[watcher_id] = {}
-                    variables_by_watcher[watcher_id][var_row["variable_name"]] = var_row["variable_value"]
+                    variables_by_watcher[watcher_id][var_row["variable_name"]] = (
+                        var_row["variable_value"]
+                    )
 
                 # Add variables to each watcher
                 for watcher in watchers:
@@ -2635,7 +2651,6 @@ async def create_watcher(
         import json
         from datetime import datetime
 
-
         cache = get_cache()
 
         # Validate required fields
@@ -2802,7 +2817,6 @@ async def update_watcher(
     """Update a watcher configuration."""
     try:
         import json
-
 
         cache = get_cache()
 
