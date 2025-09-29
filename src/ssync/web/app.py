@@ -36,11 +36,13 @@ from ..utils.slurm_params import SlurmParams
 from .cache_middleware import get_cache_middleware
 from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
 from .models import (
+    ArrayJobGroup,
     CompleteJobDataResponse,
     FileMetadata,
     HostInfoWeb,
     JobInfoWeb,
     JobOutputResponse,
+    JobStateWeb,
     JobStatusResponse,
     LaunchJobRequest,
     LaunchJobResponse,
@@ -56,6 +58,94 @@ from .security import (
 )
 
 logger = setup_logger(__name__, "INFO")
+
+
+def group_array_job_tasks(jobs: List[JobInfoWeb]) -> tuple[List[JobInfoWeb], List[ArrayJobGroup]]:
+    """Group array job tasks together.
+
+    Returns:
+        - List of non-array jobs (excluding both array tasks and parent entries)
+        - List of array job groups
+    """
+    from collections import defaultdict
+
+    # Separate array tasks from regular jobs
+    array_tasks = defaultdict(list)
+    parent_jobs = {}  # Map array_job_id to parent job entry
+    regular_jobs = []
+
+    for job in jobs:
+        # Check if this is an array task (numeric task ID)
+        if job.array_job_id and job.array_task_id and job.array_task_id.isdigit():
+            # This is an individual array task
+            array_tasks[job.array_job_id].append(job)
+        # Check if this is a parent job entry (has brackets like [0-4])
+        elif (job.array_job_id and job.array_task_id and
+              '[' in job.array_task_id and ']' in job.array_task_id):
+            # This is a parent job entry - store it for later
+            parent_jobs[job.array_job_id] = job
+        else:
+            # Regular non-array job
+            regular_jobs.append(job)
+
+    # Create array job groups and compute parent job states
+    array_groups = []
+    parent_job_states = {}  # Map array_job_id to computed state
+
+    for array_job_id, tasks in array_tasks.items():
+        # Count states
+        state_counts = defaultdict(int)
+        for task in tasks:
+            if task.state == JobStateWeb.PENDING:
+                state_counts['pending'] += 1
+            elif task.state == JobStateWeb.RUNNING:
+                state_counts['running'] += 1
+            elif task.state == JobStateWeb.COMPLETED:
+                state_counts['completed'] += 1
+            elif task.state == JobStateWeb.FAILED:
+                state_counts['failed'] += 1
+            elif task.state == JobStateWeb.CANCELLED:
+                state_counts['cancelled'] += 1
+
+        # Use the first task's info for the group metadata
+        first_task = tasks[0]
+
+        group = ArrayJobGroup(
+            array_job_id=array_job_id,
+            job_name=first_task.name,
+            hostname=first_task.hostname,
+            user=first_task.user,
+            total_tasks=len(tasks),
+            tasks=tasks,
+            pending_count=state_counts.get('pending', 0),
+            running_count=state_counts.get('running', 0),
+            completed_count=state_counts.get('completed', 0),
+            failed_count=state_counts.get('failed', 0),
+            cancelled_count=state_counts.get('cancelled', 0),
+        )
+        array_groups.append(group)
+
+        # Compute the actual state for the parent job based on task states
+        # This matches the logic in ArrayJobCard.svelte's getGroupState()
+        if state_counts.get('running', 0) > 0:
+            parent_state = JobStateWeb.RUNNING
+        elif state_counts.get('pending', 0) == len(tasks):
+            parent_state = JobStateWeb.PENDING
+        elif state_counts.get('completed', 0) == len(tasks):
+            parent_state = JobStateWeb.COMPLETED
+        elif state_counts.get('failed', 0) > 0:
+            parent_state = JobStateWeb.FAILED
+        elif state_counts.get('cancelled', 0) > 0:
+            parent_state = JobStateWeb.CANCELLED
+        else:
+            parent_state = JobStateWeb.COMPLETED
+
+        parent_job_states[array_job_id] = parent_state
+
+    # Note: Parent job entries (like 2187421_[0-4]) are NOT added to regular_jobs
+    # They are represented by the ArrayJobGroup instead to avoid duplication
+
+    return regular_jobs, array_groups
 
 app = FastAPI(
     title="SLURM Manager API",
@@ -772,6 +862,7 @@ async def get_job_status(
     active_only: bool = Query(False, description="Show only running/pending jobs"),
     completed_only: bool = Query(False, description="Show only completed jobs"),
     search: Optional[str] = Query(None, description="Search for jobs by name or ID"),
+    group_array_jobs: bool = Query(False, description="Group array job tasks together"),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get job status across hosts."""
@@ -876,11 +967,20 @@ async def get_job_status(
                     hostname = slurm_host.host.hostname
                     host_jobs = jobs_by_host.get(hostname, [])
 
+                    # Apply array job grouping if requested
+                    array_groups = None
+                    if group_array_jobs and host_jobs:
+                        display_jobs, array_groups = group_array_job_tasks(host_jobs)
+                    else:
+                        display_jobs = host_jobs
+
                     response = JobStatusResponse(
                         hostname=hostname,
-                        jobs=host_jobs,
-                        total_jobs=len(host_jobs),
+                        jobs=display_jobs,
+                        total_jobs=len(host_jobs),  # Keep original count
                         query_time=datetime.now(),
+                        group_array_jobs=group_array_jobs,
+                        array_groups=array_groups,
                     )
                     results.append(response)
 
@@ -933,14 +1033,23 @@ async def get_job_status(
                                 filtered_jobs.append(job)
                         web_jobs = filtered_jobs
 
+                    # Apply array job grouping if requested
+                    array_groups = None
+                    display_jobs = web_jobs
+                    if group_array_jobs and web_jobs:
+                        display_jobs, array_groups = group_array_job_tasks(web_jobs)
+
                     response = JobStatusResponse(
                         hostname=slurm_host.host.hostname,
-                        jobs=web_jobs,
+                        jobs=display_jobs,
                         total_jobs=len(web_jobs),
                         query_time=datetime.now(),
+                        group_array_jobs=group_array_jobs,
+                        array_groups=array_groups,
+                        cached=True,  # Mark as cached response
                     )
                     logger.info(
-                        f"Served {len(web_jobs)} jobs from date range cache for {hostname}"
+                        f"Served {len(web_jobs)} jobs from date range cache for {hostname} (grouping={group_array_jobs})"
                     )
                     return response
 
@@ -973,11 +1082,19 @@ async def get_job_status(
                             filtered_jobs.append(job)
                     web_jobs = filtered_jobs
 
+                # Apply array job grouping if requested
+                array_groups = None
+                display_jobs = web_jobs
+                if group_array_jobs and web_jobs:
+                    display_jobs, array_groups = group_array_job_tasks(web_jobs)
+
                 response = JobStatusResponse(
                     hostname=slurm_host.host.hostname,
-                    jobs=web_jobs,
-                    total_jobs=len(web_jobs),
+                    jobs=display_jobs,
+                    total_jobs=len(web_jobs),  # Keep original count
                     query_time=datetime.now(),
+                    group_array_jobs=group_array_jobs,
+                    array_groups=array_groups,
                 )
                 return response
 

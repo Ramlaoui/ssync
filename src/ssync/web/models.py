@@ -73,6 +73,10 @@ class JobInfoWeb(BaseModel):
     end_time: Optional[str] = None
     node_list: Optional[str] = None
 
+    # Array job fields
+    array_job_id: Optional[str] = None
+    array_task_id: Optional[str] = None
+
     # Resource allocation
     alloc_tres: Optional[str] = None
     req_tres: Optional[str] = None
@@ -124,6 +128,9 @@ class JobInfoWeb(BaseModel):
             start_time=job_info.start_time,
             end_time=job_info.end_time,
             node_list=job_info.node_list,
+            # Array job fields
+            array_job_id=job_info.array_job_id,
+            array_task_id=job_info.array_task_id,
             # Resource allocation
             alloc_tres=job_info.alloc_tres,
             req_tres=job_info.req_tres,
@@ -173,6 +180,9 @@ class JobInfoWeb(BaseModel):
             start_time=self.start_time,
             end_time=self.end_time,
             node_list=self.node_list,
+            # Array job fields
+            array_job_id=self.array_job_id,
+            array_task_id=self.array_task_id,
             # Resource allocation
             alloc_tres=self.alloc_tres,
             req_tres=self.req_tres,
@@ -207,6 +217,23 @@ class HostInfoWeb(BaseModel):
     slurm_defaults: Optional[SlurmDefaultsWeb] = None
 
 
+class ArrayJobGroup(BaseModel):
+    """Group of array job tasks."""
+
+    array_job_id: str
+    job_name: str
+    hostname: str
+    user: Optional[str] = None
+    total_tasks: int
+    tasks: List[JobInfoWeb]
+    # Summary statistics
+    pending_count: int = 0
+    running_count: int = 0
+    completed_count: int = 0
+    failed_count: int = 0
+    cancelled_count: int = 0
+
+
 class JobStatusResponse(BaseModel):
     """Response model for job status endpoint."""
 
@@ -215,6 +242,9 @@ class JobStatusResponse(BaseModel):
     total_jobs: int
     query_time: datetime
     cached: bool = False  # Indicates if the response was served from cache
+    # Array job grouping
+    array_groups: Optional[List[ArrayJobGroup]] = None
+    group_array_jobs: bool = False  # Whether array jobs are grouped
 
 
 class FileMetadata(BaseModel):
