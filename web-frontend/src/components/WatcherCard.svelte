@@ -188,8 +188,9 @@
   function navigateToJob() {
     // Track where we're coming from for smart back navigation
     navigationActions.setPreviousRoute($location);
-    // Navigate to the job details page
-    push(`/jobs/${watcher.job_id}/${watcher.hostname}`);
+    // Navigate to the job details page with URL encoding
+    const encodedJobId = encodeURIComponent(watcher.job_id);
+    push(`/jobs/${encodedJobId}/${watcher.hostname}`);
   }
   
   function viewDetails() {

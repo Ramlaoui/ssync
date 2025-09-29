@@ -13,7 +13,8 @@
   import SettingsPage from "./pages/SettingsPage.svelte";
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";
-  import { 
+  import { navigationActions } from "./stores/navigation";
+  import {
     Home,
     Play,
     Eye,
@@ -48,6 +49,57 @@
                  $location === '/watchers' ? 'watchers' :
                  $location === '/jobs' || $location.startsWith('/jobs/') ? 'jobs' :
                  'home';
+
+  // Track route changes for back navigation
+  let previousLocation: string | undefined;
+
+  // Import navigationState to check skipNextUpdate flag
+  import { navigationState } from "./stores/navigation";
+
+  $: {
+    if ($location && previousLocation && $location !== previousLocation) {
+      // Check if we should skip this update (e.g., during back navigation)
+      const currentState = $navigationState;
+      if (currentState.skipNextUpdate) {
+        // Clear the skip flag
+        navigationState.update(state => ({
+          ...state,
+          skipNextUpdate: false
+        }));
+      } else {
+        // Store the previous route
+        navigationActions.setPreviousRoute(previousLocation);
+      }
+    }
+    previousLocation = $location;
+  }
+
+  // Update document title based on current route
+  $: {
+    if ($location === '/') {
+      document.title = 'Dashboard | ssync';
+    } else if ($location === '/jobs') {
+      document.title = 'Jobs | ssync';
+    } else if ($location === '/launch') {
+      document.title = 'Launch Job | ssync';
+    } else if ($location === '/watchers') {
+      document.title = 'Watchers | ssync';
+    } else if ($location === '/settings') {
+      document.title = 'Settings | ssync';
+    } else if ($location.startsWith('/jobs/')) {
+      // Extract job ID and host from URL: /jobs/:id/:host
+      const parts = $location.split('/');
+      if (parts.length >= 4) {
+        const jobId = decodeURIComponent(parts[2]);
+        const hostname = parts[3];
+        document.title = `${jobId} @ ${hostname} | ssync`;
+      } else {
+        document.title = 'Job Details | ssync';
+      }
+    } else {
+      document.title = 'ssync';
+    }
+  }
 
   function checkMobile() {
     isMobile = window.innerWidth < 768;

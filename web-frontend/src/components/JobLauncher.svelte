@@ -19,7 +19,8 @@
   import { resubmitStore } from '../stores/resubmit';
   import { validateParameters } from '../lib/sbatchUtils';
   import { api } from '../services/api';
-  import { push } from 'svelte-spa-router';
+  import { push, location } from 'svelte-spa-router';
+  import { navigationActions } from '../stores/navigation';
 
   // Icons
   import {
@@ -756,7 +757,8 @@ echo "Starting job..."
         // Success - navigate to job detail page
         const jobId = response.data.job_id;
         const host = response.data.hostname || selectedHost;
-        push(`/jobs/${jobId}/${host}`);
+        const encodedJobId = encodeURIComponent(jobId);
+        push(`/jobs/${encodedJobId}/${host}`);
       } else {
         throw new Error('Invalid response from server');
       }
@@ -3343,6 +3345,10 @@ echo "Starting job..."
   :global(.launch-header-button:hover:not(:disabled)) {
     transform: translateY(-1px) !important;
     box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25) !important;
+  }
+
+  :global(.launch-header-button:active:not(:disabled)) {
+    transform: translateY(0) !important;
   }
 
   :global(.launch-header-button:disabled) {

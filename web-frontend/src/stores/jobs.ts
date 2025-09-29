@@ -1,7 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
-import type { JobInfo, JobStatusResponse, JobOutputResponse, HostInfo } from '../types/api';
+import type { JobInfo, JobStatusResponse, JobOutputResponse, HostInfo, ArrayJobGroup } from '../types/api';
 import { api } from '../services/api';
-import { batchedUpdates } from '../lib/BatchedUpdates';
 
 interface JobCache {
   [key: string]: {
@@ -105,8 +104,8 @@ function createJobsStore() {
     availableHosts: [],
   });
 
-  // Register batched update callback for job store updates
-  batchedUpdates.registerCallback('jobs-store', (updates) => {
+  // Direct update function for job store updates
+  function processBatchedUpdates(updates: any[]) {
     // Process all updates in a single store update
     update(state => {
       for (const updateItem of updates) {
@@ -150,7 +149,7 @@ function createJobsStore() {
       }
       return state;
     });
-  });
+  }
 
   return {
     subscribe,
@@ -355,6 +354,19 @@ function createJobsStore() {
           }
         });
       }
+
+      // Add array job grouping preference
+      // Import preferences and check if array grouping is enabled
+      try {
+        const { get: getPreferences } = await import('./preferences');
+        const { preferences } = await import('./preferences');
+        const prefs = getPreferences(preferences);
+        if (prefs.groupArrayJobs) {
+          params.append('group_array_jobs', 'true');
+        }
+      } catch (error) {
+        console.warn('Could not load preferences for array job grouping:', error);
+      }
       
       // Start fetching from each host WITHOUT awaiting
       // This allows the UI to update progressively as each host responds
@@ -542,8 +554,13 @@ function createJobsStore() {
     },
     
     updateJob(hostname: string, job: JobInfo) {
-      // Use batched updates instead of immediate store update
-      batchedUpdates.queueJobUpdate(job.job_id, hostname, job, 'job_update');
+      // Direct store update
+      processBatchedUpdates([{
+        type: 'job_update',
+        jobId: job.job_id,
+        hostname: hostname,
+        data: job
+      }]);
     },
     
     updateJobCache(job: JobInfo, hostname: string) {
@@ -552,12 +569,12 @@ function createJobsStore() {
       const existingJob = get({ subscribe }).cache[`${hostname}:${job.job_id}`]?.job;
       const isStateChange = existingJob && existingJob.state !== job.state;
       
-      batchedUpdates.queueJobUpdate(
-        job.job_id, 
-        hostname, 
-        job, 
-        isStateChange ? 'job_state_change' : 'job_update'
-      );
+      processBatchedUpdates([{
+        type: isStateChange ? 'job_state_change' : 'job_update',
+        jobId: job.job_id,
+        hostname: hostname,
+        data: job
+      }]);
     },
     
     async refreshHost(hostname: string): Promise<void> {
@@ -768,6 +785,27 @@ export const hostLoadingStates = derived(jobsStore, $state => $state.hostLoading
 
 // Derived store for available hosts
 export const availableHosts = derived(jobsStore, $state => $state.availableHosts);
+
+// Derived store for array job groups across all hosts
+export const arrayJobGroups = derived(jobsStore, $state => {
+  const groups: ArrayJobGroup[] = [];
+  $state.hostJobs.forEach(hostData => {
+    if (hostData.array_groups) {
+      groups.push(...hostData.array_groups);
+    }
+  });
+  return groups;
+});
+
+// Helper to check if array job grouping is enabled in response
+export const hasArrayJobGrouping = derived(jobsStore, $state => {
+  for (const hostData of $state.hostJobs.values()) {
+    if (hostData.group_array_jobs) {
+      return true;
+    }
+  }
+  return false;
+});
 
 // Derived store to check if any host is still loading
 export const isAnyHostLoading = derived(jobsStore, $state => {

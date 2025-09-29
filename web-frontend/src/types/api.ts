@@ -86,12 +86,27 @@ export interface HostInfo {
   slurm_defaults?: SlurmDefaults;
 }
 
+export interface ArrayJobGroup {
+  array_job_id: string;
+  job_name: string;
+  hostname: string;
+  total_tasks: number;
+  tasks: JobInfo[];
+  pending_count: number;
+  running_count: number;
+  completed_count: number;
+  failed_count: number;
+  cancelled_count: number;
+}
+
 export interface JobStatusResponse {
   hostname: string;
   jobs: JobInfo[];
   total_jobs: number;
   query_time: string;
   cached?: boolean;  // Indicates if data was served from cache
+  group_array_jobs?: boolean;  // Whether array jobs are grouped
+  array_groups?: ArrayJobGroup[];  // Array job groups if grouping is enabled
 }
 
 export interface FileMetadata {

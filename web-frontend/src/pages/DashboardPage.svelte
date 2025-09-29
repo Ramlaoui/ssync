@@ -188,7 +188,8 @@
   function handleJobSelect(job: JobInfo): void {
     // Track where we're coming from for smart back navigation
     navigationActions.setPreviousRoute($location);
-    push(`/jobs/${job.job_id}/${job.hostname}`);
+    const encodedJobId = encodeURIComponent(job.job_id);
+    push(`/jobs/${encodedJobId}/${job.hostname}`);
   }
   
   function handleJobHover(job: JobInfo | null): void {

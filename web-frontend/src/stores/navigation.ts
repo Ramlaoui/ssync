@@ -13,6 +13,7 @@ interface NavigationState {
     label: string;
     route: string;
   }>;
+  skipNextUpdate?: boolean; // Flag to skip the next automatic update
 }
 
 // Load initial state from localStorage if available
@@ -83,27 +84,32 @@ export const navigationActions = {
     const stored = loadFromStorage();
     console.log('Navigation goBack called with stored state:', stored);
 
-    // If we have a previous route, use it
-    if (stored.previousRoute) {
-      console.log('Using previousRoute:', stored.previousRoute);
-      push(stored.previousRoute);
-      return;
-    }
+    // Store the route we're going back to
+    const targetRoute = stored.previousRoute || this.getDefaultRoute(stored.context);
+    console.log('Going back to:', targetRoute);
 
-    // Fallback based on context
-    console.log('Using context fallback:', stored.context);
-    switch (stored.context) {
+    // Set flag to skip next automatic update and clear previous route
+    navigationState.update(state => ({
+      ...state,
+      previousRoute: undefined,
+      skipNextUpdate: true
+    }));
+
+    // Navigate to the target route
+    push(targetRoute);
+  },
+
+  // Get default route based on context
+  getDefaultRoute(context?: string): string {
+    switch (context) {
       case 'watcher':
-        push('/watchers');
-        break;
+        return '/watchers';
       case 'launch':
-        push('/launch');
-        break;
+        return '/launch';
       case 'job':
-        push('/jobs');
-        break;
+        return '/jobs';
       default:
-        push('/');
+        return '/';
     }
   },
 

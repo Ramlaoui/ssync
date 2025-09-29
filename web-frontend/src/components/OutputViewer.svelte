@@ -673,23 +673,6 @@
           <div class="loading-spinner small"></div>
           <span>Loading more content...</span>
         </div>
-      {:else if windowEnd < totalContentSize || windowStart > 0}
-        <div class="load-more-indicator">
-          <span class="indicator-text">
-            {#if windowEnd < totalContentSize}
-              Scroll down to load more...
-            {:else}
-              Content windowed for performance
-            {/if}
-          </span>
-          <span class="indicator-subtext">
-            {#if windowEnd < totalContentSize}
-              {formatBytes(totalContentSize - windowEnd)} remaining
-            {:else}
-              Showing {formatBytes(windowEnd - windowStart)} of {formatBytes(totalContentSize)}
-            {/if}
-          </span>
-        </div>
       {/if}
 
       {#if windowEnd < totalContentSize && isLargeFile}

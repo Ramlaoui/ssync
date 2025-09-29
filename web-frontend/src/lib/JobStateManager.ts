@@ -6,7 +6,7 @@
  */
 
 import { writable, derived, get, type Readable } from 'svelte/store';
-import type { JobInfo, HostInfo, JobStatusResponse } from '../types/api';
+import type { JobInfo, HostInfo, JobStatusResponse, ArrayJobGroup } from '../types/api';
 import { api } from '../services/api';
 import { notificationService } from '../services/notifications';
 
@@ -42,6 +42,7 @@ interface HostState {
   lastSync: number;
   errorCount: number;
   jobs: Map<string, string>; // jobId -> cacheKey mapping
+  arrayGroups: ArrayJobGroup[]; // Array job groups for this host
 }
 
 interface ManagerState {
@@ -454,6 +455,7 @@ class JobStateManager {
               lastSync: 0,
               errorCount: 0,
               jobs: new Map(),
+              arrayGroups: [],
             });
           }
         });
@@ -506,10 +508,15 @@ class JobStateManager {
     
     try {
       this.updateMetric('apiCalls', 1);
-      
+
+      // Build URL with array grouping parameter
+      const params = new URLSearchParams();
+      params.append('host', hostname);
+      params.append('group_array_jobs', 'true');
+
       // The API might return either an array or a single object depending on the endpoint
       const response = await api.get<JobStatusResponse | JobStatusResponse[]>(
-        `/api/status?host=${hostname}`
+        `/api/status?${params.toString()}`
       );
       
       // Log raw response
@@ -536,11 +543,15 @@ class JobStateManager {
       // Check if jobs field exists and is an array
       if (hostData && Array.isArray(hostData.jobs)) {
         console.log(`[JobStateManager] Processing ${hostData.jobs.length} jobs for ${hostname}`);
-        
+
+        // Extract array groups if present
+        const arrayGroups = hostData.array_groups || [];
+        console.log(`[JobStateManager] Found ${arrayGroups.length} array groups for ${hostname}`);
+
         // Prepare jobs for queueing
         const jobsToQueue: JobUpdate[] = [];
-        
-        // Update host state with job mappings
+
+        // Update host state with job mappings and array groups
         this.state.update(s => {
           const newHostStates = new Map(s.hostStates);
           const hs = newHostStates.get(hostname);
@@ -551,10 +562,10 @@ class JobStateManager {
               if (!job.hostname) {
                 job.hostname = hostname;
               }
-              
+
               const cacheKey = `${hostname}:${job.job_id}`;
               newJobs.set(job.job_id, cacheKey);
-              
+
               // Prepare update for this job
               jobsToQueue.push({
                 jobId: job.job_id,
@@ -566,11 +577,12 @@ class JobStateManager {
                 messageType: 'api_sync',
               });
             });
-            
-            // Create new host state object
+
+            // Create new host state object with array groups
             newHostStates.set(hostname, {
               ...hs,
               jobs: newJobs,
+              arrayGroups: arrayGroups,
               status: 'connected',
               lastSync: now,
               errorCount: 0,
@@ -579,7 +591,7 @@ class JobStateManager {
           s.hostStates = newHostStates;
           return s;
         });
-        
+
         // Queue all job updates after state update
         console.log(`[JobStateManager] Queueing ${jobsToQueue.length} job updates for ${hostname}`);
         jobsToQueue.forEach(update => this.queueUpdate(update, forceSync));
@@ -592,6 +604,7 @@ class JobStateManager {
           if (hs) {
             newHostStates.set(hostname, {
               ...hs,
+              arrayGroups: [],
               status: 'connected',
               lastSync: now,
               errorCount: 0,
@@ -1140,6 +1153,21 @@ class JobStateManager {
       connected: $state.wsConnected || $state.pollingActive,
       healthy: $state.wsHealthy || !$state.isPaused,
     }));
+  }
+
+  /**
+   * Get all array job groups across all hosts
+   */
+  public getArrayJobGroups(): Readable<ArrayJobGroup[]> {
+    return derived(this.state, $state => {
+      const allGroups: ArrayJobGroup[] = [];
+      $state.hostStates.forEach(hostState => {
+        if (hostState.arrayGroups && hostState.arrayGroups.length > 0) {
+          allGroups.push(...hostState.arrayGroups);
+        }
+      });
+      return allGroups;
+    });
   }
 }
 

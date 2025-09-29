@@ -5,7 +5,10 @@
   import { jobStateManager } from '../lib/JobStateManager';
   import { jobUtils } from '../lib/jobUtils';
   import { navigationActions } from '../stores/navigation';
+  import { preferences, preferencesActions } from '../stores/preferences';
+  import { arrayJobGroups, hasArrayJobGrouping } from '../stores/jobs';
   import { debounce } from '../lib/debounce';
+  import ArrayJobCard from './ArrayJobCard.svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   
   export let currentJobId: string = '';
@@ -48,6 +51,47 @@
   let filteredPendingJobs: JobInfo[] = [];
   let filteredRecentJobs: JobInfo[] = [];
 
+  // For array job groups
+  let filteredArrayGroups: any[] = [];
+  let arrayTaskIds = new Set<string>();
+
+  // Track which jobs are part of array groups
+  $: {
+    arrayTaskIds.clear();
+    if ($preferences.groupArrayJobs && $hasArrayJobGrouping && $arrayJobGroups) {
+      $arrayJobGroups.forEach(group => {
+        group.tasks.forEach(task => {
+          arrayTaskIds.add(`${task.job_id}-${task.hostname}`);
+        });
+      });
+    }
+  }
+
+  // Filter jobs to exclude those in array groups when grouping is enabled
+  function filterOutArrayTasks(jobs: JobInfo[]): JobInfo[] {
+    if (!$preferences.groupArrayJobs || !$hasArrayJobGrouping) {
+      return jobs;
+    }
+    return jobs.filter(job => {
+      // Check if it's an individual task that's been grouped
+      if (arrayTaskIds.has(`${job.job_id}-${job.hostname}`)) {
+        return false;
+      }
+
+      // Check if it's a parent array job (has brackets in job_id like "2187421_[0-4]")
+      if (job.job_id.includes('[') && job.job_id.includes(']')) {
+        // Extract the array ID (part before underscore)
+        const arrayId = job.job_id.split('_')[0];
+        // Hide parent job if we have a group for this array
+        if ($arrayJobGroups && $arrayJobGroups.some(g => g.array_job_id === arrayId && g.hostname === job.hostname)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
   // Debounced search update function
   const updateSearchQuery = debounce((value: string) => {
     searchQuery = value;
@@ -58,18 +102,31 @@
 
   // Single reactive block to handle all filtering
   $: {
+    const baseRunning = filterOutArrayTasks($runningJobs);
+    const basePending = filterOutArrayTasks($pendingJobs);
+    const baseRecent = filterOutArrayTasks(recentJobs);
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       // Use requestAnimationFrame to prevent blocking the UI
       requestAnimationFrame(() => {
-        filteredRunningJobs = $runningJobs.filter(job => matchesSearch(job, query));
-        filteredPendingJobs = $pendingJobs.filter(job => matchesSearch(job, query));
-        filteredRecentJobs = recentJobs.filter(job => matchesSearch(job, query));
+        filteredRunningJobs = baseRunning.filter(job => matchesSearch(job, query));
+        filteredPendingJobs = basePending.filter(job => matchesSearch(job, query));
+        filteredRecentJobs = baseRecent.filter(job => matchesSearch(job, query));
+
+        // Filter array groups
+        if ($preferences.groupArrayJobs && $hasArrayJobGrouping && $arrayJobGroups) {
+          filteredArrayGroups = $arrayJobGroups.filter(group =>
+            group.array_job_id.toLowerCase().includes(query) ||
+            group.job_name.toLowerCase().includes(query)
+          );
+        }
       });
     } else {
-      filteredRunningJobs = $runningJobs;
-      filteredPendingJobs = $pendingJobs;
-      filteredRecentJobs = recentJobs;
+      filteredRunningJobs = baseRunning;
+      filteredPendingJobs = basePending;
+      filteredRecentJobs = baseRecent;
+      filteredArrayGroups = $arrayJobGroups || [];
     }
   }
 
@@ -152,8 +209,9 @@
     // Track where we're coming from for smart back navigation
     navigationActions.setPreviousRoute($location);
 
-    // Navigate to the job
-    push(`/jobs/${job.job_id}/${job.hostname}`);
+    // Navigate to the job with URL encoding for safety
+    const encodedJobId = encodeURIComponent(job.job_id);
+    push(`/jobs/${encodedJobId}/${job.hostname}`);
 
     // Close mobile sidebar if callback provided
     if (isMobile && onMobileJobSelect) {
@@ -235,6 +293,27 @@
         </svg>
       </button>
 
+      <!-- Array grouping toggle -->
+      <button
+        class="icon-btn"
+        class:active={$preferences.groupArrayJobs}
+        on:click={() => {
+          preferencesActions.toggleArrayGrouping();
+          // Force refresh to apply grouping changes
+          setTimeout(() => loadJobs(true), 100);
+        }}
+        aria-label="Toggle array job grouping"
+        title={$preferences.groupArrayJobs ? "Disable array job grouping" : "Enable array job grouping"}
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          {#if $preferences.groupArrayJobs}
+            <path d="M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M5,7H19V9H5V7M5,11H19V13H5V11M5,15H19V17H5V15" />
+          {:else}
+            <path d="M3,3H21V5H3V3M3,7H21V9H3V7M3,11H21V13H3V11M3,15H21V17H3V15M3,19H21V21H3V19Z" />
+          {/if}
+        </svg>
+      </button>
+
       <!-- Refresh button -->
       <button class="icon-btn" on:click={() => loadJobs(true)} disabled={loading || isLoading} aria-label="Refresh jobs">
         <svg viewBox="0 0 24 24" fill="currentColor" class:spinning={loading || isLoading}>
@@ -298,6 +377,23 @@
         <LoadingSpinner size="sm" message="Loading jobs..." centered={false} />
       </div>
     {:else}
+      <!-- Array Job Groups (when grouping is enabled) -->
+      {#if $preferences.groupArrayJobs && $hasArrayJobGrouping && filteredArrayGroups.length > 0}
+        <div class="job-section">
+          <h4 class="section-title">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M5,7H19V9H5V7M5,11H19V13H5V11M5,15H19V17H5V15" />
+            </svg>
+            Array Jobs ({filteredArrayGroups.length})
+          </h4>
+          <div class="job-list">
+            {#each filteredArrayGroups as group (group.array_job_id + group.hostname)}
+              <ArrayJobCard {group} />
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <!-- Running Jobs -->
       {#if filteredRunningJobs.length > 0}
         <div class="job-section">

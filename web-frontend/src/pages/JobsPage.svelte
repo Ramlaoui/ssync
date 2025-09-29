@@ -5,10 +5,11 @@
   import { navigationActions } from "../stores/navigation";
   import type { AxiosError } from "axios";
   import JobTable from "../components/JobTable.svelte";
+  import ArrayJobCard from "../components/ArrayJobCard.svelte";
   import SyncStatus from "../components/SyncStatus.svelte";
   import { api } from "../services/api";
   import { jobStateManager } from "../lib/JobStateManager";
-  import type { HostInfo, JobFilters, JobInfo } from "../types/api";
+  import type { HostInfo, JobFilters, JobInfo, ArrayJobGroup } from "../types/api";
   import { RefreshCw, Clock, Search, X } from 'lucide-svelte';
   import Button from "../lib/components/ui/Button.svelte";
   import Badge from "../lib/components/ui/Badge.svelte";
@@ -46,10 +47,14 @@
   const allJobs = jobStateManager.getAllJobs();
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
-  
+  const arrayJobGroups = jobStateManager.getArrayJobGroups();
+
   // Debug reactive jobs - only log when count changes
   $: if ($allJobs.length > 0) {
     console.log(`[JobsPage] Received ${$allJobs.length} jobs from store`);
+  }
+  $: if ($arrayJobGroups.length > 0) {
+    console.log(`[JobsPage] Received ${$arrayJobGroups.length} array job groups`);
   }
   
   // Search scoring function - returns relevance score (lower is better)
@@ -77,11 +82,21 @@
     return 999;
   }
   
-  // Compute filtered jobs based on current filters with search ranking
+  // Filter jobs and exclude those that are part of array groups
   $: filteredJobs = (() => {
     try {
       let jobs = [...$allJobs];
-      
+
+      // Exclude jobs that are part of array groups
+      if ($arrayJobGroups.length > 0) {
+        const arrayJobIds = new Set(
+          $arrayJobGroups.flatMap(group =>
+            group.tasks.map(task => `${task.hostname}:${task.job_id}`)
+          )
+        );
+        jobs = jobs.filter(j => !arrayJobIds.has(`${j.hostname}:${j.job_id}`));
+      }
+
       // Apply filters
       if (filters.host) {
         jobs = jobs.filter(j => j.hostname === filters.host);
@@ -98,7 +113,7 @@
       if (filters.completedOnly) {
         jobs = jobs.filter(j => j.state === 'CD' || j.state === 'F' || j.state === 'CA' || j.state === 'TO');
       }
-      
+
       // Apply search with ranking
       if (search) {
         // Filter and score jobs
@@ -107,20 +122,55 @@
           .filter(item => item.score < 999)
           .sort((a, b) => a.score - b.score)
           .map(item => item.job);
-        
+
         jobs = scoredJobs;
       }
-      
+
       // Apply limit
       if (filters.limit > 0) {
         jobs = jobs.slice(0, filters.limit);
       }
-      
+
       return jobs;
     } catch (error) {
       console.error('[JobsPage] Error in filteredJobs computation:', error);
       return [];
     }
+  })();
+
+  // Filter array groups based on search and filters
+  $: filteredArrayGroups = (() => {
+    let groups = [...$arrayJobGroups];
+
+    // Apply filters
+    if (filters.host) {
+      groups = groups.filter(g => g.hostname === filters.host);
+    }
+    if (filters.user) {
+      groups = groups.filter(g => g.user?.toLowerCase().includes(filters.user.toLowerCase()));
+    }
+    if (filters.state) {
+      // Filter groups that have tasks in the specified state
+      groups = groups.filter(g => g.tasks.some(t => t.state === filters.state));
+    }
+    if (filters.activeOnly) {
+      groups = groups.filter(g => g.running_count > 0 || g.pending_count > 0);
+    }
+    if (filters.completedOnly) {
+      groups = groups.filter(g => g.completed_count > 0 || g.failed_count > 0 || g.cancelled_count > 0);
+    }
+
+    // Apply search
+    if (search) {
+      const term = search.toLowerCase();
+      groups = groups.filter(g =>
+        g.array_job_id.toLowerCase().includes(term) ||
+        g.job_name.toLowerCase().includes(term) ||
+        g.user?.toLowerCase().includes(term)
+      );
+    }
+
+    return groups;
   })();
   
   
@@ -182,7 +232,8 @@
   function handleJobSelect(job: JobInfo): void {
     // Track where we're coming from for smart back navigation
     navigationActions.setPreviousRoute($location);
-    push(`/jobs/${job.job_id}/${job.hostname}`);
+    const encodedJobId = encodeURIComponent(job.job_id);
+    push(`/jobs/${encodedJobId}/${job.hostname}`);
   }
 
   function handleManualRefresh(): void {
@@ -231,7 +282,7 @@
     setupAutoRefresh();
   }
 
-  $: totalJobs = filteredJobs.length;
+  $: totalJobs = filteredJobs.length + filteredArrayGroups.reduce((sum, g) => sum + g.total_tasks, 0);
   
 
   onMount(async () => {
@@ -398,13 +449,35 @@
   {/if}
 
   <!-- Filters removed since search is now in header -->
-  
-  <div class="flex-1 overflow-hidden">
-    <JobTable
-      jobs={filteredJobs}
-      loading={progressiveLoading && filteredJobs.length === 0}
-      on:jobSelect={(e) => handleJobSelect(e.detail)}
-    />
+
+  <div class="flex-1 overflow-auto px-4 py-4">
+    {#if progressiveLoading && filteredJobs.length === 0 && filteredArrayGroups.length === 0}
+      <div class="flex items-center justify-center h-full">
+        <div class="text-center text-gray-500">Loading jobs...</div>
+      </div>
+    {:else}
+      <!-- Array job groups -->
+      {#if filteredArrayGroups.length > 0}
+        <div class="space-y-2 mb-4">
+          {#each filteredArrayGroups as group (group.array_job_id + group.hostname)}
+            <ArrayJobCard {group} />
+          {/each}
+        </div>
+      {/if}
+
+      <!-- Regular jobs table -->
+      {#if filteredJobs.length > 0}
+        <JobTable
+          jobs={filteredJobs}
+          loading={false}
+          on:jobSelect={(e) => handleJobSelect(e.detail)}
+        />
+      {:else if filteredArrayGroups.length === 0}
+        <div class="flex items-center justify-center h-full">
+          <div class="text-center text-gray-500">No jobs found</div>
+        </div>
+      {/if}
+    {/if}
   </div>
 </div>
 
