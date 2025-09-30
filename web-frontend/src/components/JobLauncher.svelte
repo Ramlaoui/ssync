@@ -1143,12 +1143,37 @@ echo "Starting job..."
         <button
           class="mobile-icon-btn"
           on:click={() => {
-            showPresets = !showPresets;
-            if (showPresets) {
-              showPresetManager = false;
+            showTemplates = !showTemplates;
+            if (showTemplates) {
+              showPresets = false;
+              showHistory = false;
             }
           }}
           title="Templates"
+        >
+          <FileText class="w-3.5 h-3.5" />
+        </button>
+        <button
+          class="mobile-icon-btn"
+          on:click={() => {
+            showSaveTemplateDialog = true;
+          }}
+          title="Save Template"
+          disabled={!script || script.trim() === ''}
+        >
+          <Save class="w-3.5 h-3.5" />
+        </button>
+        <button
+          class="mobile-icon-btn"
+          on:click={() => {
+            showPresets = !showPresets;
+            if (showPresets) {
+              showPresetManager = false;
+              showTemplates = false;
+              showHistory = false;
+            }
+          }}
+          title="Presets"
         >
           <Zap class="w-3.5 h-3.5" />
         </button>
@@ -2476,6 +2501,223 @@ echo "Starting job..."
               on:change={handleConfigChange}
             />
           </div>
+
+          <!-- Account -->
+          <div class="mobile-config-section">
+            <Label>Account</Label>
+            <Input
+              type="text"
+              bind:value={parameters.account}
+              placeholder="project-123"
+              class="mobile-config-input-full"
+              on:change={handleConfigChange}
+            />
+          </div>
+
+          <!-- Constraint -->
+          <div class="mobile-config-section">
+            <Label>Constraint</Label>
+            <Input
+              type="text"
+              bind:value={parameters.constraint}
+              placeholder="gpu, bigmem, intel"
+              class="mobile-config-input-full"
+              on:change={handleConfigChange}
+            />
+          </div>
+
+          <!-- Advanced Options Toggle -->
+          <div class="mobile-config-section">
+            <button
+              class="mobile-advanced-toggle"
+              on:click={() => showAdvanced = !showAdvanced}
+            >
+              <Settings class="w-4 h-4" />
+              <span>{showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}</span>
+              <ChevronDown class="w-4 h-4 chevron {showAdvanced ? 'rotate-180' : ''}" />
+            </button>
+          </div>
+
+          {#if showAdvanced}
+            <!-- Advanced Resource Options -->
+            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
+              <div class="mobile-config-row">
+                <div class="mobile-config-field">
+                  <span class="mobile-config-label">Tasks/Node</span>
+                  <Input
+                    type="number"
+                    bind:value={parameters.ntasksPerNode}
+                    min="1"
+                    placeholder="1"
+                    class="mobile-config-input"
+                    on:change={handleConfigChange}
+                  />
+                </div>
+                <div class="mobile-config-field">
+                  <span class="mobile-config-label">GPUs/Node</span>
+                  <Input
+                    type="number"
+                    bind:value={parameters.gpusPerNode}
+                    min="0"
+                    placeholder="0"
+                    class="mobile-config-input"
+                    on:change={handleConfigChange}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
+              <Label>GRES</Label>
+              <Input
+                type="text"
+                bind:value={parameters.gres}
+                placeholder="gpu:1"
+                class="mobile-config-input-full"
+                on:change={handleConfigChange}
+              />
+            </div>
+
+            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
+              <Label>Output File</Label>
+              <Input
+                type="text"
+                bind:value={parameters.outputFile}
+                placeholder="%j.out"
+                class="mobile-config-input-full"
+                on:change={handleConfigChange}
+              />
+            </div>
+
+            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
+              <Label>Error File</Label>
+              <Input
+                type="text"
+                bind:value={parameters.errorFile}
+                placeholder="%j.err"
+                class="mobile-config-input-full"
+                on:change={handleConfigChange}
+              />
+            </div>
+          {/if}
+
+          <!-- Captured Variables (only for resubmission) -->
+          {#if isResubmit && Object.keys(watcherVariables).length > 0}
+            <div class="mobile-config-section">
+              <button
+                class="mobile-advanced-toggle"
+                on:click={() => showCapturedVariables = !showCapturedVariables}
+              >
+                <Database class="w-4 h-4" />
+                <span>Variables from Job #{originalJobId}</span>
+                <ChevronDown class="w-4 h-4 chevron {showCapturedVariables ? 'rotate-180' : ''}" />
+              </button>
+            </div>
+
+            {#if showCapturedVariables}
+              <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
+                <div class="mobile-variables-grid">
+                  {#each Object.entries(watcherVariables) as [key, value]}
+                    <div class="mobile-variable-item">
+                      <div class="mobile-variable-header">
+                        <span class="mobile-variable-name">{key}</span>
+                        <button
+                          class="mobile-copy-btn"
+                          on:click={() => navigator.clipboard.writeText(value)}
+                          title="Copy value"
+                        >
+                          <Copy class="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div class="mobile-variable-value">{value}</div>
+                    </div>
+                  {/each}
+                </div>
+                <div class="mobile-variables-info">
+                  <AlertCircle class="w-4 h-4 text-blue-500" />
+                  <span>
+                    Variables captured from job #{originalJobId}. Reference them in your script.
+                  </span>
+                </div>
+              </div>
+            {/if}
+          {/if}
+
+          <!-- Recent Watchers -->
+          {#if allRecentWatchers && allRecentWatchers.length > 0}
+            <div class="mobile-config-section">
+              <button
+                class="mobile-advanced-toggle"
+                on:click={() => showRecentWatchers = !showRecentWatchers}
+              >
+                <Eye class="w-4 h-4" />
+                <span>Recent Watchers</span>
+                <ChevronDown class="w-4 h-4 chevron {showRecentWatchers ? 'rotate-180' : ''}" />
+              </button>
+            </div>
+
+            {#if showRecentWatchers}
+              <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
+                <div class="mobile-watchers-list">
+                  {#each allRecentWatchers as watcher, index}
+                    <div class="mobile-watcher-item">
+                      <div class="mobile-watcher-header">
+                        <div class="mobile-watcher-title">
+                          <Code class="w-4 h-4 text-blue-500" />
+                          <span class="mobile-watcher-name">{watcher.name || `Watcher ${index + 1}`}</span>
+                        </div>
+                        <button
+                          class="mobile-copy-btn"
+                          on:click={() => {
+                            const watcherCode = JSON.stringify(watcher.actions, null, 2);
+                            navigator.clipboard.writeText(watcherCode);
+                          }}
+                          title="Copy watcher configuration"
+                        >
+                          <Copy class="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      <div class="mobile-watcher-meta">
+                        <span class="mobile-watcher-type">{watcher.type}</span>
+                        {#if watcher.job_id}
+                          <span class="mobile-watcher-job">Job #{watcher.job_id}</span>
+                        {/if}
+                      </div>
+
+                      {#if watcher.variables && Object.keys(watcher.variables).length > 0}
+                        <div class="mobile-watcher-variables">
+                          <div class="mobile-variables-label">
+                            <Database class="w-3 h-3" />
+                            <span>Variables:</span>
+                          </div>
+                          <div class="mobile-variables-tags">
+                            {#each Object.entries(watcher.variables) as [key, value]}
+                              <span class="mobile-var-tag">
+                                <strong>{key}:</strong> {value}
+                              </span>
+                            {/each}
+                          </div>
+                        </div>
+                      {/if}
+
+                      {#if watcher.status}
+                        <span class="mobile-status-badge status-{watcher.status.toLowerCase()}">
+                          {watcher.status}
+                        </span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+                <div class="mobile-variables-info">
+                  <AlertCircle class="w-4 h-4 text-blue-500" />
+                  <span>
+                    Recently used watcher configurations. Copy and reuse them for your job submission.
+                  </span>
+                </div>
+              </div>
+            {/if}
+          {/if}
 
             <!-- Sync Settings -->
             <div class="mobile-config-section">
@@ -4552,6 +4794,235 @@ echo "Starting job..."
   .mobile-sync-settings-btn:active {
     transform: translateY(0);
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  }
+
+  .mobile-advanced-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.625rem;
+    background: linear-gradient(to bottom, #f9fafb, #f3f4f6);
+    color: #374151;
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-align: left;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    cursor: pointer;
+  }
+
+  .mobile-advanced-toggle:hover {
+    border-color: #6366f1;
+    background: linear-gradient(to bottom, #f3f4f6, #e5e7eb);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08);
+  }
+
+  .mobile-advanced-toggle:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  }
+
+  .mobile-advanced-toggle span {
+    flex: 1;
+    text-align: left;
+  }
+
+  .mobile-advanced-toggle .chevron {
+    margin-left: auto;
+    transition: transform 0.2s ease;
+  }
+
+  .mobile-variables-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .mobile-variable-item {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .mobile-variable-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  .mobile-variable-name {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: #374151;
+  }
+
+  .mobile-copy-btn {
+    padding: 0.25rem;
+    border: none;
+    background: #e5e7eb;
+    border-radius: 0.25rem;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .mobile-copy-btn:hover {
+    background: #d1d5db;
+    color: #374151;
+  }
+
+  .mobile-variable-value {
+    font-size: 0.8125rem;
+    color: #6b7280;
+    word-break: break-all;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    background: white;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+  }
+
+  .mobile-variables-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 0.5rem;
+  }
+
+  .mobile-variables-info span {
+    flex: 1;
+    font-size: 0.8125rem;
+    color: #1e40af;
+    line-height: 1.4;
+  }
+
+  .mobile-watchers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .mobile-watcher-item {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 0.875rem;
+  }
+
+  .mobile-watcher-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  .mobile-watcher-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+  }
+
+  .mobile-watcher-name {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: #374151;
+  }
+
+  .mobile-watcher-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .mobile-watcher-type {
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    background: #e0e7ff;
+    color: #4338ca;
+    border-radius: 0.25rem;
+    font-weight: 500;
+  }
+
+  .mobile-watcher-job {
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    background: #dbeafe;
+    color: #1e40af;
+    border-radius: 0.25rem;
+    font-weight: 500;
+  }
+
+  .mobile-watcher-variables {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .mobile-variables-label {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #6b7280;
+    margin-bottom: 0.375rem;
+  }
+
+  .mobile-variables-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+
+  .mobile-var-tag {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.25rem;
+    color: #374151;
+  }
+
+  .mobile-var-tag strong {
+    color: #6b7280;
+  }
+
+  .mobile-status-badge {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-weight: 500;
+  }
+
+  .mobile-status-badge.status-active {
+    background: #dcfce7;
+    color: #166534;
+  }
+
+  .mobile-status-badge.status-completed {
+    background: #dbeafe;
+    color: #1e40af;
+  }
+
+  .mobile-status-badge.status-failed {
+    background: #fee2e2;
+    color: #991b1b;
   }
 
   .mobile-nested-view {
