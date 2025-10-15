@@ -14,15 +14,15 @@
 
   const dispatch = createEventDispatcher();
 
-  let activeWatchers = $derived(watchers.filter(w => w.state === 'active'));
-  let pausedWatchers = $derived(watchers.filter(w => w.state === 'paused'));
+  let activeWatchers = $derived(watchers.filter(w => w && w.state === 'active'));
+  let pausedWatchers = $derived(watchers.filter(w => w && w.state === 'paused'));
 
   function handleRefresh() {
     dispatch('refresh');
   }
 </script>
 
-<div class="flex-[0_0_380px] flex flex-col bg-white relative h-[calc(100vh-140px)]">
+<div class="flex-[0_0_380px] flex flex-col bg-white relative h-[calc(100vh-140px)] overflow-x-hidden">
   <div class="border-b border-black/6 flex-shrink-0 bg-white">
     <div class="flex items-center justify-between py-4 px-5 gap-4 md:flex-col md:items-start md:py-3 md:px-4 md:gap-3">
       <div class="flex items-center gap-6 flex-1 md:w-full md:justify-between md:gap-4">

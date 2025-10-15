@@ -267,7 +267,7 @@
   }
 </script>
 
-<div class="bg-white border border-gray-200 rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 max-w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
+<div class="bg-white border border-gray-200 rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 
@@ -285,8 +285,8 @@
         {getStateIcon(watcher.state)}
       </span>
       <div class="flex flex-col gap-0.5 min-w-0 flex-1">
-        <div class="flex items-center gap-2 flex-wrap">
-          <h3 class="m-0 text-sm font-semibold text-gray-900 overflow-hidden text-ellipsis whitespace-nowrap max-w-full">{watcher.name}</h3>
+        <div class="flex items-center gap-2 min-w-0 w-full">
+          <h3 class="m-0 text-sm font-semibold text-gray-900 overflow-hidden text-ellipsis whitespace-nowrap flex-1 min-w-0">{watcher.name}</h3>
         </div>
 {#if showJobLink && jobInfo}
           <button class="job-link" onclick={navigateToJob}>
