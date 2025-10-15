@@ -275,6 +275,60 @@ class JobDataCache:
                 "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON watcher_events(timestamp)"
             )
 
+            # Array job metadata tables for efficient grouping and querying
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS array_jobs (
+                    array_job_id TEXT,
+                    hostname TEXT,
+                    job_name TEXT,
+                    user TEXT,
+                    script_content TEXT,
+                    total_tasks INTEGER DEFAULT 0,
+                    submit_time TEXT,
+                    partition TEXT,
+                    account TEXT,
+                    work_dir TEXT,
+                    created_at TEXT NOT NULL,
+                    last_updated TEXT NOT NULL,
+                    PRIMARY KEY (array_job_id, hostname)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS array_task_stats (
+                    array_job_id TEXT,
+                    hostname TEXT,
+                    state TEXT,
+                    count INTEGER DEFAULT 0,
+                    last_updated TEXT NOT NULL,
+                    PRIMARY KEY (array_job_id, hostname, state),
+                    FOREIGN KEY (array_job_id, hostname)
+                        REFERENCES array_jobs(array_job_id, hostname)
+                )
+            """)
+
+            # Indices for array job queries
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_array_jobs_hostname ON array_jobs(hostname)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_array_jobs_user ON array_jobs(hostname, user)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_array_task_stats_array ON array_task_stats(array_job_id, hostname)"
+            )
+
+            # Add array_job_id column to cached_jobs for easier filtering (migration safe)
+            try:
+                conn.execute("ALTER TABLE cached_jobs ADD COLUMN array_job_id TEXT")
+            except:
+                pass  # Column already exists
+
+            # Add index on array_job_id for fast task lookups
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cached_jobs_array_id ON cached_jobs(array_job_id, hostname)"
+            )
+
             conn.commit()
 
     @contextmanager
@@ -408,12 +462,15 @@ class JobDataCache:
         self._store_cached_data(cached_data)
 
     def _store_cached_data(self, cached_data: CachedJobData):
-        """Store cached data in database."""
+        """Store cached data in database and maintain array metadata."""
         with self._get_connection() as conn:
             job_info_dict = asdict(cached_data.job_info)
 
             # Convert enums to strings for JSON serialization
             job_info_dict = self._prepare_dict_for_json(job_info_dict)
+
+            # Extract array_job_id from job_info
+            array_job_id = cached_data.job_info.array_job_id
 
             conn.execute(
                 """
@@ -421,8 +478,8 @@ class JobDataCache:
                 (job_id, hostname, job_info_json, script_content, local_source_dir,
                  stdout_compressed, stdout_size, stdout_compression,
                  stderr_compressed, stderr_size, stderr_compression,
-                 cached_at, last_updated, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 cached_at, last_updated, is_active, array_job_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     cached_data.job_id,
@@ -439,9 +496,256 @@ class JobDataCache:
                     cached_data.cached_at.isoformat(),
                     cached_data.last_updated.isoformat(),
                     cached_data.is_active,
+                    array_job_id,
                 ),
             )
+
+            # Maintain array metadata if this is an array job
+            if array_job_id:
+                self._update_array_metadata(
+                    conn, cached_data.job_info, cached_data.script_content
+                )
+
             conn.commit()
+
+    def _update_array_metadata(self, conn, job_info: JobInfo, script_content: Optional[str] = None):
+        """Update array job metadata and task statistics.
+
+        This method maintains the array_jobs and array_task_stats tables.
+        Should be called whenever an array job task is cached.
+        """
+        array_job_id = job_info.array_job_id
+        hostname = job_info.hostname
+        array_task_id = job_info.array_task_id
+        now = datetime.now()
+
+        # Skip parent entries (with brackets) - we only track actual tasks
+        if array_task_id and '[' in array_task_id:
+            return
+
+        # Ensure array_jobs record exists
+        cursor = conn.execute(
+            "SELECT 1 FROM array_jobs WHERE array_job_id = ? AND hostname = ?",
+            (array_job_id, hostname)
+        )
+        array_exists = cursor.fetchone() is not None
+
+        if not array_exists:
+            # Create new array job record
+            conn.execute(
+                """
+                INSERT INTO array_jobs
+                (array_job_id, hostname, job_name, user, script_content,
+                 total_tasks, submit_time, partition, account, work_dir,
+                 created_at, last_updated)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    array_job_id,
+                    hostname,
+                    job_info.name,
+                    job_info.user,
+                    script_content,
+                    job_info.submit_time,
+                    job_info.partition,
+                    job_info.account,
+                    job_info.work_dir,
+                    now.isoformat(),
+                    now.isoformat(),
+                )
+            )
+            logger.debug(f"Created array job metadata for {array_job_id} on {hostname}")
+        else:
+            # Update existing array job record (preserve script if not provided)
+            if script_content:
+                conn.execute(
+                    """
+                    UPDATE array_jobs
+                    SET job_name = ?, user = ?, script_content = ?,
+                        submit_time = ?, partition = ?, account = ?, work_dir = ?,
+                        last_updated = ?
+                    WHERE array_job_id = ? AND hostname = ?
+                    """,
+                    (
+                        job_info.name,
+                        job_info.user,
+                        script_content,
+                        job_info.submit_time,
+                        job_info.partition,
+                        job_info.account,
+                        job_info.work_dir,
+                        now.isoformat(),
+                        array_job_id,
+                        hostname,
+                    )
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE array_jobs
+                    SET job_name = ?, user = ?,
+                        submit_time = ?, partition = ?, account = ?, work_dir = ?,
+                        last_updated = ?
+                    WHERE array_job_id = ? AND hostname = ?
+                    """,
+                    (
+                        job_info.name,
+                        job_info.user,
+                        job_info.submit_time,
+                        job_info.partition,
+                        job_info.account,
+                        job_info.work_dir,
+                        now.isoformat(),
+                        array_job_id,
+                        hostname,
+                    )
+                )
+
+        # Update task count
+        cursor = conn.execute(
+            """
+            SELECT COUNT(*) as task_count FROM cached_jobs
+            WHERE array_job_id = ? AND hostname = ?
+              AND job_id NOT LIKE '%[%'
+            """,
+            (array_job_id, hostname)
+        )
+        task_count = cursor.fetchone()[0]
+
+        conn.execute(
+            """
+            UPDATE array_jobs
+            SET total_tasks = ?, last_updated = ?
+            WHERE array_job_id = ? AND hostname = ?
+            """,
+            (task_count, now.isoformat(), array_job_id, hostname)
+        )
+
+        # Recalculate state statistics
+        self._recalculate_array_stats(conn, array_job_id, hostname)
+
+        logger.debug(
+            f"Updated array metadata for {array_job_id} on {hostname}: {task_count} tasks"
+        )
+
+    def _recalculate_array_stats(self, conn, array_job_id: str, hostname: str):
+        """Recalculate and update state statistics for an array job."""
+        now = datetime.now()
+
+        # Get state counts from actual tasks
+        cursor = conn.execute(
+            """
+            SELECT
+                json_extract(job_info_json, '$.state') as state,
+                COUNT(*) as count
+            FROM cached_jobs
+            WHERE array_job_id = ? AND hostname = ?
+              AND job_id NOT LIKE '%[%'
+            GROUP BY state
+            """,
+            (array_job_id, hostname)
+        )
+
+        state_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # Clear existing stats
+        conn.execute(
+            """
+            DELETE FROM array_task_stats
+            WHERE array_job_id = ? AND hostname = ?
+            """,
+            (array_job_id, hostname)
+        )
+
+        # Insert updated stats
+        for state, count in state_counts.items():
+            conn.execute(
+                """
+                INSERT INTO array_task_stats
+                (array_job_id, hostname, state, count, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (array_job_id, hostname, state, count, now.isoformat())
+            )
+
+    def get_array_job_metadata(self, array_job_id: str, hostname: str) -> Optional[Dict[str, Any]]:
+        """Get metadata for an array job including statistics.
+
+        Returns:
+            Dictionary with array job metadata and task statistics, or None if not found
+        """
+        with self._get_connection() as conn:
+            # Get array job metadata
+            cursor = conn.execute(
+                """
+                SELECT * FROM array_jobs
+                WHERE array_job_id = ? AND hostname = ?
+                """,
+                (array_job_id, hostname)
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                return None
+
+            metadata = dict(row)
+
+            # Get task statistics
+            cursor = conn.execute(
+                """
+                SELECT state, count FROM array_task_stats
+                WHERE array_job_id = ? AND hostname = ?
+                """,
+                (array_job_id, hostname)
+            )
+
+            stats = {row["state"]: row["count"] for row in cursor.fetchall()}
+            metadata["state_counts"] = stats
+
+            return metadata
+
+    def get_array_tasks(self, array_job_id: str, hostname: str, limit: Optional[int] = None) -> List[JobInfo]:
+        """Get all tasks for an array job efficiently.
+
+        Args:
+            array_job_id: The array job ID
+            hostname: Hostname
+            limit: Optional limit on number of tasks to return
+
+        Returns:
+            List of JobInfo objects for array tasks
+        """
+        with self._get_connection() as conn:
+            query = """
+                SELECT job_info_json FROM cached_jobs
+                WHERE array_job_id = ? AND hostname = ?
+                  AND job_id NOT LIKE '%[%'
+                ORDER BY job_id
+            """
+            params = [array_job_id, hostname]
+
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+
+            cursor = conn.execute(query, params)
+
+            jobs = []
+            for row in cursor.fetchall():
+                try:
+                    job_dict = json.loads(row["job_info_json"])
+                    # Convert state string back to JobState enum
+                    if "state" in job_dict and isinstance(job_dict["state"], str):
+                        from .models.job import JobState
+                        try:
+                            job_dict["state"] = JobState(job_dict["state"])
+                        except ValueError:
+                            job_dict["state"] = JobState.UNKNOWN
+                    jobs.append(JobInfo(**job_dict))
+                except Exception as e:
+                    logger.warning(f"Failed to parse array task: {e}")
+
+            return jobs
 
     def get_cached_job(
         self, job_id: str, hostname: Optional[str] = None, max_age_days: int = 30

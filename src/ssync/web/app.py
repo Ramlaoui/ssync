@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import (
     Body,
@@ -60,92 +60,166 @@ from .security import (
 logger = setup_logger(__name__, "INFO")
 
 
-def group_array_job_tasks(jobs: List[JobInfoWeb]) -> tuple[List[JobInfoWeb], List[ArrayJobGroup]]:
-    """Group array job tasks together.
+def group_array_job_tasks(jobs: List[JobInfoWeb], use_cache: bool = True) -> tuple[List[JobInfoWeb], List[ArrayJobGroup]]:
+    """Group array job tasks together using pre-computed cache stats when possible.
+
+    Args:
+        jobs: List of jobs to group
+        use_cache: If True, use pre-computed stats from cache (much faster)
 
     Returns:
         - List of non-array jobs (excluding both array tasks and parent entries)
         - List of array job groups
     """
     from collections import defaultdict
+    from ..cache import get_cache
 
     # Separate array tasks from regular jobs
     array_tasks = defaultdict(list)
     parent_jobs = {}  # Map array_job_id to parent job entry
     regular_jobs = []
+    array_hostnames = {}  # Map array_job_id to hostname
 
     for job in jobs:
         # Check if this is an array task (numeric task ID)
         if job.array_job_id and job.array_task_id and job.array_task_id.isdigit():
-            # This is an individual array task
+            # This is an individual array task - add to array_tasks
             array_tasks[job.array_job_id].append(job)
+            array_hostnames[job.array_job_id] = job.hostname
+            # DO NOT add to regular_jobs - this is part of an array group
         # Check if this is a parent job entry (has brackets like [0-4])
         elif (job.array_job_id and job.array_task_id and
               '[' in job.array_task_id and ']' in job.array_task_id):
-            # This is a parent job entry - store it for later
+            # This is a parent job entry - store it for metadata but don't include in regular jobs
             parent_jobs[job.array_job_id] = job
+            array_hostnames[job.array_job_id] = job.hostname
+            # DO NOT add to regular_jobs - this will be represented by the array group
         else:
             # Regular non-array job
             regular_jobs.append(job)
 
-    # Create array job groups and compute parent job states
+    # Create array job groups using cached metadata when available
     array_groups = []
-    parent_job_states = {}  # Map array_job_id to computed state
 
-    for array_job_id, tasks in array_tasks.items():
-        # Count states
-        state_counts = defaultdict(int)
-        for task in tasks:
-            if task.state == JobStateWeb.PENDING:
-                state_counts['pending'] += 1
-            elif task.state == JobStateWeb.RUNNING:
-                state_counts['running'] += 1
-            elif task.state == JobStateWeb.COMPLETED:
-                state_counts['completed'] += 1
-            elif task.state == JobStateWeb.FAILED:
-                state_counts['failed'] += 1
-            elif task.state == JobStateWeb.CANCELLED:
-                state_counts['cancelled'] += 1
+    if use_cache:
+        # Try to use pre-computed stats from cache (much faster!)
+        cache = get_cache()
 
-        # Use the first task's info for the group metadata
-        first_task = tasks[0]
+        for array_job_id, tasks in array_tasks.items():
+            hostname = array_hostnames.get(array_job_id)
+            if not hostname:
+                continue
 
-        group = ArrayJobGroup(
-            array_job_id=array_job_id,
-            job_name=first_task.name,
-            hostname=first_task.hostname,
-            user=first_task.user,
-            total_tasks=len(tasks),
-            tasks=tasks,
-            pending_count=state_counts.get('pending', 0),
-            running_count=state_counts.get('running', 0),
-            completed_count=state_counts.get('completed', 0),
-            failed_count=state_counts.get('failed', 0),
-            cancelled_count=state_counts.get('cancelled', 0),
-        )
-        array_groups.append(group)
+            # Try to get pre-computed metadata from cache
+            metadata = cache.get_array_job_metadata(array_job_id, hostname)
 
-        # Compute the actual state for the parent job based on task states
-        # This matches the logic in ArrayJobCard.svelte's getGroupState()
-        if state_counts.get('running', 0) > 0:
-            parent_state = JobStateWeb.RUNNING
-        elif state_counts.get('pending', 0) == len(tasks):
-            parent_state = JobStateWeb.PENDING
-        elif state_counts.get('completed', 0) == len(tasks):
-            parent_state = JobStateWeb.COMPLETED
-        elif state_counts.get('failed', 0) > 0:
-            parent_state = JobStateWeb.FAILED
-        elif state_counts.get('cancelled', 0) > 0:
-            parent_state = JobStateWeb.CANCELLED
-        else:
-            parent_state = JobStateWeb.COMPLETED
+            if metadata and metadata.get('state_counts'):
+                # Use pre-computed statistics (FAST!)
+                state_counts = metadata['state_counts']
 
-        parent_job_states[array_job_id] = parent_state
+                # Map JobState enum values to display names
+                from ..models.job import JobState
+                pending_count = state_counts.get(JobState.PENDING.value, 0)
+                running_count = state_counts.get(JobState.RUNNING.value, 0)
+                completed_count = state_counts.get(JobState.COMPLETED.value, 0)
+                failed_count = state_counts.get(JobState.FAILED.value, 0)
+                cancelled_count = state_counts.get(JobState.CANCELLED.value, 0)
 
-    # Note: Parent job entries (like 2187421_[0-4]) are NOT added to regular_jobs
-    # They are represented by the ArrayJobGroup instead to avoid duplication
+                # Use the first task's info for the group metadata
+                first_task = tasks[0] if tasks else None
+                if not first_task:
+                    continue
+
+                group = ArrayJobGroup(
+                    array_job_id=array_job_id,
+                    job_name=metadata.get('job_name', first_task.name),
+                    hostname=hostname,
+                    user=metadata.get('user', first_task.user),
+                    total_tasks=metadata.get('total_tasks', len(tasks)),
+                    tasks=tasks,
+                    pending_count=pending_count,
+                    running_count=running_count,
+                    completed_count=completed_count,
+                    failed_count=failed_count,
+                    cancelled_count=cancelled_count,
+                )
+                array_groups.append(group)
+                logger.debug(f"Using cached metadata for array {array_job_id}: {len(tasks)} tasks")
+            else:
+                # Fallback to runtime computation (slower but still works)
+                array_groups.extend(_compute_array_group_runtime(array_job_id, tasks))
+    else:
+        # Runtime computation (original behavior)
+        for array_job_id, tasks in array_tasks.items():
+            array_groups.extend(_compute_array_group_runtime(array_job_id, tasks))
 
     return regular_jobs, array_groups
+
+
+def deduplicate_array_jobs(jobs: List[JobInfoWeb]) -> List[JobInfoWeb]:
+    """Remove duplicate array job entries when not grouping.
+
+    When array jobs are NOT grouped, we should only show individual tasks,
+    not the parent entry (with brackets like [0-4]).
+
+    Args:
+        jobs: List of jobs that may contain duplicates
+
+    Returns:
+        List of jobs with array job parent entries filtered out
+    """
+    deduplicated_jobs = []
+
+    for job in jobs:
+        # Skip parent array job entries (those with brackets like [0-4])
+        if (job.array_job_id and job.array_task_id and
+            '[' in job.array_task_id and ']' in job.array_task_id):
+            # This is a parent entry - skip it
+            continue
+        else:
+            # Keep regular jobs and individual array tasks
+            deduplicated_jobs.append(job)
+
+    return deduplicated_jobs
+
+
+def _compute_array_group_runtime(array_job_id: str, tasks: List[JobInfoWeb]) -> List[ArrayJobGroup]:
+    """Compute array job group statistics at runtime (fallback when cache unavailable)."""
+    from collections import defaultdict
+
+    # Count states by iterating through tasks
+    state_counts = defaultdict(int)
+    for task in tasks:
+        if task.state == JobStateWeb.PENDING:
+            state_counts['pending'] += 1
+        elif task.state == JobStateWeb.RUNNING:
+            state_counts['running'] += 1
+        elif task.state == JobStateWeb.COMPLETED:
+            state_counts['completed'] += 1
+        elif task.state == JobStateWeb.FAILED:
+            state_counts['failed'] += 1
+        elif task.state == JobStateWeb.CANCELLED:
+            state_counts['cancelled'] += 1
+
+    # Use the first task's info for the group metadata
+    first_task = tasks[0]
+
+    group = ArrayJobGroup(
+        array_job_id=array_job_id,
+        job_name=first_task.name,
+        hostname=first_task.hostname,
+        user=first_task.user,
+        total_tasks=len(tasks),
+        tasks=tasks,
+        pending_count=state_counts.get('pending', 0),
+        running_count=state_counts.get('running', 0),
+        completed_count=state_counts.get('completed', 0),
+        failed_count=state_counts.get('failed', 0),
+        cancelled_count=state_counts.get('cancelled', 0),
+    )
+
+    logger.debug(f"Computed runtime stats for array {array_job_id}: {len(tasks)} tasks")
+    return [group]
 
 app = FastAPI(
     title="SLURM Manager API",
@@ -863,6 +937,9 @@ async def get_job_status(
     completed_only: bool = Query(False, description="Show only completed jobs"),
     search: Optional[str] = Query(None, description="Search for jobs by name or ID"),
     group_array_jobs: bool = Query(False, description="Group array job tasks together"),
+    force_refresh: bool = Query(
+        False, description="Force refresh from SLURM, bypassing all caches"
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get job status across hosts."""
@@ -931,6 +1008,7 @@ async def get_job_status(
                     active_only=active_only,
                     completed_only=completed_only,
                     skip_user_detection=skip_user_detection,
+                    force_refresh=force_refresh,
                 )
 
                 # Group jobs by hostname and create responses
@@ -972,7 +1050,8 @@ async def get_job_status(
                     if group_array_jobs and host_jobs:
                         display_jobs, array_groups = group_array_job_tasks(host_jobs)
                     else:
-                        display_jobs = host_jobs
+                        # Even when not grouping, deduplicate array job parent entries
+                        display_jobs = deduplicate_array_jobs(host_jobs)
 
                     response = JobStatusResponse(
                         hostname=hostname,
@@ -1004,8 +1083,9 @@ async def get_job_status(
             hostname = slurm_host.host.hostname
 
             # Check date range cache first if we have a single host and since parameter
+            # Skip cache if force_refresh is True
             if (
-                host and since and not job_id_list
+                host and since and not job_id_list and not force_refresh
             ):  # Only use cache for date-range queries
                 # Build filters dict for cache key
                 cache_filters = {
@@ -1035,9 +1115,11 @@ async def get_job_status(
 
                     # Apply array job grouping if requested
                     array_groups = None
-                    display_jobs = web_jobs
                     if group_array_jobs and web_jobs:
                         display_jobs, array_groups = group_array_job_tasks(web_jobs)
+                    else:
+                        # Even when not grouping, deduplicate array job parent entries
+                        display_jobs = deduplicate_array_jobs(web_jobs)
 
                     response = JobStatusResponse(
                         hostname=slurm_host.host.hostname,
@@ -1066,6 +1148,7 @@ async def get_job_status(
                     active_only,
                     completed_only,
                     skip_user_detection,
+                    force_refresh,
                 )
 
                 web_jobs = [JobInfoWeb.from_job_info(job) for job in jobs]
@@ -1084,9 +1167,11 @@ async def get_job_status(
 
                 # Apply array job grouping if requested
                 array_groups = None
-                display_jobs = web_jobs
                 if group_array_jobs and web_jobs:
                     display_jobs, array_groups = group_array_job_tasks(web_jobs)
+                else:
+                    # Even when not grouping, deduplicate array job parent entries
+                    display_jobs = deduplicate_array_jobs(web_jobs)
 
                 response = JobStatusResponse(
                     hostname=slurm_host.host.hostname,
@@ -2137,10 +2222,16 @@ async def cancel_job(
 
         for slurm_host in slurm_hosts:
             try:
-                jobs = manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
+                jobs = await manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
                 if jobs:
                     success = manager.cancel_job(slurm_host, job_id)
                     if success:
+                        # Immediately stop any watchers for this job
+                        from ..watchers import get_watcher_engine
+                        engine = get_watcher_engine()
+                        await engine.stop_watchers_for_job(job_id, slurm_host.host.hostname)
+                        logger.info(f"Stopped watchers for cancelled job {job_id}")
+
                         return {"message": "Job cancelled successfully"}
                     else:
                         raise HTTPException(
@@ -2582,11 +2673,11 @@ async def trigger_watcher_manually(
         if not watcher:
             raise HTTPException(status_code=404, detail="Watcher not found in database")
 
-        # Check if watcher is active
-        if watcher.state != WatcherState.ACTIVE:
+        # Check if watcher is active or static
+        if watcher.state not in [WatcherState.ACTIVE, WatcherState.STATIC]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Watcher is in {watcher.state.value} state. It must be ACTIVE to trigger manually.",
+                detail=f"Watcher is in {watcher.state.value} state. It must be ACTIVE or STATIC to trigger manually.",
             )
 
         # Check if watcher is in timer mode
@@ -2605,24 +2696,24 @@ async def trigger_watcher_manually(
             }
 
         # Regular pattern matching mode
-        # If test_text is provided, use it; otherwise fetch latest output from cache
+        # If test_text is provided, use it; otherwise fetch latest output from cache or SLURM
         if test_text:
             content = test_text
             logger.info(f"Manually triggering watcher {watcher_id} with test text")
         else:
-            # Try to get output from cache
+            # Try to get output from cache first
             cache = get_cache()
             cached_job = cache.get_cached_job(
                 watcher_row["job_id"], watcher_row["hostname"]
             )
 
+            stdout_content = ""
+            stderr_content = ""
+
             if cached_job and (
                 cached_job.stdout_compressed or cached_job.stderr_compressed
             ):
                 import gzip
-
-                stdout_content = ""
-                stderr_content = ""
 
                 # Decompress cached outputs
                 if cached_job.stdout_compressed:
@@ -2651,37 +2742,98 @@ async def trigger_watcher_manually(
                     except Exception as e:
                         logger.warning(f"Failed to decompress cached stderr: {e}")
 
-                # Take the last 100 lines (approximate)
-                combined_output = stdout_content + "\n" + stderr_content
-                lines = combined_output.split("\n")
-                content = (
-                    "\n".join(lines[-100:]) if len(lines) > 100 else combined_output
+                logger.info(
+                    f"Using cached output for watcher {watcher_id} - stdout: {len(stdout_content)} chars, stderr: {len(stderr_content)} chars"
                 )
 
+            # If cache is empty, try to fetch from SLURM directly
+            if not stdout_content and not stderr_content:
+                try:
+                    logger.info(f"Cache empty, fetching output from SLURM for job {watcher_row['job_id']}")
+                    manager = get_slurm_manager()
+                    job_info = manager.get_job_info(watcher_row["hostname"], watcher_row["job_id"])
+
+                    if job_info:
+                        # Try to get output from SLURM paths
+                        import os
+                        if job_info.stdout_path:
+                            try:
+                                from ..ssh.connection import get_connection
+                                conn = get_connection(watcher_row["hostname"])
+                                result = conn.run(f"cat {job_info.stdout_path}", warn=True, hide=True)
+                                if result.ok:
+                                    stdout_content = result.stdout
+                                    logger.info(f"Fetched stdout from SLURM: {len(stdout_content)} chars")
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch stdout from SLURM: {e}")
+
+                        if job_info.stderr_path:
+                            try:
+                                from ..ssh.connection import get_connection
+                                conn = get_connection(watcher_row["hostname"])
+                                result = conn.run(f"cat {job_info.stderr_path}", warn=True, hide=True)
+                                if result.ok:
+                                    stderr_content = result.stdout
+                                    logger.info(f"Fetched stderr from SLURM: {len(stderr_content)} chars")
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch stderr from SLURM: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch output from SLURM: {e}")
+
+            # Combine outputs based on watcher output_type
+            output_type = watcher.definition.output_type if hasattr(watcher.definition, 'output_type') else 'stdout'
+
+            if output_type == 'stdout':
+                content = stdout_content
+            elif output_type == 'stderr':
+                content = stderr_content
+            else:  # both
+                content = stdout_content + "\n" + stderr_content
+
+            if content:
+                lines = content.split("\n")
                 logger.info(
-                    f"Manually triggering watcher {watcher_id} with cached job output ({len(lines)} lines)"
+                    f"Triggering watcher {watcher_id} with job output ({len(lines)} lines, {len(content)} chars)"
                 )
             else:
-                # No cached output available, use sample text for testing
-                content = f"Sample test output for job {watcher_row['job_id']} on {watcher_row['hostname']}"
-                logger.info(
-                    f"No cached output found, using sample text for watcher {watcher_id}"
+                # No output available at all
+                content = ""
+                logger.warning(
+                    f"No output found for job {watcher_row['job_id']} on {watcher_row['hostname']} (cache and SLURM both empty)"
                 )
 
         # Run pattern matching and actions
+        if not content:
+            return {
+                "success": False,
+                "message": f"No output available for job {watcher_row['job_id']}. The job output may not be cached yet or the output files may not be accessible.",
+                "matches": False,
+                "timer_mode": False,
+            }
+
         matches_found = engine._check_patterns(watcher, content)
 
         if matches_found:
+            # Count how many matches
+            pattern = watcher.definition.pattern
+            if pattern in engine._pattern_cache:
+                regex = engine._pattern_cache[pattern]
+                match_count = len(list(regex.finditer(content)))
+            else:
+                match_count = 1
+
             return {
                 "success": True,
-                "message": f"Watcher {watcher_id} triggered successfully",
+                "message": f"✓ Found {match_count} match(es) and executed actions",
                 "matches": True,
+                "match_count": match_count,
                 "timer_mode": False,
             }
         else:
+            lines = content.split("\n")
             return {
                 "success": True,
-                "message": f"Watcher {watcher_id} checked but no patterns matched",
+                "message": f"✗ No matches found (searched {len(lines)} lines, {len(content)} chars)",
                 "matches": False,
                 "timer_mode": False,
             }
@@ -2779,9 +2931,6 @@ async def create_watcher(
                 )
 
         with cache._get_connection() as conn:
-            # Check if job exists (optional validation)
-            # You might want to validate the job exists on the host
-
             # Prepare watcher data
             name = watcher_config["name"]
             pattern = watcher_config["pattern"]
@@ -2794,8 +2943,35 @@ async def create_watcher(
             )
             captures_json = json.dumps(captures_list)
             condition = watcher_config.get("condition")
-            state = watcher_config.get("state", "active")
             timer_mode_enabled = watcher_config.get("timer_mode_enabled", False)
+
+            # Determine state: check if job is completed/canceled
+            # If so, create as STATIC watcher (runs on manual trigger only)
+            state = watcher_config.get("state", "active")
+
+            # Check job state to auto-determine if this should be a static watcher
+            try:
+                manager = get_slurm_manager()
+                job_info = manager.get_job_info(hostname, job_id)
+
+                logger.info(f"Checking job {job_id} state for watcher creation - job_info: {job_info}, state: {job_info.state if job_info else 'None'}")
+
+                if job_info:
+                    # If job is in a terminal/finished state, create as static watcher
+                    if job_info.state in [JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.TIMEOUT, JobState.UNKNOWN]:
+                        state = "static"
+                        logger.info(f"Creating STATIC watcher for finished job {job_id} (state: {job_info.state.value})")
+                    else:
+                        logger.info(f"Creating ACTIVE watcher for running job {job_id} (state: {job_info.state.value})")
+                else:
+                    # Job not found - likely completed and purged from queue
+                    # Create as static watcher since we can still access cached output
+                    state = "static"
+                    logger.info(f"Job {job_id} not found in queue - creating STATIC watcher (job likely completed)")
+            except Exception as e:
+                # If we can't get job info, assume static for safety
+                logger.warning(f"Could not determine job state for {job_id}: {e} - defaulting to STATIC")
+                state = "static"
             # Use the same interval for timer mode by default unless explicitly specified
             timer_interval_seconds = watcher_config.get(
                 "timer_interval_seconds", interval_seconds
@@ -2850,7 +3026,7 @@ async def create_watcher(
             watcher_id = cursor.lastrowid
             conn.commit()
 
-            # Start monitoring if active
+            # Start monitoring if active (but not for static watchers)
             if state == "active":
                 try:
                     from ..watchers import get_watcher_engine
@@ -2864,6 +3040,8 @@ async def create_watcher(
                         engine.active_tasks[watcher_id] = task
                 except Exception as engine_error:
                     logger.debug(f"Could not start watcher monitoring: {engine_error}")
+            elif state == "static":
+                logger.info(f"Created static watcher {watcher_id} - will only run on manual trigger")
 
             # Return the created watcher
             cursor = conn.execute(
@@ -3441,7 +3619,7 @@ async def monitor_job_updates(
         last_output_size = 0
 
         while True:
-            await asyncio.sleep(15)  # Poll every 15 seconds (reduced from 5s)
+            await asyncio.sleep(15)  # Poll every 15 seconds
 
             try:
                 # Fetch current job info
@@ -3451,7 +3629,15 @@ async def monitor_job_updates(
                 job_info = jobs[0] if jobs else None
 
                 if not job_info:
-                    # Job disappeared or completed
+                    # Job disappeared or completed - stop any watchers
+                    try:
+                        from ..watchers import get_watcher_engine
+                        engine = get_watcher_engine()
+                        await engine.stop_watchers_for_job(actual_job_id, hostname)
+                        logger.debug(f"Stopped watchers for disappeared job {actual_job_id}")
+                    except Exception as e:
+                        logger.error(f"Error stopping watchers for disappeared job {actual_job_id}: {e}")
+
                     await websocket.send_json(
                         {
                             "type": "job_completed",
@@ -3474,6 +3660,22 @@ async def monitor_job_updates(
                         }
                     )
                     last_state = job_info.state
+
+                    # Stop watchers when job enters terminal state
+                    if job_info.state in [
+                        JobState.COMPLETED,
+                        JobState.FAILED,
+                        JobState.CANCELLED,
+                        JobState.TIMEOUT,
+                        JobState.UNKNOWN,
+                    ]:
+                        try:
+                            from ..watchers import get_watcher_engine
+                            engine = get_watcher_engine()
+                            await engine.stop_watchers_for_job(actual_job_id, hostname)
+                            logger.info(f"Stopped watchers for job {actual_job_id} (state: {job_info.state.value})")
+                        except Exception as e:
+                            logger.error(f"Error stopping watchers for job {actual_job_id}: {e}")
 
                     # Also broadcast to all-jobs watchers
                     await job_manager.broadcast_job_update(
@@ -3521,119 +3723,6 @@ async def monitor_job_updates(
         logger.debug(f"Job monitoring cancelled for {actual_job_id}")
     except Exception as e:
         logger.error(f"Fatal error in job monitoring for {actual_job_id}: {e}")
-
-
-async def monitor_all_jobs_updates(websocket: WebSocket):
-    """Monitor all jobs for state changes and send updates via WebSocket."""
-    try:
-        from ..job_data_manager import get_job_data_manager
-
-        get_slurm_manager()
-        job_data_manager = get_job_data_manager()
-        job_states = {}  # Track states of all jobs
-
-        while True:
-            await asyncio.sleep(
-                30
-            )  # Poll every 30 seconds for all jobs (reduced from 10s)
-
-            try:
-                # Fetch all recent jobs (both active and recently completed)
-                all_jobs = await job_data_manager.fetch_all_jobs(
-                    hostname=None,
-                    limit=200,
-                    active_only=False,  # Need to track completed jobs too
-                )
-
-                current_job_ids = set()
-                updates = []
-
-                for job in all_jobs:
-                    job_key = f"{job.hostname}:{job.job_id}"
-                    current_job_ids.add(job_key)
-
-                    # Check for new jobs or state changes
-                    if job_key not in job_states or job_states[job_key] != job.state:
-                        old_state = job_states.get(job_key)
-                        job_states[job_key] = job.state
-
-                        updates.append(
-                            {
-                                "type": "job_update",
-                                "job_id": job.job_id,
-                                "hostname": job.hostname,
-                                "old_state": old_state.value if old_state else None,
-                                "new_state": job.state.value,
-                                "job": JobInfoWeb.from_job_info(job).model_dump(),
-                            }
-                        )
-
-                # Check for completed/disappeared jobs
-                completed_jobs = set(job_states.keys()) - current_job_ids
-                for job_key in completed_jobs:
-                    hostname, job_id = job_key.split(":", 1)
-
-                    # Try to fetch the final state of the completed job
-                    try:
-                        completed_job_data = await job_data_manager.fetch_all_jobs(
-                            hostname=hostname, job_ids=[job_id], limit=1
-                        )
-                        if completed_job_data:
-                            # Send the completed job with its final state
-                            updates.append(
-                                {
-                                    "type": "job_completed",
-                                    "job_id": job_id,
-                                    "hostname": hostname,
-                                    "job": JobInfoWeb.from_job_info(
-                                        completed_job_data[0]
-                                    ).model_dump(),
-                                }
-                            )
-                        else:
-                            # Job not found, just mark as completed
-                            updates.append(
-                                {
-                                    "type": "job_completed",
-                                    "job_id": job_id,
-                                    "hostname": hostname,
-                                }
-                            )
-                    except Exception as e:
-                        logger.debug(f"Could not fetch completed job {job_id}: {e}")
-                        updates.append(
-                            {
-                                "type": "job_completed",
-                                "job_id": job_id,
-                                "hostname": hostname,
-                            }
-                        )
-
-                    del job_states[job_key]
-
-                # Send updates if any (check WebSocket is still open)
-                if updates:
-                    try:
-                        await websocket.send_json(
-                            {
-                                "type": "batch_update",
-                                "updates": updates,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    except Exception as e:
-                        logger.debug(
-                            f"WebSocket send failed, connection may be closing: {e}"
-                        )
-                        break  # Exit the monitoring loop
-
-            except Exception as e:
-                logger.error(f"Error monitoring all jobs: {e}")
-
-    except asyncio.CancelledError:
-        logger.debug("All jobs monitoring cancelled")
-    except Exception as e:
-        logger.error(f"Fatal error in all jobs monitoring: {e}")
 
 
 async def send_job_output(websocket: WebSocket, hostname: str, job_id: str):
@@ -3776,9 +3865,124 @@ async def websocket_job(websocket: WebSocket, job_id: str):
         job_manager.disconnect(websocket, job_id)
 
 
+# Global task to track single monitoring instance
+_all_jobs_monitor_task: Optional[asyncio.Task] = None
+_all_jobs_websockets: Set[WebSocket] = set()
+_all_jobs_monitor_lock = asyncio.Lock()
+
+
+async def monitor_all_jobs_singleton():
+    """Single background task that broadcasts to all connected WebSocket clients."""
+    global _all_jobs_websockets
+
+    try:
+        from ..job_data_manager import get_job_data_manager
+        get_slurm_manager()
+        job_data_manager = get_job_data_manager()
+        job_states = {}
+
+        while True:
+            await asyncio.sleep(30)  # Check every 30 seconds
+
+            # If no clients are connected, stop the task
+            if not _all_jobs_websockets:
+                logger.info("No WebSocket clients connected, stopping monitor task")
+                break
+
+            try:
+                # Every 30 seconds: Check all recent jobs
+                all_jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=None,
+                    limit=500,  # Increased from 200 to catch more jobs
+                    active_only=False,
+                    since="1d",  # Only check jobs from last day
+                )
+
+                current_job_ids = set()
+                updates = []
+
+                for job in all_jobs:
+                    job_key = f"{job.hostname}:{job.job_id}"
+                    current_job_ids.add(job_key)
+
+                    if job_key not in job_states or job_states[job_key] != job.state:
+                        old_state = job_states.get(job_key)
+                        job_states[job_key] = job.state
+
+                        updates.append({
+                            "type": "job_update",
+                            "job_id": job.job_id,
+                            "hostname": job.hostname,
+                            "old_state": old_state.value if old_state else None,
+                            "new_state": job.state.value,
+                            "job": JobInfoWeb.from_job_info(job).model_dump(),
+                        })
+
+                # Detect jobs that disappeared from the list (completed/removed)
+                completed_jobs = set(job_states.keys()) - current_job_ids
+                for job_key in completed_jobs:
+                    hostname, job_id = job_key.split(":", 1)
+
+                    try:
+                        completed_job_data = await job_data_manager.fetch_all_jobs(
+                            hostname=hostname, job_ids=[job_id], limit=1
+                        )
+                        if completed_job_data:
+                            updates.append({
+                                "type": "job_completed",
+                                "job_id": job_id,
+                                "hostname": hostname,
+                                "job": JobInfoWeb.from_job_info(completed_job_data[0]).model_dump(),
+                            })
+                        else:
+                            updates.append({
+                                "type": "job_completed",
+                                "job_id": job_id,
+                                "hostname": hostname,
+                            })
+                    except Exception as e:
+                        logger.debug(f"Could not fetch completed job {job_id}: {e}")
+                        updates.append({
+                            "type": "job_completed",
+                            "job_id": job_id,
+                            "hostname": hostname,
+                        })
+
+                    del job_states[job_key]
+
+                # Broadcast to all connected clients
+                if updates:
+                    message = {
+                        "type": "batch_update",
+                        "updates": updates,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+
+                    disconnected = set()
+                    for ws in _all_jobs_websockets:
+                        try:
+                            await ws.send_json(message)
+                        except Exception as e:
+                            logger.debug(f"Failed to send to WebSocket: {e}")
+                            disconnected.add(ws)
+
+                    # Remove disconnected clients
+                    _all_jobs_websockets -= disconnected
+
+            except Exception as e:
+                logger.error(f"Error in monitor loop: {e}")
+
+    except asyncio.CancelledError:
+        logger.info("Monitor task cancelled")
+    except Exception as e:
+        logger.error(f"Fatal error in monitor task: {e}")
+
+
 @app.websocket("/ws/jobs")
 async def websocket_all_jobs(websocket: WebSocket):
     """WebSocket endpoint for real-time updates of all jobs."""
+    global _all_jobs_monitor_task, _all_jobs_websockets
+
     try:
         # Accept the connection
         await job_manager.connect(websocket)
@@ -3810,17 +4014,25 @@ async def websocket_all_jobs(websocket: WebSocket):
                 {"type": "initial", "jobs": jobs_by_host, "total": len(all_jobs)}
             )
 
-            # Start background task to monitor all job changes
-            monitor_task = asyncio.create_task(monitor_all_jobs_updates(websocket))
+            # Add this WebSocket to the set of connected clients
+            async with _all_jobs_monitor_lock:
+                _all_jobs_websockets.add(websocket)
+
+                # Start singleton monitoring task if not already running
+                if _all_jobs_monitor_task is None or _all_jobs_monitor_task.done():
+                    logger.info("Starting singleton all-jobs monitor task")
+                    _all_jobs_monitor_task = asyncio.create_task(monitor_all_jobs_singleton())
 
         except WebSocketDisconnect:
             # Client disconnected - this is normal, don't log as error
             logger.debug("WebSocket client disconnected during initial data fetch")
+            _all_jobs_websockets.discard(websocket)
             return
         except Exception as e:
             # Only log actual errors, not disconnections
             if not isinstance(e, WebSocketDisconnect):
                 logger.error(f"Error fetching initial jobs data: {e}", exc_info=True)
+            _all_jobs_websockets.discard(websocket)
             try:
                 await websocket.send_json({"type": "error", "message": str(e)})
             except WebSocketDisconnect:
@@ -3837,18 +4049,17 @@ async def websocket_all_jobs(websocket: WebSocket):
 
             except WebSocketDisconnect:
                 job_manager.disconnect(websocket)
-                if "monitor_task" in locals():
-                    monitor_task.cancel()
+                _all_jobs_websockets.discard(websocket)
                 break
             except Exception:
                 job_manager.disconnect(websocket)
-                if "monitor_task" in locals():
-                    monitor_task.cancel()
+                _all_jobs_websockets.discard(websocket)
                 break
 
     except Exception as e:
         logger.error(f"WebSocket all jobs error: {e}")
         job_manager.disconnect(websocket)
+        _all_jobs_websockets.discard(websocket)
 
 
 @app.websocket("/ws/watchers")

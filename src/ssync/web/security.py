@@ -199,17 +199,17 @@ class ScriptValidator:
 
     # Dangerous command patterns
     DANGEROUS_PATTERNS = [
-        (r"rm\s+-rf\s+/(?:\s|$)", "Dangerous recursive deletion of root"),
+        (r"rm\s+-rf\s+/", "Dangerous recursive deletion of root"),
         (r"chmod\s+777", "Overly permissive file permissions"),
         (r"sudo\s+", "Sudo commands not allowed"),
         (r">\s*/etc/", "Writing to system directories forbidden"),
-        (r"curl\s+.*\|\s*sh", "Remote code execution attempt"),
-        (r"wget\s+.*\|\s*sh", "Remote code execution attempt"),
+        (r"curl\s+.*\|\s*(/bin/)?(sh|bash)", "Remote code execution attempt"),
+        (r"wget\s+.*\|\s*(/bin/)?(sh|bash)", "Remote code execution attempt"),
         (r"nc\s+-l", "Network backdoor attempt"),
         (r"mkfifo\s+/tmp/", "Named pipe creation in tmp"),
         (r"/etc/passwd", "Access to system password file"),
         (r"/etc/shadow", "Access to system shadow file"),
-        (r"base64\s+-d.*\|\s*sh", "Encoded command execution"),
+        (r"base64\s+-d.*\|\s*(/bin/)?(sh|bash)", "Encoded command execution"),
         (r"eval\s+.*\$", "Dynamic code evaluation"),
         (r"exec\s+.*<", "Input redirection to exec"),
     ]
@@ -366,6 +366,7 @@ class InputSanitizer:
             r"<script[^>]*>.*?</script>",
             r"javascript:",
             r"on\w+\s*=",
+            r"\b(DROP|DELETE|UPDATE|INSERT|CREATE|ALTER|EXEC|UNION|SELECT)\b",
         ]
 
         for pattern in dangerous_patterns:
@@ -478,6 +479,10 @@ def sanitize_error_message(error: Exception) -> str:
     """Sanitize error messages to prevent information disclosure."""
     error_str = str(error)
 
+    # Remove usernames from paths first (before path replacement)
+    error_str = re.sub(r"/home/\w+", "/home/[USER]", error_str)
+    error_str = re.sub(r"/Users/\w+", "/Users/[USER]", error_str)
+
     # Remove file paths
     error_str = re.sub(r"/[/\w\-\.]+", "[PATH]", error_str)
 
@@ -486,9 +491,5 @@ def sanitize_error_message(error: Exception) -> str:
 
     # Remove port numbers
     error_str = re.sub(r":\d{2,5}", ":[PORT]", error_str)
-
-    # Remove usernames that might appear in paths
-    error_str = re.sub(r"/home/\w+", "/home/[USER]", error_str)
-    error_str = re.sub(r"/Users/\w+", "/Users/[USER]", error_str)
 
     return error_str

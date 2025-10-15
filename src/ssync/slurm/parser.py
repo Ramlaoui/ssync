@@ -167,8 +167,6 @@ class SlurmParser:
         cls, fields: list[str], hostname: str, field_names: list[str] = None
     ) -> JobInfo:
         """Create JobInfo from sacct field array."""
-        state = cls.map_slurm_state(fields[2], from_sacct=True)
-
         active_field_names = field_names or SACCT_FIELDS
 
         def get_field(field_name: str) -> str | None:
@@ -177,6 +175,8 @@ class SlurmParser:
                 return fields[idx] if len(fields) > idx and fields[idx] else None
             except (ValueError, IndexError):
                 return None
+
+        state = cls.map_slurm_state(get_field("State") or "", from_sacct=True)
 
         work_dir = get_field("WorkDir")
         var_dict = cls.create_var_dict(fields, active_field_names)

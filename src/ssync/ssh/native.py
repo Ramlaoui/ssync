@@ -138,7 +138,7 @@ class NativeSSH:
                 "-o",
                 "ServerAliveCountMax=3",
                 "-o",
-                "ConnectTimeout=10",
+                "ConnectTimeout=5",  # Reduced from 10s to 5s for faster failure
                 "-o",
                 "StrictHostKeyChecking=accept-new",
                 "-N",  # No command
@@ -172,8 +172,8 @@ class NativeSSH:
             safe_cmd = [c if not password or c != password else "***" for c in ssh_cmd]
             logger.debug(f"SSH command: {' '.join(safe_cmd[:10])}...")
 
-            # Start control master
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+            # Start control master with shorter timeout for faster failure
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=5)
 
             # Wait a bit for socket to be created
             import time
@@ -335,7 +335,7 @@ class NativeSSH:
                 ssh_cmd.extend(["-p", str(host_config["port"])])
 
         ssh_cmd.extend(
-            ["-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"]
+            ["-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new"]  # Faster timeout
         )
 
         return ssh_cmd

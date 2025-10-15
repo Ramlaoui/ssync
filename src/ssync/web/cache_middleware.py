@@ -96,6 +96,9 @@ class CacheMiddleware:
                     jobs=current_jobs,
                     total_jobs=len(current_jobs),
                     query_time=response.query_time,
+                    group_array_jobs=response.group_array_jobs,
+                    array_groups=response.array_groups,
+                    cached=response.cached if hasattr(response, 'cached') else False,
                 )
             )
 
@@ -332,20 +335,122 @@ class CacheMiddleware:
             # Find jobs that are no longer active
             to_mark_completed = self.cache.verify_cached_jobs(current_job_ids)
 
-            # For jobs being marked as completed, try to preserve their scripts
-            await self._preserve_scripts_for_completing_jobs(to_mark_completed)
+            if not to_mark_completed:
+                return
 
-            # Mark them as completed
+            # For jobs being marked as completed:
+            # 1. Fetch final state from sacct (ONE LAST TIME)
+            # 2. Preserve scripts if possible
+            # 3. Mark as inactive (won't be queried again)
+
+            await self._fetch_final_states_and_preserve(to_mark_completed)
+
+            # Now mark them as completed (inactive)
             for job_id, hostname in to_mark_completed:
                 self.cache.mark_job_completed(job_id, hostname)
 
-            if to_mark_completed:
-                logger.info(
-                    f"Marked {len(to_mark_completed)} jobs as completed based on SLURM state"
-                )
+            logger.info(
+                f"Marked {len(to_mark_completed)} jobs as completed with final states"
+            )
 
         except Exception as e:
             logger.error(f"Error verifying cache: {e}")
+
+    async def _fetch_final_states_and_preserve(
+        self, completing_jobs: list[tuple[str, str]]
+    ):
+        """
+        Fetch final states from sacct and preserve scripts for completing jobs.
+
+        This is the "one last check" that ensures we capture the correct final state
+        (COMPLETED/CANCELLED/FAILED/TIMEOUT) before marking jobs as inactive.
+
+        Args:
+            completing_jobs: List of (job_id, hostname) tuples for jobs being marked as completed
+        """
+        if not completing_jobs:
+            return
+
+        logger.info(
+            f"Fetching final states from sacct for {len(completing_jobs)} completing jobs"
+        )
+
+        try:
+            from .app import get_slurm_manager
+
+            manager = get_slurm_manager()
+            if not manager:
+                logger.warning("No manager available for fetching final states")
+                return
+
+            # Group jobs by hostname for efficient processing
+            jobs_by_host = {}
+            for job_id, hostname in completing_jobs:
+                if hostname not in jobs_by_host:
+                    jobs_by_host[hostname] = []
+                jobs_by_host[hostname].append(job_id)
+
+            # Process each host
+            for hostname, job_ids in jobs_by_host.items():
+                try:
+                    slurm_host = manager.get_host_by_name(hostname)
+                    conn = manager._get_connection(slurm_host.host)
+
+                    for job_id in job_ids:
+                        try:
+                            # CRITICAL: Fetch final state from sacct (ONE LAST TIME)
+                            final_state = manager.slurm_client.get_job_final_state(
+                                conn, hostname, job_id
+                            )
+
+                            if final_state:
+                                # Update cache with correct final state
+                                logger.info(
+                                    f"Updating job {job_id} with final state: {final_state.state.value}"
+                                )
+
+                                # Get existing cached job to preserve script if already cached
+                                cached_job = self.cache.get_cached_job(job_id, hostname)
+                                script_content = (
+                                    cached_job.script_content if cached_job else None
+                                )
+
+                                # Try to fetch script if not already cached
+                                if not script_content:
+                                    try:
+                                        script_content = (
+                                            manager.slurm_client.get_job_batch_script(
+                                                conn, job_id, hostname
+                                            )
+                                        )
+                                        if script_content:
+                                            logger.info(
+                                                f"Preserved script for job {job_id} ({len(script_content)} chars)"
+                                            )
+                                    except Exception as e:
+                                        logger.debug(
+                                            f"Could not fetch script for job {job_id}: {e}"
+                                        )
+
+                                # Update cache with final state and script
+                                self.cache.cache_job(
+                                    final_state, script_content=script_content
+                                )
+                            else:
+                                logger.warning(
+                                    f"Could not fetch final state for job {job_id} from sacct"
+                                )
+
+                        except Exception as e:
+                            logger.warning(
+                                f"Error processing completing job {job_id}: {e}"
+                            )
+
+                except Exception as e:
+                    logger.error(f"Error processing host {hostname}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in _fetch_final_states_and_preserve: {e}")
 
     async def _preserve_scripts_for_completing_jobs(
         self, completing_jobs: list[tuple[str, str]]

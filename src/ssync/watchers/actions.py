@@ -145,6 +145,16 @@ class ActionExecutor:
             if result.ok:
                 reason = params.get("reason", "Triggered by watcher")
                 logger.info(f"Cancelled job {job_id}: {reason}")
+
+                # Stop all watchers for this job to prevent orphaned watchers
+                try:
+                    from . import get_watcher_engine
+                    engine = get_watcher_engine()
+                    await engine.stop_watchers_for_job(job_id, hostname)
+                    logger.info(f"Stopped all watchers for cancelled job {job_id}")
+                except Exception as e:
+                    logger.error(f"Failed to stop watchers for cancelled job {job_id}: {e}")
+
                 return True, f"Job {job_id} cancelled: {reason}"
             else:
                 return False, f"Failed to cancel job: {result.stderr}"
