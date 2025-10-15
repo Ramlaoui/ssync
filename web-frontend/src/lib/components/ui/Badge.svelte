@@ -1,9 +1,15 @@
 <script lang="ts">
   import { cn } from "../../utils";
   
-  export let variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" = "default";
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    variant?: "default" | "secondary" | "destructive" | "outline" | "success" | "warning";
+    class?: string;
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let { variant = "default", class: className = "", children, ...rest }: Props = $props();
+  
   
   const variants = {
     default: "bg-primary text-primary-foreground hover:bg-primary/80",
@@ -21,7 +27,7 @@
     variants[variant],
     className
   )}
-  {...$$restProps}
+  {...rest}
 >
-  <slot />
+  {@render children?.()}
 </div>

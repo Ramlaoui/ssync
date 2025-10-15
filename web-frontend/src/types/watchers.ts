@@ -6,6 +6,7 @@ export enum WatcherState {
   PENDING = 'pending',
   ACTIVE = 'active',
   PAUSED = 'paused',
+  STATIC = 'static',  // Static watcher for completed jobs (manual trigger only)
   COMPLETED = 'completed',
   FAILED = 'failed'
 }

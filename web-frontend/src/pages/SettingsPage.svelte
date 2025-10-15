@@ -26,16 +26,16 @@
   } from 'lucide-svelte';
 
   // Mobile detection
-  let isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  let isMobile = $state(typeof window !== 'undefined' && window.innerWidth < 768);
 
   // API Key state
-  let showApiKey = false;
-  let apiKeyInput = '';
-  let testing = false;
-  let testResult: 'success' | 'error' | null = null;
+  let showApiKey = $state(false);
+  let apiKeyInput = $state('');
+  let testing = $state(false);
+  let testResult: 'success' | 'error' | null = $state(null);
 
   // UI Preferences (stored in localStorage)
-  let preferences = {
+  let preferences = $state({
     theme: 'light',
     autoRefresh: false,
     refreshInterval: 30,
@@ -46,29 +46,29 @@
     defaultJobView: 'table',
     showCompletedJobs: true,
     groupJobsByHost: false
-  };
+  });
 
   // Auto-refresh timer
   let refreshTimer: number | null = null;
 
   // Cache stats
-  let cacheStats = {
+  let cacheStats = $state({
     size: '0 MB',
     entries: 0,
     lastCleared: null as Date | null
-  };
+  });
   let loadingCacheStats = false;
-  let clearingCache = false;
+  let clearingCache = $state(false);
 
   // Active section for mobile
-  let activeSection: string | null = null;
+  let activeSection: string | null = $state(null);
 
   // Collapsible sections state - expand on mobile when viewing sync section
-  $: collapsedSections = {
+  let collapsedSections = $derived({
     sync: !(isMobile && activeSection === 'sync') // Expand on mobile when viewing sync section
-  };
+  });
 
-  $: isConfigured = $apiConfig.apiKey !== '';
+  let isConfigured = $derived($apiConfig.apiKey !== '');
 
   function checkMobile() {
     isMobile = window.innerWidth < 768;
@@ -323,7 +323,7 @@
       <div>
         <button
           class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          on:click={() => activeSection = 'api'}
+          onclick={() => activeSection = 'api'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Key class="w-5 h-5" />
@@ -345,7 +345,7 @@
 
         <button
           class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          on:click={() => activeSection = 'display'}
+          onclick={() => activeSection = 'display'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Monitor class="w-5 h-5" />
@@ -359,7 +359,7 @@
 
         <button
           class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          on:click={() => activeSection = 'sync'}
+          onclick={() => activeSection = 'sync'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <RefreshCw class="w-5 h-5" />
@@ -373,7 +373,7 @@
 
         <button
           class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          on:click={() => activeSection = 'notifications'}
+          onclick={() => activeSection = 'notifications'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Bell class="w-5 h-5" />
@@ -387,7 +387,7 @@
 
         <button
           class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          on:click={() => activeSection = 'cache'}
+          onclick={() => activeSection = 'cache'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Database class="w-5 h-5" />
@@ -401,7 +401,7 @@
 
         <button
           class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          on:click={() => activeSection = 'data'}
+          onclick={() => activeSection = 'data'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
             <Shield class="w-5 h-5" />
@@ -446,7 +446,7 @@
                       type="text"
                       placeholder="Enter your API key..."
                       bind:value={apiKeyInput}
-                      on:keydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+                      onkeydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
                       class="input-field"
                     />
                   {:else}
@@ -454,14 +454,14 @@
                       type="password"
                       placeholder="Enter your API key..."
                       bind:value={apiKeyInput}
-                      on:keydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+                      onkeydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
                       class="input-field"
                     />
                   {/if}
                   <button
                     type="button"
                     class="btn-icon"
-                    on:click={toggleShowApiKey}
+                    onclick={toggleShowApiKey}
                   >
                     {#if showApiKey}
                       <EyeOff class="w-4 h-4" />
@@ -472,7 +472,7 @@
                   <button
                     type="button"
                     class="btn-primary"
-                    on:click={handleSaveApiKey}
+                    onclick={handleSaveApiKey}
                     disabled={!apiKeyInput.trim()}
                   >
                     Save API Key
@@ -489,7 +489,7 @@
                 <div class="button-group">
                   <button
                     class="btn-secondary"
-                    on:click={handleTestConnection}
+                    onclick={handleTestConnection}
                     disabled={testing}
                   >
                     {#if testing}
@@ -502,7 +502,7 @@
 
                   <button
                     class="btn-danger"
-                    on:click={handleClearApiKey}
+                    onclick={handleClearApiKey}
                   >
                     <Trash2 class="w-4 h-4" />
                     Remove API Key
@@ -538,20 +538,20 @@
             <div class="section-content">
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Theme</label>
+                  <span class="preference-label">Theme</span>
                   <span class="preference-description">Choose your preferred color scheme</span>
                 </div>
                 <div class="button-toggle">
                   <button
                     class="toggle-option {preferences.theme === 'light' ? 'active' : ''}"
-                    on:click={() => handlePreferenceChange('theme', 'light')}
+                    onclick={() => handlePreferenceChange('theme', 'light')}
                   >
                     <Sun class="w-4 h-4" />
                     Light
                   </button>
                   <button
                     class="toggle-option {preferences.theme === 'dark' ? 'active' : ''}"
-                    on:click={() => handlePreferenceChange('theme', 'dark')}
+                    onclick={() => handlePreferenceChange('theme', 'dark')}
                   >
                     <Moon class="w-4 h-4" />
                     Dark
@@ -561,14 +561,14 @@
 
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Compact Mode</label>
+                  <span class="preference-label">Compact Mode</span>
                   <span class="preference-description">Reduce spacing for more content</span>
                 </div>
                 <label class="switch">
                   <input
                     type="checkbox"
                     bind:checked={preferences.compactMode}
-                    on:change={() => handlePreferenceChange('compactMode', preferences.compactMode)}
+                    onchange={() => handlePreferenceChange('compactMode', preferences.compactMode)}
                   />
                   <span class="slider"></span>
                 </label>
@@ -576,14 +576,14 @@
 
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Auto Refresh</label>
+                  <span class="preference-label">Auto Refresh</span>
                   <span class="preference-description">Automatically update job status</span>
                 </div>
                 <label class="switch">
                   <input
                     type="checkbox"
                     bind:checked={preferences.autoRefresh}
-                    on:change={() => handlePreferenceChange('autoRefresh', preferences.autoRefresh)}
+                    onchange={() => handlePreferenceChange('autoRefresh', preferences.autoRefresh)}
                   />
                   <span class="slider"></span>
                 </label>
@@ -591,13 +591,13 @@
 
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Refresh Interval</label>
+                  <span class="preference-label">Refresh Interval</span>
                   <span class="preference-description">How often to check for updates</span>
                 </div>
                 <select
                   class="select-field"
                   bind:value={preferences.refreshInterval}
-                  on:change={() => handlePreferenceChange('refreshInterval', preferences.refreshInterval)}
+                  onchange={() => handlePreferenceChange('refreshInterval', preferences.refreshInterval)}
                   disabled={!preferences.autoRefresh}
                 >
                   <option value={10}>10 seconds</option>
@@ -610,13 +610,13 @@
 
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Jobs Per Page</label>
+                  <span class="preference-label">Jobs Per Page</span>
                   <span class="preference-description">Number of jobs to display</span>
                 </div>
                 <select
                   class="select-field"
                   bind:value={preferences.jobsPerPage}
-                  on:change={() => handlePreferenceChange('jobsPerPage', preferences.jobsPerPage)}
+                  onchange={() => handlePreferenceChange('jobsPerPage', preferences.jobsPerPage)}
                 >
                   <option value={25}>25</option>
                   <option value={50}>50</option>
@@ -628,7 +628,7 @@
 
               <div class="preference-item disabled">
                 <div class="preference-info">
-                  <label>Default Job View</label>
+                  <span class="preference-label">Default Job View</span>
                   <span class="preference-description">How to display job listings (Coming soon)</span>
                 </div>
                 <div class="button-toggle disabled">
@@ -650,7 +650,7 @@
               </div>
               <button
                 class="collapse-btn"
-                on:click={() => collapsedSections.sync = !collapsedSections.sync}
+                onclick={() => collapsedSections.sync = !collapsedSections.sync}
                 title="{collapsedSections.sync ? 'Expand' : 'Collapse'} sync settings"
               >
                 <ChevronRight class="w-4 h-4 collapse-icon {collapsedSections.sync ? '' : 'collapsed'}" />
@@ -678,14 +678,14 @@
             <div class="section-content">
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Show Notifications</label>
+                  <span class="preference-label">Show Notifications</span>
                   <span class="preference-description">Browser notifications for job status changes</span>
                 </div>
                 <label class="switch">
                   <input
                     type="checkbox"
                     bind:checked={preferences.showNotifications}
-                    on:change={() => handlePreferenceChange('showNotifications', preferences.showNotifications)}
+                    onchange={() => handlePreferenceChange('showNotifications', preferences.showNotifications)}
                   />
                   <span class="slider"></span>
                 </label>
@@ -693,14 +693,14 @@
 
               <div class="preference-item">
                 <div class="preference-info">
-                  <label>Sound Alerts</label>
+                  <span class="preference-label">Sound Alerts</span>
                   <span class="preference-description">Play sound when jobs complete</span>
                 </div>
                 <label class="switch">
                   <input
                     type="checkbox"
                     bind:checked={preferences.soundAlerts}
-                    on:change={() => handlePreferenceChange('soundAlerts', preferences.soundAlerts)}
+                    onchange={() => handlePreferenceChange('soundAlerts', preferences.soundAlerts)}
                     disabled={!preferences.showNotifications}
                   />
                   <span class="slider"></span>
@@ -742,7 +742,7 @@
 
               <button
                 class="btn-danger full-width"
-                on:click={clearCache}
+                onclick={clearCache}
                 disabled={clearingCache || !$apiConfig.apiKey}
               >
                 {#if clearingCache}
@@ -774,7 +774,7 @@
             <div class="section-content">
               <button
                 class="btn-secondary full-width"
-                on:click={exportSettings}
+                onclick={exportSettings}
               >
                 <Download class="w-4 h-4" />
                 Export Settings
@@ -782,7 +782,7 @@
 
               <button
                 class="btn-secondary full-width"
-                on:click={importSettings}
+                onclick={importSettings}
               >
                 <Upload class="w-4 h-4" />
                 Import Settings
@@ -800,75 +800,6 @@
 </div>
 
 <style>
-  .settings-container {
-    padding: 1.5rem 2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    max-width: 100%;
-  }
-
-  @media (min-width: 1024px) {
-    .settings-container {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
-      grid-auto-rows: min-content;
-      align-items: start;
-    }
-  }
-
-  .settings-container.mobile-section {
-    padding: 0;
-    display: block;
-  }
-
-  .mobile-settings-list {
-    background: white;
-  }
-
-  .settings-item {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    padding: 1rem;
-    background: white;
-    border: none;
-    border-bottom: 1px solid #e5e7eb;
-    cursor: pointer;
-    transition: background 0.15s;
-    text-align: left;
-  }
-
-  .settings-item:hover {
-    background: #f9fafb;
-  }
-
-  .item-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    background: #f3f4f6;
-    border-radius: 10px;
-    margin-right: 1rem;
-  }
-
-  .item-content {
-    flex: 1;
-  }
-
-  .item-title {
-    font-weight: 500;
-    color: #111827;
-    margin-bottom: 0.25rem;
-  }
-
-  .item-subtitle {
-    font-size: 0.875rem;
-    color: #6b7280;
-  }
-
   .settings-section {
     background: white;
     border: 1px solid #e5e7eb;
@@ -880,12 +811,6 @@
     .settings-section.full-width {
       grid-column: 1 / -1;
     }
-  }
-
-  .mobile-section .settings-section {
-    border: none;
-    border-radius: 0;
-    margin: 0;
   }
 
   .section-header {
@@ -952,14 +877,6 @@
     color: #374151;
   }
 
-  .collapse-icon {
-    transition: transform 0.2s ease;
-  }
-
-  .collapse-icon.collapsed {
-    transform: rotate(90deg);
-  }
-
   .preference-item {
     display: flex;
     justify-content: space-between;
@@ -971,7 +888,7 @@
     flex: 1;
   }
 
-  .preference-info label {
+  .preference-label {
     display: block;
     font-weight: 500;
     color: #111827;
@@ -981,27 +898,6 @@
   .preference-description {
     font-size: 0.875rem;
     color: #6b7280;
-  }
-
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.25rem 0.75rem;
-    border-radius: 9999px;
-    font-size: 0.75rem;
-    font-weight: 500;
-    background: #f3f4f6;
-    color: #6b7280;
-  }
-
-  .status-badge.success {
-    background: #d1fae5;
-    color: #065f46;
-  }
-
-  .status-badge.warning {
-    background: #fed7aa;
-    color: #92400e;
   }
 
   .help-text {
@@ -1278,36 +1174,18 @@
     color: #111827;
   }
 
-  /* Animations */
-  .animate-spin {
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
   /* Disabled state styles */
   .preference-item.disabled {
     opacity: 0.6;
     pointer-events: none;
   }
 
-  .preference-item.disabled label {
+  .preference-item.disabled .preference-label {
     color: #9ca3af;
   }
 
   .preference-item.disabled .preference-description {
     color: #d1d5db;
-  }
-
-  .switch.disabled {
-    opacity: 0.6;
-  }
-
-  .switch.disabled input {
-    cursor: not-allowed;
   }
 
   .button-toggle.disabled {
@@ -1349,11 +1227,6 @@
 
   /* Mobile responsive */
   @media (max-width: 768px) {
-    .settings-container {
-      padding: 1rem;
-      gap: 1rem;
-    }
-
     .preference-item {
       flex-direction: column;
       align-items: flex-start;
@@ -1376,14 +1249,6 @@
 
     .settings-section {
       padding: 1rem;
-    }
-  }
-
-  /* Large screens - better utilize space */
-  @media (min-width: 1400px) {
-    .settings-container {
-      padding: 1.5rem 3rem;
-      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
     }
   }
 </style>

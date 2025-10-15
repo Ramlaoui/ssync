@@ -1,34 +1,40 @@
 <script lang="ts">
+  import { stopPropagation } from 'svelte/legacy';
+
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import type { JobInfo } from '../types/api';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import { jobUtils } from '../lib/jobUtils';
   
-  export let jobs: JobInfo[] = [];
-  export let loading = false;
+  interface Props {
+    jobs?: JobInfo[];
+    loading?: boolean;
+  }
+
+  let { jobs = [], loading = false }: Props = $props();
   
   const dispatch = createEventDispatcher<{
     jobSelect: JobInfo;
   }>();
   
   // Sorting state
-  let sortBy: keyof JobInfo = 'submit_time';
-  let sortDesc = true;
+  let sortBy: keyof JobInfo = $state('submit_time');
+  let sortDesc = $state(true);
   
   // Filter state
-  let hostFilter = '';
-  let statusFilter = '';
-  let userFilter = '';
+  let hostFilter = $state('');
+  let statusFilter = $state('');
+  let userFilter = $state('');
   
   // Dropdown visibility
-  let showHostFilter = false;
-  let showStatusFilter = false;
-  let showUserFilter = false;
+  let showHostFilter = $state(false);
+  let showStatusFilter = $state(false);
+  let showUserFilter = $state(false);
   
   // Get unique values for filters
-  $: uniqueHosts = [...new Set(jobs.map(j => j.hostname).filter(Boolean))];
-  $: uniqueStatuses = [...new Set(jobs.map(j => j.state).filter(Boolean))];
-  $: uniqueUsers = [...new Set(jobs.map(j => j.user).filter(Boolean))];
+  let uniqueHosts = $derived([...new Set(jobs.map(j => j.hostname).filter(Boolean))]);
+  let uniqueStatuses = $derived([...new Set(jobs.map(j => j.state).filter(Boolean))]);
+  let uniqueUsers = $derived([...new Set(jobs.map(j => j.user).filter(Boolean))]);
   
   // Filter and sort functions
   function filterAndSortJobs(jobs: JobInfo[]): JobInfo[] {
@@ -189,8 +195,8 @@
     return duration;
   }
   
-  $: processedJobs = filterAndSortJobs(jobs);
-  $: hasActiveFilters = hostFilter || statusFilter || userFilter;
+  let processedJobs = $derived(filterAndSortJobs(jobs));
+  let hasActiveFilters = $derived(hostFilter || statusFilter || userFilter);
 </script>
 
 <div class="relative overflow-hidden bg-white rounded-lg border border-gray-200">
@@ -200,42 +206,42 @@
       {#if hostFilter}
         <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           Host: {hostFilter}
-          <button on:click={() => hostFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
+          <button onclick={() => hostFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
         </span>
       {/if}
       {#if statusFilter}
         <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           Status: {jobUtils.getStateLabel(statusFilter)}
-          <button on:click={() => statusFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
+          <button onclick={() => statusFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
         </span>
       {/if}
       {#if userFilter}
         <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           User: {userFilter}
-          <button on:click={() => userFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
+          <button onclick={() => userFilter = ''} class="ml-1 text-blue-600 hover:text-blue-800 font-bold">×</button>
         </span>
       {/if}
-      <button class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50" on:click={resetFilters}>Reset all</button>
+      <button class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50" onclick={resetFilters}>Reset all</button>
     </div>
   {/if}
   
   <table class="w-full border-collapse">
     <thead class="bg-gray-50">
       <tr>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" on:click|stopPropagation={() => handleSort('job_id')}>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick={stopPropagation(() => handleSort('job_id'))}>
           <span>Job ID</span>
           {#if sortBy === 'job_id'}
             <span class="ml-1 text-gray-400">{sortDesc ? '↓' : '↑'}</span>
           {/if}
         </th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" on:click|stopPropagation={() => handleSort('name')}>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick={stopPropagation(() => handleSort('name'))}>
           <span>Name</span>
           {#if sortBy === 'name'}
             <span class="ml-1 text-gray-400">{sortDesc ? '↓' : '↑'}</span>
           {/if}
         </th>
         <th class="filter-dropdown">
-          <button class="filter-header" on:click|stopPropagation={toggleUserFilter}>
+          <button class="filter-header" onclick={stopPropagation(toggleUserFilter)}>
             <span>User</span>
             <span class="filter-icon">{userFilter ? '●' : '▼'}</span>
           </button>
@@ -244,7 +250,7 @@
               <button 
                 class="dropdown-item"
                 class:selected={!userFilter}
-                on:click={() => selectUser('')}
+                onclick={() => selectUser('')}
               >
                 All Users
               </button>
@@ -252,7 +258,7 @@
                 <button 
                   class="dropdown-item"
                   class:selected={userFilter === user}
-                  on:click={() => selectUser(user)}
+                  onclick={() => selectUser(user)}
                 >
                   {user}
                 </button>
@@ -261,7 +267,7 @@
           {/if}
         </th>
         <th class="filter-dropdown">
-          <button class="filter-header" on:click|stopPropagation={toggleHostFilter}>
+          <button class="filter-header" onclick={stopPropagation(toggleHostFilter)}>
             <span>Host</span>
             <span class="filter-icon">{hostFilter ? '●' : '▼'}</span>
           </button>
@@ -270,7 +276,7 @@
               <button 
                 class="dropdown-item"
                 class:selected={!hostFilter}
-                on:click={() => selectHost('')}
+                onclick={() => selectHost('')}
               >
                 All Hosts
               </button>
@@ -278,7 +284,7 @@
                 <button 
                   class="dropdown-item"
                   class:selected={hostFilter === host}
-                  on:click={() => selectHost(host)}
+                  onclick={() => selectHost(host)}
                 >
                   {host}
                 </button>
@@ -287,7 +293,7 @@
           {/if}
         </th>
         <th class="filter-dropdown">
-          <button class="filter-header" on:click|stopPropagation={toggleStatusFilter}>
+          <button class="filter-header" onclick={stopPropagation(toggleStatusFilter)}>
             <span>Status</span>
             <span class="filter-icon">{statusFilter ? '●' : '▼'}</span>
           </button>
@@ -296,7 +302,7 @@
               <button 
                 class="dropdown-item"
                 class:selected={!statusFilter}
-                on:click={() => selectStatus('')}
+                onclick={() => selectStatus('')}
               >
                 All Statuses
               </button>
@@ -304,7 +310,7 @@
                 <button 
                   class="dropdown-item"
                   class:selected={statusFilter === status}
-                  on:click={() => selectStatus(status)}
+                  onclick={() => selectStatus(status)}
                 >
                   <span 
                     class="status-dot"
@@ -316,7 +322,7 @@
             </div>
           {/if}
         </th>
-        <th class="sortable" on:click|stopPropagation={() => handleSort('submit_time')}>
+        <th class="sortable" onclick={stopPropagation(() => handleSort('submit_time'))}>
           <span>Submitted</span>
           {#if sortBy === 'submit_time'}
             <span class="sort-icon">{sortDesc ? '↓' : '↑'}</span>
@@ -340,7 +346,7 @@
         </tr>
       {:else}
         {#each processedJobs as job (job.job_id + job.hostname)}
-          <tr class="job-row" on:click={() => handleJobClick(job)}>
+          <tr class="job-row" onclick={() => handleJobClick(job)}>
             <td class="job-id">{job.job_id}</td>
             <td class="job-name" title={job.name}>
               <div class="job-name-wrapper">

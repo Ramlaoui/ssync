@@ -1,35 +1,96 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher, onMount } from 'svelte';
   import type { JobInfo } from '../types/api';
   import { jobUtils } from '../lib/jobUtils';
   import { jobStateManager } from '../lib/JobStateManager';
   import { get } from 'svelte/store';
+  import Dialog from '../lib/components/ui/Dialog.svelte';
+  import { api } from '../services/api';
 
-  export let title = "Select a Job";
-  export let description = "Choose a job to attach watchers to";
-  export let initialJobs: JobInfo[] = [];
-  export let fetchJobsOnMount = true;
-  export let preSelectedJobId: string | null = null;
-  export let preSelectedHostname: string | null = null;
+  interface Props {
+    title?: string;
+    description?: string;
+    initialJobs?: JobInfo[];
+    fetchJobsOnMount?: boolean;
+    preSelectedJobId?: string | null;
+    preSelectedHostname?: string | null;
+    open?: boolean;
+    allowMultiSelect?: boolean;
+    includeCompletedJobs?: boolean; // Allow completed/canceled jobs for static watchers
+  }
+
+  let {
+    title = "Select a Job",
+    description = "Choose a job to attach watchers to",
+    initialJobs = [],
+    fetchJobsOnMount = true,
+    preSelectedJobId = null,
+    preSelectedHostname = null,
+    open = $bindable(true),
+    allowMultiSelect = false,
+    includeCompletedJobs = false
+  }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
-  let selectedJob: JobInfo | null = null;
-  let searchTerm = '';
-  let jobs: JobInfo[] = initialJobs;
-  let isLoading = false;
+  let selectedJob: JobInfo | null = $state(null);
+  let selectedJobs: JobInfo[] = $state([]);
+  let searchTerm = $state('');
+  let jobs: JobInfo[] = $state(initialJobs);
+  let isLoading = $state(false);
+  let watcherCounts: Map<string, number> = new Map();
+  let activeTab: 'running' | 'other' = $state('running');  // Tab state
 
   // Subscribe to job updates
   const jobsStore = jobStateManager.getAllJobs();
 
   // Reactive subscription to job store - update jobs whenever store changes
-  $: {
+  run(() => {
     const allJobs = $jobsStore;
-    const runningJobs = allJobs.filter(job => job.state === 'R' || job.state === 'PD');
+
+    // Filter based on includeCompletedJobs flag
+    const filteredJobs = includeCompletedJobs
+      ? allJobs  // Show all jobs (including completed/canceled)
+      : allJobs.filter(job => job.state === 'R' || job.state === 'PD');  // Only running/pending
+
     // Only update if we have new jobs or if jobs list is empty
-    if (runningJobs.length > 0 || (jobs.length === 0 && !isLoading)) {
-      jobs = runningJobs;
+    if (filteredJobs.length > 0 || (jobs.length === 0 && !isLoading)) {
+      jobs = filteredJobs;
     }
+  });
+
+  // Separate jobs into running and other
+  let runningJobs = $derived(jobs.filter(job => job.state === 'R' || job.state === 'PD'));
+  let otherJobs = $derived(jobs.filter(job => job.state !== 'R' && job.state !== 'PD'));
+
+  // Jobs to display based on active tab
+  let displayJobs = $derived(activeTab === 'running' ? runningJobs : otherJobs);
+
+  async function fetchWatcherCounts() {
+    // Fetch watcher counts for all jobs
+    try {
+      const response = await api.get('/api/watchers');
+      const allWatchers = response.data.watchers || [];
+
+      // Count watchers per job
+      const counts = new Map<string, number>();
+      allWatchers.forEach((watcher: any) => {
+        const jobKey = `${watcher.job_id}-${watcher.hostname}`;
+        counts.set(jobKey, (counts.get(jobKey) || 0) + 1);
+      });
+
+      watcherCounts = counts;
+    } catch (err) {
+      console.error('Failed to fetch watcher counts:', err);
+      // Don't fail the whole dialog if this fails
+    }
+  }
+
+  function getWatcherCount(job: JobInfo): number {
+    const jobKey = `${job.job_id}-${job.hostname}`;
+    return watcherCounts.get(jobKey) || 0;
   }
 
   onMount(async () => {
@@ -42,6 +103,9 @@
         selectedJob = preSelected;
       }
     }
+
+    // Fetch watcher counts in parallel
+    fetchWatcherCounts();
 
     // Fetch fresh jobs in background if requested
     if (fetchJobsOnMount) {
@@ -67,8 +131,8 @@
     }
   });
 
-  // Filter jobs based on search
-  $: filteredJobs = jobs.filter(job => {
+  // Filter jobs based on search (apply to displayJobs from active tab)
+  let filteredJobs = $derived(displayJobs.filter(job => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     return (
@@ -77,34 +141,84 @@
       job.name?.toLowerCase().includes(search) ||
       job.partition?.toLowerCase().includes(search)
     );
-  });
-  
+  }));
+
   // Group jobs by hostname
-  $: jobsByHost = filteredJobs.reduce((acc, job) => {
+  let jobsByHost = $derived(filteredJobs.reduce((acc, job) => {
     if (!acc[job.hostname]) {
       acc[job.hostname] = [];
     }
     acc[job.hostname].push(job);
     return acc;
-  }, {} as Record<string, JobInfo[]>);
-  
+  }, {} as Record<string, JobInfo[]>));
+
   // Sort hosts alphabetically
-  $: sortedHosts = Object.keys(jobsByHost).sort();
-  
-  function selectJob(job: JobInfo) {
-    selectedJob = job;
+  let sortedHosts = $derived(Object.keys(jobsByHost).sort());
+
+  function switchTab(tab: 'running' | 'other') {
+    activeTab = tab;
+    // Clear search when switching tabs for better UX
+    searchTerm = '';
   }
   
-  function handleConfirm() {
-    if (selectedJob) {
-      dispatch('select', selectedJob);
+  function selectJob(job: JobInfo) {
+    if (allowMultiSelect) {
+      // Multi-select mode: toggle job in array
+      const jobKey = `${job.job_id}-${job.hostname}`;
+      const existingIndex = selectedJobs.findIndex(j =>
+        `${j.job_id}-${j.hostname}` === jobKey
+      );
+
+      if (existingIndex >= 0) {
+        selectedJobs = selectedJobs.filter((_, i) => i !== existingIndex);
+      } else {
+        selectedJobs = [...selectedJobs, job];
+      }
+    } else {
+      // Single select mode
+      selectedJob = job;
+    }
+  }
+
+  function isJobSelected(job: JobInfo): boolean {
+    if (allowMultiSelect) {
+      const jobKey = `${job.job_id}-${job.hostname}`;
+      return selectedJobs.some(j => `${j.job_id}-${j.hostname}` === jobKey);
+    } else {
+      return selectedJob === job;
+    }
+  }
+
+  function selectAll() {
+    selectedJobs = [...filteredJobs];
+  }
+
+  function clearSelection() {
+    selectedJobs = [];
+  }
+
+  function handleConfirm(action: 'apply' | 'edit' = 'apply') {
+    if (allowMultiSelect) {
+      if (selectedJobs.length > 0) {
+        // For multi-select, wrap the jobs array with metadata
+        const payload = {
+          jobs: selectedJobs,
+          action: action
+        };
+        dispatch('select', payload);
+      }
+    } else {
+      if (selectedJob) {
+        dispatch('select', selectedJob);
+      }
     }
   }
   
   function handleClose() {
+    open = false;
     dispatch('close');
   }
-  
+
   function formatJobState(state: string): string {
     const states: Record<string, string> = {
       'R': 'Running',
@@ -132,35 +246,21 @@
     return `${Math.floor(diff / 86400000)}d ago`;
   }
   
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      handleClose();
-    }
-  }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
-
-<div class="dialog-overlay" on:click={handleClose} on:keydown={() => {}}>
-  <div class="dialog-container" on:click|stopPropagation on:keydown={() => {}}>
-    <div class="dialog-header">
-      <div>
-        <h2>{title}</h2>
-        <p class="description">{description}</p>
-      </div>
-      <button class="close-btn" on:click={handleClose} aria-label="Close dialog">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-        </svg>
-      </button>
-    </div>
-    
-    <div class="dialog-body">
+<Dialog
+  bind:open
+  on:close={handleClose}
+  {title}
+  {description}
+  size="xl"
+  contentClass="job-selection-content"
+>
       {#if isLoading && jobs.length === 0}
         <div class="loading-state">
           <div class="spinner"></div>
           <h3>Loading Jobs...</h3>
-          <p>Fetching running and pending jobs from all hosts</p>
+          <p>Fetching jobs from all hosts</p>
         </div>
       {:else if jobs.length === 0}
         <div class="empty-state">
@@ -168,24 +268,80 @@
             <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M14,6L8,18H10L16,6H14Z"/>
           </svg>
           <h3>No Jobs Available</h3>
-          <p>There are no running or pending jobs to attach watchers to.</p>
+          <p>There are no jobs to attach watchers to.</p>
         </div>
       {:else}
-        <!-- Search bar -->
-        <div class="search-bar">
-          <svg viewBox="0 0 24 24" fill="currentColor" class="search-icon">
-            <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
-          </svg>
-          <input
-            type="text"
-            placeholder="Search by job ID, name, host, or partition..."
-            bind:value={searchTerm}
-            class="search-input"
-          />
-          {#if isLoading}
-            <div class="loading-indicator">
-              <div class="small-spinner"></div>
-              <span>Updating...</span>
+        <!-- Tab navigation (only show if includeCompletedJobs is true) -->
+        {#if includeCompletedJobs}
+          <div class="tabs-container">
+            <button
+              type="button"
+              class="tab-button"
+              class:active={activeTab === 'running'}
+              onclick={() => switchTab('running')}
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" class="tab-icon">
+                <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4M10,16.5L16,12L10,7.5V16.5Z"/>
+              </svg>
+              Running
+              <span class="tab-count">{runningJobs.length}</span>
+            </button>
+            <button
+              type="button"
+              class="tab-button"
+              class:active={activeTab === 'other'}
+              onclick={() => switchTab('other')}
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" class="tab-icon">
+                <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12C4,13.85 4.63,15.55 5.68,16.91L16.91,5.68C15.55,4.63 13.85,4 12,4M12,20A8,8 0 0,0 20,12C20,10.15 19.37,8.45 18.32,7.09L7.09,18.32C8.45,19.37 10.15,20 12,20Z"/>
+              </svg>
+              Completed / Canceled
+              <span class="tab-count">{otherJobs.length}</span>
+            </button>
+          </div>
+        {/if}
+
+        <!-- Search bar and multi-select controls -->
+        <div class="search-container">
+          <div class="search-bar">
+            <svg viewBox="0 0 24 24" fill="currentColor" class="search-icon">
+              <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+            </svg>
+            <input
+              type="text"
+              placeholder="Search by job ID, name, host, or partition..."
+              bind:value={searchTerm}
+              class="search-input"
+            />
+            {#if isLoading}
+              <div class="loading-indicator">
+                <div class="small-spinner"></div>
+                <span>Updating...</span>
+              </div>
+            {/if}
+          </div>
+
+          {#if allowMultiSelect && filteredJobs.length > 0}
+            <div class="multi-select-controls">
+              <span class="selection-count">{selectedJobs.length} of {filteredJobs.length} selected</span>
+              <div class="control-buttons">
+                <button
+                  type="button"
+                  onclick={selectAll}
+                  class="control-button"
+                  disabled={selectedJobs.length === filteredJobs.length}
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onclick={clearSelection}
+                  class="control-button"
+                  disabled={selectedJobs.length === 0}
+                >
+                  Clear
+                </button>
+              </div>
             </div>
           {/if}
         </div>
@@ -194,7 +350,17 @@
         <div class="jobs-list">
           {#if filteredJobs.length === 0}
             <div class="no-results">
-              <p>No jobs match your search criteria</p>
+              {#if searchTerm}
+                <p>No jobs match your search criteria</p>
+              {:else if includeCompletedJobs && activeTab === 'running'}
+                <p>No running or pending jobs available</p>
+                <p class="hint">Try the "Completed / Canceled" tab to create static watchers</p>
+              {:else if includeCompletedJobs && activeTab === 'other'}
+                <p>No completed or canceled jobs available</p>
+                <p class="hint">Try the "Running" tab to create active watchers</p>
+              {:else}
+                <p>No jobs available</p>
+              {/if}
             </div>
           {:else}
             {#each sortedHosts as hostname}
@@ -208,8 +374,8 @@
                   {#each jobsByHost[hostname] as job}
                     <button
                       class="job-item"
-                      class:selected={selectedJob === job}
-                      on:click={() => selectJob(job)}
+                      class:selected={isJobSelected(job)}
+                      onclick={() => selectJob(job)}
                     >
                       <div class="job-main">
                         <div class="job-header">
@@ -235,7 +401,7 @@
                               {job.partition}
                             </span>
                           {/if}
-                          
+
                           {#if job.nodes}
                             <span class="detail-item">
                               <svg viewBox="0 0 24 24" fill="currentColor">
@@ -244,17 +410,26 @@
                               {job.nodes} node{job.nodes > 1 ? 's' : ''}
                             </span>
                           {/if}
-                          
+
                           <span class="detail-item">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                               <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M16.2,16.2L11,13V7H12.5V12.2L17,14.9L16.2,16.2Z"/>
                             </svg>
                             {formatTime(job.submit_time)}
                           </span>
+
+                          {#if getWatcherCount(job) > 0}
+                            <span class="detail-item watcher-count" title="{getWatcherCount(job)} watcher{getWatcherCount(job) !== 1 ? 's' : ''} attached">
+                              <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5M12,17C9.24,17 7,14.76 7,12C7,9.24 9.24,7 12,7C14.76,7 17,9.24 17,12C17,14.76 14.76,17 12,17M12,9C10.34,9 9,10.34 9,12C9,13.66 10.34,15 12,15C13.66,15 15,13.66 15,12C15,10.34 13.66,9 12,9Z"/>
+                              </svg>
+                              {getWatcherCount(job)} watcher{getWatcherCount(job) !== 1 ? 's' : ''}
+                            </span>
+                          {/if}
                         </div>
                       </div>
-                      
-                      {#if selectedJob === job}
+
+                      {#if isJobSelected(job)}
                         <div class="selected-indicator">
                           <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
@@ -269,115 +444,59 @@
           {/if}
         </div>
       {/if}
-    </div>
-    
-    <div class="dialog-footer">
-      <button 
+
+  {#snippet footer()}
+    <div  class="selection-footer">
+      <button
         type="button"
-        on:click={handleClose}
+        onclick={handleClose}
         class="cancel-btn"
       >
         Cancel
       </button>
-      <button 
-        type="button"
-        on:click={handleConfirm}
-        disabled={!selectedJob}
-        class="confirm-btn"
-      >
-        Select Job
-      </button>
+      {#if allowMultiSelect && selectedJobs.length > 1}
+        <!-- Multi-select with multiple jobs: show both options -->
+        <button
+          type="button"
+          onclick={() => handleConfirm('edit')}
+          class="edit-btn-footer"
+          title="Edit watcher configuration before applying to all jobs"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
+            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+          </svg>
+          Edit & Apply to {selectedJobs.length} Jobs
+        </button>
+        <button
+          type="button"
+          onclick={() => handleConfirm('apply')}
+          class="confirm-btn"
+          title="Apply watcher as-is to all selected jobs"
+        >
+          Apply to {selectedJobs.length} Jobs
+        </button>
+      {:else}
+        <!-- Single select or multi-select with 0-1 jobs -->
+        <button
+          type="button"
+          onclick={() => handleConfirm('apply')}
+          disabled={allowMultiSelect ? selectedJobs.length === 0 : !selectedJob}
+          class="confirm-btn"
+        >
+          {#if allowMultiSelect}
+            Select {selectedJobs.length} Job{selectedJobs.length !== 1 ? 's' : ''}
+          {:else}
+            Select Job
+          {/if}
+        </button>
+      {/if}
     </div>
-  </div>
-</div>
+  {/snippet}
+</Dialog>
 
 <style>
-  .dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.2s ease;
-  }
-  
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  
-  .dialog-container {
-    background: white;
-    border-radius: 12px;
-    width: 90%;
-    max-width: 800px;
-    max-height: 85vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-    animation: slideUp 0.3s ease;
-  }
-  
-  @keyframes slideUp {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-  
-  .dialog-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-  }
-  
-  .dialog-header h2 {
-    margin: 0;
-    font-size: 1.5rem;
-    color: #1f2937;
-  }
-  
-  .description {
-    margin: 0.25rem 0 0 0;
-    font-size: 0.875rem;
-    color: #6b7280;
-  }
-  
-  .close-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0.5rem;
-    color: #6b7280;
-    transition: color 0.2s;
-    border-radius: 6px;
-  }
-  
-  .close-btn:hover {
-    color: #1f2937;
-    background: #f3f4f6;
-  }
-  
-  .close-btn svg {
-    width: 24px;
-    height: 24px;
-  }
-  
-  .dialog-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1.5rem;
+  :global(.job-selection-content) {
+    padding: 1.5rem !important;
     min-height: 200px;
   }
   
@@ -466,11 +585,76 @@
     font-size: 0.75rem;
     color: #6b7280;
   }
-  
+
+  /* Tabs */
+  .tabs-container {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 0;
+  }
+
+  .tab-button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #6b7280;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    bottom: -1px;
+  }
+
+  .tab-button:hover {
+    color: #374151;
+    background: #f9fafb;
+  }
+
+  .tab-button.active {
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
+  }
+
+  .tab-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.375rem;
+    background: #f3f4f6;
+    color: #6b7280;
+    border-radius: 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .tab-button.active .tab-count {
+    background: #dbeafe;
+    color: #3b82f6;
+  }
+
+  /* Search container */
+  .search-container {
+    margin-bottom: 1.5rem;
+  }
+
   /* Search bar */
   .search-bar {
     position: relative;
-    margin-bottom: 1.5rem;
+    margin-bottom: 0.75rem;
   }
   
   .search-icon {
@@ -497,7 +681,51 @@
     border-color: #3b82f6;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
-  
+
+  /* Multi-select controls */
+  .multi-select-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+  }
+
+  .selection-count {
+    font-size: 0.875rem;
+    color: #374151;
+    font-weight: 500;
+  }
+
+  .control-buttons {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .control-button {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+    border: 1px solid #d1d5db;
+    background: white;
+    color: #374151;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+  }
+
+  .control-button:hover:not(:disabled) {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+  }
+
+  .control-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   /* Jobs list */
   .jobs-list {
     display: flex;
@@ -509,6 +737,16 @@
     text-align: center;
     padding: 2rem;
     color: #6b7280;
+  }
+
+  .no-results p {
+    margin: 0.5rem 0;
+  }
+
+  .no-results .hint {
+    font-size: 0.875rem;
+    color: #9ca3af;
+    font-style: italic;
   }
   
   .host-group {
@@ -621,7 +859,20 @@
     height: 14px;
     opacity: 0.5;
   }
-  
+
+  .detail-item.watcher-count {
+    color: #3b82f6;
+    font-weight: 500;
+    background: #eff6ff;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+  }
+
+  .detail-item.watcher-count svg {
+    opacity: 1;
+    color: #3b82f6;
+  }
+
   .selected-indicator {
     display: flex;
     align-items: center;
@@ -639,16 +890,16 @@
   }
   
   /* Footer */
-  .dialog-footer {
+  .selection-footer {
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;
-    padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
+    width: 100%;
   }
   
   .cancel-btn,
-  .confirm-btn {
+  .confirm-btn,
+  .edit-btn-footer {
     padding: 0.5rem 1rem;
     border: none;
     border-radius: 6px;
@@ -656,45 +907,50 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
-  
+
   .cancel-btn {
     background: white;
     color: #374151;
     border: 1px solid #d1d5db;
   }
-  
+
   .cancel-btn:hover {
     background: #f3f4f6;
   }
-  
+
+  .edit-btn-footer {
+    background: white;
+    color: #3b82f6;
+    border: 1px solid #3b82f6;
+  }
+
+  .edit-btn-footer:hover {
+    background: #eff6ff;
+  }
+
   .confirm-btn {
     background: #3b82f6;
     color: white;
   }
-  
+
   .confirm-btn:hover:not(:disabled) {
     background: #2563eb;
   }
-  
+
   .confirm-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
   
   @media (max-width: 640px) {
-    .dialog-container {
-      width: 100%;
-      height: 100%;
-      max-width: none;
-      max-height: none;
-      border-radius: 0;
+    :global(.job-selection-content) {
+      padding: 1rem !important;
     }
-    
-    .dialog-body {
-      padding: 1rem;
-    }
-    
+
     .job-details {
       flex-direction: column;
       gap: 0.5rem;

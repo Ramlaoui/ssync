@@ -4,14 +4,18 @@
   import WatcherCard from './WatcherCard.svelte';
   import type { Watcher } from '../types/watchers';
 
-  export let watchers: Watcher[] = [];
-  export let selectedJobId: string | null = null;
-  export let selectedJobWatchers: Watcher[] = [];
+  interface Props {
+    watchers?: Watcher[];
+    selectedJobId?: string | null;
+    selectedJobWatchers?: Watcher[];
+  }
+
+  let { watchers = [], selectedJobId = null, selectedJobWatchers = [] }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
-  $: activeWatchers = watchers.filter(w => w.state === 'active');
-  $: pausedWatchers = watchers.filter(w => w.state === 'paused');
+  let activeWatchers = $derived(watchers.filter(w => w.state === 'active'));
+  let pausedWatchers = $derived(watchers.filter(w => w.state === 'paused'));
 
   function handleRefresh() {
     dispatch('refresh');

@@ -1,11 +1,24 @@
 <script lang="ts">
   import { cn } from "../../cn";
   
-  export let className: string = "";
-  export { className as class };
-  export let variant: 'default' | 'glass' | 'gradient' | 'bordered' | 'elevated' = 'default';
-  export let hover: boolean = false;
-  export let noPadding: boolean = false;
+  
+  interface Props {
+    class?: string;
+    variant?: 'default' | 'glass' | 'gradient' | 'bordered' | 'elevated';
+    hover?: boolean;
+    noPadding?: boolean;
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let {
+    class: className = "",
+    variant = 'default',
+    hover = false,
+    noPadding = false,
+    children,
+    ...rest
+  }: Props = $props();
   
   const variants = {
     default: "bg-white border border-gray-200",
@@ -26,7 +39,7 @@
     },
     className
   )}
-  {...$$restProps}
+  {...rest}
 >
-  <slot />
+  {@render children?.()}
 </div>

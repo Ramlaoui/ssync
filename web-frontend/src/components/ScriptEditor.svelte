@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { EditorView, basicSetup } from 'codemirror';
   import { EditorState, Compartment } from '@codemirror/state';
@@ -8,33 +10,42 @@
   import { shell } from '@codemirror/legacy-modes/mode/shell';
   import { python } from '@codemirror/lang-python';
   
-  export let value = '';
-  export let language: 'shell' | 'python' = 'shell';
-  export let readOnly = false;
-  export let placeholder = '';
-  export let showLineNumbers = true;
-  export let height = '400px';
-  export let splitView = false;
+  interface Props {
+    value?: string;
+    language?: 'shell' | 'python';
+    readOnly?: boolean;
+    placeholder?: string;
+    showLineNumbers?: boolean;
+    height?: string;
+    splitView?: boolean;
+  }
+
+  let {
+    value = $bindable(''),
+    language = $bindable('shell'),
+    readOnly = false,
+    placeholder = '',
+    showLineNumbers = true,
+    height = '400px',
+    splitView = false
+  }: Props = $props();
   
   const dispatch = createEventDispatcher();
   
-  let container: HTMLDivElement;
-  let editor: EditorView;
+  let container: HTMLDivElement = $state();
+  let editor: EditorView = $state();
   let languageCompartment = new Compartment();
   let readOnlyCompartment = new Compartment();
   
   // Auto-save state
   let lastSaved = value;
-  let hasUnsavedChanges = false;
+  let hasUnsavedChanges = $state(false);
   let autoSaveTimer: ReturnType<typeof setTimeout>;
   
   // Split view sections
   let loginSetupContent = '';
   let mainScriptContent = '';
   
-  $: if (splitView && value) {
-    parseSplitContent(value);
-  }
   
   function parseSplitContent(content: string) {
     const loginMatch = content.match(/#LOGIN_SETUP_BEGIN([\s\S]*?)#LOGIN_SETUP_END/);
@@ -231,30 +242,41 @@ ${mainScriptContent}`;
     clearTimeout(autoSaveTimer);
   });
   
+  
+  
+  run(() => {
+    if (splitView && value) {
+      parseSplitContent(value);
+    }
+  });
   // Handle external value changes
-  $: if (editor && value !== editor.state.doc.toString()) {
-    editor.dispatch({
-      changes: {
-        from: 0,
-        to: editor.state.doc.length,
-        insert: value
-      }
-    });
-  }
-  
+  run(() => {
+    if (editor && value !== editor.state.doc.toString()) {
+      editor.dispatch({
+        changes: {
+          from: 0,
+          to: editor.state.doc.length,
+          insert: value
+        }
+      });
+    }
+  });
   // Handle language changes
-  $: if (editor) {
-    editor.dispatch({
-      effects: languageCompartment.reconfigure(getLanguageExtension())
-    });
-  }
-  
+  run(() => {
+    if (editor) {
+      editor.dispatch({
+        effects: languageCompartment.reconfigure(getLanguageExtension())
+      });
+    }
+  });
   // Handle readonly changes
-  $: if (editor) {
-    editor.dispatch({
-      effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(readOnly))
-    });
-  }
+  run(() => {
+    if (editor) {
+      editor.dispatch({
+        effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(readOnly))
+      });
+    }
+  });
 </script>
 
 <div class="script-editor">
@@ -276,7 +298,7 @@ ${mainScriptContent}`;
   
   <div class="editor-toolbar">
     <div class="toolbar-left">
-      <button class="toolbar-btn" on:click={formatScript} title="Format Script">
+      <button class="toolbar-btn" onclick={formatScript} title="Format Script">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M3,3H21V5H3V3M3,7H21V9H3V7M3,11H21V13H3V11M3,15H21V17H3V15M3,19H21V21H3V19Z"/>
         </svg>

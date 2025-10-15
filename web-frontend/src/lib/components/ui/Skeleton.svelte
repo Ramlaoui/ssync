@@ -1,11 +1,16 @@
 <script lang="ts">
   import { cn } from "../../utils";
   
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    class?: string;
+    [key: string]: any
+  }
+
+  let { class: className = "", ...rest }: Props = $props();
+  
 </script>
 
 <div
   class={cn("animate-pulse rounded-md bg-muted", className)}
-  {...$$restProps}
-/>
+  {...rest}
+></div>

@@ -275,23 +275,5 @@
     transition: stroke-dasharray 0.6s ease-in-out;
   }
 
-  /* Responsive grid adjustments */
-  @media (max-width: 640px) {
-    .grid {
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      @apply gap-3;
-    }
-
-    .bg-white.border.border-slate-200 {
-      @apply p-3;
-    }
-
-    .w-\\[60px\\].h-\\[60px\\] {
-      @apply w-12 h-12;
-    }
-
-    .text-xs.font-bold {
-      @apply text-[0.6875rem];
-    }
-  }
+  /* Responsive grid adjustments handled in HTML with Tailwind classes */
 </style>

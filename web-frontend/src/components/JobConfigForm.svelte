@@ -23,25 +23,49 @@
     };
   }>();
 
-  export let hosts: HostInfo[] = [];
-  export let selectedHost = '';
-  export let sourceDir = '';
-  export let jobName = '';
-  export let partition = '';
-  export let constraint = '';
-  export let account = '';
-  export let cpus = 1;
-  export let useMemory = false;
-  export let memory = 4; // GB default when enabled
-  export let timeLimit = 60; // minutes
-  export let nodes = 1;
-  export let ntasksPerNode = 1;
-  export let gpusPerNode = 0;
-  export let gres = '';
-  export let outputFile = '';
-  export let errorFile = '';
-  export let loading = false;
-  export let readonly = false;
+  interface Props {
+    hosts?: HostInfo[];
+    selectedHost?: string;
+    sourceDir?: string;
+    jobName?: string;
+    partition?: string;
+    constraint?: string;
+    account?: string;
+    cpus?: number;
+    useMemory?: boolean;
+    memory?: number; // GB default when enabled
+    timeLimit?: number; // minutes
+    nodes?: number;
+    ntasksPerNode?: number;
+    gpusPerNode?: number;
+    gres?: string;
+    outputFile?: string;
+    errorFile?: string;
+    loading?: boolean;
+    readonly?: boolean;
+  }
+
+  let {
+    hosts = [],
+    selectedHost = $bindable(''),
+    sourceDir = $bindable(''),
+    jobName = $bindable(''),
+    partition = $bindable(''),
+    constraint = $bindable(''),
+    account = $bindable(''),
+    cpus = $bindable(1),
+    useMemory = $bindable(false),
+    memory = $bindable(4),
+    timeLimit = $bindable(60),
+    nodes = $bindable(1),
+    ntasksPerNode = $bindable(1),
+    gpusPerNode = $bindable(0),
+    gres = $bindable(''),
+    outputFile = $bindable(''),
+    errorFile = $bindable(''),
+    loading = false,
+    readonly = false
+  }: Props = $props();
 
   function onHostChanged(newHostName: string): void {
     const host = hosts.find(h => h.hostname === newHostName);
@@ -126,7 +150,7 @@
     </div>
     <div class="field">
       <label for="host">SLURM Host *</label>
-      <select id="host" bind:value={selectedHost} required disabled={loading || readonly} class="select-input" on:change={() => onHostChanged(selectedHost)}>
+      <select id="host" bind:value={selectedHost} required disabled={loading || readonly} class="select-input" onchange={() => onHostChanged(selectedHost)}>
         <option value="">Select a host...</option>
         {#if loading}
           <option disabled>Loading hosts...</option>
@@ -153,7 +177,7 @@
         placeholder="/path/to/your/project"
         required
         class="text-input"
-        on:input={dispatchChange}
+        oninput={dispatchChange}
       />
       <div class="field-help">
         <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -172,18 +196,18 @@
     <div class="field-group">
       <div class="field">
         <label for="job-name">Job Name</label>
-        <input id="job-name" type="text" bind:value={jobName} placeholder="my-job" class="text-input" readonly={readonly} on:input={dispatchChange} />
+        <input id="job-name" type="text" bind:value={jobName} placeholder="my-job" class="text-input" readonly={readonly} oninput={dispatchChange} />
       </div>
       <div class="field">
         <label for="partition">Partition</label>
-        <input id="partition" type="text" bind:value={partition} placeholder="gpu" class="text-input" readonly={readonly} on:input={dispatchChange} />
+        <input id="partition" type="text" bind:value={partition} placeholder="gpu" class="text-input" readonly={readonly} oninput={dispatchChange} />
       </div>
     </div>
     
     <div class="field-group">
       <div class="field">
         <label for="constraint">Constraint</label>
-        <input id="constraint" type="text" bind:value={constraint} placeholder="gpu" class="text-input" readonly={readonly} on:input={dispatchChange} />
+        <input id="constraint" type="text" bind:value={constraint} placeholder="gpu" class="text-input" readonly={readonly} oninput={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -193,7 +217,7 @@
       </div>
       <div class="field">
         <label for="account">Account</label>
-        <input id="account" type="text" bind:value={account} placeholder="project-123" class="text-input" readonly={readonly} on:input={dispatchChange} />
+        <input id="account" type="text" bind:value={account} placeholder="project-123" class="text-input" readonly={readonly} oninput={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -221,7 +245,7 @@
           bind:value={cpus}
           class="slider"
           disabled={readonly}
-          on:input={dispatchChange}
+          oninput={dispatchChange}
         />
       </div>
       
@@ -229,13 +253,13 @@
         <label for="memory">Memory</label>
         <div class="memory-control">
           <label class="checkbox-control">
-            <input type="checkbox" bind:checked={useMemory} disabled={readonly} on:change={dispatchChange} />
+            <input type="checkbox" bind:checked={useMemory} disabled={readonly} onchange={dispatchChange} />
             <span>Specify memory limit</span>
           </label>
           {#if useMemory}
             <div class="memory-slider">
               <label for="memory">{formatMemoryLabel(memory)}</label>
-              <input id="memory" type="range" min="1" max="512" bind:value={memory} class="slider" disabled={readonly} on:input={dispatchChange} />
+              <input id="memory" type="range" min="1" max="512" bind:value={memory} class="slider" disabled={readonly} oninput={dispatchChange} />
             </div>
           {/if}
         </div>
@@ -253,7 +277,7 @@
           bind:value={nodes}
           class="slider"
           disabled={readonly}
-          on:input={dispatchChange}
+          oninput={dispatchChange}
         />
       </div>
       
@@ -267,7 +291,7 @@
           bind:value={ntasksPerNode}
           class="slider"
           disabled={readonly}
-          on:input={dispatchChange}
+          oninput={dispatchChange}
         />
       </div>
     </div>
@@ -283,7 +307,7 @@
         bind:value={timeLimit}
         class="slider"
         disabled={readonly}
-        on:input={dispatchChange}
+        oninput={dispatchChange}
       />
     </div>
   </section>
@@ -305,13 +329,13 @@
           bind:value={gpusPerNode}
           class="slider"
           disabled={readonly}
-          on:input={dispatchChange}
+          oninput={dispatchChange}
         />
       </div>
       
       <div class="field">
         <label for="gres">Generic Resources</label>
-        <input id="gres" type="text" bind:value={gres} placeholder="gpu:tesla:2" class="text-input" readonly={readonly} on:input={dispatchChange} />
+        <input id="gres" type="text" bind:value={gres} placeholder="gpu:tesla:2" class="text-input" readonly={readonly} oninput={dispatchChange} />
         <div class="field-help">
           <svg class="info-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,1 0 0,0 12,2M11,17H13V11H11V17Z"/>
@@ -337,7 +361,7 @@
           bind:value={outputFile}
           placeholder="job-%j.out"
           class="text-input"
-          on:input={dispatchChange}
+          oninput={dispatchChange}
         />
       </div>
       
@@ -349,7 +373,7 @@
           bind:value={errorFile}
           placeholder="job-%j.err"
           class="text-input"
-          on:input={dispatchChange}
+          oninput={dispatchChange}
         />
       </div>
     </div>

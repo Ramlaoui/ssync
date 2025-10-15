@@ -1,7 +1,13 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher } from 'svelte';
   
-  export let script: string = '';
+  interface Props {
+    script?: string;
+  }
+
+  let { script = $bindable('') }: Props = $props();
   
   const dispatch = createEventDispatcher<{
     update: { script: string };
@@ -19,8 +25,8 @@
     unit?: string;
   }
   
-  let parameters: Parameter[] = [];
-  let customParameters: Parameter[] = [];
+  let parameters: Parameter[] = $state([]);
+  let customParameters: Parameter[] = $state([]);
   
   // Parse SBATCH parameters from script
   function parseParameters(): void {
@@ -207,9 +213,11 @@
   }
   
   // Initialize on mount
-  $: if (script) {
-    parseParameters();
-  }
+  run(() => {
+    if (script) {
+      parseParameters();
+    }
+  });
   
   // Common quick values
   const quickTimes = ['00:30:00', '01:00:00', '02:00:00', '04:00:00', '08:00:00', '24:00:00'];
@@ -220,7 +228,7 @@
 <div class="parameter-editor">
   <div class="editor-header">
     <h3>Quick Settings</h3>
-    <button class="add-btn" on:click={addCustomParameter}>
+    <button class="add-btn" onclick={addCustomParameter}>
       <svg viewBox="0 0 24 24">
         <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
       </svg>
@@ -237,7 +245,7 @@
           <input 
             type="text" 
             bind:value={param.value}
-            on:change={() => updateParameter(param)}
+            onchange={() => updateParameter(param)}
             class="param-input"
             placeholder="Enter {param.label.toLowerCase()}"
           />
@@ -246,7 +254,7 @@
           <div class="number-input">
             <button 
               class="stepper minus" 
-              on:click={() => {
+              onclick={() => {
                 const val = parseInt(param.value) || 0;
                 param.value = String(Math.max(param.min || 0, val - (param.step || 1)));
                 updateParameter(param);
@@ -257,7 +265,7 @@
             <input 
               type="number" 
               bind:value={param.value}
-              on:change={() => updateParameter(param)}
+              onchange={() => updateParameter(param)}
               min={param.min}
               max={param.max}
               step={param.step}
@@ -265,7 +273,7 @@
             />
             <button 
               class="stepper plus" 
-              on:click={() => {
+              onclick={() => {
                 const val = parseInt(param.value) || 0;
                 param.value = String(Math.min(param.max || 999, val + (param.step || 1)));
                 updateParameter(param);
@@ -281,7 +289,7 @@
                 <button 
                   class="quick-btn"
                   class:active={param.value === String(cpu)}
-                  on:click={() => {
+                  onclick={() => {
                     param.value = String(cpu);
                     updateParameter(param);
                   }}
@@ -299,7 +307,7 @@
               <input 
                 type="number" 
                 value={time.hours}
-                on:change={(e) => updateTime(param, parseInt(e.currentTarget.value) || 0, time.minutes)}
+                onchange={(e) => updateTime(param, parseInt(e.currentTarget.value) || 0, time.minutes)}
                 min="0"
                 max="72"
                 class="time-field"
@@ -311,7 +319,7 @@
               <input 
                 type="number" 
                 value={time.minutes}
-                on:change={(e) => updateTime(param, time.hours, parseInt(e.currentTarget.value) || 0)}
+                onchange={(e) => updateTime(param, time.hours, parseInt(e.currentTarget.value) || 0)}
                 min="0"
                 max="59"
                 class="time-field"
@@ -325,7 +333,7 @@
               <button 
                 class="quick-btn"
                 class:active={param.value === qtime}
-                on:click={() => {
+                onclick={() => {
                   param.value = qtime;
                   updateParameter(param);
                 }}
@@ -340,14 +348,14 @@
             <input 
               type="number" 
               bind:value={param.value}
-              on:change={() => updateParameter(param)}
+              onchange={() => updateParameter(param)}
               min="1"
               max="999"
               class="param-number"
             />
             <select 
               bind:value={param.unit}
-              on:change={() => updateParameter(param)}
+              onchange={() => updateParameter(param)}
               class="unit-select"
             >
               <option value="G">GB</option>
@@ -360,7 +368,7 @@
               <button 
                 class="quick-btn"
                 class:active={param.value + param.unit === mem}
-                on:click={() => {
+                onclick={() => {
                   param.value = mem.replace(/[GM]/, '');
                   param.unit = mem.match(/[GM]/)?.[0];
                   updateParameter(param);
@@ -374,7 +382,7 @@
         {:else if param.type === 'select'}
           <select 
             bind:value={param.value}
-            on:change={() => updateParameter(param)}
+            onchange={() => updateParameter(param)}
             class="param-select"
           >
             <option value="">Select {param.label}</option>
@@ -402,7 +410,7 @@
         />
         <button 
           class="remove-btn"
-          on:click={() => customParameters = customParameters.filter((_, idx) => idx !== i)}
+          onclick={() => customParameters = customParameters.filter((_, idx) => idx !== i)}
         >
           <svg viewBox="0 0 24 24">
             <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />

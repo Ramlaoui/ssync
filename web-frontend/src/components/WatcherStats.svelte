@@ -1,8 +1,12 @@
 <script lang="ts">
   import type { WatcherStats } from '../types/watchers';
   
-  export let stats: WatcherStats | null = null;
-  export let loading = false;
+  interface Props {
+    stats?: WatcherStats | null;
+    loading?: boolean;
+  }
+
+  let { stats = null, loading = false }: Props = $props();
   
   function getStateColor(state: string): string {
     switch (state) {

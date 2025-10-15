@@ -1,21 +1,21 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from 'svelte';
   import type { WatcherEvent } from '../types/watchers';
   
-  export let events: WatcherEvent[] = [];
+  interface Props {
+    events?: WatcherEvent[];
+  }
+
+  let { events = [] }: Props = $props();
   
   // Metric state
-  let selectedMetric: string | null = null;
-  let chartCanvas: HTMLCanvasElement;
-  let chartContext: CanvasRenderingContext2D | null = null;
+  let selectedMetric: string | null = $state(null);
+  let chartCanvas: HTMLCanvasElement = $state();
+  let chartContext: CanvasRenderingContext2D | null = $state(null);
   let animationFrame: number;
   
-  // Extract metrics from events
-  $: metrics = extractMetrics(events);
-  $: metricNames = Array.from(new Set(metrics.map(m => m.name)));
-  $: selectedMetricData = selectedMetric 
-    ? metrics.filter(m => m.name === selectedMetric)
-    : [];
   
   interface Metric {
     name: string;
@@ -181,15 +181,23 @@
   });
   
   onDestroy(() => {
+  
+  // Extract metrics from events
+  let metrics = $derived(extractMetrics(events));
+  let metricNames = $derived(Array.from(new Set(metrics.map(m => m.name))));
+  let selectedMetricData = $derived(selectedMetric 
+    ? metrics.filter(m => m.name === selectedMetric)
+    : []);
     // Cleanup if needed
   });
   
   // Redraw when data changes
-  $: if (selectedMetricData && chartContext) {
-    drawChart();
-  }
-  
-  $: stats = selectedMetric ? getMetricStats(selectedMetricData) : null;
+  run(() => {
+    if (selectedMetricData && chartContext) {
+      drawChart();
+    }
+  });
+  let stats = $derived(selectedMetric ? getMetricStats(selectedMetricData) : null);
 </script>
 
 <div class="metrics-container">
@@ -213,7 +221,7 @@
           <button 
             class="metric-btn"
             class:active={selectedMetric === name}
-            on:click={() => selectedMetric = name}
+            onclick={() => selectedMetric = name}
           >
             {name}
             <span class="metric-badge">

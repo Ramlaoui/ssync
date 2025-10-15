@@ -31,20 +31,33 @@
   
   const dispatch = createEventDispatcher();
   
-  // Props
-  export let script = '';
-  export let launching = false;
-  export let hosts: HostInfo[] = [];
-  export let selectedHost = '';
-  export let loading = false;
-  export let validationDetails: any = { isValid: false };
-  export let config: any = {};
+  
+  interface Props {
+    // Props
+    script?: string;
+    launching?: boolean;
+    hosts?: HostInfo[];
+    selectedHost?: string;
+    loading?: boolean;
+    validationDetails?: any;
+    config?: any;
+  }
+
+  let {
+    script = $bindable(''),
+    launching = false,
+    hosts = [],
+    selectedHost = $bindable(''),
+    loading = false,
+    validationDetails = { isValid: false },
+    config = $bindable({})
+  }: Props = $props();
   
   // State
-  let sidebarOpen = true;
-  let activeSection: 'presets' | 'config' | 'directory' | 'sync' | 'templates' = 'config';
-  let showAdvanced = false;
-  let searchQuery = '';
+  let sidebarOpen = $state(true);
+  let activeSection: 'presets' | 'config' | 'directory' | 'sync' | 'templates' = $state('config');
+  let showAdvanced = $state(false);
+  let searchQuery = $state('');
   
   // Presets
   const presets = [
@@ -76,7 +89,7 @@
     }
   ];
   
-  $: canLaunch = validationDetails.isValid && selectedHost;
+  let canLaunch = $derived(validationDetails.isValid && selectedHost);
   
   function handleScriptChange(event: CustomEvent) {
     script = event.detail.content;
@@ -200,9 +213,9 @@
                 ? "bg-primary text-primary-foreground"
                 : "hover:bg-muted text-muted-foreground hover:text-foreground"
             )}
-            on:click={() => activeSection = tab.id}
+            onclick={() => activeSection = tab.id}
           >
-            <svelte:component this={tab.icon} class="h-4 w-4" />
+            <tab.icon class="h-4 w-4" />
             {tab.label}
           </button>
         {/each}
@@ -219,7 +232,7 @@
               >
                 <div class="flex items-start gap-3">
                   <div class="p-2 rounded-lg bg-primary/10">
-                    <svelte:component this={preset.icon} class="h-5 w-5 text-primary" />
+                    <preset.icon class="h-5 w-5 text-primary" />
                   </div>
                   <div class="flex-1">
                     <h4 class="font-medium">{preset.name}</h4>
@@ -321,7 +334,7 @@
             <div class="pt-2">
               <button
                 class="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors"
-                on:click={() => showAdvanced = !showAdvanced}
+                onclick={() => showAdvanced = !showAdvanced}
               >
                 <ChevronDown class={cn("h-4 w-4 transition-transform", showAdvanced && "rotate-180")} />
                 Advanced Options

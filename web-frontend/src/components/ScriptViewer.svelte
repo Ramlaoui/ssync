@@ -1,25 +1,38 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import { Settings, Type, Hash, WrapText } from 'lucide-svelte';
   
-  export let content: string = '';
-  export let isLoading: boolean = false;
-  export let onDownload: (() => void) | null = null;
-  export let onScrollToTop: (() => void) | null = null;
-  export let onScrollToBottom: (() => void) | null = null;
-  export let fileName: string = 'script.sh';
+  interface Props {
+    content?: string;
+    isLoading?: boolean;
+    onDownload?: (() => void) | null;
+    onScrollToTop?: (() => void) | null;
+    onScrollToBottom?: (() => void) | null;
+    fileName?: string;
+  }
 
-  let scriptElement: HTMLPreElement;
-  let lineNumbersElement: HTMLDivElement;
-  let searchQuery: string = '';
-  let searchResults: number[] = [];
-  let currentSearchIndex: number = -1;
-  let showLineNumbers: boolean = true;
-  let highlightedContent: string = '';
-  let showSettingsMenu: boolean = false;
-  let fontSize: 'small' | 'medium' | 'large' = 'medium';
-  let wordWrap: boolean = true;
+  let {
+    content = '',
+    isLoading = false,
+    onDownload = null,
+    onScrollToTop = null,
+    onScrollToBottom = null,
+    fileName = 'script.sh'
+  }: Props = $props();
+
+  let scriptElement: HTMLPreElement = $state();
+  let lineNumbersElement: HTMLDivElement = $state();
+  let searchQuery: string = $state('');
+  let searchResults: number[] = $state([]);
+  let currentSearchIndex: number = $state(-1);
+  let showLineNumbers: boolean = $state(true);
+  let highlightedContent: string = $state('');
+  let showSettingsMenu: boolean = $state(false);
+  let fontSize: 'small' | 'medium' | 'large' = $state('medium');
+  let wordWrap: boolean = $state(true);
 
   // Progressive loading constants
   const MAX_INITIAL_SIZE = 1 * 1024 * 1024; // 1MB initial load for scripts
@@ -30,27 +43,21 @@
   const DISABLE_HIGHLIGHTING_THRESHOLD = 500 * 1024; // 500KB
 
   // Progressive loading state
-  let renderedContent: string = '';
-  let windowStart: number = 0; // Start of the rendered window
-  let windowEnd: number = 0; // End of the rendered window
-  let totalContentSize: number = 0;
-  let isLargeFile: boolean = false;
-  let loadingMore: boolean = false;
-  let disableHighlighting: boolean = false;
-  let showSizeWarning: boolean = false;
+  let renderedContent: string = $state('');
+  let windowStart: number = $state(0); // Start of the rendered window
+  let windowEnd: number = $state(0); // End of the rendered window
+  let totalContentSize: number = $state(0);
+  let isLargeFile: boolean = $state(false);
+  let loadingMore: boolean = $state(false);
+  let disableHighlighting: boolean = $state(false);
+  let showSizeWarning: boolean = $state(false);
   let warningDismissTimer: NodeJS.Timeout | null = null;
-  let userInteractionCount: number = 0;
+  let userInteractionCount: number = $state(0);
   let virtualScrollOffset: number = 0; // Virtual scroll position
   
   // Line processing
-  let lines: string[] = [];
+  let lines: string[] = $state([]);
 
-  // Initialize content when it changes
-  $: {
-    if (content) {
-      initializeContent();
-    }
-  }
 
   function initializeContent() {
     totalContentSize = content.length;
@@ -94,16 +101,6 @@
     }
   }
 
-  $: {
-    lines = renderedContent.split('\n');
-    if (searchQuery) {
-      highlightSearchResults();
-    } else if (!disableHighlighting) {
-      highlightedContent = applySyntaxHighlighting(renderedContent);
-    } else {
-      highlightedContent = escapeHtml(renderedContent);
-    }
-  }
   
   function escapeHtml(unsafe: string): string {
     return unsafe
@@ -462,12 +459,6 @@
     }
   }
 
-  // Font size classes
-  $: fontSizeClass = {
-    small: 'text-xs',
-    medium: 'text-sm',
-    large: 'text-base'
-  }[fontSize];
 
   // Utility function to format bytes
   function formatBytes(bytes: number): string {
@@ -477,9 +468,31 @@
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+  // Initialize content when it changes
+  run(() => {
+    if (content) {
+      initializeContent();
+    }
+  });
+  run(() => {
+    lines = renderedContent.split('\n');
+    if (searchQuery) {
+      highlightSearchResults();
+    } else if (!disableHighlighting) {
+      highlightedContent = applySyntaxHighlighting(renderedContent);
+    } else {
+      highlightedContent = escapeHtml(renderedContent);
+    }
+  });
+  // Font size classes
+  let fontSizeClass = $derived({
+    small: 'text-xs',
+    medium: 'text-sm',
+    large: 'text-base'
+  }[fontSize]);
 </script>
 
-<div class="enhanced-script-viewer" on:click={handleClickOutside}>
+<div class="enhanced-script-viewer" onclick={handleClickOutside} role="presentation">
   <!-- Header with Controls -->
   <div class="viewer-header">
     <div class="search-controls">
@@ -504,7 +517,7 @@
         <div class="search-navigation">
           <button 
             class="search-nav-btn" 
-            on:click={prevSearchResult}
+            onclick={prevSearchResult}
             disabled={searchResults.length === 0}
             title="Previous result"
           >
@@ -514,7 +527,7 @@
           </button>
           <button 
             class="search-nav-btn" 
-            on:click={nextSearchResult}
+            onclick={nextSearchResult}
             disabled={searchResults.length === 0}
             title="Next result"
           >
@@ -532,7 +545,7 @@
       
       
       <!-- Copy to Clipboard -->
-      <button class="control-btn" on:click={copyToClipboard} title="Copy script">
+      <button class="control-btn" onclick={copyToClipboard} title="Copy script">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/>
         </svg>
@@ -540,7 +553,7 @@
       
       <!-- Download Script -->
       {#if onDownload}
-        <button class="control-btn" on:click={onDownload} title="Download script">
+        <button class="control-btn" onclick={onDownload} title="Download script">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
           </svg>
@@ -548,13 +561,13 @@
       {/if}
       
       <!-- Scroll Controls -->
-      <button class="control-btn" on:click={handleScrollToTop} title="Scroll to top">
+      <button class="control-btn" onclick={handleScrollToTop} title="Scroll to top">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"/>
         </svg>
       </button>
 
-      <button class="control-btn" on:click={handleScrollToBottom} title="Scroll to bottom">
+      <button class="control-btn" onclick={handleScrollToBottom} title="Scroll to bottom">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"/>
         </svg>
@@ -562,7 +575,7 @@
 
       <!-- Settings Menu -->
       <div class="settings-dropdown relative">
-        <button class="control-btn" on:click={() => showSettingsMenu = !showSettingsMenu} title="View settings">
+        <button class="control-btn" onclick={() => showSettingsMenu = !showSettingsMenu} title="View settings">
           <Settings class="w-3.5 h-3.5" />
         </button>
 
@@ -573,21 +586,21 @@
               <div class="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">Text Size</div>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'small' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={() => setFontSize('small')}
+                onclick={() => setFontSize('small')}
               >
                 <Type class="w-3 h-3" />
                 Small
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'medium' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={() => setFontSize('medium')}
+                onclick={() => setFontSize('medium')}
               >
                 <Type class="w-4 h-4" />
                 Medium
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'large' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={() => setFontSize('large')}
+                onclick={() => setFontSize('large')}
               >
                 <Type class="w-5 h-5" />
                 Large
@@ -598,14 +611,14 @@
               <!-- Display Options -->
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {showLineNumbers ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={toggleLineNumbers}
+                onclick={toggleLineNumbers}
               >
                 <Hash class="w-4 h-4" />
                 {showLineNumbers ? 'Hide' : 'Show'} Line Numbers
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {wordWrap ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={toggleWordWrap}
+                onclick={toggleWordWrap}
               >
                 <WrapText class="w-4 h-4" />
                 {wordWrap ? 'Disable' : 'Enable'} Word Wrap
@@ -640,7 +653,7 @@
         </div>
         <button
           class="dismiss-btn"
-          on:click={dismissWarning}
+          onclick={dismissWarning}
           title="Dismiss"
         >
           <svg viewBox="0 0 20 20" fill="currentColor">
@@ -682,7 +695,7 @@
           class="script-content {fontSizeClass}"
           class:wrap={wordWrap}
           bind:this={scriptElement}
-          on:scroll={() => onScriptScroll()}
+          onscroll={() => onScriptScroll()}
         >{@html highlightedContent}</pre>
       </div>
 

@@ -6,15 +6,29 @@
   import { resubmitStore } from '../stores/resubmit.ts';
   import { api } from '../services/api';
 
-  export let job: JobInfo | null = null;
-  export let isMobile: boolean = false;
-  export let showSidebarOnly: boolean = false;
-  export let onToggleSidebar: () => void = () => {};
-  export let onShareJob: () => void = () => {};
-  export let onCancelJob: () => void = () => {};
-  export let onAttachWatchers: () => void = () => {};
-  export let onRefreshJob: () => void = () => {};
-  export let refreshing: boolean = false;
+  interface Props {
+    job?: JobInfo | null;
+    isMobile?: boolean;
+    showSidebarOnly?: boolean;
+    onToggleSidebar?: () => void;
+    onShareJob?: () => void;
+    onCancelJob?: () => void;
+    onAttachWatchers?: () => void;
+    onRefreshJob?: () => void;
+    refreshing?: boolean;
+  }
+
+  let {
+    job = null,
+    isMobile = false,
+    showSidebarOnly = false,
+    onToggleSidebar = () => {},
+    onShareJob = () => {},
+    onCancelJob = () => {},
+    onAttachWatchers = () => {},
+    onRefreshJob = () => {},
+    refreshing = false
+  }: Props = $props();
 
   function getJobStateColor(state: string): string {
     switch (state) {
@@ -40,7 +54,7 @@
     }
   }
 
-  let showDropdown = false;
+  let showDropdown = $state(false);
 
   async function handleResubmitJob() {
     if (!job) return;
@@ -186,18 +200,23 @@
   }
 </script>
 
-<div class="header" on:click={handleClickOutside}>
+<div
+  class="header"
+  onclick={handleClickOutside}
+  onkeydown={(e) => { if (e.key === 'Escape' && showDropdown) showDropdown = false; }}
+  role="presentation"
+>
   <div class="header-left">
     {#if !isMobile}
       {#if showSidebarOnly}
         <!-- Desktop Jobs Page: Home button -->
-        <button class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors" on:click={() => push('/')}>
+        <button class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors" onclick={() => push('/')}>
           <ArrowLeft class="w-4 h-4" />
           Home
         </button>
       {:else}
         <!-- Desktop Job Detail Page: Jobs button -->
-        <button class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors" on:click={() => push('/jobs')}>
+        <button class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors" onclick={() => push('/jobs')}>
           <ArrowLeft class="w-4 h-4" />
           Jobs
         </button>
@@ -209,7 +228,7 @@
         <!-- Mobile hamburger menu button -->
         <button
           class="flex items-center justify-center p-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
-          on:click={onToggleSidebar}
+          onclick={onToggleSidebar}
           aria-label="Show job list"
         >
           <Menu class="w-4 h-4" />
@@ -280,7 +299,7 @@
               {#if job.state === 'R' || job.state === 'PD'}
                 <button
                   class="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50 font-medium"
-                  on:click={handleCancelFromMenu}
+                  onclick={handleCancelFromMenu}
                 >
                   <Square class="w-4 h-4" />
                   Cancel Job
@@ -289,7 +308,7 @@
 
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                on:click={handleResubmitJob}
+                onclick={handleResubmitJob}
               >
                 <RotateCcw class="w-4 h-4" />
                 Resubmit Job
@@ -297,7 +316,7 @@
 
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                on:click={handleAttachWatchersFromMenu}
+                onclick={handleAttachWatchersFromMenu}
               >
                 <Plus class="w-4 h-4" />
                 Attach Watchers
@@ -307,7 +326,7 @@
 
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                on:click={handleDownloadOutputs}
+                onclick={handleDownloadOutputs}
               >
                 <Download class="w-4 h-4" />
                 Download Output
@@ -315,7 +334,7 @@
 
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                on:click={handleDownloadScript}
+                onclick={handleDownloadScript}
               >
                 <FileText class="w-4 h-4" />
                 Download Script

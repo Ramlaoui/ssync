@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { push, location } from "svelte-spa-router";
@@ -15,14 +17,15 @@
   import Badge from "../lib/components/ui/Badge.svelte";
   import Separator from "../lib/components/ui/Separator.svelte";
   import NavigationHeader from "../components/NavigationHeader.svelte";
+  import CollapsibleSection from "../lib/components/ui/CollapsibleSection.svelte";
   import WebSocketStatus from "../components/WebSocketStatus.svelte";
 
-  let hosts: HostInfo[] = [];
-  let loading = false;
+  let hosts: HostInfo[] = $state([]);
+  let loading = $state(false);
   let hostsLoading = false;
-  let error: string | null = null;
-  let search = '';
-  let filters: JobFilters = {
+  let error: string | null = $state(null);
+  let search = $state('');
+  let filters: JobFilters = $state({
     host: "",
     user: "",
     since: "1d",
@@ -30,17 +33,17 @@
     state: "",
     activeOnly: false,
     completedOnly: false,
-  };
+  });
   
   // Mobile UI state
-  let isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  let isMobile = $state(typeof window !== 'undefined' && window.innerWidth < 768);
   let searchFocused = false;
-  let searchExpanded = false;
-  let searchInput: HTMLInputElement;
+  let searchExpanded = $state(false);
+  let searchInput: HTMLInputElement = $state();
 
   // Auto-refresh state
-  let autoRefreshEnabled = false;
-  let autoRefreshInterval = 30; // seconds
+  let autoRefreshEnabled = $state(false);
+  let autoRefreshInterval = $state(30); // seconds
   let autoRefreshTimer: number | null = null;
   
   // Get reactive stores from JobStateManager
@@ -48,14 +51,27 @@
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
   const arrayJobGroups = jobStateManager.getArrayJobGroups();
+  const hostStates = jobStateManager.getHostStates();
 
-  // Debug reactive jobs - only log when count changes
-  $: if ($allJobs.length > 0) {
-    console.log(`[JobsPage] Received ${$allJobs.length} jobs from store`);
-  }
-  $: if ($arrayJobGroups.length > 0) {
-    console.log(`[JobsPage] Received ${$arrayJobGroups.length} array job groups`);
-  }
+  // Debug reactive jobs - check for duplicates
+  run(() => {
+    if ($allJobs.length > 0) {
+      const uniqueKeys = new Set($allJobs.map(j => `${j.hostname}:${j.job_id}`));
+      const hasDuplicates = uniqueKeys.size !== $allJobs.length;
+      console.log(`[JobsPage] Received ${$allJobs.length} jobs from store (${uniqueKeys.size} unique) ${hasDuplicates ? '⚠️ DUPLICATES DETECTED' : '✓'}`);
+      if (hasDuplicates) {
+        // Find and log duplicates
+        const jobKeys = $allJobs.map(j => `${j.hostname}:${j.job_id}`);
+        const duplicates = jobKeys.filter((key, index) => jobKeys.indexOf(key) !== index);
+        console.log(`[JobsPage] Duplicate keys:`, [...new Set(duplicates)]);
+      }
+    }
+  });
+  run(() => {
+    if ($arrayJobGroups.length > 0) {
+      console.log(`[JobsPage] Received ${$arrayJobGroups.length} array job groups`);
+    }
+  });
   
   // Search scoring function - returns relevance score (lower is better)
   function getSearchScore(job: any, searchTerm: string): number {
@@ -83,9 +99,17 @@
   }
   
   // Filter jobs and exclude those that are part of array groups
-  $: filteredJobs = (() => {
+  let filteredJobs = $derived((() => {
     try {
       let jobs = [...$allJobs];
+
+      // Defensive deduplication: Ensure no duplicate job_id + hostname combinations
+      const uniqueJobs = new Map();
+      jobs.forEach(job => {
+        const key = `${job.hostname}:${job.job_id}`;
+        uniqueJobs.set(key, job);
+      });
+      jobs = Array.from(uniqueJobs.values());
 
       // Exclude jobs that are part of array groups
       if ($arrayJobGroups.length > 0) {
@@ -136,10 +160,10 @@
       console.error('[JobsPage] Error in filteredJobs computation:', error);
       return [];
     }
-  })();
+  })());
 
   // Filter array groups based on search and filters
-  $: filteredArrayGroups = (() => {
+  let filteredArrayGroups = $derived((() => {
     let groups = [...$arrayJobGroups];
 
     // Apply filters
@@ -171,12 +195,26 @@
     }
 
     return groups;
-  })();
+  })());
+
+  // Track active arrays for smart collapsible defaults
+  let activeArrayCount = $derived(filteredArrayGroups.filter(g =>
+    g.running_count > 0 || g.pending_count > 0
+  ).length);
+
+  let hasActiveArrays = $derived(activeArrayCount > 0);
+
+  // Smart default: collapse if all completed OR > 10 arrays
+  let arraysSectionExpanded = $derived(hasActiveArrays && filteredArrayGroups.length <= 10);
   
   
   // Compute loading states from manager
-  $: progressiveLoading = Array.from($managerState.hostStates.values()).some(h => h.status === 'loading');
-  $: dataFromCache = $managerState.dataSource === 'cache';
+  let progressiveLoading = $derived(Array.from($managerState.hostStates.values()).some(h => h.status === 'loading'));
+  let dataFromCache = $derived($managerState.dataSource === 'cache');
+
+  // Track hosts with errors
+  let hostsWithErrors = $derived(Array.from($hostStates.values()).filter(h => h.status === 'error'));
+  let hostsWithTimeouts = $derived(hostsWithErrors.filter(h => h.isTimeout));
   
   function checkMobile() {
     isMobile = window.innerWidth < 768;
@@ -278,11 +316,13 @@
   }
 
   // React to auto-refresh settings changes
-  $: if (typeof autoRefreshEnabled !== 'undefined') {
-    setupAutoRefresh();
-  }
+  run(() => {
+    if (typeof autoRefreshEnabled !== 'undefined') {
+      setupAutoRefresh();
+    }
+  });
 
-  $: totalJobs = filteredJobs.length + filteredArrayGroups.reduce((sum, g) => sum + g.total_tasks, 0);
+  let totalJobs = $derived(filteredJobs.length + filteredArrayGroups.reduce((sum, g) => sum + g.total_tasks, 0));
   
 
   onMount(async () => {
@@ -331,55 +371,57 @@
     <NavigationHeader
       showRefresh={true}
       refreshing={loading || progressiveLoading}
-      {autoRefreshEnabled}
-      {autoRefreshInterval}
+      bind:autoRefreshEnabled
+      bind:autoRefreshInterval
       on:refresh={handleManualRefresh}
       on:refreshSettingsChanged={handleRefreshSettingsChanged}
     >
-      <div slot="left" class="flex items-center gap-4">
-        <div class="flex gap-4 flex-shrink-0 items-center">
-          <div class="flex items-center gap-1 whitespace-nowrap">
-            <span class="text-base font-semibold text-slate-900">{hosts.length}</span>
-            <span class="text-xs text-slate-500">hosts</span>
-          </div>
-          <div class="flex items-center gap-1 whitespace-nowrap">
-            <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
-            <span class="text-xs text-slate-500">jobs</span>
-          </div>
-          {#if dataFromCache}
-            <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-gray-200 ml-4">
-              <Clock class="h-4 w-4 text-muted-foreground" />
-              <Badge variant="secondary">Cached</Badge>
+      {#snippet left()}
+            <div  class="flex items-center gap-4">
+          <div class="flex gap-4 flex-shrink-0 items-center">
+            <div class="flex items-center gap-1 whitespace-nowrap">
+              <span class="text-base font-semibold text-slate-900">{hosts.length}</span>
+              <span class="text-xs text-slate-500">hosts</span>
             </div>
-          {/if}
-        </div>
-
-        <!-- WebSocket Status -->
-        <div class="ml-4">
-          <WebSocketStatus compact={true} />
-        </div>
-
-        <!-- Search Bar -->
-        <div class="flex-1 max-w-md">
-          <div class="relative w-full">
-            <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none flex items-center justify-center">
-              <Search size={16} />
+            <div class="flex items-center gap-1 whitespace-nowrap">
+              <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
+              <span class="text-xs text-slate-500">jobs</span>
             </div>
-            <input
-              type="text"
-              class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
-              placeholder="Search jobs..."
-              bind:value={search}
-              on:input={handleFilterChange}
-            />
-            {#if search}
-              <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" on:click={() => { search = ''; handleFilterChange(); }}>
-                <X size={14} />
-              </button>
+            {#if dataFromCache}
+              <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-gray-200 ml-4">
+                <Clock class="h-4 w-4 text-muted-foreground" />
+                <Badge variant="secondary">Cached</Badge>
+              </div>
             {/if}
           </div>
+
+          <!-- WebSocket Status -->
+          <div class="ml-4">
+            <WebSocketStatus compact={true} />
+          </div>
+
+          <!-- Search Bar -->
+          <div class="flex-1 max-w-md">
+            <div class="relative w-full">
+              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none flex items-center justify-center">
+                <Search size={16} />
+              </div>
+              <input
+                type="text"
+                class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
+                placeholder="Search jobs..."
+                bind:value={search}
+                oninput={handleFilterChange}
+              />
+              {#if search}
+                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
+                  <X size={14} />
+                </button>
+              {/if}
+            </div>
+          </div>
         </div>
-      </div>
+          {/snippet}
     </NavigationHeader>
   {:else}
     <!-- Mobile header -->
@@ -412,18 +454,18 @@
                 class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
                 placeholder="Search jobs..."
                 bind:value={search}
-                on:input={handleFilterChange}
-                on:blur={() => { if (!search) searchExpanded = false; }}
+                oninput={handleFilterChange}
+                onblur={() => { if (!search) searchExpanded = false; }}
                 bind:this={searchInput}
               />
               {#if search}
-                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" on:click={() => { search = ''; handleFilterChange(); }}>
+                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
                   <X size={14} />
                 </button>
               {/if}
             </div>
           {:else}
-            <button class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-gray-500 cursor-pointer transition-all hover:bg-gray-100 hover:text-gray-700" on:click={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
+            <button class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-gray-500 cursor-pointer transition-all hover:bg-gray-100 hover:text-gray-700" onclick={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
               <Search size={16} />
             </button>
           {/if}
@@ -431,7 +473,7 @@
 
         <!-- Refresh button -->
         <button
-          on:click={handleManualRefresh}
+          onclick={handleManualRefresh}
           disabled={loading}
           class="flex items-center justify-center w-8 h-8 bg-white border border-black/8 rounded-lg text-sm font-medium text-slate-600 cursor-pointer transition-all flex-shrink-0 hover:bg-slate-50 hover:border-black/12 disabled:opacity-50 disabled:cursor-not-allowed"
           title="{loading || progressiveLoading ? 'Loading from hosts...' : 'Refresh'}"
@@ -448,6 +490,36 @@
     </div>
   {/if}
 
+  <!-- Host connection warnings -->
+  {#if hostsWithTimeouts.length > 0}
+    <div class="bg-yellow-50 border-b border-yellow-200 p-3">
+      <div class="flex items-center gap-2">
+        <svg class="h-5 w-5 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+        <p class="text-sm font-medium text-yellow-800">
+          Connection timeout: {hostsWithTimeouts.map(h => h.hostname).join(', ')}
+          {#if hostsWithTimeouts.length === 1}
+            - Some jobs may not be visible
+          {:else}
+            - Some jobs may not be visible from these hosts
+          {/if}
+        </p>
+      </div>
+    </div>
+  {:else if hostsWithErrors.length > 0}
+    <div class="bg-red-50 border-b border-red-200 p-3">
+      <div class="flex items-center gap-2">
+        <svg class="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="text-sm font-medium text-red-800">
+          Connection error: {hostsWithErrors.map(h => h.hostname).join(', ')}
+        </p>
+      </div>
+    </div>
+  {/if}
+
   <!-- Filters removed since search is now in header -->
 
   <div class="flex-1 overflow-auto px-4 py-4">
@@ -456,12 +528,22 @@
         <div class="text-center text-gray-500">Loading jobs...</div>
       </div>
     {:else}
-      <!-- Array job groups -->
+      <!-- Array job groups - Collapsible Section -->
       {#if filteredArrayGroups.length > 0}
-        <div class="space-y-2 mb-4">
-          {#each filteredArrayGroups as group (group.array_job_id + group.hostname)}
-            <ArrayJobCard {group} />
-          {/each}
+        <div class="mb-4">
+          <CollapsibleSection
+            title="Array Jobs"
+            badge="{filteredArrayGroups.length} total"
+            subtitle="{activeArrayCount} active"
+            defaultExpanded={arraysSectionExpanded}
+            storageKey="jobspage-arrays-expanded"
+          >
+            <div class="space-y-2">
+              {#each filteredArrayGroups as group (group.array_job_id + group.hostname)}
+                <ArrayJobCard {group} />
+              {/each}
+            </div>
+          </CollapsibleSection>
         </div>
       {/if}
 

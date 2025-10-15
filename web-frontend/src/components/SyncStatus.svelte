@@ -2,8 +2,12 @@
   import { onMount, onDestroy } from 'svelte';
   import { jobStateManager } from '../lib/JobStateManager';
   
-  export let compact = false;
-  export let showDetails = false;
+  interface Props {
+    compact?: boolean;
+    showDetails?: boolean;
+  }
+
+  let { compact = false, showDetails = false }: Props = $props();
   
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
@@ -37,8 +41,8 @@
   }
   
   // Queue status
-  $: queueSize = $managerState.pendingUpdates.length;
-  $: isProcessing = $managerState.processingUpdates;
+  let queueSize = $derived($managerState.pendingUpdates.length);
+  let isProcessing = $derived($managerState.processingUpdates);
 </script>
 
 <div class="sync-status" class:compact>

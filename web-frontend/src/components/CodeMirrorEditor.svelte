@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { EditorView, keymap, drawSelection, dropCursor, rectangularSelection, crosshairCursor, lineNumbers as lineNumbersGutter, gutter } from '@codemirror/view';
   import { EditorState, Compartment } from '@codemirror/state';
@@ -16,28 +18,43 @@
     toggleVim: void;
   }>();
 
-  export let value = '';
-  export let placeholder = '';
-  export let disabled = false;
-  export let vimMode = true;
-  export let theme = 'dark';
-  export let fontSize = 14;
-  export let lineNumbers = true;
-  export let wordWrap = false;
-  export let tabSize = 2;
-  export let autoIndent = true;
+  interface Props {
+    value?: string;
+    placeholder?: string;
+    disabled?: boolean;
+    vimMode?: boolean;
+    theme?: string;
+    fontSize?: number;
+    lineNumbers?: boolean;
+    wordWrap?: boolean;
+    tabSize?: number;
+    autoIndent?: boolean;
+  }
 
-  let editorElement: HTMLDivElement;
-  let editorView: EditorView | null = null;
-  let previousValue = '';
-  let previousDisabled = disabled;
-  let previousVimMode = vimMode;
-  let previousTheme = theme;
-  let previousLineNumbers = lineNumbers;
-  let previousWordWrap = wordWrap;
-  let previousTabSize = tabSize;
-  let previousAutoIndent = autoIndent;
-  let previousFontSize = fontSize;
+  let {
+    value = '',
+    placeholder = '',
+    disabled = false,
+    vimMode = true,
+    theme = 'dark',
+    fontSize = 14,
+    lineNumbers = true,
+    wordWrap = false,
+    tabSize = 2,
+    autoIndent = true
+  }: Props = $props();
+
+  let editorElement: HTMLDivElement | undefined = $state();
+  let editorView: EditorView | null = $state(null);
+  let previousValue = $state('');
+  let previousDisabled = $state(disabled);
+  let previousVimMode = $state(vimMode);
+  let previousTheme = $state(theme);
+  let previousLineNumbers = $state(lineNumbers);
+  let previousWordWrap = $state(wordWrap);
+  let previousTabSize = $state(tabSize);
+  let previousAutoIndent = $state(autoIndent);
+  let previousFontSize = $state(fontSize);
   let isInternalChange = false;
   let isMobile = false;
   
@@ -301,28 +318,7 @@
     isInternalChange = false;
   }
 
-  // Reactive updates
-  $: if (editorView && value !== previousValue) {
-    updateEditorContent(value);
-  }
 
-  $: if (editorView && (disabled !== previousDisabled || vimMode !== previousVimMode)) {
-    const effects = [];
-    
-    if (disabled !== previousDisabled) {
-      effects.push(readOnlyCompartment.reconfigure(disabled ? EditorState.readOnly.of(true) : []));
-      previousDisabled = disabled;
-    }
-    
-    if (vimMode !== previousVimMode) {
-      effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
-      previousVimMode = vimMode;
-    }
-    
-    if (effects.length > 0) {
-      editorView.dispatch({ effects });
-    }
-  }
 
   onMount(() => {
     // Detect if we're on a mobile device
@@ -384,59 +380,86 @@
     return [];
   }
 
-  // Reactive updates for editor options
-  $: if (editorView) {
-    const effects = [];
-    let needsRecreate = false;
-
-    if (vimMode !== previousVimMode) {
-      effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
-      previousVimMode = vimMode;
+  // Reactive updates
+  run(() => {
+    if (editorView && value !== previousValue) {
+      updateEditorContent(value);
     }
-
-    if (theme !== previousTheme || fontSize !== previousFontSize) {
-      effects.push(themeCompartment.reconfigure(getThemeExtension()));
-      previousTheme = theme;
-      previousFontSize = fontSize;
-    }
-
-    if (lineNumbers !== previousLineNumbers) {
-      effects.push(lineNumbersCompartment.reconfigure(lineNumbers ? lineNumbersGutter() : []));
-      previousLineNumbers = lineNumbers;
-    }
-
-    if (wordWrap !== previousWordWrap) {
-      effects.push(wrapCompartment.reconfigure(wordWrap ? EditorView.lineWrapping : []));
-      previousWordWrap = wordWrap;
-    }
-
-    if (disabled !== previousDisabled) {
-      effects.push(readOnlyCompartment.reconfigure(disabled ? EditorState.readOnly.of(true) : []));
-      previousDisabled = disabled;
-    }
-
-    // Tab size and autoIndent require recreating some extensions
-    if (tabSize !== previousTabSize || autoIndent !== previousAutoIndent) {
-      needsRecreate = true;
-      previousTabSize = tabSize;
-      previousAutoIndent = autoIndent;
-    }
-
-    if (needsRecreate) {
-      // For tabSize and autoIndent changes, we need to recreate the editor
-      const currentValue = editorView.state.doc.toString();
-      const currentSelection = editorView.state.selection;
-      createEditor();
-      if (editorView) {
-        editorView.dispatch({
-          changes: { from: 0, to: editorView.state.doc.length, insert: currentValue },
-          selection: currentSelection
-        });
+  });
+  run(() => {
+    if (editorView && (disabled !== previousDisabled || vimMode !== previousVimMode)) {
+      const effects = [];
+      
+      if (disabled !== previousDisabled) {
+        effects.push(readOnlyCompartment.reconfigure(disabled ? EditorState.readOnly.of(true) : []));
+        previousDisabled = disabled;
       }
-    } else if (effects.length > 0) {
-      editorView.dispatch({ effects });
+      
+      if (vimMode !== previousVimMode) {
+        effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
+        previousVimMode = vimMode;
+      }
+      
+      if (effects.length > 0) {
+        editorView.dispatch({ effects });
+      }
     }
-  }
+  });
+  // Reactive updates for editor options
+  run(() => {
+    if (editorView) {
+      const effects = [];
+      let needsRecreate = false;
+
+      if (vimMode !== previousVimMode) {
+        effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
+        previousVimMode = vimMode;
+      }
+
+      if (theme !== previousTheme || fontSize !== previousFontSize) {
+        effects.push(themeCompartment.reconfigure(getThemeExtension()));
+        previousTheme = theme;
+        previousFontSize = fontSize;
+      }
+
+      if (lineNumbers !== previousLineNumbers) {
+        effects.push(lineNumbersCompartment.reconfigure(lineNumbers ? lineNumbersGutter() : []));
+        previousLineNumbers = lineNumbers;
+      }
+
+      if (wordWrap !== previousWordWrap) {
+        effects.push(wrapCompartment.reconfigure(wordWrap ? EditorView.lineWrapping : []));
+        previousWordWrap = wordWrap;
+      }
+
+      if (disabled !== previousDisabled) {
+        effects.push(readOnlyCompartment.reconfigure(disabled ? EditorState.readOnly.of(true) : []));
+        previousDisabled = disabled;
+      }
+
+      // Tab size and autoIndent require recreating some extensions
+      if (tabSize !== previousTabSize || autoIndent !== previousAutoIndent) {
+        needsRecreate = true;
+        previousTabSize = tabSize;
+        previousAutoIndent = autoIndent;
+      }
+
+      if (needsRecreate) {
+        // For tabSize and autoIndent changes, we need to recreate the editor
+        const currentValue = editorView.state.doc.toString();
+        const currentSelection = editorView.state.selection;
+        createEditor();
+        if (editorView) {
+          editorView.dispatch({
+            changes: { from: 0, to: editorView.state.doc.length, insert: currentValue },
+            selection: currentSelection
+          });
+        }
+      } else if (effects.length > 0) {
+        editorView.dispatch({ effects });
+      }
+    }
+  });
 </script>
 
 <div class="codemirror-container">
@@ -543,26 +566,7 @@
     .codemirror-container {
       border-radius: 0;
     }
-    
-    .editor-controls {
-      position: fixed;
-      bottom: 100px;
-      right: 1rem;
-    }
 
-    .vim-toggle {
-      font-size: 0.85rem;
-      padding: 0.5rem 1rem;
-      min-width: 3.5rem;
-      min-height: 44px;
-      border-radius: 22px;
-      font-weight: 700;
-      backdrop-filter: blur(10px);
-      background: rgba(0, 0, 0, 0.6);
-      border: 2px solid rgba(255, 255, 255, 0.3);
-    }
-    
-    
     :global(.cm-scroller) {
       font-family: "SF Mono", "Monaco", "Courier New", monospace !important;
       font-size: 14px !important;

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { run, createBubbler, stopPropagation } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { onMount, onDestroy } from "svelte";
   import { push } from "svelte-spa-router";
   import type { AxiosError } from "axios";
@@ -15,32 +18,36 @@
   import { Info, Terminal, AlertTriangle, Code, ArrowLeft, Eye } from 'lucide-svelte';
   import { navigationState, navigationActions } from '../stores/navigation';
 
-  export let params: any = {};
-  export let showSidebarOnly: boolean = false;
+  interface Props {
+    params?: any;
+    showSidebarOnly?: boolean;
+  }
 
-  let job: JobInfo | null = null;
-  let jobStore: Readable<JobInfo | null> | null = null;
-  let loading = false;
-  let initialLoadComplete = false;
-  let error: string | null = null;
-  let activeTab = 'details';
-  let sidebarCollapsed = false;
-  let isMobile = false;
-  let showMobileSidebar = false;
-  let showAttachWatchersDialog = false;
-  let isClosingSidebar = false;
+  let { params = {}, showSidebarOnly = false }: Props = $props();
+
+  let job: JobInfo | null = $state(null);
+  let jobStore: Readable<JobInfo | null> | null = $state(null);
+  let loading = $state(false);
+  let initialLoadComplete = $state(false);
+  let error: string | null = $state(null);
+  let activeTab = $state('details');
+  let sidebarCollapsed = $state(false);
+  let isMobile = $state(false);
+  let showMobileSidebar = $state(false);
+  let showAttachWatchersDialog = $state(false);
+  let isClosingSidebar = $state(false);
 
   // Output related state
-  let outputData: OutputData | null = null;
-  let outputError: string | null = null;
-  let loadingOutput = false;
+  let outputData: OutputData | null = $state(null);
+  let outputError: string | null = $state(null);
+  let loadingOutput = $state(false);
   let loadingMoreOutput = false;
-  let refreshingOutput = false;
+  let refreshingOutput = $state(false);
 
   // Script related state
-  let scriptData: ScriptData | null = null;
-  let scriptError: string | null = null;
-  let loadingScript = false;
+  let scriptData: ScriptData | null = $state(null);
+  let scriptError: string | null = $state(null);
+  let loadingScript = $state(false);
 
   // Check mobile
   function checkMobile() {
@@ -185,40 +192,62 @@
     navigationActions.goBack();
   }
 
-  // Set up reactive job store when params change
-  $: if (params.id && params.host && !showSidebarOnly) {
-    // Clear previous data when switching jobs
-    outputData = null;
-    scriptData = null;
-    outputError = null;
-    scriptError = null;
-    error = null;
-    activeTab = 'details';
-    initialLoadComplete = false;
+  // Track previous params to avoid recreating store on every reactive run
+  let prevParamsId: string | undefined = $state();
+  let prevParamsHost: string | undefined = $state();
 
-    // Get reactive store for this job
-    jobStore = jobStateManager.getJob(params.id, params.host);
+  // Reactive block 1: Set up job store when params change (not on every run)
+  run(() => {
+    if (params.id && params.host && !showSidebarOnly) {
+      // Only set up store if params actually changed
+      if (params.id !== prevParamsId || params.host !== prevParamsHost) {
+        console.log(`[JobPage] Params changed from ${prevParamsHost}:${prevParamsId} to ${params.host}:${params.id}`);
 
-    // Set current view for priority updates
-    jobStateManager.setCurrentViewJob(params.id, params.host);
+        // Clear previous data when switching jobs
+        outputData = null;
+        scriptData = null;
+        outputError = null;
+        scriptError = null;
+        error = null;
+        activeTab = 'details';
+        initialLoadComplete = false;
 
-    // Load the job data
-    loadJob();
-  }
+        // Update tracked params
+        prevParamsId = params.id;
+        prevParamsHost = params.host;
 
-  // Subscribe to job updates from the store
-  $: if (jobStore) {
-    job = $jobStore;
-  }
+        // Get reactive store for this job (only when params change)
+        jobStore = jobStateManager.getJob(params.id, params.host);
 
-  // Load data when tab changes
-  $: if (job && activeTab === 'output' && !outputData) {
-    loadOutput();
-  }
+        // Set current view for priority updates
+        jobStateManager.setCurrentViewJob(params.id, params.host);
 
-  $: if (job && activeTab === 'script' && !scriptData) {
-    loadScript();
-  }
+        // Load the job data
+        loadJob();
+      }
+    }
+  });
+
+  // Reactive block 2: Subscribe to job updates from the store
+  run(() => {
+    if (jobStore) {
+      job = $jobStore;
+    }
+  });
+
+  // Reactive block 3: Load output data when tab changes
+  run(() => {
+    if (job && activeTab === 'output' && !outputData) {
+      loadOutput();
+    }
+  });
+
+  // Reactive block 4: Load script data when tab changes
+  run(() => {
+    if (job && activeTab === 'script' && !scriptData) {
+      loadScript();
+    }
+  });
 
   onMount(async () => {
     // Job loading is now handled by reactive statement above
@@ -231,9 +260,7 @@
         jobId: params.id,
         hostname: params.host
       });
-
-      // Set current view for priority updates
-      jobStateManager.setCurrentViewJob(params.id, params.host);
+      // Note: setCurrentViewJob is now called in the reactive block to avoid duplication
     }
   });
 
@@ -254,7 +281,7 @@
           <!-- Left side - Back button -->
           <button
             class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
-            on:click={handleBackNavigation}
+            onclick={handleBackNavigation}
           >
             <ArrowLeft class="w-4 h-4" />
             Back
@@ -308,8 +335,8 @@
 
     <!-- Mobile Sidebar for Jobs Page -->
     {#if isMobile && showMobileSidebar}
-      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" on:click={handleMobileSidebarClose} on:keydown={() => {}}>
-        <div role="dialog" on:click|stopPropagation on:keydown={() => {}}>
+      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" tabindex="-1" onclick={handleMobileSidebarClose} onkeydown={() => {}}>
+        <div role="dialog" tabindex="0" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}}>
           <JobSidebar
             currentJobId=""
             currentHost=""
@@ -325,8 +352,8 @@
   {:else}
     <!-- Regular Job Detail Page -->
     {#if isMobile && showMobileSidebar}
-      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" on:click={handleMobileSidebarClose} on:keydown={() => {}}>
-        <div role="dialog" on:click|stopPropagation on:keydown={() => {}}>
+      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" tabindex="-1" onclick={handleMobileSidebarClose} onkeydown={() => {}}>
+        <div role="dialog" tabindex="0" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}}>
           <JobSidebar
             currentJobId={params.id || ''}
             currentHost={params.host || ''}
@@ -375,35 +402,35 @@
               <nav class="flex space-x-8">
                 <button
                   class="tab-button {activeTab === 'details' ? 'tab-button-active' : ''}"
-                  on:click={() => handleTabClick('details')}
+                  onclick={() => handleTabClick('details')}
                 >
                   <Info class="w-4 h-4" />
                   Details
                 </button>
                 <button
                   class="tab-button {activeTab === 'output' ? 'tab-button-active' : ''}"
-                  on:click={() => handleTabClick('output')}
+                  onclick={() => handleTabClick('output')}
                 >
                   <Terminal class="w-4 h-4" />
                   Output
                 </button>
                 <button
                   class="tab-button {activeTab === 'errors' ? 'tab-button-active' : ''}"
-                  on:click={() => handleTabClick('errors')}
+                  onclick={() => handleTabClick('errors')}
                 >
                   <AlertTriangle class="w-4 h-4" />
                   Errors
                 </button>
                 <button
                   class="tab-button {activeTab === 'script' ? 'tab-button-active' : ''}"
-                  on:click={() => handleTabClick('script')}
+                  onclick={() => handleTabClick('script')}
                 >
                   <Code class="w-4 h-4" />
                   Script
                 </button>
                 <button
                   class="tab-button {activeTab === 'watchers' ? 'tab-button-active' : ''}"
-                  on:click={() => handleTabClick('watchers')}
+                  onclick={() => handleTabClick('watchers')}
                 >
                   <Eye class="w-4 h-4" />
                   Watchers

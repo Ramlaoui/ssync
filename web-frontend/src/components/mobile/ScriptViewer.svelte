@@ -1,31 +1,47 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount } from 'svelte';
   
-  export let script: string = '';
-  export let highlightLine: number | null = null;
-  export let showLineNumbers: boolean = true;
-  export let collapsible: boolean = true;
-  export let maxHeight: string = '400px';
-  
-  let container: HTMLDivElement;
-  let isCollapsed = collapsible;
-  let lines: string[] = [];
-  let searchTerm = '';
-  let searchVisible = false;
-  let matchedLines: Set<number> = new Set();
-  
-  $: lines = script.split('\n');
-  
-  $: if (searchTerm) {
-    matchedLines = new Set();
-    lines.forEach((line, index) => {
-      if (line.toLowerCase().includes(searchTerm.toLowerCase())) {
-        matchedLines.add(index);
-      }
-    });
-  } else {
-    matchedLines = new Set();
+  interface Props {
+    script?: string;
+    highlightLine?: number | null;
+    showLineNumbers?: boolean;
+    collapsible?: boolean;
+    maxHeight?: string;
   }
+
+  let {
+    script = '',
+    highlightLine = null,
+    showLineNumbers = true,
+    collapsible = true,
+    maxHeight = '400px'
+  }: Props = $props();
+  
+  let container: HTMLDivElement = $state();
+  let isCollapsed = $state(collapsible);
+  let lines: string[] = $state([]);
+  let searchTerm = $state('');
+  let searchVisible = $state(false);
+  let matchedLines: Set<number> = $state(new Set());
+  
+  run(() => {
+    lines = script.split('\n');
+  });
+  
+  run(() => {
+    if (searchTerm) {
+      matchedLines = new Set();
+      lines.forEach((line, index) => {
+        if (line.toLowerCase().includes(searchTerm.toLowerCase())) {
+          matchedLines.add(index);
+        }
+      });
+    } else {
+      matchedLines = new Set();
+    }
+  });
   
   function toggleCollapse() {
     isCollapsed = !isCollapsed;
@@ -85,7 +101,7 @@
 
 <div class="script-viewer">
   <div class="viewer-header">
-    <button class="expand-btn" on:click={toggleCollapse} aria-label="Toggle expand">
+    <button class="expand-btn" onclick={toggleCollapse} aria-label="Toggle expand">
       <svg class="expand-icon" class:rotated={!isCollapsed} viewBox="0 0 24 24">
         <path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z" />
       </svg>
@@ -93,13 +109,13 @@
     </button>
     
     <div class="viewer-actions">
-      <button class="action-btn" on:click={() => searchVisible = !searchVisible} aria-label="Search">
+      <button class="action-btn" onclick={() => searchVisible = !searchVisible} aria-label="Search">
         <svg viewBox="0 0 24 24">
           <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z" />
         </svg>
       </button>
       
-      <button class="action-btn" on:click={copyToClipboard} aria-label="Copy">
+      <button class="action-btn" onclick={copyToClipboard} aria-label="Copy">
         <svg viewBox="0 0 24 24">
           <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" />
         </svg>

@@ -1,27 +1,33 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, tick } from 'svelte';
   import type { WatcherEvent } from '../types/watchers';
   
-  export let events: WatcherEvent[] = [];
-  export let loading = false;
+  interface Props {
+    events?: WatcherEvent[];
+    loading?: boolean;
+  }
+
+  let { events = [], loading = false }: Props = $props();
   
   // Performance: limit initial render
   const EVENTS_PER_PAGE = 20;
-  let displayedEvents = EVENTS_PER_PAGE;
-  let searchTerm = '';
+  let displayedEvents = $state(EVENTS_PER_PAGE);
+  let searchTerm = $state('');
   
   // Group events by watcher for better organization
-  $: groupedEvents = events.reduce((acc, event) => {
+  let groupedEvents = $derived(events.reduce((acc, event) => {
     const key = event.watcher_name || 'Unknown';
     if (!acc[key]) acc[key] = [];
     acc[key].push(event);
     return acc;
-  }, {} as Record<string, WatcherEvent[]>);
+  }, {} as Record<string, WatcherEvent[]>));
   
-  $: watcherNames = Object.keys(groupedEvents);
+  let watcherNames = $derived(Object.keys(groupedEvents));
   
-  let selectedWatcher: string | null = null;
-  let expandedEvents: Set<string> = new Set();
+  let selectedWatcher: string | null = $state(null);
+  let expandedEvents: Set<string> = $state(new Set());
   
   // Initialize selected watcher after mount to prevent SSR issues
   onMount(() => {
@@ -29,7 +35,7 @@
   });
   
   // Filter events based on search
-  $: filteredEvents = selectedWatcher && groupedEvents[selectedWatcher] 
+  let filteredEvents = $derived(selectedWatcher && groupedEvents[selectedWatcher] 
     ? groupedEvents[selectedWatcher].filter(event => {
         if (!searchTerm) return true;
         const term = searchTerm.toLowerCase();
@@ -40,21 +46,23 @@
           event.job_id?.toLowerCase().includes(term)
         );
       })
-    : [];
+    : []);
   
   // Paginated events for performance
-  $: visibleEvents = filteredEvents.slice(0, displayedEvents);
-  $: hasMore = displayedEvents < filteredEvents.length;
+  let visibleEvents = $derived(filteredEvents.slice(0, displayedEvents));
+  let hasMore = $derived(displayedEvents < filteredEvents.length);
   
   function loadMore() {
     displayedEvents += EVENTS_PER_PAGE;
   }
   
   // Reset pagination when switching watchers or searching
-  $: if (selectedWatcher || searchTerm) {
-    displayedEvents = EVENTS_PER_PAGE;
-    expandedEvents = new Set(); // Force reactivity with new Set
-  }
+  run(() => {
+    if (selectedWatcher || searchTerm) {
+      displayedEvents = EVENTS_PER_PAGE;
+      expandedEvents = new Set(); // Force reactivity with new Set
+    }
+  });
   
   function getActionIcon(actionType: string): string {
     if (actionType.includes('metric')) return '📊';
@@ -150,7 +158,7 @@
           <button 
             class="watcher-tab"
             class:active={selectedWatcher === watcherName}
-            on:click={() => selectedWatcher = watcherName}
+            onclick={() => selectedWatcher = watcherName}
           >
             {watcherName}
             <span class="tab-count">{groupedEvents[watcherName].length}</span>
@@ -175,7 +183,7 @@
               <button 
                 class="event-card"
                 class:expanded={isExpanded}
-                on:click={() => toggleEventExpansion(eventId)}
+                onclick={() => toggleEventExpansion(eventId)}
               >
                 <div class="event-header">
                   <div class="event-main">
@@ -247,7 +255,7 @@
         
         {#if hasMore}
           <div class="load-more-container">
-            <button class="load-more-btn" on:click={loadMore}>
+            <button class="load-more-btn" onclick={loadMore}>
               Load More ({filteredEvents.length - displayedEvents} remaining)
             </button>
           </div>

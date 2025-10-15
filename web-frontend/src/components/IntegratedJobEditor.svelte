@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { fly, slide } from 'svelte/transition';
   import CodeMirrorEditor from './CodeMirrorEditor.svelte';
@@ -10,28 +12,40 @@
     configChanged: any;
   }>();
 
-  // Props
-  export let script = '';
-  export let launching = false;
-  export let hosts: HostInfo[] = [];
-  export let selectedHost = '';
-  export let loading = false;
-  export let validationDetails: any = { isValid: false, missing: [], missingText: '' };
+  
+  interface Props {
+    // Props
+    script?: string;
+    launching?: boolean;
+    hosts?: HostInfo[];
+    selectedHost?: string;
+    loading?: boolean;
+    validationDetails?: any;
+  }
+
+  let {
+    script = '',
+    launching = false,
+    hosts = [],
+    selectedHost = $bindable(''),
+    loading = false,
+    validationDetails = { isValid: false, missing: [], missingText: '' }
+  }: Props = $props();
 
   // Layout state
-  let sidebarOpen = true;
+  let sidebarOpen = $state(true);
   let sidebarWidth = 380; // pixels
-  let editorView: 'script' | 'split' | 'preview' = 'script';
-  let activeSection: 'resources' | 'output' | 'advanced' = 'resources';
+  let editorView: 'script' | 'split' | 'preview' = $state('script');
+  let activeSection: 'resources' | 'output' | 'advanced' = $state('resources');
   
   // Editor state
-  let codeMirrorEditor: CodeMirrorEditor;
-  let vimMode = false;
-  let editableScript = script;
+  let codeMirrorEditor: CodeMirrorEditor = $state();
+  let vimMode = $state(false);
+  let editableScript = $state(script);
   let hasUnsavedChanges = false;
   
   // Configuration state
-  let jobConfig = {
+  let jobConfig = $state({
     jobName: '',
     partition: '',
     timeLimit: 60, // minutes
@@ -42,28 +56,14 @@
     account: '',
     outputFile: '',
     errorFile: ''
-  };
+  });
   
   // Parsed SLURM parameters from script
-  let parsedParams: Record<string, any> = {};
-  let scriptValidation = { errors: [], warnings: [] };
+  let parsedParams: Record<string, any> = $state({});
+  let scriptValidation = $state({ errors: [], warnings: [] });
 
-  $: editableScript = script;
   
-  // Parse SLURM parameters from script
-  $: {
-    if (editableScript) {
-      parsedParams = parseSlurmScript(editableScript);
-      scriptValidation = validateSlurmScript(editableScript);
-    }
-  }
   
-  // Auto-sync parsed params to config
-  $: {
-    if (Object.keys(parsedParams).length > 0) {
-      syncParsedToConfig();
-    }
-  }
   
   function parseSlurmScript(content: string): Record<string, any> {
     const params: Record<string, any> = {};
@@ -292,6 +292,22 @@ python train.py --epochs 100 --batch-size 32
       document.removeEventListener('keydown', handleGlobalKeydown);
     };
   });
+  run(() => {
+    editableScript = script;
+  });
+  // Parse SLURM parameters from script
+  run(() => {
+    if (editableScript) {
+      parsedParams = parseSlurmScript(editableScript);
+      scriptValidation = validateSlurmScript(editableScript);
+    }
+  });
+  // Auto-sync parsed params to config
+  run(() => {
+    if (Object.keys(parsedParams).length > 0) {
+      syncParsedToConfig();
+    }
+  });
 </script>
 
 <div class="integrated-editor">
@@ -331,7 +347,7 @@ python train.py --epochs 100 --batch-size 32
         <button 
           class="view-btn"
           class:active={editorView === 'script'}
-          on:click={() => editorView = 'script'}
+          onclick={() => editorView = 'script'}
           title="Script Only"
         >
           <svg viewBox="0 0 24 24">
@@ -341,7 +357,7 @@ python train.py --epochs 100 --batch-size 32
         <button 
           class="view-btn"
           class:active={editorView === 'split'}
-          on:click={() => editorView = 'split'}
+          onclick={() => editorView = 'split'}
           title="Split View"
         >
           <svg viewBox="0 0 24 24">
@@ -359,13 +375,13 @@ python train.py --epochs 100 --batch-size 32
             Templates
           </button>
           <div class="dropdown-menu">
-            <button on:click={() => insertTemplate('basic')}>Basic Job</button>
-            <button on:click={() => insertTemplate('gpu')}>GPU Job</button>
-            <button on:click={() => insertTemplate('ml')}>ML Training</button>
+            <button onclick={() => insertTemplate('basic')}>Basic Job</button>
+            <button onclick={() => insertTemplate('gpu')}>GPU Job</button>
+            <button onclick={() => insertTemplate('ml')}>ML Training</button>
           </div>
         </div>
         
-        <button class="icon-btn" on:click={toggleSidebar} title="Toggle Config Panel">
+        <button class="icon-btn" onclick={toggleSidebar} title="Toggle Config Panel">
           <svg viewBox="0 0 24 24">
             <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/>
           </svg>
@@ -438,7 +454,7 @@ python train.py --epochs 100 --batch-size 32
       <aside class="config-sidebar" transition:fly={{ x: sidebarWidth, duration: 300 }}>
         <div class="sidebar-header">
           <h2>Job Configuration</h2>
-          <button class="close-btn" on:click={toggleSidebar}>
+          <button class="close-btn" onclick={toggleSidebar}>
             <svg viewBox="0 0 24 24">
               <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
             </svg>
@@ -451,21 +467,21 @@ python train.py --epochs 100 --batch-size 32
             <button 
               class="section-tab"
               class:active={activeSection === 'resources'}
-              on:click={() => activeSection = 'resources'}
+              onclick={() => activeSection = 'resources'}
             >
               Resources
             </button>
             <button 
               class="section-tab"
               class:active={activeSection === 'output'}
-              on:click={() => activeSection = 'output'}
+              onclick={() => activeSection = 'output'}
             >
               Output
             </button>
             <button 
               class="section-tab"
               class:active={activeSection === 'advanced'}
-              on:click={() => activeSection = 'advanced'}
+              onclick={() => activeSection = 'advanced'}
             >
               Advanced
             </button>
@@ -480,14 +496,14 @@ python train.py --epochs 100 --batch-size 32
                   <input 
                     type="text" 
                     bind:value={jobConfig.jobName}
-                    on:change={handleConfigChange}
+                    onchange={handleConfigChange}
                     placeholder="my-job"
                   />
                 </div>
                 
                 <div class="config-group">
                   <label>Partition</label>
-                  <select bind:value={jobConfig.partition} on:change={handleConfigChange}>
+                  <select bind:value={jobConfig.partition} onchange={handleConfigChange}>
                     <option value="">Default</option>
                     <option value="cpu">CPU</option>
                     <option value="gpu">GPU</option>
@@ -501,7 +517,7 @@ python train.py --epochs 100 --batch-size 32
                     <input 
                       type="number" 
                       bind:value={jobConfig.timeLimit}
-                      on:change={handleConfigChange}
+                      onchange={handleConfigChange}
                       min="1" 
                       max="168"
                     />
@@ -511,7 +527,7 @@ python train.py --epochs 100 --batch-size 32
                     <input 
                       type="number" 
                       bind:value={jobConfig.memory}
-                      on:change={handleConfigChange}
+                      onchange={handleConfigChange}
                       min="1" 
                       max="512"
                     />
@@ -524,7 +540,7 @@ python train.py --epochs 100 --batch-size 32
                     <input 
                       type="number" 
                       bind:value={jobConfig.cpus}
-                      on:change={handleConfigChange}
+                      onchange={handleConfigChange}
                       min="1" 
                       max="128"
                     />
@@ -534,7 +550,7 @@ python train.py --epochs 100 --batch-size 32
                     <input 
                       type="number" 
                       bind:value={jobConfig.gpusPerNode}
-                      on:change={handleConfigChange}
+                      onchange={handleConfigChange}
                       min="0" 
                       max="8"
                     />
@@ -549,7 +565,7 @@ python train.py --epochs 100 --batch-size 32
                   <input 
                     type="text" 
                     bind:value={jobConfig.outputFile}
-                    on:change={handleConfigChange}
+                    onchange={handleConfigChange}
                     placeholder="job-%j.out"
                   />
                 </div>
@@ -558,7 +574,7 @@ python train.py --epochs 100 --batch-size 32
                   <input 
                     type="text" 
                     bind:value={jobConfig.errorFile}
-                    on:change={handleConfigChange}
+                    onchange={handleConfigChange}
                     placeholder="job-%j.err"
                   />
                 </div>
@@ -571,7 +587,7 @@ python train.py --epochs 100 --batch-size 32
                   <input 
                     type="text" 
                     bind:value={jobConfig.account}
-                    on:change={handleConfigChange}
+                    onchange={handleConfigChange}
                     placeholder="project-account"
                   />
                 </div>
@@ -580,7 +596,7 @@ python train.py --epochs 100 --batch-size 32
                   <input 
                     type="number" 
                     bind:value={jobConfig.nodes}
-                    on:change={handleConfigChange}
+                    onchange={handleConfigChange}
                     min="1" 
                     max="100"
                   />
@@ -591,13 +607,13 @@ python train.py --epochs 100 --batch-size 32
           
           <!-- Quick Actions -->
           <div class="quick-actions">
-            <button class="action-btn secondary" on:click={() => vimMode = !vimMode}>
+            <button class="action-btn secondary" onclick={() => vimMode = !vimMode}>
               <svg viewBox="0 0 24 24">
                 <path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/>
               </svg>
               {vimMode ? 'Disable' : 'Enable'} Vim
             </button>
-            <button class="action-btn secondary" on:click={() => navigator.clipboard.writeText(editableScript)}>
+            <button class="action-btn secondary" onclick={() => navigator.clipboard.writeText(editableScript)}>
               <svg viewBox="0 0 24 24">
                 <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/>
               </svg>
@@ -612,7 +628,7 @@ python train.py --epochs 100 --batch-size 32
             class="launch-btn" 
             class:ready={validationDetails.isValid}
             class:launching={launching}
-            on:click={handleLaunch}
+            onclick={handleLaunch}
             disabled={!validationDetails.isValid || launching}
           >
             {#if launching}

@@ -4,24 +4,46 @@
   import ScriptViewer from "./ScriptViewer.svelte";
   import WatchersTab from "./WatchersTab.svelte";
 
-  export let job: JobInfo | null = null;
-  export let activeTab: string = 'details';
-  export let outputData: OutputData | null = null;
-  export let outputError: string | null = null;
-  export let loadingOutput: boolean = false;
-  export let loadingMoreOutput: boolean = false;
-  export let scriptData: ScriptData | null = null;
-  export let scriptError: string | null = null;
-  export let loadingScript: boolean = false;
 
-  export let onRetryLoadOutput: () => void = () => {};
-  export let onLoadMoreOutput: () => void = () => {};
-  export let onScrollToTop: () => void = () => {};
-  export let onScrollToBottom: () => void = () => {};
-  export let onRetryLoadScript: () => void = () => {};
-  export let onDownloadScript: () => void = () => {};
-  export let onRefreshOutput: () => void = () => {};
-  export let refreshingOutput: boolean = false;
+  interface Props {
+    job?: JobInfo | null;
+    activeTab?: string;
+    outputData?: OutputData | null;
+    outputError?: string | null;
+    loadingOutput?: boolean;
+    loadingMoreOutput?: boolean;
+    scriptData?: ScriptData | null;
+    scriptError?: string | null;
+    loadingScript?: boolean;
+    onRetryLoadOutput?: () => void;
+    onLoadMoreOutput?: () => void;
+    onScrollToTop?: () => void;
+    onScrollToBottom?: () => void;
+    onRetryLoadScript?: () => void;
+    onDownloadScript?: () => void;
+    onRefreshOutput?: () => void;
+    refreshingOutput?: boolean;
+  }
+
+  let {
+    job = null,
+    activeTab = 'details',
+    outputData = null,
+    outputError = null,
+    loadingOutput = false,
+    loadingMoreOutput = false,
+    scriptData = null,
+    scriptError = null,
+    loadingScript = false,
+    onRetryLoadOutput = () => {},
+    onLoadMoreOutput = () => {},
+    onScrollToTop = () => {},
+    onScrollToBottom = () => {},
+    onRetryLoadScript = () => {},
+    onDownloadScript = () => {},
+    onRefreshOutput = () => {},
+    refreshingOutput = false
+  }: Props = $props();
 </script>
 
 {#if activeTab === 'output'}
@@ -29,7 +51,7 @@
     {#if outputError}
       <div class="error-state">
         <span>{outputError}</span>
-        <button class="retry-btn" on:click={onRetryLoadOutput}>Retry</button>
+        <button class="retry-btn" onclick={onRetryLoadOutput}>Retry</button>
       </div>
     {:else}
       <OutputViewer
@@ -52,7 +74,7 @@
     {#if outputError}
       <div class="error-state">
         <span>{outputError}</span>
-        <button class="retry-btn" on:click={onRetryLoadOutput}>Retry</button>
+        <button class="retry-btn" onclick={onRetryLoadOutput}>Retry</button>
       </div>
     {:else}
       <OutputViewer
@@ -75,7 +97,7 @@
     {#if scriptError}
       <div class="error-state">
         <span>{scriptError}</span>
-        <button class="retry-btn" on:click={onRetryLoadScript}>Retry</button>
+        <button class="retry-btn" onclick={onRetryLoadScript}>Retry</button>
       </div>
     {:else}
       <ScriptViewer

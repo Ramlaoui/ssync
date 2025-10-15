@@ -46,7 +46,7 @@ export async function fetchJobWatchers(jobId: string, host?: string): Promise<vo
   try {
     const params = host ? { host } : {};
     const response = await api.get<WatchersResponse>(
-      `/api/jobs/${jobId}/watchers`,
+      `/api/jobs/${encodeURIComponent(jobId)}/watchers`,
       { params }
     );
     

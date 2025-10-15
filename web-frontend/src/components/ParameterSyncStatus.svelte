@@ -1,12 +1,16 @@
 <script lang="ts">
   import type { JobParameter } from '../stores/jobParameters';
   
-  export let parameters: Map<string, JobParameter>;
-  export let scriptHasSbatch: boolean = false;
+  interface Props {
+    parameters: Map<string, JobParameter>;
+    scriptHasSbatch?: boolean;
+  }
+
+  let { parameters, scriptHasSbatch = false }: Props = $props();
   
   // Count synced parameters
-  $: scriptParameterCount = Array.from(parameters.values()).filter(p => p.scriptLine !== undefined).length;
-  $: enabledParameterCount = Array.from(parameters.values()).filter(p => p.enabled).length;
+  let scriptParameterCount = $derived(Array.from(parameters.values()).filter(p => p.scriptLine !== undefined).length);
+  let enabledParameterCount = $derived(Array.from(parameters.values()).filter(p => p.enabled).length);
 </script>
 
 <div class="sync-status-container">

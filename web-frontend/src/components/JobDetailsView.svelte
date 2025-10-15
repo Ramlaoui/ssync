@@ -2,7 +2,11 @@
   import type { JobInfo } from "../types/api";
   import LoadingSpinner from './LoadingSpinner.svelte';
 
-  export let job: JobInfo | null = null;
+  interface Props {
+    job?: JobInfo | null;
+  }
+
+  let { job = null }: Props = $props();
 
   function formatTime(time: string | null): string {
     if (!time || time === 'N/A' || time === 'Unknown') return 'N/A';

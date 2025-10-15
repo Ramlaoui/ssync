@@ -15,7 +15,7 @@ export default defineConfig({
     reportCompressedSize: false,
     // Use esbuild for faster minification (default in Vite)
     minify: 'esbuild',
-    // Increase chunk size warning to reduce noise
-    chunkSizeWarningLimit: 1000
+    // Increase chunk size warning limit (informational only, doesn't affect functionality)
+    chunkSizeWarningLimit: 2000
   }
 })

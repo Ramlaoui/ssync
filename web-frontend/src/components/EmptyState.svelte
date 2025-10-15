@@ -1,11 +1,21 @@
 <script lang="ts">
-  export let title: string;
-  export let message: string = '';
-  export let icon: string = 'empty';
-  export let actionLabel: string = '';
-  export let actionHref: string = '';
   
   import { createEventDispatcher } from 'svelte';
+  interface Props {
+    title: string;
+    message?: string;
+    icon?: string;
+    actionLabel?: string;
+    actionHref?: string;
+  }
+
+  let {
+    title,
+    message = '',
+    icon = 'empty',
+    actionLabel = '',
+    actionHref = ''
+  }: Props = $props();
   const dispatch = createEventDispatcher<{
     action: void;
   }>();
@@ -51,7 +61,7 @@
   {#if actionLabel}
     <button 
       class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-      on:click={handleAction}
+      onclick={handleAction}
     >
       {actionLabel}
     </button>

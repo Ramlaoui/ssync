@@ -6,18 +6,7 @@
 
   const dispatch = createEventDispatcher();
 
-  export let title: string = '';
-  export let subtitle: string = '';
-  export let count: number | undefined = undefined;
-  export let countLabel: string = 'total';
-  export let showRefresh: boolean = false;
-  export let refreshing: boolean = false;
-  export let showBackButton: boolean = true;
-  export let customActions: boolean = false; // Slot for custom actions
-  export let autoRefreshEnabled: boolean = false;
-  export let autoRefreshInterval: number = 30;
 
-  $: backLabel = customBackLabel || getBackLabel($navigationState);
 
   function getBackLabel(navState: typeof $navigationState): string {
     if (navState.context === 'job') {
@@ -32,8 +21,41 @@
     return 'Home';
   }
 
-  export let customBackHandler: boolean = false;
-  export let customBackLabel: string = '';
+  interface Props {
+    title?: string;
+    subtitle?: string;
+    count?: number | undefined;
+    countLabel?: string;
+    showRefresh?: boolean;
+    refreshing?: boolean;
+    showBackButton?: boolean;
+    customActions?: boolean; // Slot for custom actions
+    autoRefreshEnabled?: boolean;
+    autoRefreshInterval?: number;
+    customBackHandler?: boolean;
+    customBackLabel?: string;
+    left?: import('svelte').Snippet;
+    actions?: import('svelte').Snippet;
+    additional?: import('svelte').Snippet;
+  }
+
+  let {
+    title = '',
+    subtitle = '',
+    count = undefined,
+    countLabel = 'total',
+    showRefresh = false,
+    refreshing = false,
+    showBackButton = true,
+    customActions = false,
+    autoRefreshEnabled = $bindable(false),
+    autoRefreshInterval = $bindable(30),
+    customBackHandler = false,
+    customBackLabel = '',
+    left,
+    actions,
+    additional
+  }: Props = $props();
 
   function handleBackClick() {
     if (customBackHandler) {
@@ -50,6 +72,7 @@
   function handleRefreshSettingsChanged(event: CustomEvent) {
     dispatch('refreshSettingsChanged', event.detail);
   }
+  let backLabel = $derived(customBackLabel || getBackLabel($navigationState));
 </script>
 
 <header class="bg-white border-b border-gray-200 sticky top-0 z-40">
@@ -60,7 +83,7 @@
         {#if showBackButton}
           <button
             class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
-            on:click={handleBackClick}
+            onclick={handleBackClick}
           >
             <ArrowLeft class="w-4 h-4" />
             {backLabel}
@@ -85,19 +108,19 @@
         {/if}
 
         <!-- Slot for additional left content -->
-        <slot name="left" />
+        {@render left?.()}
       </div>
 
       <!-- Right side -->
       <div class="flex items-center space-x-3">
         <!-- Slot for custom actions -->
-        <slot name="actions" />
+        {@render actions?.()}
 
         {#if showRefresh}
           <RefreshControl
             {refreshing}
-            {autoRefreshEnabled}
-            {autoRefreshInterval}
+            bind:autoRefreshEnabled
+            bind:autoRefreshInterval
             on:refresh={handleRefresh}
             on:settingsChanged={handleRefreshSettingsChanged}
           />
@@ -106,7 +129,7 @@
     </div>
 
     <!-- Slot for additional header content (tabs, etc.) -->
-    <slot name="additional" />
+    {@render additional?.()}
   </div>
 </header>
 

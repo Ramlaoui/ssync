@@ -9,6 +9,19 @@ import { writable, derived, get, type Readable } from 'svelte/store';
 import type { JobInfo, HostInfo, JobStatusResponse, ArrayJobGroup } from '../types/api';
 import { api } from '../services/api';
 import { notificationService } from '../services/notifications';
+import { preferences } from '../stores/preferences';
+import type {
+  JobStateManagerDependencies,
+  IApiClient,
+  IWebSocketFactory,
+  IPreferencesStore,
+  INotificationService,
+  IEnvironment
+} from './JobStateManager.types';
+import {
+  ProductionWebSocketFactory,
+  ProductionEnvironment
+} from './JobStateManager.types';
 
 // ============================================================================
 // Types
@@ -41,6 +54,9 @@ interface HostState {
   status: 'connected' | 'loading' | 'error' | 'idle';
   lastSync: number;
   errorCount: number;
+  lastError?: string;
+  lastErrorTime?: number;
+  isTimeout?: boolean;
   jobs: Map<string, string>; // jobId -> cacheKey mapping
   arrayGroups: ArrayJobGroup[]; // Array job groups for this host
 }
@@ -154,19 +170,35 @@ class JobStateManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
-  
+
+  // Injected dependencies
+  private api: IApiClient;
+  private wsFactory: IWebSocketFactory;
+  private preferences: IPreferencesStore;
+  private notificationService: INotificationService;
+  private environment: IEnvironment;
+
   // ========================================================================
   // Initialization
   // ========================================================================
-  
-  constructor() {
+
+  constructor(dependencies?: Partial<JobStateManagerDependencies>) {
+    // Initialize dependencies with defaults
+    this.api = dependencies?.api || api;
+    this.wsFactory = dependencies?.webSocketFactory || new ProductionWebSocketFactory();
+    this.preferences = dependencies?.preferences || preferences;
+    this.notificationService = dependencies?.notificationService || notificationService;
+    this.environment = dependencies?.environment || new ProductionEnvironment();
     // Bind methods to ensure proper context
     this.processUpdateQueue = this.processUpdateQueue.bind(this);
     this.queueUpdate = this.queueUpdate.bind(this);
     this.handleWebSocketMessage = this.handleWebSocketMessage.bind(this);
 
-    this.setupEventListeners();
-    this.startHealthMonitoring();
+    // Only setup event listeners and monitoring if in browser environment
+    if (this.environment.hasDocument) {
+      this.setupEventListeners();
+      this.startHealthMonitoring();
+    }
   }
   
   private setupEventListeners(): void {
@@ -214,12 +246,26 @@ class JobStateManager {
   // ========================================================================
   
   public connectWebSocket(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/jobs`;
-    
-    this.ws = new WebSocket(wsUrl);
+    // Check if WebSocket is available (not in test environment without proper mock)
+    if (!this.environment.hasWebSocket) {
+      console.warn('[JobStateManager] WebSocket not available');
+      return;
+    }
+
+    // Check if already open (readyState 1 = OPEN)
+    if (this.ws?.readyState === 1) return;
+
+    // Get location from environment
+    const location = this.environment.location;
+    if (!location) {
+      console.warn('[JobStateManager] Location not available');
+      return;
+    }
+
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${location.host}/ws/jobs`;
+
+    this.ws = this.wsFactory.create(wsUrl) as WebSocket;
     
     this.ws.onopen = () => {
       this.updateState({ 
@@ -284,7 +330,9 @@ class JobStateManager {
     // Handle different message formats
     if (data.type === 'initial' && data.jobs) {
       // Handle initial data load with jobs grouped by hostname
-      console.log(`[JobStateManager] Processing initial data with ${data.total || 0} total jobs`);
+      const totalJobs = data.total || 0;
+      const hostsInUpdate = Object.keys(data.jobs);
+      console.log(`[JobStateManager] Processing initial data with ${totalJobs} total jobs from ${hostsInUpdate.length} hosts: ${hostsInUpdate.join(', ')}`);
 
       // Mark that we've received initial WebSocket data
       this.updateState({
@@ -292,9 +340,25 @@ class JobStateManager {
         wsInitialDataTimestamp: Date.now()
       });
 
-      // Clear existing cache to prevent duplicates from stale data
+      // Only clear cache for hosts that are included in this update
+      // This prevents losing jobs from hosts that timed out or weren't included
       this.state.update(s => {
-        s.jobCache.clear();
+        const newCache = new Map(s.jobCache);
+
+        // Remove jobs only for hosts included in the update
+        hostsInUpdate.forEach(hostname => {
+          // Remove all jobs for this host
+          const keysToDelete: string[] = [];
+          newCache.forEach((_, cacheKey) => {
+            if (cacheKey.startsWith(`${hostname}:`)) {
+              keysToDelete.push(cacheKey);
+            }
+          });
+          keysToDelete.forEach(key => newCache.delete(key));
+          console.log(`[JobStateManager] Cleared ${keysToDelete.length} cached jobs for host ${hostname} before initial load`);
+        });
+
+        s.jobCache = newCache;
         return s;
       });
 
@@ -302,14 +366,12 @@ class JobStateManager {
         if (Array.isArray(jobs)) {
           console.log(`[JobStateManager] Processing ${jobs.length} jobs for ${hostname}`);
           jobs.forEach((job: any) => {
-            if (job.job_id) {
-              // Ensure hostname is set on the job
-              if (!job.hostname) {
-                job.hostname = hostname;
-              }
+            if (job.job_id && hostname) {
+              // ALWAYS set hostname from the key to ensure consistency
+              job.hostname = hostname;
               this.queueUpdate({
                 jobId: job.job_id,
-                hostname: hostname,
+                hostname: hostname,  // Use hostname from the key, not from job object
                 job: job,
                 source: 'websocket',
                 timestamp: Date.now(),
@@ -351,9 +413,12 @@ class JobStateManager {
       console.log(`[JobStateManager] WebSocket sent array of ${data.length} jobs`);
       data.forEach((job: any) => {
         if (job.job_id && job.hostname) {
+          // Ensure hostname is set on job object for consistency
+          const hostname = job.hostname;
+          job.hostname = hostname;
           this.queueUpdate({
             jobId: job.job_id,
-            hostname: job.hostname,
+            hostname: hostname,
             job: job,
             source: 'websocket',
             timestamp: Date.now(),
@@ -365,11 +430,20 @@ class JobStateManager {
     } else if (data.jobs && Array.isArray(data.jobs)) {
       // Handle object with jobs array
       console.log(`[JobStateManager] WebSocket sent object with ${data.jobs.length} jobs`);
+      const contextHostname = data.hostname;
       data.jobs.forEach((job: any) => {
         if (job.job_id) {
+          // Use context hostname if provided, otherwise use job's hostname
+          const hostname = contextHostname || job.hostname;
+          if (!hostname) {
+            console.warn(`[JobStateManager] Job ${job.job_id} has no hostname, skipping`);
+            return;
+          }
+          // Ensure hostname is set on job object for consistency
+          job.hostname = hostname;
           this.queueUpdate({
             jobId: job.job_id,
-            hostname: data.hostname || job.hostname,
+            hostname: hostname,
             job: job,
             source: 'websocket',
             timestamp: Date.now(),
@@ -420,17 +494,21 @@ class JobStateManager {
     const state = get(this.state);
     if (!forceSync && state.isPaused) return;
 
-    // Skip API sync if we just received WebSocket initial data
+    // Skip API sync if we just received WebSocket initial data (unless forcing)
+    // When forceSync=true, this check is bypassed to ensure fresh data from SLURM
     if (!forceSync && state.wsInitialDataReceived &&
         (Date.now() - state.wsInitialDataTimestamp < 5000)) {
-      console.log('[JobStateManager] Skipping API sync - WebSocket initial data is fresh');
+      console.log('[JobStateManager] Skipping API sync - WebSocket initial data is fresh (use force refresh to override)');
       return;
     }
 
     try {
-      console.log('[JobStateManager] Starting sync for all hosts' + (forceSync ? ' (forced)' : ''));
+      console.log(`[JobStateManager] Starting sync for all hosts${forceSync ? ' (FORCE REFRESH - bypassing all caches)' : ''}`);
+      if (forceSync) {
+        console.log('[JobStateManager] Force refresh will fetch directly from SLURM');
+      }
       // Get list of hosts
-      const hostsResponse = await api.get<HostInfo[]>('/api/hosts');
+      const hostsResponse = await this.api.get<HostInfo[]>('/api/hosts');
       const hosts = hostsResponse.data || [];
       console.log(`[JobStateManager] Found ${hosts.length} hosts:`, hosts.map(h => h.hostname));
 
@@ -475,12 +553,12 @@ class JobStateManager {
   public async syncHost(hostname: string, forceSync = false): Promise<void> {
     const state = get(this.state);
     const hostState = state.hostStates.get(hostname);
-    
+
     if (!hostState) {
       console.warn(`[JobStateManager] Host state not found for ${hostname}`);
       return;
     }
-    
+
     // Check if sync needed based on cache (skip check if forceSync)
     if (!forceSync) {
       const now = Date.now();
@@ -490,11 +568,11 @@ class JobStateManager {
         return;
       }
     }
-    
-    console.log(`[JobStateManager] Syncing host ${hostname}`);
-    
+
+    console.log(`[JobStateManager] Syncing host ${hostname}${forceSync ? ' (forced)' : ''}`);
+
     const now = Date.now();
-    
+
     // Update host status
     this.state.update(s => {
       const newHostStates = new Map(s.hostStates);
@@ -505,48 +583,52 @@ class JobStateManager {
       s.hostStates = newHostStates;
       return s;
     });
-    
+
     try {
       this.updateMetric('apiCalls', 1);
+
+      // Set a timeout for the API call
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Request timeout')), 30000); // 30s timeout
+      });
 
       // Build URL with array grouping parameter
       const params = new URLSearchParams();
       params.append('host', hostname);
-      params.append('group_array_jobs', 'true');
+      // Use the user's preference for array job grouping
+      params.append('group_array_jobs', String(get(this.preferences).groupArrayJobs));
+
+      // Pass force_refresh parameter when forceSync is true
+      if (forceSync) {
+        params.append('force_refresh', 'true');
+      }
 
       // The API might return either an array or a single object depending on the endpoint
-      const response = await api.get<JobStatusResponse | JobStatusResponse[]>(
-        `/api/status?${params.toString()}`
-      );
-      
-      // Log raw response
-      console.log(`[JobStateManager] Raw API response for ${hostname}:`, response.data);
-      
+      // Race between API call and timeout
+      const response = await Promise.race([
+        this.api.get<JobStatusResponse | JobStatusResponse[]>(
+          `/api/status?${params.toString()}`
+        ),
+        timeoutPromise
+      ]);
+
       // Handle both array and single object responses
       let hostData: JobStatusResponse;
       if (Array.isArray(response.data)) {
         hostData = response.data[0];
-        console.log(`[JobStateManager] Got array response for ${hostname}, array length: ${response.data.length}`);
       } else {
         hostData = response.data;
-        console.log(`[JobStateManager] Got single object response for ${hostname}`);
       }
-      
+
       if (!hostData) {
         console.warn(`[JobStateManager] No data in response for ${hostname}`);
         return;
       }
-      
-      // Log the actual response structure to debug
-      console.log(`[JobStateManager] Full response data for ${hostname}:`, JSON.stringify(hostData, null, 2));
-      
+
       // Check if jobs field exists and is an array
       if (hostData && Array.isArray(hostData.jobs)) {
-        console.log(`[JobStateManager] Processing ${hostData.jobs.length} jobs for ${hostname}`);
-
         // Extract array groups if present
         const arrayGroups = hostData.array_groups || [];
-        console.log(`[JobStateManager] Found ${arrayGroups.length} array groups for ${hostname}`);
 
         // Prepare jobs for queueing
         const jobsToQueue: JobUpdate[] = [];
@@ -593,10 +675,8 @@ class JobStateManager {
         });
 
         // Queue all job updates after state update
-        console.log(`[JobStateManager] Queueing ${jobsToQueue.length} job updates for ${hostname}`);
         jobsToQueue.forEach(update => this.queueUpdate(update, forceSync));
       } else {
-        console.log(`[JobStateManager] No jobs returned for ${hostname}`);
         // Still mark as connected even if no jobs
         this.state.update(s => {
           const newHostStates = new Map(s.hostStates);
@@ -614,8 +694,12 @@ class JobStateManager {
           return s;
         });
       }
-    } catch (error) {
-      console.error(`[JobStateManager] Failed to sync host ${hostname}:`, error);
+    } catch (error: any) {
+      const isTimeout = error?.message?.includes('timeout') || error?.message?.includes('Timeout');
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Unknown error';
+
+      console.error(`[JobStateManager] Failed to sync host ${hostname}:`, errorMessage, isTimeout ? '(TIMEOUT)' : '');
+
       this.state.update(s => {
         const newHostStates = new Map(s.hostStates);
         const hs = newHostStates.get(hostname);
@@ -624,11 +708,23 @@ class JobStateManager {
             ...hs,
             status: 'error',
             errorCount: hs.errorCount + 1,
+            lastError: errorMessage,
+            lastErrorTime: Date.now(),
+            isTimeout: isTimeout,
           });
         }
         s.hostStates = newHostStates;
         return s;
       });
+
+      // Show notification for timeout
+      if (isTimeout) {
+        this.notificationService.notify({
+          type: 'error',
+          message: `Connection to ${hostname} timed out`,
+          duration: 5000,
+        });
+      }
     }
   }
   
@@ -637,6 +733,12 @@ class JobStateManager {
   // ========================================================================
   
   private queueUpdate(update: JobUpdate, immediate = false): void {
+    // Validate hostname is present
+    if (!update.hostname) {
+      console.error(`[JobStateManager] Cannot queue update for job ${update.jobId} - missing hostname`);
+      return;
+    }
+
     // Update state with new pending update
     this.state.update(s => {
       // Add to queue
@@ -653,10 +755,12 @@ class JobStateManager {
           const key = `${u.hostname}:${u.jobId}`;
           const existing = latestByJob.get(key);
 
-          // WebSocket updates take priority over API updates
+          // WebSocket updates take priority over API updates, except when forcing refresh
+          // For same source, newer timestamp wins
           const shouldReplace = !existing ||
-            (u.source === 'websocket' && existing.source === 'api') ||
-            (u.source === existing.source && u.timestamp > existing.timestamp);
+            (u.source === 'websocket' && existing.source === 'api' && u.timestamp >= existing.timestamp) ||
+            (u.source === existing.source && u.timestamp > existing.timestamp) ||
+            (u.priority === 'realtime' && existing.priority !== 'realtime');
 
           if (shouldReplace) {
             latestByJob.set(key, u);
@@ -726,10 +830,10 @@ class JobStateManager {
         if (shouldUpdate) {
           // Check for new jobs appearing
           if (!existing) {
-            console.log(`[JobStateManager] New job detected: ${cacheKey} in state ${update.job.state}`);
+            console.log(`[JobStateManager] New job detected: ${cacheKey} in state ${update.job.state} from ${update.source}`);
 
             // Notify about new job
-            notificationService.notifyNewJob(
+            this.notificationService.notifyNewJob(
               update.jobId,
               update.hostname,
               update.job.state,
@@ -741,12 +845,19 @@ class JobStateManager {
             console.log(`[JobStateManager] Job ${cacheKey} state change: ${existing.job.state} -> ${update.job.state}`);
 
             // Send notification for state changes
-            notificationService.notifyJobStateChange(
+            this.notificationService.notifyJobStateChange(
               update.jobId,
               update.hostname,
               existing.job.state,
               update.job.state
             );
+          } else {
+            console.log(`[JobStateManager] Updating existing job ${cacheKey} from ${update.source} (no state change)`);
+          }
+
+          // Ensure hostname is set on the job object
+          if (!update.job.hostname) {
+            update.job.hostname = update.hostname;
           }
 
           newCache.set(cacheKey, {
@@ -760,7 +871,7 @@ class JobStateManager {
           // Track metrics
           s.metrics.totalUpdates++;
         } else {
-          console.log(`[JobStateManager] Skipping duplicate update for ${cacheKey} from ${update.source}`);
+          console.log(`[JobStateManager] Skipping duplicate update for ${cacheKey} from ${update.source} (existing: ${existing.lastSource}, timestamp: ${existing.lastUpdated} vs ${update.timestamp})`);
         }
       });
 
@@ -845,7 +956,7 @@ class JobStateManager {
     // Fetch from API
     try {
       this.updateMetric('apiCalls', 1);
-      const response = await api.get<JobInfo>(`/api/jobs/${jobId}?host=${hostname}`);
+      const response = await this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}`);
       const job = response.data;
       
       // Update cache
@@ -939,12 +1050,11 @@ class JobStateManager {
   public hasRecentData(maxAge: number = 30000): boolean {
     // Check if we have recent data from any host (within maxAge milliseconds)
     const now = Date.now();
-    const hosts = get(this.hostConfigs);
+    const state = get(this.state);
 
-    for (const host of hosts) {
-      const hostState = this.hostStates.get(host.host);
+    for (const [hostname, hostState] of state.hostStates) {
       if (hostState && (now - hostState.lastSync) < maxAge) {
-        console.log(`[JobStateManager] Host ${host.host} has recent data (${Math.round((now - hostState.lastSync) / 1000)}s old)`);
+        console.log(`[JobStateManager] Host ${hostname} has recent data (${Math.round((now - hostState.lastSync) / 1000)}s old)`);
         return true;
       }
     }
@@ -962,7 +1072,7 @@ class JobStateManager {
   private async fetchDirectStatus(): Promise<void> {
     try {
       console.log('[JobStateManager] Fetching jobs directly from /api/status');
-      const response = await api.get<JobStatusResponse>('/api/status');
+      const response = await this.api.get<JobStatusResponse>('/api/status');
       if (response.data && response.data.jobs) {
         const jobs = response.data.jobs;
         console.log(`[JobStateManager] Got ${Object.keys(jobs).length} hosts from direct status`);
@@ -1058,7 +1168,17 @@ class JobStateManager {
       $state.jobCache.forEach((entry, cacheKey) => {
         // Only include jobs with valid data
         if (entry.job && entry.job.job_id && entry.job.hostname) {
-          uniqueJobs.set(cacheKey, entry.job);
+          // Double-check the cache key matches the job's actual hostname:job_id
+          const expectedKey = `${entry.job.hostname}:${entry.job.job_id}`;
+          if (cacheKey !== expectedKey) {
+            console.warn(`[JobStateManager] Cache key mismatch: ${cacheKey} vs ${expectedKey}`);
+          }
+
+          // Use the expected key to ensure consistency
+          const existingJob = uniqueJobs.get(expectedKey);
+          if (!existingJob || entry.lastUpdated > ($state.jobCache.get(expectedKey)?.lastUpdated || 0)) {
+            uniqueJobs.set(expectedKey, entry.job);
+          }
         }
       });
 
@@ -1123,7 +1243,7 @@ class JobStateManager {
     // Fetch from API
     try {
       this.updateMetric('apiCalls', 1);
-      const response = await api.get<JobInfo>(`/api/jobs/${jobId}?host=${hostname}${forceRefresh ? '&force=true' : ''}`);
+      const response = await this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}${forceRefresh ? '&force=true' : ''}`);
       const job = response.data;
 
       // Update cache immediately for current job (bypass batch delay)
@@ -1169,15 +1289,27 @@ class JobStateManager {
       return allGroups;
     });
   }
+
+  /**
+   * Get host states (loading status, error state, etc.)
+   * Returns a Map of hostname -> HostState
+   */
+  public getHostStates(): Readable<Map<string, HostState>> {
+    return derived(this.state, $state => $state.hostStates);
+  }
 }
 
 // ============================================================================
-// Export Singleton Instance
+// Export Singleton Instance and Class
 // ============================================================================
 
+// Export the class for testing purposes
+export { JobStateManager };
+
+// Export singleton instance for production use
 export const jobStateManager = new JobStateManager();
 
-// Initialize on import
-if (typeof window !== 'undefined') {
+// Initialize on import (only in browser, not in test environment)
+if (typeof window !== 'undefined' && !import.meta.env.VITEST) {
   jobStateManager.initialize();
 }

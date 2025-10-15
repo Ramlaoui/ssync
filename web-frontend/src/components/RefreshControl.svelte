@@ -1,17 +1,23 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher, onDestroy } from 'svelte';
   import { RefreshCw, Settings2, Clock } from 'lucide-svelte';
-  import { clickOutside } from '../lib/clickOutside';
+  import { clickOutside } from '../lib/actions/clickOutside';
 
   const dispatch = createEventDispatcher();
 
-  export let refreshing = false;
-  export let autoRefreshEnabled = false;
-  export let autoRefreshInterval = 30; // seconds
+  interface Props {
+    refreshing?: boolean;
+    autoRefreshEnabled?: boolean;
+    autoRefreshInterval?: number; // seconds
+  }
 
-  let showMenu = false;
-  let autoRefreshTimer: number | null = null;
-  let secondsUntilRefresh = autoRefreshInterval;
+  let { refreshing = false, autoRefreshEnabled = $bindable(false), autoRefreshInterval = $bindable(30) }: Props = $props();
+
+  let showMenu = $state(false);
+  let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let secondsUntilRefresh = $state(autoRefreshInterval);
 
   // Common auto-refresh intervals
   const intervals = [
@@ -41,7 +47,7 @@
     savePreferences();
   }
 
-  function setInterval(value: number) {
+  function setRefreshInterval(value: number) {
     if (value === 0) {
       autoRefreshEnabled = false;
       stopAutoRefresh();
@@ -98,9 +104,11 @@
   }
 
   // Start auto-refresh if enabled on mount
-  $: if (autoRefreshEnabled) {
-    startAutoRefresh();
-  }
+  run(() => {
+    if (autoRefreshEnabled) {
+      startAutoRefresh();
+    }
+  });
 
   onDestroy(() => {
     stopAutoRefresh();
@@ -110,7 +118,7 @@
 <div class="relative flex items-center gap-1">
   <!-- Main refresh button -->
   <button
-    on:click={handleManualRefresh}
+    onclick={handleManualRefresh}
     disabled={refreshing}
     class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors flex items-center gap-2"
     title="{autoRefreshEnabled ? `Auto-refresh in ${formatCountdown(secondsUntilRefresh)}` : 'Refresh'}"
@@ -125,7 +133,7 @@
 
   <!-- Settings dropdown button -->
   <button
-    on:click={() => showMenu = !showMenu}
+    onclick={() => showMenu = !showMenu}
     class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
     title="Refresh settings"
   >
@@ -136,8 +144,7 @@
   {#if showMenu}
     <div
       class="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
-      use:clickOutside
-      on:click_outside={() => showMenu = false}
+      use:clickOutside={{ callback: () => showMenu = false }}
     >
       <div class="px-3 py-2 border-b border-gray-100">
         <div class="text-xs font-semibold text-gray-600 uppercase tracking-wider">
@@ -150,7 +157,7 @@
           class="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between text-sm"
           class:bg-blue-50={autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}
           class:text-blue-700={autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}
-          on:click={() => setInterval(interval.value)}
+          onclick={() => setRefreshInterval(interval.value)}
         >
           <span>{interval.label}</span>
           {#if autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}

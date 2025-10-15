@@ -8,7 +8,7 @@ interface UIPreferences {
 }
 
 const defaultPreferences: UIPreferences = {
-  groupArrayJobs: true,  // Default to grouping array jobs
+  groupArrayJobs: false,  // Default to ungrouped, user can enable after data loads
   autoRefresh: true,
   refreshInterval: 30000,  // 30 seconds
   showMetrics: false,

@@ -2,14 +2,18 @@
   import { allJobsWebSocketStore, connectAllJobsWebSocket, disconnectAllJobsWebSocket, getConnectionQuality } from '../stores/jobWebSocket';
   import { Wifi, WifiOff, RefreshCw, AlertTriangle } from 'lucide-svelte';
 
-  export let compact = false;
+  interface Props {
+    compact?: boolean;
+  }
+
+  let { compact = false }: Props = $props();
 
   // Reactive connection status
-  $: connected = $allJobsWebSocketStore.connected;
-  $: error = $allJobsWebSocketStore.error;
+  let connected = $derived($allJobsWebSocketStore.connected);
+  let error = $derived($allJobsWebSocketStore.error);
 
-  let reconnecting = false;
-  let showDetails = false;
+  let reconnecting = $state(false);
+  let showDetails = $state(false);
 
   async function handleReconnect() {
     reconnecting = true;
@@ -32,7 +36,7 @@
   <!-- Compact status indicator -->
   <button
     class="flex items-center gap-2 px-2 py-1 rounded-lg transition-colors {connected ? 'hover:bg-green-50' : 'hover:bg-red-50'}"
-    on:click={handleReconnect}
+    onclick={handleReconnect}
     disabled={reconnecting}
     title="{connected ? 'WebSocket connected - Click to reconnect' : 'WebSocket disconnected - Click to connect'}"
   >
@@ -66,7 +70,7 @@
     <button
       class="ml-2 px-3 py-1 text-xs font-medium rounded-md transition-colors
         {connected ? 'bg-gray-100 hover:bg-gray-200 text-gray-700' : 'bg-blue-100 hover:bg-blue-200 text-blue-700'}"
-      on:click={handleReconnect}
+      onclick={handleReconnect}
       disabled={reconnecting}
     >
       {connected ? 'Reconnect' : 'Connect'}
@@ -75,7 +79,7 @@
     {#if !compact}
       <button
         class="ml-auto text-xs text-gray-500 hover:text-gray-700"
-        on:click={() => showDetails = !showDetails}
+        onclick={() => showDetails = !showDetails}
       >
         {showDetails ? 'Hide' : 'Show'} details
       </button>

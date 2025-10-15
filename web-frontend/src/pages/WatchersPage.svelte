@@ -15,6 +15,7 @@
     disconnectWatcherWebSocket
   } from '../stores/watchers';
   import { jobStateManager } from '../lib/JobStateManager';
+  import { api } from '../services/api';
   import WatcherCard from '../components/WatcherCard.svelte';
   import WatcherEvents from '../components/WatcherEvents.svelte';
   import EventsView from '../components/EventsView.svelte';
@@ -41,35 +42,25 @@
   // Get jobs store
   const allCurrentJobs = jobStateManager.getAllJobs();
 
-  // Enhance watchers with job names from current jobs
-  $: enhancedWatchers = sortedWatchers.map(watcher => {
-    const jobInfo = get(allCurrentJobs).find(job =>
-      job.job_id === watcher.job_id && job.hostname === watcher.hostname
-    );
-    return {
-      ...watcher,
-      job_name: jobInfo?.name || watcher.job_name || null
-    };
-  });
 
-  let activeTab: 'watchers' | 'events' = 'watchers';
-  let viewMode: 'grid' | 'grouped' = 'grid';
-  let searchQuery = '';
-  let filterState: 'all' | 'active' | 'paused' | 'completed' = 'all';
-  let isMobile = false;
+  let activeTab: 'watchers' | 'events' = $state('watchers');
+  let viewMode: 'grid' | 'grouped' = $state('grid');
+  let searchQuery = $state('');
+  let filterState: 'all' | 'active' | 'paused' | 'completed' = $state('all');
+  let isMobile = $state(false);
   let showMobileFilters = false;
-  let collapsedJobs: Set<string> = new Set();
-  let error: string | null = null;
+  let collapsedJobs: Set<string> = $state(new Set());
+  let error: string | null = $state(null);
 
   // Dialog state
-  let showAttachDialog = false;
-  let showStreamlinedCreator = false;
-  let showJobSelectionDialog = false;
-  let selectedJobId: string | null = null;
-  let selectedHostname: string | null = null;
+  let showAttachDialog = $state(false);
+  let showStreamlinedCreator = $state(false);
+  let showJobSelectionDialog = $state(false);
+  let selectedJobId: string | null = $state(null);
+  let selectedHostname: string | null = $state(null);
   let useStreamlinedInterface = true; // Toggle between old and new interface
   let useModernEvents = true; // Toggle between old and new events view
-  let copiedWatcherConfig: any = null;
+  let copiedWatcherConfig: any = $state(null);
 
   // Fuzzy search scoring function - returns relevance score (lower is better)
   function getWatcherSearchScore(watcher: any, searchTerm: string): number {
@@ -98,84 +89,9 @@
     return 999;
   }
 
-  // Computed values with fuzzy search
-  $: sortedWatchers = (() => {
-    let filtered = $watchers.filter(w => {
-      if (filterState === 'all') return true;
-      return w.state === filterState;
-    });
 
-    // Apply search with ranking
-    if (searchQuery) {
-      const scoredWatchers = filtered
-        .map(watcher => ({ watcher, score: getWatcherSearchScore(watcher, searchQuery) }))
-        .filter(item => item.score < 999)
-        .sort((a, b) => a.score - b.score)
-        .map(item => item.watcher);
 
-      filtered = scoredWatchers;
-    } else {
-      // Default sort by creation date when no search
-      filtered = filtered.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-    }
 
-    return filtered;
-  })();
-
-  $: activeCount = $watchers.filter(w => w.state === 'active').length;
-  $: pausedCount = $watchers.filter(w => w.state === 'paused').length;
-  $: completedCount = $watchers.filter(w => w.state === 'completed').length;
-  $: totalCount = $watchers.length;
-
-  // Create a map of latest events by watcher_id for quick lookup
-  $: latestEventsByWatcher = (() => {
-    const eventMap: Record<number, any> = {};
-    $watcherEvents.forEach(event => {
-      if (!eventMap[event.watcher_id] || new Date(event.timestamp) > new Date(eventMap[event.watcher_id].timestamp)) {
-        eventMap[event.watcher_id] = event;
-      }
-    });
-    return eventMap;
-  })();
-
-  // Group watchers by job
-  $: watchersByJob = (() => {
-    const groups: Record<string, {
-      job_id: string;
-      job_name?: string;
-      hostname: string;
-      watchers: typeof sortedWatchers;
-      stats: { active: number; paused: number; completed: number };
-    }> = {};
-
-    sortedWatchers.forEach(watcher => {
-      const jobKey = `${watcher.job_id}-${watcher.hostname}`;
-
-      if (!groups[jobKey]) {
-        // Try to find job info from current jobs to get the job name
-        const jobInfo = get(allCurrentJobs).find(job =>
-          job.job_id === watcher.job_id && job.hostname === watcher.hostname
-        );
-
-        groups[jobKey] = {
-          job_id: watcher.job_id || 'unknown',
-          job_name: jobInfo?.name || watcher.job_name || null,
-          hostname: watcher.hostname || 'unknown',
-          watchers: [],
-          stats: { active: 0, paused: 0, completed: 0 }
-        };
-      }
-
-      groups[jobKey].watchers.push(watcher);
-
-      // Update stats
-      if (watcher.state === 'active') groups[jobKey].stats.active++;
-      else if (watcher.state === 'paused') groups[jobKey].stats.paused++;
-      else if (watcher.state === 'completed') groups[jobKey].stats.completed++;
-    });
-
-    return groups;
-  })();
 
   function checkMobile() {
     isMobile = window.innerWidth < 768;
@@ -230,16 +146,102 @@
     }
   }
 
-  function handleJobSelection(event: CustomEvent) {
-    const job = event.detail;
-    selectedJobId = job.job_id;
-    selectedHostname = job.hostname;
+  // Store selected jobs for multi-job watcher creation
+  let pendingMultiJobSelection: any[] = [];
+
+  async function handleJobSelection(event: CustomEvent) {
+    const selection = event.detail;
     showJobSelectionDialog = false;
 
-    if (useStreamlinedInterface) {
-      showStreamlinedCreator = true;
+    // Handle multi-select payload format: { jobs: [...], action: 'apply'/'edit' }
+    let jobs: any[];
+    let action: 'apply' | 'edit' = 'apply';
+
+    if (selection.jobs && selection.action) {
+      // Multi-select payload
+      jobs = selection.jobs;
+      action = selection.action;
+    } else if (Array.isArray(selection)) {
+      // Legacy array format
+      jobs = selection;
     } else {
-      showAttachDialog = true;
+      // Single job
+      jobs = [selection];
+    }
+
+    if (jobs.length === 1) {
+      // Single job - open creator
+      selectedJobId = jobs[0].job_id;
+      selectedHostname = jobs[0].hostname;
+
+      if (useStreamlinedInterface) {
+        showStreamlinedCreator = true;
+      } else {
+        showAttachDialog = true;
+      }
+    } else if (jobs.length > 1) {
+      // Store the selected jobs
+      pendingMultiJobSelection = jobs;
+
+      if (copiedWatcherConfig) {
+        if (action === 'edit') {
+          // Open creator for editing before applying to multiple jobs
+          // Use the first job for the creator context
+          selectedJobId = jobs[0].job_id;
+          selectedHostname = jobs[0].hostname;
+          showStreamlinedCreator = true;
+        } else {
+          // Apply directly without editing
+          await applyWatcherToMultipleJobs(jobs, copiedWatcherConfig);
+        }
+      } else {
+        // No config - prompt user to create watcher first for one job
+        error = 'Please configure a watcher on one job first, then copy it to multiple jobs.';
+        setTimeout(() => error = null, 5000);
+        pendingMultiJobSelection = [];
+      }
+    }
+  }
+
+  async function applyWatcherToMultipleJobs(jobs: any[], config: any) {
+    try {
+      const promises = jobs.map(job =>
+        api.post('/api/watchers', {
+          job_id: job.job_id,
+          hostname: job.hostname,
+          name: config.name,
+          pattern: config.pattern,
+          captures: config.captures || [],
+          interval_seconds: config.interval || 60,
+          condition: config.condition,
+          actions: config.actions || [],
+          timer_mode_enabled: config.timer_mode_enabled || false,
+          timer_interval_seconds: config.timer_interval_seconds || 30
+        }).catch((err: any) => ({ error: err }))
+      );
+
+      const results = await Promise.all(promises);
+
+      const successful = results.filter((r: any) => !r.error).length;
+      const failed = results.filter((r: any) => r.error).length;
+
+      if (successful > 0) {
+        console.log(`Successfully created ${successful} watcher(s)`);
+      }
+      if (failed > 0) {
+        console.error(`Failed to create ${failed} watcher(s)`);
+        error = `Created ${successful} watcher(s), but ${failed} failed.`;
+        setTimeout(() => error = null, 5000);
+      }
+
+      copiedWatcherConfig = null;
+      pendingMultiJobSelection = [];
+      await refreshData();
+    } catch (err) {
+      console.error('Failed to create watchers:', err);
+      error = 'Failed to create watchers for selected jobs.';
+      setTimeout(() => error = null, 5000);
+      pendingMultiJobSelection = [];
     }
   }
 
@@ -279,9 +281,26 @@
     }
   }
 
-  async function handleAttachSuccess() {
+  async function handleAttachSuccess(event?: CustomEvent) {
     error = null; // Clear any existing errors
     showAttachDialog = false;
+    showStreamlinedCreator = false;
+
+    // If we have pending multi-job selections, apply the watcher to all of them
+    if (pendingMultiJobSelection.length > 1 && copiedWatcherConfig) {
+      // Get the updated config from the event if available
+      const updatedConfig = event?.detail || copiedWatcherConfig;
+
+      // Apply to all pending jobs except the first one (already created)
+      const remainingJobs = pendingMultiJobSelection.slice(1);
+
+      if (remainingJobs.length > 0) {
+        await applyWatcherToMultipleJobs(remainingJobs, updatedConfig);
+      }
+
+      pendingMultiJobSelection = [];
+    }
+
     selectedJobId = null;
     selectedHostname = null;
     copiedWatcherConfig = null;
@@ -326,6 +345,93 @@
     window.removeEventListener('resize', checkMobile);
     disconnectWatcherWebSocket();
   });
+  // Computed values with fuzzy search
+  let sortedWatchers = $derived((() => {
+    let filtered = $watchers.filter(w => {
+      if (filterState === 'all') return true;
+      return w.state === filterState;
+    });
+
+    // Apply search with ranking
+    if (searchQuery) {
+      const scoredWatchers = filtered
+        .map(watcher => ({ watcher, score: getWatcherSearchScore(watcher, searchQuery) }))
+        .filter(item => item.score < 999)
+        .sort((a, b) => a.score - b.score)
+        .map(item => item.watcher);
+
+      filtered = scoredWatchers;
+    } else {
+      // Default sort by creation date when no search
+      filtered = filtered.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+    }
+
+    return filtered;
+  })());
+  // Enhance watchers with job names from current jobs
+  let enhancedWatchers = $derived(sortedWatchers.map(watcher => {
+    const jobInfo = get(allCurrentJobs).find(job =>
+      job.job_id === watcher.job_id && job.hostname === watcher.hostname
+    );
+    return {
+      ...watcher,
+      job_name: jobInfo?.name || watcher.job_name || null
+    };
+  }));
+  let activeCount = $derived($watchers.filter(w => w.state === 'active').length);
+  let pausedCount = $derived($watchers.filter(w => w.state === 'paused').length);
+  let staticCount = $derived($watchers.filter(w => w.state === 'static').length);
+  let completedCount = $derived($watchers.filter(w => w.state === 'completed').length);
+  let totalCount = $derived($watchers.length);
+  // Create a map of latest events by watcher_id for quick lookup
+  let latestEventsByWatcher = $derived((() => {
+    const eventMap: Record<number, any> = {};
+    $watcherEvents.forEach(event => {
+      if (!eventMap[event.watcher_id] || new Date(event.timestamp) > new Date(eventMap[event.watcher_id].timestamp)) {
+        eventMap[event.watcher_id] = event;
+      }
+    });
+    return eventMap;
+  })());
+  // Group watchers by job
+  let watchersByJob = $derived((() => {
+    const groups: Record<string, {
+      job_id: string;
+      job_name?: string;
+      hostname: string;
+      watchers: typeof sortedWatchers;
+      stats: { active: number; paused: number; static: number; completed: number };
+    }> = {};
+
+    sortedWatchers.forEach(watcher => {
+      const jobKey = `${watcher.job_id}-${watcher.hostname}`;
+
+      if (!groups[jobKey]) {
+        // Try to find job info from current jobs to get the job name
+        const jobInfo = get(allCurrentJobs).find(job =>
+          job.job_id === watcher.job_id && job.hostname === watcher.hostname
+        );
+
+        groups[jobKey] = {
+          job_id: watcher.job_id || 'unknown',
+          job_name: jobInfo?.name || watcher.job_name || null,
+          hostname: watcher.hostname || 'unknown',
+          watchers: [],
+          stats: { active: 0, paused: 0, static: 0, completed: 0 }
+        };
+      }
+
+      groups[jobKey].watchers.push(watcher);
+
+      // Update stats
+      if (watcher.state === 'active') groups[jobKey].stats.active++;
+      else if (watcher.state === 'paused') groups[jobKey].stats.paused++;
+      else if (watcher.state === 'static') groups[jobKey].stats.static++;
+      else if (watcher.state === 'completed') groups[jobKey].stats.completed++;
+    });
+
+    return groups;
+  })());
 </script>
 
 <div class="h-full flex flex-col bg-white">
@@ -335,118 +441,124 @@
       refreshing={$watchersLoading || $eventsLoading}
       on:refresh={refreshData}
     >
-      <div slot="left" class="flex items-center space-x-4">
-        <!-- Tab Navigation -->
-        <div class="flex items-center bg-gray-100 rounded-lg p-1">
-            <button
-              class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
-              on:click={() => handleTabClick('watchers')}
-            >
-              <Eye class="w-4 h-4" />
-              Watchers
-            </button>
-            <button
-              class="header-tab {activeTab === 'events' ? 'header-tab-active' : ''}"
-              on:click={() => handleTabClick('events')}
-            >
-              <Activity class="w-4 h-4" />
-              Events
-            </button>
-          </div>
-
-        <!-- Search Bar -->
-        {#if activeTab === 'watchers'}
-          <div class="header-search">
-            <div class="search-bar">
-              <div class="search-icon">
-                <Search size={16} />
-              </div>
-              <input
-                type="text"
-                class="search-input"
-                placeholder="Search watchers..."
-                bind:value={searchQuery}
-              />
-              {#if searchQuery}
-                <button class="clear-btn" on:click={clearSearch}>
-                  <X size={14} />
-                </button>
-              {/if}
+      {#snippet left()}
+            <div  class="flex items-center space-x-4">
+          <!-- Tab Navigation -->
+          <div class="flex items-center bg-gray-100 rounded-lg p-1">
+              <button
+                class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
+                onclick={() => handleTabClick('watchers')}
+              >
+                <Eye class="w-4 h-4" />
+                Watchers
+              </button>
+              <button
+                class="header-tab {activeTab === 'events' ? 'header-tab-active' : ''}"
+                onclick={() => handleTabClick('events')}
+              >
+                <Activity class="w-4 h-4" />
+                Events
+              </button>
             </div>
-          </div>
-        {/if}
-      </div>
 
-      <div slot="actions">
-        <button
-          on:click={openAttachDialog}
-          class="inline-flex items-center gap-2 px-3 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
-        >
-          <Plus class="w-4 h-4" />
-          Create
-        </button>
-      </div>
+          <!-- Search Bar -->
+          {#if activeTab === 'watchers'}
+            <div class="header-search">
+              <div class="search-bar">
+                <div class="search-icon">
+                  <Search size={16} />
+                </div>
+                <input
+                  type="text"
+                  class="search-input"
+                  placeholder="Search watchers..."
+                  bind:value={searchQuery}
+                />
+                {#if searchQuery}
+                  <button class="clear-btn" onclick={clearSearch}>
+                    <X size={14} />
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/if}
+        </div>
+          {/snippet}
+
+      {#snippet actions()}
+            <div >
+          <button
+            onclick={openAttachDialog}
+            class="inline-flex items-center gap-2 px-3 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
+          >
+            <Plus class="w-4 h-4" />
+            Create
+          </button>
+        </div>
+          {/snippet}
 
       <!-- Filters in additional slot -->
-      <div slot="additional" class="bg-gray-50 border-t border-gray-200 py-3" class:hidden={activeTab !== 'watchers'}>
-        <div class="flex justify-between items-center">
-          <!-- Filter Tabs -->
-          <div class="flex gap-2">
-            <button
-              class="filter-tab-modern {filterState === 'all' ? 'filter-tab-active' : ''}"
-              on:click={() => filterState = 'all'}
-            >
-              <div class="w-2 h-2 bg-gray-400 rounded-full"></div>
-              All
-              <span class="filter-count">{totalCount}</span>
-            </button>
-            <button
-              class="filter-tab-modern {filterState === 'active' ? 'filter-tab-active' : ''}"
-              on:click={() => filterState = 'active'}
-            >
-              <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-              Active
-              <span class="filter-count">{activeCount}</span>
-            </button>
-            <button
-              class="filter-tab-modern {filterState === 'paused' ? 'filter-tab-active' : ''}"
-              on:click={() => filterState = 'paused'}
-            >
-              <div class="w-2 h-2 bg-yellow-500 rounded-full"></div>
-              Paused
-              <span class="filter-count">{pausedCount}</span>
-            </button>
-            <button
-              class="filter-tab-modern {filterState === 'completed' ? 'filter-tab-active' : ''}"
-              on:click={() => filterState = 'completed'}
-            >
-              <div class="w-2 h-2 bg-blue-500 rounded-full"></div>
-              Completed
-              <span class="filter-count">{completedCount}</span>
-            </button>
-          </div>
+      {#snippet additional()}
+            <div  class="bg-gray-50 border-t border-gray-200 py-3" class:hidden={activeTab !== 'watchers'}>
+          <div class="flex justify-between items-center">
+            <!-- Filter Tabs -->
+            <div class="flex gap-2">
+              <button
+                class="filter-tab-modern {filterState === 'all' ? 'filter-tab-active' : ''}"
+                onclick={() => filterState = 'all'}
+              >
+                <div class="w-2 h-2 bg-gray-400 rounded-full"></div>
+                All
+                <span class="filter-count">{totalCount}</span>
+              </button>
+              <button
+                class="filter-tab-modern {filterState === 'active' ? 'filter-tab-active' : ''}"
+                onclick={() => filterState = 'active'}
+              >
+                <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                Active
+                <span class="filter-count">{activeCount}</span>
+              </button>
+              <button
+                class="filter-tab-modern {filterState === 'paused' ? 'filter-tab-active' : ''}"
+                onclick={() => filterState = 'paused'}
+              >
+                <div class="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                Paused
+                <span class="filter-count">{pausedCount}</span>
+              </button>
+              <button
+                class="filter-tab-modern {filterState === 'completed' ? 'filter-tab-active' : ''}"
+                onclick={() => filterState = 'completed'}
+              >
+                <div class="w-2 h-2 bg-blue-500 rounded-full"></div>
+                Completed
+                <span class="filter-count">{completedCount}</span>
+              </button>
+            </div>
 
-          <!-- View Toggle -->
-          <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
-            <button
-              class="view-toggle {viewMode === 'grid' ? 'view-toggle-active' : ''}"
-              on:click={() => viewMode = 'grid'}
-              title="Grid view"
-            >
-              <Grid3X3 class="w-4 h-4" />
-              <span class="view-toggle-label">Grid</span>
-            </button>
-            <button
-              class="view-toggle {viewMode === 'grouped' ? 'view-toggle-active' : ''}"
-              on:click={() => viewMode = 'grouped'}
-              title="Grouped by job"
-            >
-              <List class="w-4 h-4" />
-              <span class="view-toggle-label">By Job</span>
-            </button>
+            <!-- View Toggle -->
+            <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
+              <button
+                class="view-toggle {viewMode === 'grid' ? 'view-toggle-active' : ''}"
+                onclick={() => viewMode = 'grid'}
+                title="Grid view"
+              >
+                <Grid3X3 class="w-4 h-4" />
+                <span class="view-toggle-label">Grid</span>
+              </button>
+              <button
+                class="view-toggle {viewMode === 'grouped' ? 'view-toggle-active' : ''}"
+                onclick={() => viewMode = 'grouped'}
+                title="Grouped by job"
+              >
+                <List class="w-4 h-4" />
+                <span class="view-toggle-label">By Job</span>
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+          {/snippet}
     </NavigationHeader>
   {:else}
     <!-- Mobile header -->
@@ -456,14 +568,14 @@
         <div class="flex items-center bg-gray-100 rounded-lg p-1">
           <button
             class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
-            on:click={() => handleTabClick('watchers')}
+            onclick={() => handleTabClick('watchers')}
           >
             <Eye class="w-4 h-4" />
             Watchers
           </button>
           <button
             class="header-tab {activeTab === 'events' ? 'header-tab-active' : ''}"
-            on:click={() => handleTabClick('events')}
+            onclick={() => handleTabClick('events')}
           >
             <Activity class="w-4 h-4" />
             Events
@@ -473,7 +585,7 @@
         <!-- Actions -->
         <div class="flex items-center space-x-2">
           <button
-            on:click={refreshData}
+            onclick={refreshData}
             disabled={$watchersLoading || $eventsLoading}
             class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             title="Refresh"
@@ -482,7 +594,7 @@
           </button>
 
           <button
-            on:click={openAttachDialog}
+            onclick={openAttachDialog}
             class="inline-flex items-center gap-2 px-3 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
           >
             <Plus class="w-4 h-4" />
@@ -507,8 +619,9 @@
                 <p class="text-sm font-medium text-red-800">{error}</p>
               </div>
               <button
-                on:click={() => error = null}
+                onclick={() => error = null}
                 class="inline-flex items-center text-sm font-medium text-red-600 hover:text-red-500"
+                aria-label="Dismiss error"
               >
                 <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
@@ -554,7 +667,7 @@
               </p>
               {#if !searchQuery && filterState === 'all'}
                 <button
-                  on:click={openAttachDialog}
+                  onclick={openAttachDialog}
                   class="inline-flex items-center gap-2 px-4 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
                 >
                   <Plus class="w-4 h-4" />
@@ -591,7 +704,7 @@
                 <!-- Job Header -->
                 <button
                   class="w-full p-4 bg-gray-50 hover:bg-gray-100 transition-colors text-left flex justify-between items-center border-b border-gray-200"
-                  on:click={() => toggleJobGroup(jobKey)}
+                  onclick={() => toggleJobGroup(jobKey)}
                 >
                   <div class="space-y-1">
                     <h3 class="text-lg font-semibold flex items-center gap-2 text-gray-900">
@@ -693,10 +806,12 @@
 <!-- Dialogs -->
 {#if showJobSelectionDialog}
   <JobSelectionDialog
-    title={copiedWatcherConfig ? "Select Job for Copied Watcher" : "Select a Job"}
-    description={copiedWatcherConfig ? "Choose which job to attach the copied watcher to" : "Choose a job to attach watchers to"}
+    title={copiedWatcherConfig ? "Select Job(s) for Copied Watcher" : "Select Job(s)"}
+    description={copiedWatcherConfig ? "Choose which job(s) to attach the copied watcher to (including completed jobs for static watchers)" : "Choose job(s) to attach watchers to (including completed jobs for static watchers)"}
     preSelectedJobId={selectedJobId}
     preSelectedHostname={selectedHostname}
+    allowMultiSelect={true}
+    includeCompletedJobs={true}
     on:select={handleJobSelection}
     on:close={() => {
       showJobSelectionDialog = false;
