@@ -2,9 +2,9 @@
 
 import pytest
 
-from src.ssync.models.watcher import ActionType, WatcherAction, WatcherDefinition
-from src.ssync.script_processor import ScriptProcessor
-from src.ssync.utils.slurm_params import SlurmParams
+from ssync.models.watcher import ActionType, WatcherAction, WatcherDefinition
+from ssync.script_processor import ScriptProcessor
+from ssync.utils.slurm_params import SlurmParams
 
 
 class TestEnsureShebang:
