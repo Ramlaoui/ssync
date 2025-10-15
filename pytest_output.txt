@@ -1,0 +1,4 @@
+ImportError while loading conftest '/home/aliramlaoui/slurm-manager/tests/conftest.py'.
+tests/conftest.py:9: in <module>
+    from src.ssync.cache import JobDataCache
+E   ModuleNotFoundError: No module named 'src'

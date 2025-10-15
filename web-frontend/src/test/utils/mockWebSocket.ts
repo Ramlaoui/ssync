@@ -84,7 +84,12 @@ export function setupWebSocketMock(): {
   WebSocketMock.CLOSING = 2;
   WebSocketMock.CLOSED = 3;
 
-  global.WebSocket = WebSocketMock;
+  // Use Object.defineProperty for jsdom compatibility (WebSocket is read-only in jsdom)
+  Object.defineProperty(global, 'WebSocket', {
+    value: WebSocketMock,
+    writable: true,
+    configurable: true,
+  });
 
   return {
     WebSocketMock,

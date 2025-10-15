@@ -13,23 +13,34 @@
   import LoadingSpinner from './LoadingSpinner.svelte';
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
 
-  export let currentJobId: string = '';
-  export let currentHost: string = '';
-  export let collapsed = false;
+  interface Props {
+    currentJobId?: string;
+    currentHost?: string;
+    collapsed?: boolean;
+    isMobile?: boolean;
+    onMobileJobSelect?: (() => void);
+    onClose?: (() => void);
+  }
+
+  let {
+    currentJobId = '',
+    currentHost = '',
+    collapsed = $bindable(false),
+    isMobile = false,
+    onMobileJobSelect = undefined,
+    onClose = undefined
+  }: Props = $props();
 
   // On mobile, we never want the sidebar to be collapsed
-  $: actuallyCollapsed = !isMobile && collapsed;
-  export let isMobile = false;
-  export let onMobileJobSelect: (() => void) | undefined = undefined;
-  export let onClose: (() => void) | undefined = undefined;
+  let actuallyCollapsed = $derived(!isMobile && collapsed);
 
-  let loading = false;
-  let hamburgerToX = false;
-  let isClosing = false;
-  let searchInputValue = '';
-  let searchQuery = ''; // This will be the debounced value
-  let searchFocused = false;
-  let showSearch = false;
+  let loading = $state(false);
+  let hamburgerToX = $state(false);
+  let isClosing = $state(false);
+  let searchInputValue = $state('');
+  let searchQuery = $state(''); // This will be the debounced value
+  let searchFocused = $state(false);
+  let showSearch = $state(false);
 
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
@@ -43,45 +54,42 @@
   import { derived } from 'svelte/store';
   const hasArrayJobGrouping = derived(arrayJobGroups, $groups => $groups && $groups.length > 0);
 
-  // Compute recent jobs (terminal states) - store them in a variable to avoid reactive loops
-  let recentJobs: JobInfo[] = [];
-  let allJobsCached: JobInfo[] = [];
-
-  // Update cached jobs only when store changes
-  $: allJobsCached = $allJobs;
-
-  // Compute recent jobs from cached array
-  $: recentJobs = allJobsCached.filter(j => jobUtils.isTerminalState(j.state)).slice(0, 50);
+  // Compute recent jobs from all jobs
+  let recentJobs = $derived($allJobs.filter(j => j && j.state && jobUtils.isTerminalState(j.state)).slice(0, 50));
 
   // Create filtered arrays with optimized computation
-  let filteredRunningJobs: JobInfo[] = [];
-  let filteredPendingJobs: JobInfo[] = [];
-  let filteredRecentJobs: JobInfo[] = [];
+  let filteredRunningJobs = $state<JobInfo[]>([]);
+  let filteredPendingJobs = $state<JobInfo[]>([]);
+  let filteredRecentJobs = $state<JobInfo[]>([]);
 
   // For array job groups
-  let filteredArrayGroups: any[] = [];
+  let filteredArrayGroups = $state<any[]>([]);
   let arrayTaskIds = new Set<string>();
 
   // Track which jobs are part of array groups
-  $: {
+  $effect(() => {
     arrayTaskIds.clear();
     if ($preferences.groupArrayJobs && $hasArrayJobGrouping && $arrayJobGroups) {
       $arrayJobGroups.forEach(group => {
-        group.tasks.forEach(task => {
-          arrayTaskIds.add(`${task.job_id}-${task.hostname}`);
-        });
+        if (group.tasks && Array.isArray(group.tasks)) {
+          group.tasks.forEach(task => {
+            if (task && task.job_id && task.hostname) {
+              arrayTaskIds.add(`${task.job_id}-${task.hostname}`);
+            }
+          });
+        }
       });
     }
-  }
+  });
 
-  // Categorize array groups by activity state
-  $: runningArrayGroups = filteredArrayGroups.filter(g => g.running_count > 0);
-  $: pendingArrayGroups = filteredArrayGroups.filter(g =>
+  // Categorize array groups by activity state using $derived
+  let runningArrayGroups = $derived(filteredArrayGroups.filter(g => g.running_count > 0));
+  let pendingArrayGroups = $derived(filteredArrayGroups.filter(g =>
     g.pending_count > 0 && g.running_count === 0
-  );
-  $: completedArrayGroups = filteredArrayGroups.filter(g =>
+  ));
+  let completedArrayGroups = $derived(filteredArrayGroups.filter(g =>
     g.running_count === 0 && g.pending_count === 0
-  );
+  ));
 
   // Filter jobs to exclude those in array groups when grouping is enabled
   function filterOutArrayTasks(jobs: JobInfo[]): JobInfo[] {
@@ -114,32 +122,31 @@
   }, 150); // 150ms debounce delay
 
   // Update search query when input changes
-  $: updateSearchQuery(searchInputValue);
+  $effect(() => {
+    updateSearchQuery(searchInputValue);
+  });
 
-  // Single reactive block to handle all filtering
-  $: {
+  // Use $effect to handle filtering synchronously (no requestAnimationFrame needed)
+  $effect(() => {
     const baseRunning = filterOutArrayTasks($runningJobs);
     const basePending = filterOutArrayTasks($pendingJobs);
     const baseRecent = filterOutArrayTasks(recentJobs);
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      // Use requestAnimationFrame to prevent blocking the UI
-      requestAnimationFrame(() => {
-        filteredRunningJobs = baseRunning.filter(job => matchesSearch(job, query));
-        filteredPendingJobs = basePending.filter(job => matchesSearch(job, query));
-        filteredRecentJobs = baseRecent.filter(job => matchesSearch(job, query));
+      filteredRunningJobs = baseRunning.filter(job => matchesSearch(job, query));
+      filteredPendingJobs = basePending.filter(job => matchesSearch(job, query));
+      filteredRecentJobs = baseRecent.filter(job => matchesSearch(job, query));
 
-        // Filter array groups (only when grouping is enabled)
-        if ($preferences.groupArrayJobs && $hasArrayJobGrouping && $arrayJobGroups) {
-          filteredArrayGroups = $arrayJobGroups.filter(group =>
-            group.array_job_id.toLowerCase().includes(query) ||
-            group.job_name.toLowerCase().includes(query)
-          );
-        } else {
-          filteredArrayGroups = [];
-        }
-      });
+      // Filter array groups (only when grouping is enabled)
+      if ($preferences.groupArrayJobs && $hasArrayJobGrouping && $arrayJobGroups) {
+        filteredArrayGroups = $arrayJobGroups.filter(group =>
+          group.array_job_id.toLowerCase().includes(query) ||
+          group.job_name.toLowerCase().includes(query)
+        );
+      } else {
+        filteredArrayGroups = [];
+      }
     } else {
       filteredRunningJobs = baseRunning;
       filteredPendingJobs = basePending;
@@ -147,11 +154,11 @@
       // Only populate array groups when grouping is enabled
       filteredArrayGroups = ($preferences.groupArrayJobs && $arrayJobGroups) ? $arrayJobGroups : [];
     }
-  }
+  });
 
-  $: hasSearchResults = filteredRunningJobs.length > 0 ||
-                        filteredPendingJobs.length > 0 ||
-                        filteredRecentJobs.length > 0;
+  let hasSearchResults = $derived(filteredRunningJobs.length > 0 ||
+                                   filteredPendingJobs.length > 0 ||
+                                   filteredRecentJobs.length > 0);
 
   function matchesSearch(job: JobInfo, query: string): boolean {
     // Early return for better performance
@@ -203,7 +210,7 @@
   }
   
   // Track loading state
-  $: isLoading = Array.from($managerState.hostStates.values()).some(h => h.status === 'loading');
+  let isLoading = $derived(Array.from($managerState.hostStates.values()).some(h => h.status === 'loading'));
   
   async function loadJobs(forceRefresh = false) {
     if (loading) return;

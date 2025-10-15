@@ -31,11 +31,11 @@
   let showStatusFilter = $state(false);
   let showUserFilter = $state(false);
   
-  // Get unique values for filters
-  let uniqueHosts = $derived([...new Set(jobs.map(j => j.hostname).filter(Boolean))]);
-  let uniqueStatuses = $derived([...new Set(jobs.map(j => j.state).filter(Boolean))]);
-  let uniqueUsers = $derived([...new Set(jobs.map(j => j.user).filter(Boolean))]);
-  
+  // Get unique values for filters - filter out undefined jobs first
+  let uniqueHosts = $derived([...new Set(jobs.filter(j => j).map(j => j.hostname).filter(Boolean))]);
+  let uniqueStatuses = $derived([...new Set(jobs.filter(j => j && j.state).map(j => j.state))]);
+  let uniqueUsers = $derived([...new Set(jobs.filter(j => j).map(j => j.user).filter(Boolean))]);
+
   // Filter and sort functions
   function filterAndSortJobs(jobs: JobInfo[]): JobInfo[] {
     let filtered = [...jobs];

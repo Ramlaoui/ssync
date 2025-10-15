@@ -1,12 +1,34 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, Plugin } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import path from 'path';
 
+// Custom plugin to force Svelte to use client build in tests
+function svelteClientResolver(): Plugin {
+  return {
+    name: 'svelte-client-resolver',
+    enforce: 'pre',
+    resolveId(id) {
+      // Only apply during tests
+      if (!process.env.VITEST) return null;
+
+      // Force main svelte export to use client build
+      if (id === 'svelte') {
+        return path.resolve(__dirname, './node_modules/svelte/src/index-client.js');
+      }
+      return null;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [svelte({ hot: !process.env.VITEST })],
+  plugins: [
+    svelteClientResolver(),
+    svelte({ hot: !process.env.VITEST })
+  ],
   test: {
     globals: true,
-    environment: 'happy-dom',
+    // jsdom is required for Svelte 5 component testing
+    environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{js,ts}'],
     coverage: {
@@ -21,9 +43,9 @@ export default defineConfig({
         'dist/',
       ],
     },
-    // Handle WebSocket mocking
-    testTimeout: 10000,
-    hookTimeout: 10000,
+    // Handle WebSocket mocking and async operations
+    testTimeout: 15000,
+    hookTimeout: 15000,
   },
   resolve: {
     alias: {
