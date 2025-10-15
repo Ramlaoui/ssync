@@ -25,6 +25,9 @@ class CacheMiddleware:
 
     def __init__(self):
         self.cache = get_cache()
+        # Track UNKNOWN state retry attempts to prevent infinite loops
+        # Format: {(job_id, hostname): attempt_count}
+        self._unknown_retry_attempts: Dict[tuple[str, str], int] = {}
 
     async def cache_job_status_response(
         self,
@@ -398,12 +401,37 @@ class CacheMiddleware:
 
                     for job_id in job_ids:
                         try:
+                            # Check if this job has been stuck in UNKNOWN state
+                            job_key = (job_id, hostname)
+                            unknown_attempts = self._unknown_retry_attempts.get(job_key, 0)
+
+                            # Skip jobs that have been UNKNOWN too many times (max 3 attempts)
+                            if unknown_attempts >= 3:
+                                logger.warning(
+                                    f"Skipping job {job_id} on {hostname} - stuck in UNKNOWN state after {unknown_attempts} attempts"
+                                )
+                                # Clean up the tracking entry
+                                self._unknown_retry_attempts.pop(job_key, None)
+                                continue
+
                             # CRITICAL: Fetch final state from sacct (ONE LAST TIME)
                             final_state = manager.slurm_client.get_job_final_state(
                                 conn, hostname, job_id
                             )
 
                             if final_state:
+                                # Check if state is UNKNOWN
+                                from ..models.job import JobState
+                                if final_state.state == JobState.UNKNOWN:
+                                    # Increment retry counter for UNKNOWN jobs
+                                    self._unknown_retry_attempts[job_key] = unknown_attempts + 1
+                                    logger.warning(
+                                        f"Job {job_id} has UNKNOWN state (attempt {unknown_attempts + 1}/3) - will retry"
+                                    )
+                                else:
+                                    # Clear retry counter for jobs with known states
+                                    self._unknown_retry_attempts.pop(job_key, None)
+
                                 # Update cache with correct final state
                                 logger.info(
                                     f"Updating job {job_id} with final state: {final_state.state.value}"
