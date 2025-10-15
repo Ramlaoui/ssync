@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from src.ssync.cache import JobDataCache
-from src.ssync.models.job import JobInfo, JobState
+from ssync.cache import JobDataCache
+from ssync.models.job import JobInfo, JobState
 
 
 @pytest.fixture

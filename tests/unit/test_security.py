@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
-from src.ssync.web.security import (
+from ssync.web.security import (
     InputSanitizer,
     PathValidator,
     RateLimiter,

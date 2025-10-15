@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.ssync.connection import ConnectionManager
-from src.ssync.models.cluster import Host
-from src.ssync.ssh.connection import SSHCommandResult, SSHConnection, _CDContext
-from src.ssync.ssh.native import NativeSSH, SSHResult
+from ssync.connection import ConnectionManager
+from ssync.models.cluster import Host
+from ssync.ssh.connection import SSHCommandResult, SSHConnection, _CDContext
+from ssync.ssh.native import NativeSSH, SSHResult
 
 
 class TestSSHResult:
