@@ -90,8 +90,8 @@ class AuthenticatedSlurmApiClient:
 
         logger.info("Starting ssync API server...")
         try:
-            # Choose which app to start
-            app_module = "ssync.web.app_secure" if secure else "ssync.web.app"
+            # Use the unified app module (security is handled within app.py)
+            app_module = "ssync.web.app"
 
             # Start API server in background
             cmd = [
