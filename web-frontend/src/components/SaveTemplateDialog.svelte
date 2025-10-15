@@ -1,20 +1,32 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher } from 'svelte';
-  import { X } from 'lucide-svelte';
+  import Dialog from '../lib/components/ui/Dialog.svelte';
 
   const dispatch = createEventDispatcher();
 
-  export let isOpen = false;
-  export let script = '';
-  export let parameters = {};
-  export let selectedHost = '';
+  interface Props {
+    isOpen?: boolean;
+    script?: string;
+    parameters?: any;
+    selectedHost?: string;
+  }
 
-  let templateName = '';
-  let templateDescription = '';
+  let {
+    isOpen = $bindable(false),
+    script = '',
+    parameters = {},
+    selectedHost = ''
+  }: Props = $props();
 
-  function close() {
+  let templateName = $state('');
+  let templateDescription = $state('');
+
+  function handleClose() {
     templateName = '';
     templateDescription = '';
+    isOpen = false;
     dispatch('close');
   }
 
@@ -36,177 +48,130 @@
     };
 
     dispatch('save', template);
-    close();
+    handleClose();
   }
 
   // Reset form when dialog opens
-  $: if (isOpen) {
-    templateName = '';
-    templateDescription = '';
+  run(() => {
+    if (isOpen) {
+      templateName = '';
+      templateDescription = '';
+    }
+  });
+
+  // Handle Enter key in form
+  function handleKeyPress(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.shiftKey && templateName.trim()) {
+      event.preventDefault();
+      save();
+    }
   }
 </script>
 
-{#if isOpen}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="save-template-dialog" on:click|stopPropagation>
-      <div class="dialog-header">
-        <h3>Save as Template</h3>
-        <button
-          class="close-btn"
-          on:click={close}
-        >
-          <X class="w-5 h-5" />
-        </button>
+<Dialog
+  open={isOpen}
+  onClose={handleClose}
+  title="Save as Template"
+  description="Save this script configuration for quick reuse"
+  size="md"
+>
+  <div class="form-content">
+    <div class="form-group">
+      <label for="template-name">Template Name *</label>
+      <input
+        id="template-name"
+        type="text"
+        bind:value={templateName}
+        placeholder="e.g., GPU Training Script"
+        class="form-input"
+        onkeypress={handleKeyPress}
+      />
+    </div>
+
+    <div class="form-group">
+      <label for="template-description">Description (optional)</label>
+      <textarea
+        id="template-description"
+        bind:value={templateDescription}
+        placeholder="Describe what this script does..."
+        class="form-textarea"
+        rows="3"
+></textarea>
+    </div>
+
+    <div class="form-group">
+      <span class="section-label">Script Preview</span>
+      <div class="script-preview">
+        <pre>{script.split('\n').slice(0, 10).join('\n')}...</pre>
       </div>
+    </div>
 
-      <div class="dialog-content">
-        <div class="form-group">
-          <label for="template-name">Template Name *</label>
-          <input
-            id="template-name"
-            type="text"
-            bind:value={templateName}
-            placeholder="e.g., GPU Training Script"
-            class="form-input"
-          />
+    <div class="form-group">
+      <span class="section-label">Saved Parameters</span>
+      <div class="saved-params">
+        <div class="param-row">
+          <span class="param-label">Host:</span>
+          <span class="param-value">{selectedHost || 'Not selected'}</span>
         </div>
-
-        <div class="form-group">
-          <label for="template-description">Description (optional)</label>
-          <textarea
-            id="template-description"
-            bind:value={templateDescription}
-            placeholder="Describe what this script does..."
-            class="form-textarea"
-            rows="3"
-          />
+        <div class="param-row">
+          <span class="param-label">Directory:</span>
+          <span class="param-value">{parameters.sourceDir || 'Not selected'}</span>
         </div>
-
-        <div class="form-group">
-          <label>Script Preview</label>
-          <div class="script-preview">
-            <pre>{script.split('\n').slice(0, 10).join('\n')}...</pre>
+        <div class="param-row">
+          <span class="param-label">Time:</span>
+          <span class="param-value">{parameters.time || '60'} minutes</span>
+        </div>
+        <div class="param-row">
+          <span class="param-label">Memory:</span>
+          <span class="param-value">{parameters.memory || '4'}GB</span>
+        </div>
+        <div class="param-row">
+          <span class="param-label">CPUs:</span>
+          <span class="param-value">{parameters.cpus || '1'}</span>
+        </div>
+        {#if parameters.gpus}
+          <div class="param-row">
+            <span class="param-label">GPUs:</span>
+            <span class="param-value">{parameters.gpus}</span>
           </div>
-        </div>
-
-        <div class="form-group">
-          <label>Saved Parameters</label>
-          <div class="saved-params">
-            <div class="param-row">
-              <span class="param-label">Host:</span>
-              <span class="param-value">{selectedHost || 'Not selected'}</span>
-            </div>
-            <div class="param-row">
-              <span class="param-label">Directory:</span>
-              <span class="param-value">{parameters.sourceDir || 'Not selected'}</span>
-            </div>
-            <div class="param-row">
-              <span class="param-label">Time:</span>
-              <span class="param-value">{parameters.time || '60'} minutes</span>
-            </div>
-            <div class="param-row">
-              <span class="param-label">Memory:</span>
-              <span class="param-value">{parameters.memory || '4'}GB</span>
-            </div>
-            <div class="param-row">
-              <span class="param-label">CPUs:</span>
-              <span class="param-value">{parameters.cpus || '1'}</span>
-            </div>
-            {#if parameters.gpus}
-              <div class="param-row">
-                <span class="param-label">GPUs:</span>
-                <span class="param-value">{parameters.gpus}</span>
-              </div>
-            {/if}
-          </div>
-        </div>
-      </div>
-
-      <div class="dialog-footer">
-        <button
-          class="btn-secondary"
-          on:click={close}
-        >
-          Cancel
-        </button>
-        <button
-          class="btn-primary"
-          on:click={save}
-          disabled={!templateName.trim()}
-        >
-          Save Template
-        </button>
+        {/if}
       </div>
     </div>
   </div>
-{/if}
+
+  {#snippet footer()}
+    <div  class="dialog-footer">
+      <button
+        class="btn-secondary"
+        onclick={handleClose}
+      >
+        Cancel
+      </button>
+      <button
+        class="btn-primary"
+        onclick={save}
+        disabled={!templateName.trim()}
+      >
+        Save Template
+      </button>
+    </div>
+  {/snippet}
+</Dialog>
 
 <style>
-  .modal-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+  .form-content {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
+    flex-direction: column;
+    gap: 1.25rem;
   }
 
-  .save-template-dialog {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    max-width: 500px;
-    width: 90%;
-    max-height: 80vh;
+  .form-group {
     display: flex;
     flex-direction: column;
   }
 
-  .dialog-header {
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .dialog-header h3 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #111827;
-    margin: 0;
-  }
-
-  .close-btn {
-    background: none;
-    border: none;
-    padding: 0.5rem;
-    border-radius: 6px;
-    color: #6b7280;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .close-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
-  }
-
-  .dialog-content {
-    padding: 1.5rem;
-    overflow-y: auto;
-    flex: 1;
-  }
-
-  .form-group {
-    margin-bottom: 1.25rem;
-  }
-
-  .form-group label {
+  .form-group label,
+  .form-group .section-label {
     display: block;
     font-size: 0.875rem;
     font-weight: 500;
@@ -279,8 +244,6 @@
   }
 
   .dialog-footer {
-    padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;

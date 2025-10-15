@@ -1,12 +1,23 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
 
-  export let error: string;
-  export let title: string = 'Error';
-  export let icon: string = 'error';
-  export let showRetry: boolean = true;
-  export let retryLabel: string = 'Retry';
-  export let variant: 'page' | 'inline' | 'card' = 'inline';
+  interface Props {
+    error: string;
+    title?: string;
+    icon?: string;
+    showRetry?: boolean;
+    retryLabel?: string;
+    variant?: 'page' | 'inline' | 'card';
+  }
+
+  let {
+    error,
+    title = 'Error',
+    icon = 'error',
+    showRetry = true,
+    retryLabel = 'Retry',
+    variant = 'inline'
+  }: Props = $props();
   
   const dispatch = createEventDispatcher<{
     retry: void;
@@ -16,13 +27,13 @@
     dispatch('retry');
   }
 
-  $: containerClass = {
+  let containerClass = $derived({
     page: 'flex-1 flex flex-col items-center justify-center p-8 text-center',
     inline: 'flex flex-col items-center justify-center p-6 text-center',
     card: 'bg-red-50 border border-red-200 rounded-lg p-4'
-  }[variant];
+  }[variant]);
 
-  $: iconSize = variant === 'page' ? 'w-12 h-12' : 'w-8 h-8';
+  let iconSize = $derived(variant === 'page' ? 'w-12 h-12' : 'w-8 h-8');
 </script>
 
 <div class="{containerClass}">
@@ -46,7 +57,7 @@
   {#if showRetry}
     <button 
       class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-      on:click={handleRetry}
+      onclick={handleRetry}
     >
       {retryLabel}
     </button>

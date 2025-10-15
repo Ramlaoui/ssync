@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher } from 'svelte';
   import { jobParameters } from '../stores/jobParameters';
   import type { SyncMode } from '../stores/jobParameters';
@@ -7,10 +9,12 @@
     modeChanged: { mode: SyncMode };
   }>();
 
-  let currentMode: SyncMode = 'bidirectional';
+  let currentMode: SyncMode = $state('bidirectional');
 
   // Subscribe to the store's sync mode
-  $: currentMode = $jobParameters.syncMode;
+  run(() => {
+    currentMode = $jobParameters.syncMode;
+  });
 
   function handleModeChange(event: Event) {
     const target = event.target as HTMLSelectElement;
@@ -38,7 +42,7 @@
     id="sync-mode"
     class="sync-select"
     value={currentMode}
-    on:change={handleModeChange}
+    onchange={handleModeChange}
   >
     {#each syncModes as mode}
       <option value={mode.value} title={mode.description}>

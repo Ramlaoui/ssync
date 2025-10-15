@@ -3,8 +3,12 @@
   import JobTable from './JobTable.svelte';
   import type { JobInfo } from '../types/api';
 
-  export let jobs: JobInfo[] = [];
-  export let loading = false;
+  interface Props {
+    jobs?: JobInfo[];
+    loading?: boolean;
+  }
+
+  let { jobs = [], loading = false }: Props = $props();
 
   const dispatch = createEventDispatcher<{
     jobSelect: JobInfo;

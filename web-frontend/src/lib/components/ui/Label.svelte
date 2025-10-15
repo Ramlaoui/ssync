@@ -6,16 +6,22 @@
     class?: string;
   };
   
-  let className: string = "";
-  export { className as class };
+  interface Props {
+    class?: string;
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let { class: className = "", children, ...rest }: Props = $props();
+  
 </script>
 
 <label
-  {...$$restProps}
+  {...rest}
   class={cn(
     "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
     className
   )}
 >
-  <slot />
+  {@render children?.()}
 </label>

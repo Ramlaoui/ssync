@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { stopPropagation } from 'svelte/legacy';
+
   import { createEventDispatcher } from 'svelte';
   import { push, location } from 'svelte-spa-router';
   import { navigationActions } from '../stores/navigation';
@@ -6,25 +8,34 @@
   import { pauseWatcher, resumeWatcher } from '../stores/watchers';
   import { api } from '../services/api';
   import WatcherDetailDialog from './WatcherDetailDialog.svelte';
-  import { portal } from '../lib/portal';
+  import { portal } from '../lib/actions/portal';
   
-  export let watcher: Watcher;
-  export let jobInfo: any = null;
-  export let showJobLink = true;
-  export let lastEvent: any = null; // Latest event for this watcher
+  interface Props {
+    watcher: Watcher;
+    jobInfo?: any;
+    showJobLink?: boolean;
+    lastEvent?: any; // Latest event for this watcher
+  }
+
+  let {
+    watcher,
+    jobInfo = null,
+    showJobLink = true,
+    lastEvent = null
+  }: Props = $props();
   
   const dispatch = createEventDispatcher();
   
   // State management
-  let isExpanded = false;
-  let isPausing = false;
-  let isTriggering = false;
-  let triggerMessage = '';
-  let showDetailDialog = false;
+  let isExpanded = $state(false);
+  let isPausing = $state(false);
+  let isTriggering = $state(false);
+  let triggerMessage = $state('');
+  let showDetailDialog = $state(false);
   
   // Real-time pulse animation for active watchers
-  $: isActive = watcher.state === 'active';
-  $: pulseClass = isActive ? 'pulse' : '';
+  let isActive = $derived(watcher.state === 'active');
+  let pulseClass = $derived(isActive ? 'pulse' : '');
   
   // Format time like JobList component
   function formatTime(timeStr: string | null): string {
@@ -55,16 +66,18 @@
     switch (state) {
       case 'active': return '●';
       case 'paused': return '||';
+      case 'static': return '▶';  // Play icon for static watchers
       case 'completed': return '✓';
       case 'failed': return '×';
       default: return '○';
     }
   }
-  
+
   function getStateColor(state: string): string {
     switch (state) {
       case 'active': return '#10b981';
       case 'paused': return '#f59e0b';
+      case 'static': return '#8b5cf6';  // Purple for static watchers
       case 'completed': return '#3b82f6';
       case 'failed': return '#ef4444';
       default: return '#6b7280';
@@ -128,7 +141,8 @@
   }
   
   async function triggerManually() {
-    if (isTriggering || watcher.state !== 'active') return;
+    // Allow triggering for both ACTIVE and STATIC watchers
+    if (isTriggering || (watcher.state !== 'active' && watcher.state !== 'static')) return;
     isTriggering = true;
     triggerMessage = '';
     
@@ -231,7 +245,7 @@
   }
   
   // Calculate activity percentage for visualization
-  $: activityPercentage = Math.min((watcher.trigger_count / 100) * 100, 100);
+  let activityPercentage = $derived(Math.min((watcher.trigger_count / 100) * 100, 100));
   
   function openDetailDialog() {
     showDetailDialog = true;
@@ -253,7 +267,7 @@
   }
 </script>
 
-<div class="bg-white border border-gray-200 rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 max-w-full {pulseClass} {isExpanded ? 'expanded' : ''}" on:click={() => isExpanded = !isExpanded} role="button" tabindex="0" on:keydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
+<div class="bg-white border border-gray-200 rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 max-w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 
@@ -275,7 +289,7 @@
           <h3 class="m-0 text-sm font-semibold text-gray-900 overflow-hidden text-ellipsis whitespace-nowrap max-w-full">{watcher.name}</h3>
         </div>
 {#if showJobLink && jobInfo}
-          <button class="job-link" on:click={navigateToJob}>
+          <button class="job-link" onclick={navigateToJob}>
             {#if watcher.job_name && watcher.job_name !== 'N/A'}
               Job #{watcher.job_id} - {watcher.job_name}
             {:else}
@@ -291,6 +305,14 @@
     </div>
     
     <div class="flex items-start gap-2 flex-shrink-0">
+      {#if watcher.state === 'static'}
+        <div class="static-indicator" title="Static watcher - runs on manual trigger only (for completed/canceled jobs)">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M9.5 6.5v11l8-5.5-8-5.5z"/>
+          </svg>
+          <span class="text-xs">Static</span>
+        </div>
+      {/if}
       {#if watcher.timer_mode_enabled}
         <div class="timer-indicator" class:active={watcher.timer_mode_active} title="Timer Mode {watcher.timer_mode_active ? 'Active' : 'Enabled'}">
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -303,7 +325,7 @@
       <button
         id="copy-btn-{watcher.id}"
         class="copy-btn"
-        on:click|stopPropagation={copyWatcher}
+        onclick={stopPropagation(copyWatcher)}
         title="Copy this watcher configuration"
       >
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -316,7 +338,7 @@
         <button
           class="control-btn {watcher.state === 'paused' ? 'resume' : ''}"
           class:pausing={isPausing}
-          on:click|stopPropagation={togglePause}
+          onclick={stopPropagation(togglePause)}
           disabled={isPausing}
           title={watcher.state === 'active' ? 'Pause watcher' : 'Resume watcher'}
         >
@@ -337,13 +359,13 @@
         </button>
       {/if}
       
-      {#if watcher.state === 'active'}
+      {#if watcher.state === 'active' || watcher.state === 'static'}
         <button
           class="control-btn"
           class:triggering={isTriggering}
-          on:click|stopPropagation={triggerManually}
+          onclick={stopPropagation(triggerManually)}
           disabled={isTriggering}
-          title="Manually trigger watcher">
+          title={watcher.state === 'static' ? 'Run watcher (static mode - runs on trigger only)' : 'Manually trigger watcher'}>
           {#if isTriggering}
             <svg class="spinner-icon" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.4" stroke-dashoffset="10"/>
@@ -358,7 +380,7 @@
       
       <button
         class="edit-btn"
-        on:click|stopPropagation={openDetailDialog}
+        onclick={stopPropagation(openDetailDialog)}
         title="Edit watcher"
       >
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -404,7 +426,7 @@
     <div class="expanded-content">
       {#if watcher.captures && watcher.captures.length > 0}
         <div class="captures-section">
-          <label>Capture Groups</label>
+          <span class="section-label">Capture Groups</span>
           <div class="captures-list">
             {#each watcher.captures as capture, i}
               <span class="capture-item">
@@ -417,7 +439,7 @@
       
       {#if watcher.condition}
         <div class="condition-section">
-          <label>Condition</label>
+          <span class="section-label">Condition</span>
           <code class="condition-code">{watcher.condition}</code>
         </div>
       {/if}
@@ -425,7 +447,7 @@
       <!-- Actions Preview -->
       {#if watcher.actions && watcher.actions.length > 0}
         <div class="actions-section">
-          <label>Actions ({watcher.actions.length})</label>
+          <span class="section-label">Actions ({watcher.actions.length})</span>
           <div class="actions-preview">
             {#each watcher.actions as action, i}
               <div class="action-item">
@@ -445,7 +467,7 @@
       <!-- Last Trigger Result -->
       {#if lastEvent}
         <div class="last-trigger-section">
-          <label>Last Trigger</label>
+          <span class="section-label">Last Trigger</span>
           <div class="trigger-result">
             <div class="trigger-header">
               <span class="trigger-time">{formatTime(lastEvent.timestamp)}</span>
@@ -480,11 +502,11 @@
       {/if}
 
       <div class="details-actions">
-        <button class="detail-btn" on:click={viewDetails}>
+        <button class="detail-btn" onclick={viewDetails}>
           View All Events
         </button>
         {#if showJobLink}
-          <button class="detail-btn" on:click={navigateToJob}>
+          <button class="detail-btn" onclick={navigateToJob}>
             View Job Output
           </button>
         {/if}
@@ -592,6 +614,24 @@
     white-space: nowrap;
   }
   
+  .static-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: #f3e8ff;
+    color: #8b5cf6;
+    font-weight: 500;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .static-indicator svg {
+    width: 12px;
+    height: 12px;
+  }
+
   .timer-indicator {
     display: flex;
     align-items: center;
@@ -604,18 +644,18 @@
     transition: all 0.2s;
     flex-shrink: 0;
   }
-  
+
   .timer-indicator.active {
     background: #dbeafe;
     color: #1d4ed8;
     animation: timer-pulse 2s infinite;
   }
-  
+
   .timer-indicator svg {
     width: 16px;
     height: 16px;
   }
-  
+
   @keyframes timer-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
@@ -898,9 +938,9 @@
   .condition-section {
     margin-bottom: 1rem;
   }
-  
-  .captures-section label,
-  .condition-section label {
+
+  .captures-section .section-label,
+  .condition-section .section-label {
     display: block;
     font-size: 0.75rem;
     color: var(--color-text-secondary);
@@ -1092,9 +1132,9 @@
     .condition-section {
       margin-bottom: 0.75rem;
     }
-    
-    .captures-section label,
-    .condition-section label {
+
+    .captures-section .section-label,
+    .condition-section .section-label {
       font-size: 0.625rem;
       margin-bottom: 0.375rem;
     }
@@ -1208,7 +1248,7 @@
     border-top: 1px solid #e2e8f0;
   }
 
-  .actions-section label {
+  .actions-section .section-label {
     display: block;
     font-size: 0.875rem;
     font-weight: 600;
@@ -1271,7 +1311,7 @@
     border-top: 1px solid #e2e8f0;
   }
 
-  .last-trigger-section label {
+  .last-trigger-section .section-label {
     display: block;
     font-size: 0.875rem;
     font-weight: 600;

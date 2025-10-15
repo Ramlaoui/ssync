@@ -2,8 +2,12 @@
   import { jobStateManager } from '../lib/JobStateManager';
   import { onMount, onDestroy } from 'svelte';
   
-  export let showDetails = false;
-  export let position: 'top-right' | 'bottom-right' | 'bottom-left' = 'bottom-left';
+  interface Props {
+    showDetails?: boolean;
+    position?: 'top-right' | 'bottom-right' | 'bottom-left';
+  }
+
+  let { showDetails = $bindable(false), position = 'bottom-left' }: Props = $props();
   
   const metrics = jobStateManager.getMetrics();
   const connectionStatus = jobStateManager.getConnectionStatus();
@@ -12,9 +16,9 @@
   let refreshInterval: ReturnType<typeof setInterval>;
   
   // Calculate cache hit rate
-  $: cacheHitRate = $metrics.cacheHits + $metrics.cacheMisses > 0
+  let cacheHitRate = $derived($metrics.cacheHits + $metrics.cacheMisses > 0
     ? (($metrics.cacheHits / ($metrics.cacheHits + $metrics.cacheMisses)) * 100).toFixed(1)
-    : '0.0';
+    : '0.0');
   
   // Format numbers
   function formatNumber(num: number): string {
@@ -50,7 +54,7 @@
 <div class="performance-monitor {position}" class:expanded={showDetails}>
   <button 
     class="monitor-toggle"
-    on:click={() => showDetails = !showDetails}
+    onclick={() => showDetails = !showDetails}
     title="Performance Metrics"
   >
     <svg viewBox="0 0 24 24" fill="currentColor">
@@ -67,7 +71,7 @@
     <div class="monitor-details">
       <div class="details-header">
         <h3>Performance Metrics</h3>
-        <button class="reset-btn" on:click={resetMetrics} title="Reset metrics">
+        <button class="reset-btn" onclick={resetMetrics} title="Reset metrics">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
           </svg>

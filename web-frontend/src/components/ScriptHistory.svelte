@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { run, preventDefault, stopPropagation, createBubbler } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { onMount, createEventDispatcher } from 'svelte';
   import { slide, fade } from 'svelte/transition';
   import { api } from '../services/api';
@@ -8,10 +11,19 @@
 
   const dispatch = createEventDispatcher();
 
-  export let isOpen = false;
-  export let currentHost: string | null = null;
-  export let embedded = false; // New prop to indicate if embedded in another component
-  export let isMobile = false;
+  interface Props {
+    isOpen?: boolean;
+    currentHost?: string | null;
+    embedded?: boolean; // New prop to indicate if embedded in another component
+    isMobile?: boolean;
+  }
+
+  let {
+    isOpen = $bindable(false),
+    currentHost = null,
+    embedded = false,
+    isMobile = false
+  }: Props = $props();
   
   interface ScriptHistoryItem {
     job_id: string;
@@ -23,21 +35,21 @@
     cached_at?: string;
   }
   
-  let loading = true;
-  let scripts: ScriptHistoryItem[] = [];
-  let filteredScripts: ScriptHistoryItem[] = [];
-  let selectedScript: ScriptHistoryItem | null = null;
-  let searchTerm = '';
-  let filterHost = 'all';
-  let filterState = 'all';
-  let showPreview = false;
-  let previewContent = '';
-  let errorMessage = '';
+  let loading = $state(true);
+  let scripts: ScriptHistoryItem[] = $state([]);
+  let filteredScripts: ScriptHistoryItem[] = $state([]);
+  let selectedScript: ScriptHistoryItem | null = $state(null);
+  let searchTerm = $state('');
+  let filterHost = $state('all');
+  let filterState = $state('all');
+  let showPreview = $state(false);
+  let previewContent = $state('');
+  let errorMessage = $state('');
   
   // Infinite scroll
-  let displayCount = 20;
-  let scrollContainer: HTMLElement;
-  $: displayedScripts = filteredScripts.slice(0, displayCount);
+  let displayCount = $state(20);
+  let scrollContainer: HTMLElement = $state();
+  let displayedScripts = $derived(filteredScripts.slice(0, displayCount));
 
   function handleScroll(event: Event) {
     const element = event.target as HTMLElement;
@@ -279,32 +291,38 @@
   });
   
   // Watch for changes to isOpen and load history when opened
-  $: if (isOpen) {
-    console.log('ScriptHistory isOpen changed, loading scripts...');
-    loadScriptHistory();
-  }
+  run(() => {
+    if (isOpen) {
+      console.log('ScriptHistory isOpen changed, loading scripts...');
+      loadScriptHistory();
+    }
+  });
   
   // Re-filter whenever search or filters change
-  $: searchTerm, filterHost, filterState, filterScripts();
+  run(() => {
+    searchTerm, filterHost, filterState, filterScripts();
+  });
 
   // Reset display count when filters change
-  $: if (searchTerm || filterHost || filterState) {
-    displayCount = 20;
-  }
+  run(() => {
+    if (searchTerm || filterHost || filterState) {
+      displayCount = 20;
+    }
+  });
 </script>
 
 {#if isOpen}
 <!-- Overlay for mobile/desktop -->
-<div class="sidebar-overlay" on:click|preventDefault|stopPropagation={close} transition:fade={{ duration: 200 }}></div>
+<div class="sidebar-overlay" onclick={stopPropagation(preventDefault(close))} onkeydown={() => {}} role="presentation" transition:fade={{ duration: 200 }}></div>
 
 <!-- Sidebar -->
-<div class="sidebar-container {isMobile ? 'mobile' : 'desktop'}" on:click|stopPropagation transition:slide={{ duration: 300, axis: 'x' }}>
+<div class="sidebar-container {isMobile ? 'mobile' : 'desktop'}" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}} role="dialog" aria-modal="true" tabindex="-1" transition:slide={{ duration: 300, axis: 'x' }}>
   <div class="sidebar-header">
     <div class="sidebar-title">
       <History class="w-5 h-5" />
       <h2>Script History</h2>
     </div>
-    <button class="close-btn" on:click={close}>
+    <button class="close-btn" onclick={close}>
       <X class="w-5 h-5" />
     </button>
   </div>
@@ -337,7 +355,7 @@
       </select>
     </div>
     
-    <div class="sidebar-body" bind:this={scrollContainer} on:scroll={handleScroll}>
+    <div class="sidebar-body" bind:this={scrollContainer} onscroll={handleScroll}>
       {#if loading}
         <div class="loading">
           <div class="spinner"></div>
@@ -347,7 +365,7 @@
         <div class="error-state">
           <p>Error</p>
           <small>{errorMessage}</small>
-          <button class="retry-btn" on:click={loadScriptHistory}>Retry</button>
+          <button class="retry-btn" onclick={loadScriptHistory}>Retry</button>
         </div>
       {:else if displayedScripts.length === 0}
         <div class="empty-state">
@@ -363,10 +381,13 @@
       {:else}
         <div class="scripts-grid">
           {#each displayedScripts as script}
-            <div 
+            <div
               class="script-card"
               class:selected={selectedScript?.job_id === script.job_id}
-              on:click={() => selectScript(script)}
+              onclick={() => selectScript(script)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectScript(script); } }}
+              role="button"
+              tabindex="0"
             >
               <div class="script-header">
                 <div class="script-info">
@@ -427,7 +448,7 @@
       <div class="preview-section">
         <div class="preview-header">
           <h3>Script Preview</h3>
-          <button class="collapse-btn" on:click={() => showPreview = false}>
+          <button class="collapse-btn" onclick={() => showPreview = false} aria-label="Collapse preview">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M7 10l5 5 5-5z"/>
             </svg>
@@ -438,11 +459,11 @@
     {/if}
     
     <div class="sidebar-footer">
-      <button class="cancel-btn" on:click={close}>Cancel</button>
+      <button class="cancel-btn" onclick={close}>Cancel</button>
       <button
         class="use-btn"
         disabled={!selectedScript?.script_content}
-        on:click={useScript}
+        onclick={useScript}
       >
         Use This Script
       </button>

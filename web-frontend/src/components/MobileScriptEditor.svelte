@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, createEventDispatcher, tick } from "svelte";
   import { fade, fly, scale } from 'svelte/transition';
 
@@ -8,23 +10,32 @@
     openHistory: void;
   }>();
 
-  export let script = "";
-  export let launching = false;
-  export let canLaunch = false;
-  export let validationMessage = "";
+  interface Props {
+    script?: string;
+    launching?: boolean;
+    canLaunch?: boolean;
+    validationMessage?: string;
+  }
 
-  let textarea: HTMLTextAreaElement;
-  let scrollContainer: HTMLDivElement;
-  let showActions = false;
-  let showQuickInsert = false;
-  let copied = false;
-  let saved = false;
+  let {
+    script = $bindable(""),
+    launching = false,
+    canLaunch = false,
+    validationMessage = ""
+  }: Props = $props();
+
+  let textarea: HTMLTextAreaElement = $state();
+  let scrollContainer: HTMLDivElement = $state();
+  let showActions = $state(false);
+  let showQuickInsert = $state(false);
+  let copied = $state(false);
+  let saved = $state(false);
   let cursorPosition = 0;
-  let selectedText = "";
-  let lineCount = 1;
-  let currentLine = 1;
-  let fontSize = 16;
-  let isDarkMode = true;
+  let selectedText = $state("");
+  let lineCount = $state(1);
+  let currentLine = $state(1);
+  let fontSize = $state(16);
+  let isDarkMode = $state(true);
   
   // Common SLURM snippets for quick insert
   const snippets = [
@@ -40,9 +51,9 @@
     { label: "Python Run", value: "python ", icon: "🐍" },
   ];
 
-  $: {
+  run(() => {
     lineCount = (script.match(/\n/g) || []).length + 1;
-  }
+  });
 
   onMount(() => {
     adjustTextareaHeight();
@@ -156,7 +167,7 @@
   <!-- Compact Header -->
   <header class="editor-header">
     <div class="header-left">
-      <button class="icon-btn" on:click={() => dispatch('openHistory')} aria-label="Script History">
+      <button class="icon-btn" onclick={() => dispatch('openHistory')} aria-label="Script History">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M16.2,16.2L11,13V7H12.5V12.2L17,14.9L16.2,16.2Z" />
         </svg>
@@ -165,7 +176,7 @@
     </div>
     
     <div class="header-right">
-      <button class="icon-btn" on:click={() => showActions = !showActions} aria-label="More Actions">
+      <button class="icon-btn" onclick={() => showActions = !showActions} aria-label="More Actions">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z" />
         </svg>
@@ -200,10 +211,10 @@
     <textarea
       bind:this={textarea}
       bind:value={script}
-      on:input={handleInput}
-      on:select={updateCursorInfo}
-      on:click={updateCursorInfo}
-      on:keydown={handleKeyDown}
+      oninput={handleInput}
+      onselect={updateCursorInfo}
+      onclick={updateCursorInfo}
+      onkeydown={handleKeyDown}
       placeholder="#!/bin/bash&#10;#SBATCH --job-name=my-job&#10;#SBATCH --time=01:00:00&#10;#SBATCH --mem=4G&#10;&#10;# Your commands here..."
       spellcheck="false"
       autocomplete="off"
@@ -211,14 +222,14 @@
       autocapitalize="off"
       style="font-size: {fontSize}px;"
       disabled={launching}
-    />
+></textarea>
   </div>
 
   <!-- Quick Insert Bar -->
   <div class="quick-insert-bar">
     <button 
       class="quick-btn"
-      on:click={() => showQuickInsert = !showQuickInsert}
+      onclick={() => showQuickInsert = !showQuickInsert}
     >
       <svg viewBox="0 0 24 24" fill="currentColor">
         <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
@@ -227,13 +238,13 @@
     </button>
     
     <div class="quick-actions">
-      <button class="quick-btn" on:click={() => changeFontSize(-2)} aria-label="Decrease Font">
+      <button class="quick-btn" onclick={() => changeFontSize(-2)} aria-label="Decrease Font">
         A-
       </button>
-      <button class="quick-btn" on:click={() => changeFontSize(2)} aria-label="Increase Font">
+      <button class="quick-btn" onclick={() => changeFontSize(2)} aria-label="Increase Font">
         A+
       </button>
-      <button class="quick-btn" on:click={toggleTheme} aria-label="Toggle Theme">
+      <button class="quick-btn" onclick={toggleTheme} aria-label="Toggle Theme">
         {#if isDarkMode}
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6A6,6 0 0,1 18,12A6,6 0 0,1 12,18M20,15.31L23.31,12L20,8.69V4H15.31L12,0.69L8.69,4H4V8.69L0.69,12L4,15.31V20H8.69L12,23.31L15.31,20H20V15.31Z" />
@@ -252,7 +263,7 @@
     class="launch-button"
     class:ready={canLaunch}
     class:launching={launching}
-    on:click={handleLaunch}
+    onclick={handleLaunch}
     disabled={!canLaunch || launching}
   >
     {#if launching}
@@ -273,7 +284,7 @@
     <div class="quick-insert-panel" transition:fly={{ y: 100, duration: 200 }}>
       <div class="panel-header">
         <h3>Quick Insert</h3>
-        <button class="close-btn" on:click={() => showQuickInsert = false}>
+        <button class="close-btn" onclick={() => showQuickInsert = false}>
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />
           </svg>
@@ -283,7 +294,7 @@
         {#each snippets as snippet}
           <button 
             class="snippet-btn"
-            on:click={() => insertSnippet(snippet.value)}
+            onclick={() => insertSnippet(snippet.value)}
           >
             <span class="snippet-icon">{snippet.icon}</span>
             <span class="snippet-label">{snippet.label}</span>
@@ -296,26 +307,26 @@
   <!-- Actions Sheet -->
   {#if showActions}
     <div class="action-sheet" transition:fly={{ y: 100, duration: 200 }}>
-      <button class="action-item" on:click={copyScript}>
+      <button class="action-item" onclick={copyScript}>
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" />
         </svg>
         {copied ? 'Copied!' : 'Copy Script'}
       </button>
       
-      <button class="action-item" on:click={downloadScript}>
+      <button class="action-item" onclick={downloadScript}>
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
         </svg>
         {saved ? 'Saved!' : 'Download'}
       </button>
       
-      <button class="action-item cancel" on:click={() => showActions = false}>
+      <button class="action-item cancel" onclick={() => showActions = false}>
         Cancel
       </button>
     </div>
     
-    <div class="action-overlay" on:click={() => showActions = false}></div>
+    <div class="action-overlay" onclick={() => showActions = false}></div>
   {/if}
 </div>
 

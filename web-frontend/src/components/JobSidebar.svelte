@@ -1,3 +1,5 @@
+<!-- @migration-task Error while migrating Svelte code: can't migrate `$: actuallyCollapsed = !isMobile && collapsed;` to `$derived` because there's a variable named derived.
+     Rename the variable and try again or migrate by hand. -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { push, location } from 'svelte-spa-router';
@@ -6,11 +8,11 @@
   import { jobUtils } from '../lib/jobUtils';
   import { navigationActions } from '../stores/navigation';
   import { preferences, preferencesActions } from '../stores/preferences';
-  import { arrayJobGroups, hasArrayJobGrouping } from '../stores/jobs';
   import { debounce } from '../lib/debounce';
   import ArrayJobCard from './ArrayJobCard.svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
-  
+  import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
+
   export let currentJobId: string = '';
   export let currentHost: string = '';
   export let collapsed = false;
@@ -28,13 +30,18 @@
   let searchQuery = ''; // This will be the debounced value
   let searchFocused = false;
   let showSearch = false;
-  
+
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
   const runningJobs = jobStateManager.getJobsByState('R');
   const pendingJobs = jobStateManager.getJobsByState('PD');
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
+  const arrayJobGroups = jobStateManager.getArrayJobGroups(); // ✅ Use JobStateManager's array groups
+
+  // Derive hasArrayJobGrouping from arrayJobGroups store
+  import { derived } from 'svelte/store';
+  const hasArrayJobGrouping = derived(arrayJobGroups, $groups => $groups && $groups.length > 0);
 
   // Compute recent jobs (terminal states) - store them in a variable to avoid reactive loops
   let recentJobs: JobInfo[] = [];
@@ -66,6 +73,15 @@
       });
     }
   }
+
+  // Categorize array groups by activity state
+  $: runningArrayGroups = filteredArrayGroups.filter(g => g.running_count > 0);
+  $: pendingArrayGroups = filteredArrayGroups.filter(g =>
+    g.pending_count > 0 && g.running_count === 0
+  );
+  $: completedArrayGroups = filteredArrayGroups.filter(g =>
+    g.running_count === 0 && g.pending_count === 0
+  );
 
   // Filter jobs to exclude those in array groups when grouping is enabled
   function filterOutArrayTasks(jobs: JobInfo[]): JobInfo[] {
@@ -114,19 +130,22 @@
         filteredPendingJobs = basePending.filter(job => matchesSearch(job, query));
         filteredRecentJobs = baseRecent.filter(job => matchesSearch(job, query));
 
-        // Filter array groups
+        // Filter array groups (only when grouping is enabled)
         if ($preferences.groupArrayJobs && $hasArrayJobGrouping && $arrayJobGroups) {
           filteredArrayGroups = $arrayJobGroups.filter(group =>
             group.array_job_id.toLowerCase().includes(query) ||
             group.job_name.toLowerCase().includes(query)
           );
+        } else {
+          filteredArrayGroups = [];
         }
       });
     } else {
       filteredRunningJobs = baseRunning;
       filteredPendingJobs = basePending;
       filteredRecentJobs = baseRecent;
-      filteredArrayGroups = $arrayJobGroups || [];
+      // Only populate array groups when grouping is enabled
+      filteredArrayGroups = ($preferences.groupArrayJobs && $arrayJobGroups) ? $arrayJobGroups : [];
     }
   }
 
@@ -297,10 +316,10 @@
       <button
         class="icon-btn"
         class:active={$preferences.groupArrayJobs}
-        on:click={() => {
+        on:click={async () => {
           preferencesActions.toggleArrayGrouping();
-          // Force refresh to apply grouping changes
-          setTimeout(() => loadJobs(true), 100);
+          // Trigger a refresh to fetch data with new grouping preference
+          await loadJobs(true);
         }}
         aria-label="Toggle array job grouping"
         title={$preferences.groupArrayJobs ? "Disable array job grouping" : "Enable array job grouping"}
@@ -377,33 +396,26 @@
         <LoadingSpinner size="sm" message="Loading jobs..." centered={false} />
       </div>
     {:else}
-      <!-- Array Job Groups (when grouping is enabled) -->
-      {#if $preferences.groupArrayJobs && $hasArrayJobGrouping && filteredArrayGroups.length > 0}
-        <div class="job-section">
-          <h4 class="section-title">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M5,7H19V9H5V7M5,11H19V13H5V11M5,15H19V17H5V15" />
-            </svg>
-            Array Jobs ({filteredArrayGroups.length})
-          </h4>
-          <div class="job-list">
-            {#each filteredArrayGroups as group (group.array_job_id + group.hostname)}
-              <ArrayJobCard {group} />
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      <!-- Running Jobs -->
-      {#if filteredRunningJobs.length > 0}
+      <!-- Running Jobs (includes running array groups when grouping enabled) -->
+      {#if filteredRunningJobs.length > 0 || ($preferences.groupArrayJobs && runningArrayGroups.length > 0)}
         <div class="job-section">
           <h4 class="section-title">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
             </svg>
-            Running ({filteredRunningJobs.length}{#if searchQuery && $runningJobs.length !== filteredRunningJobs.length} <span class="search-count">of {$runningJobs.length}</span>{/if})
+            Running ({filteredRunningJobs.length}{#if $preferences.groupArrayJobs && runningArrayGroups.length > 0} + {runningArrayGroups.length} arrays{/if}{#if searchQuery && $runningJobs.length !== filteredRunningJobs.length} <span class="search-count">of {$runningJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
+            <!-- Running array groups first -->
+            {#if $preferences.groupArrayJobs}
+              {#each runningArrayGroups as group (group.array_job_id + group.hostname)}
+                <div class="array-job-wrapper">
+                  <ArrayJobCard {group} />
+                </div>
+              {/each}
+            {/if}
+
+            <!-- Then individual running jobs -->
             {#each filteredRunningJobs as job (job.job_id + job.hostname)}
               <button 
                 class="job-item"
@@ -437,16 +449,26 @@
         </div>
       {/if}
       
-      <!-- Pending Jobs -->
-      {#if filteredPendingJobs.length > 0}
+      <!-- Pending Jobs (includes pending array groups when grouping enabled) -->
+      {#if filteredPendingJobs.length > 0 || ($preferences.groupArrayJobs && pendingArrayGroups.length > 0)}
         <div class="job-section">
           <h4 class="section-title">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z" />
             </svg>
-            Pending ({filteredPendingJobs.length}{#if searchQuery && $pendingJobs.length !== filteredPendingJobs.length} <span class="search-count">of {$pendingJobs.length}</span>{/if})
+            Pending ({filteredPendingJobs.length}{#if $preferences.groupArrayJobs && pendingArrayGroups.length > 0} + {pendingArrayGroups.length} arrays{/if}{#if searchQuery && $pendingJobs.length !== filteredPendingJobs.length} <span class="search-count">of {$pendingJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
+            <!-- Pending array groups first -->
+            {#if $preferences.groupArrayJobs}
+              {#each pendingArrayGroups as group (group.array_job_id + group.hostname)}
+                <div class="array-job-wrapper">
+                  <ArrayJobCard {group} />
+                </div>
+              {/each}
+            {/if}
+
+            <!-- Then individual pending jobs -->
             {#each filteredPendingJobs as job (job.job_id + job.hostname)}
               <button 
                 class="job-item"
@@ -480,7 +502,27 @@
         </div>
       {/if}
       
-      <!-- Recent Jobs -->
+      <!-- Completed Array Jobs (collapsible section) -->
+      {#if $preferences.groupArrayJobs && completedArrayGroups.length > 0}
+        <div class="job-section">
+          <CollapsibleSection
+            title="Completed Array Jobs"
+            badge="{completedArrayGroups.length}"
+            defaultExpanded={false}
+            storageKey="sidebar-completed-arrays-expanded"
+          >
+            <div class="job-list">
+              {#each completedArrayGroups as group (group.array_job_id + group.hostname)}
+                <div class="array-job-wrapper">
+                  <ArrayJobCard {group} />
+                </div>
+              {/each}
+            </div>
+          </CollapsibleSection>
+        </div>
+      {/if}
+
+      <!-- Recent Jobs (individual jobs only, no arrays) -->
       {#if filteredRecentJobs.length > 0}
         <div class="job-section">
           <h4 class="section-title">
@@ -491,7 +533,7 @@
           </h4>
           <div class="job-list">
             {#each filteredRecentJobs as job (job.job_id + job.hostname)}
-              <button 
+              <button
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 on:click={() => selectJob(job)}
@@ -517,7 +559,7 @@
           </div>
         </div>
       {/if}
-      
+
       {#if $allJobs.length === 0}
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -683,16 +725,6 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
-  
-  .refresh-btn svg {
-    width: 16px;
-    height: 16px;
-    color: var(--text-secondary);
-  }
-  
-  .refresh-btn svg.spinning {
-    animation: spin 1s linear infinite;
-  }
 
   .close-btn {
     width: 28px;
@@ -832,7 +864,14 @@
     flex-direction: column;
     gap: 0.5rem;
   }
-  
+
+  /* Array job wrapper - subtle distinction in sidebar context */
+  .array-job-wrapper {
+    margin-left: -4px;
+    padding-left: 4px;
+    border-left: 2px solid #e5e7eb;
+  }
+
   .job-item {
     display: flex;
     align-items: flex-start;
@@ -1213,12 +1252,6 @@
     color: var(--text-tertiary);
     opacity: 0.5;
     margin-bottom: 1rem;
-  }
-
-  .no-search-results p {
-    margin: 0 0 1rem 0;
-    color: var(--text-secondary);
-    font-size: 0.875rem;
   }
 
   .clear-search-btn {

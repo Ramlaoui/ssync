@@ -4,32 +4,41 @@
   import LoadingSpinner from './LoadingSpinner.svelte';
   import HostStatusIndicator from './HostStatusIndicator.svelte';
   import { jobUtils } from '../lib/jobUtils';
-  import { jobsStore } from '../stores/jobs';
+  import { jobStateManager } from '../lib/JobStateManager';
   import { RefreshCw } from 'lucide-svelte';
-  
-  export let hostname: string;
-  export let jobs: JobInfo[];
-  export let queryTime: string;
-  export let loading = false;
-  
+
+  interface Props {
+    hostname: string;
+    jobs: JobInfo[];
+    queryTime: string;
+    loading?: boolean;
+  }
+
+  let {
+    hostname,
+    jobs,
+    queryTime,
+    loading = false
+  }: Props = $props();
+
   const dispatch = createEventDispatcher<{
     jobSelect: JobInfo;
   }>();
-  
+
   // Mobile detection
-  let isMobile = false;
-  
+  let isMobile = $state(false);
+
   function checkMobile() {
     isMobile = window.innerWidth <= 768;
   }
-  
+
   function selectJob(job: JobInfo): void {
     if (loading) return;
     dispatch('jobSelect', job);
   }
 
   async function refreshHost(): Promise<void> {
-    await jobsStore.refreshHost(hostname);
+    await jobStateManager.syncHost(hostname, true); // true = force sync
   }
   
   function formatTime(timeStr: string | null): string {
@@ -102,7 +111,7 @@
       <HostStatusIndicator {hostname} compact={false} />
       <button
         class="p-1.5 rounded hover:bg-gray-200 transition-colors"
-        on:click={refreshHost}
+        onclick={refreshHost}
         title="Refresh jobs for {hostname}"
       >
         <RefreshCw class="h-4 w-4 text-gray-600" />
@@ -120,7 +129,7 @@
       {#each jobs as job}
         <button
           class="w-full bg-white border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors text-left {loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}"
-          on:click={() => selectJob(job)}
+          onclick={() => selectJob(job)}
           disabled={loading}
           aria-label="View job details for job {job.job_id}"
         >
@@ -172,11 +181,11 @@
           {#each jobs as job}
             <tr 
               class="hover:bg-gray-50 transition-colors {loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}"
-              on:click={() => selectJob(job)}
+              onclick={() => selectJob(job)}
               tabindex="0"
               role="button"
               aria-label="View job details"
-              on:keydown={(e) => e.key === 'Enter' && selectJob(job)}
+              onkeydown={(e) => e.key === 'Enter' && selectJob(job)}
             >
               <td class="px-4 py-3 whitespace-nowrap">
                 <strong class="text-gray-700 font-semibold">{job.job_id}</strong>

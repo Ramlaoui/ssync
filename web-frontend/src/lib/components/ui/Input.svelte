@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { createBubbler } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { cn } from "../../cn";
   import type { HTMLInputAttributes } from "svelte/elements";
   
@@ -6,22 +9,27 @@
     class?: string;
   };
   
-  let className: string = "";
-  export { className as class };
-  export let value: $$Props["value"] = "";
+  
+  interface Props {
+    class?: string;
+    value?: $$Props["value"];
+    [key: string]: any
+  }
+
+  let { class: className = "", value = $bindable(""), ...rest }: Props = $props();
 </script>
 
 <input
-  {...$$restProps}
+  {...rest}
   bind:value
   class={cn(
     "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
     className
   )}
-  on:input
-  on:change
-  on:focus
-  on:blur
-  on:keydown
-  on:keyup
+  oninput={bubble('input')}
+  onchange={bubble('change')}
+  onfocus={bubble('focus')}
+  onblur={bubble('blur')}
+  onkeydown={bubble('keydown')}
+  onkeyup={bubble('keyup')}
 />

@@ -1,27 +1,29 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from 'svelte';
   import type { WatcherEvent } from '../types/watchers';
   
-  export let events: WatcherEvent[] = [];
-  export let maxEvents = 50;
-  export let autoScroll = true;
+  interface Props {
+    events?: WatcherEvent[];
+    maxEvents?: number;
+    autoScroll?: boolean;
+  }
+
+  let { events = [], maxEvents = 50, autoScroll = $bindable(true) }: Props = $props();
   
   // Timeline state
-  let timelineElement: HTMLDivElement;
-  let hoveredEvent: WatcherEvent | null = null;
-  let selectedTimeRange = '1h'; // 1h, 6h, 24h, all
-  let tooltipX = 0;
-  let tooltipY = 0;
+  let timelineElement: HTMLDivElement = $state();
+  let hoveredEvent: WatcherEvent | null = $state(null);
+  let selectedTimeRange = $state('1h'); // 1h, 6h, 24h, all
+  let tooltipX = $state(0);
+  let tooltipY = $state(0);
   
   // Real-time updates
   let animationFrame: number;
   let timeNow = new Date();
   
-  // Filter events by time range
-  $: filteredEvents = filterEventsByTime(events, selectedTimeRange);
   
-  // Group events by minute for visualization
-  $: eventGroups = groupEventsByTime(filteredEvents);
   
   function filterEventsByTime(events: WatcherEvent[], range: string): WatcherEvent[] {
     const now = new Date();
@@ -153,10 +155,16 @@
     return () => clearInterval(interval);
   });
   
+  // Filter events by time range
+  let filteredEvents = $derived(filterEventsByTime(events, selectedTimeRange));
+  // Group events by minute for visualization
+  let eventGroups = $derived(groupEventsByTime(filteredEvents));
   // Scroll when new events arrive
-  $: if (events.length && autoScroll) {
-    scrollToLatest();
-  }
+  run(() => {
+    if (events.length && autoScroll) {
+      scrollToLatest();
+    }
+  });
 </script>
 
 <div class="timeline-container">
@@ -168,7 +176,7 @@
           <button 
             class="range-btn"
             class:active={selectedTimeRange === range}
-            on:click={() => selectedTimeRange = range}
+            onclick={() => selectedTimeRange = range}
           >
             {range === 'all' ? 'All' : `Last ${range}`}
           </button>
@@ -196,8 +204,8 @@
               background: {getEventColor(event)};
               left: {(i / Math.max(filteredEvents.length - 1, 1)) * 90}%;
             "
-            on:mouseenter={(e) => handleMouseEnter(e, event)}
-            on:mouseleave={() => hoveredEvent = null}
+            onmouseenter={(e) => handleMouseEnter(e, event)}
+            onmouseleave={() => hoveredEvent = null}
           >
             <span class="event-icon">{getEventIcon(event)}</span>
           </div>

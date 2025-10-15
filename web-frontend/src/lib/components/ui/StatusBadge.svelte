@@ -2,9 +2,13 @@
   import { cn } from "../../utils";
   import Badge from "./Badge.svelte";
 
-  export let status: string;
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    status: string;
+    class?: string;
+  }
+
+  let { status, class: className = "" }: Props = $props();
+  
 
   type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "success" | "warning";
 
@@ -17,7 +21,7 @@
     'TO': { label: 'Timeout', variant: 'destructive', icon: '⏱', pulse: false },
   };
 
-  $: config = statusConfig[status] || { label: status, variant: 'default' as BadgeVariant, icon: '?', pulse: false };
+  let config = $derived(statusConfig[status] || { label: status, variant: 'default' as BadgeVariant, icon: '?', pulse: false });
 </script>
 
 <Badge 

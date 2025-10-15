@@ -1,31 +1,48 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import { Settings, Type, Hash, WrapText, RefreshCw } from 'lucide-svelte';
   
-  export let content: string = '';
-  export let isLoading: boolean = false;
-  export let hasMoreContent: boolean = false;
-  export let onLoadMore: (() => void) | null = null;
-  export let onScrollToTop: (() => void) | null = null;
-  export let onScrollToBottom: (() => void) | null = null;
-  export let type: 'output' | 'error' = 'output';
-  export let isStreaming: boolean = false;
-  export let onRefresh: (() => void) | null = null;
-  export let refreshing: boolean = false;
+  interface Props {
+    content?: string;
+    isLoading?: boolean;
+    hasMoreContent?: boolean;
+    onLoadMore?: (() => void) | null;
+    onScrollToTop?: (() => void) | null;
+    onScrollToBottom?: (() => void) | null;
+    type?: 'output' | 'error';
+    isStreaming?: boolean;
+    onRefresh?: (() => void) | null;
+    refreshing?: boolean;
+  }
 
-  let outputElement: HTMLPreElement;
-  let lineNumbersElement: HTMLDivElement;
-  let searchQuery: string = '';
-  let searchResults: number[] = [];
-  let currentSearchIndex: number = -1;
-  let showLineNumbers: boolean = true;
+  let {
+    content = '',
+    isLoading = false,
+    hasMoreContent = false,
+    onLoadMore = null,
+    onScrollToTop = null,
+    onScrollToBottom = null,
+    type = 'output',
+    isStreaming = false,
+    onRefresh = null,
+    refreshing = false
+  }: Props = $props();
+
+  let outputElement: HTMLPreElement = $state();
+  let lineNumbersElement: HTMLDivElement = $state();
+  let searchQuery: string = $state('');
+  let searchResults: number[] = $state([]);
+  let currentSearchIndex: number = $state(-1);
+  let showLineNumbers: boolean = $state(true);
   let autoScroll: boolean = true;
-  let isAtBottom: boolean = true;
-  let highlightedContent: string = '';
-  let showSettingsMenu: boolean = false;
-  let fontSize: 'small' | 'medium' | 'large' = 'medium';
-  let wordWrap: boolean = true;
+  let isAtBottom: boolean = $state(true);
+  let highlightedContent: string = $state('');
+  let showSettingsMenu: boolean = $state(false);
+  let fontSize: 'small' | 'medium' | 'large' = $state('medium');
+  let wordWrap: boolean = $state(true);
 
   // Progressive loading constants
   const MAX_INITIAL_SIZE = 2 * 1024 * 1024; // 2MB initial load
@@ -36,29 +53,23 @@
   const DISABLE_HIGHLIGHTING_THRESHOLD = 1 * 1024 * 1024; // 1MB
 
   // Progressive loading state
-  let renderedContent: string = '';
-  let windowStart: number = 0; // Start of the rendered window
-  let windowEnd: number = 0; // End of the rendered window
-  let totalContentSize: number = 0;
-  let isLargeFile: boolean = false;
-  let loadingMore: boolean = false;
-  let disableHighlighting: boolean = false;
-  let showSizeWarning: boolean = false;
+  let renderedContent: string = $state('');
+  let windowStart: number = $state(0); // Start of the rendered window
+  let windowEnd: number = $state(0); // End of the rendered window
+  let totalContentSize: number = $state(0);
+  let isLargeFile: boolean = $state(false);
+  let loadingMore: boolean = $state(false);
+  let disableHighlighting: boolean = $state(false);
+  let showSizeWarning: boolean = $state(false);
   let warningDismissTimer: NodeJS.Timeout | null = null;
-  let userInteractionCount: number = 0;
+  let userInteractionCount: number = $state(0);
   let virtualScrollOffset: number = 0; // Virtual scroll position
   let scrollPlaceholder: HTMLDivElement; // Placeholder to maintain scroll height
   
   // Line processing
-  let lines: string[] = [];
+  let lines: string[] = $state([]);
   let filteredLines: { lineNumber: number; content: string; matches: number[] }[] = [];
 
-  // Initialize content when it changes
-  $: {
-    if (content) {
-      initializeContent();
-    }
-  }
 
   function initializeContent() {
     totalContentSize = content.length;
@@ -103,18 +114,7 @@
     }
   }
 
-  $: {
-    lines = renderedContent.split('\n');
-    updateFilteredLines();
-  }
 
-  $: {
-    if (searchQuery) {
-      highlightSearchResults();
-    } else {
-      highlightedContent = escapeHtml(renderedContent);
-    }
-  }
   
   function updateFilteredLines() {
     if (!searchQuery) {
@@ -399,14 +399,6 @@
     onScrollToBottom?.();
   }
   
-  // Auto-scroll to bottom when new content arrives (if enabled and user is at bottom)
-  $: if (autoScroll && isAtBottom && outputElement && renderedContent) {
-    setTimeout(() => {
-      if (outputElement && isAtBottom) {
-        outputElement.scrollTop = outputElement.scrollHeight;
-      }
-    }, 10);
-  }
   
   onMount(() => {
     if (outputElement) {
@@ -449,12 +441,6 @@
     }
   }
 
-  // Font size classes
-  $: fontSizeClass = {
-    small: 'text-xs',
-    medium: 'text-sm',
-    large: 'text-base'
-  }[fontSize];
 
   // Utility function to format bytes
   function formatBytes(bytes: number): string {
@@ -464,9 +450,42 @@
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+  // Initialize content when it changes
+  run(() => {
+    if (content) {
+      initializeContent();
+    }
+  });
+  run(() => {
+    lines = renderedContent.split('\n');
+    updateFilteredLines();
+  });
+  run(() => {
+    if (searchQuery) {
+      highlightSearchResults();
+    } else {
+      highlightedContent = escapeHtml(renderedContent);
+    }
+  });
+  // Auto-scroll to bottom when new content arrives (if enabled and user is at bottom)
+  run(() => {
+    if (autoScroll && isAtBottom && outputElement && renderedContent) {
+      setTimeout(() => {
+        if (outputElement && isAtBottom) {
+          outputElement.scrollTop = outputElement.scrollHeight;
+        }
+      }, 10);
+    }
+  });
+  // Font size classes
+  let fontSizeClass = $derived({
+    small: 'text-xs',
+    medium: 'text-sm',
+    large: 'text-base'
+  }[fontSize]);
 </script>
 
-<div class="enhanced-output-viewer" on:click={handleClickOutside}>
+<div class="enhanced-output-viewer" onclick={handleClickOutside} role="presentation">
   <!-- Search and Controls Header -->
   <div class="viewer-header">
     <div class="search-controls">
@@ -491,7 +510,7 @@
         <div class="search-navigation">
           <button 
             class="search-nav-btn" 
-            on:click={prevSearchResult}
+            onclick={prevSearchResult}
             disabled={searchResults.length === 0}
             title="Previous result"
           >
@@ -501,7 +520,7 @@
           </button>
           <button 
             class="search-nav-btn" 
-            on:click={nextSearchResult}
+            onclick={nextSearchResult}
             disabled={searchResults.length === 0}
             title="Next result"
           >
@@ -520,7 +539,7 @@
       {#if onRefresh}
         <button
           class="control-btn"
-          on:click={onRefresh}
+          onclick={onRefresh}
           disabled={refreshing}
           title="Refresh {type}"
         >
@@ -529,13 +548,13 @@
       {/if}
 
       <!-- Scroll Controls -->
-      <button class="control-btn" on:click={handleScrollToTop} title="Scroll to top">
+      <button class="control-btn" onclick={handleScrollToTop} title="Scroll to top">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"/>
         </svg>
       </button>
 
-      <button class="control-btn" on:click={handleScrollToBottom} title="Scroll to bottom">
+      <button class="control-btn" onclick={handleScrollToBottom} title="Scroll to bottom">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"/>
         </svg>
@@ -543,7 +562,7 @@
 
       <!-- Settings Menu -->
       <div class="settings-dropdown relative">
-        <button class="control-btn" on:click={() => showSettingsMenu = !showSettingsMenu} title="View settings">
+        <button class="control-btn" onclick={() => showSettingsMenu = !showSettingsMenu} title="View settings">
           <Settings class="w-3.5 h-3.5" />
         </button>
 
@@ -554,21 +573,21 @@
               <div class="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">Text Size</div>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'small' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={() => setFontSize('small')}
+                onclick={() => setFontSize('small')}
               >
                 <Type class="w-3 h-3" />
                 Small
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'medium' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={() => setFontSize('medium')}
+                onclick={() => setFontSize('medium')}
               >
                 <Type class="w-4 h-4" />
                 Medium
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'large' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={() => setFontSize('large')}
+                onclick={() => setFontSize('large')}
               >
                 <Type class="w-5 h-5" />
                 Large
@@ -579,14 +598,14 @@
               <!-- Display Options -->
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {showLineNumbers ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={toggleLineNumbers}
+                onclick={toggleLineNumbers}
               >
                 <Hash class="w-4 h-4" />
                 {showLineNumbers ? 'Hide' : 'Show'} Line Numbers
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {wordWrap ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                on:click={toggleWordWrap}
+                onclick={toggleWordWrap}
               >
                 <WrapText class="w-4 h-4" />
                 {wordWrap ? 'Disable' : 'Enable'} Word Wrap
@@ -621,7 +640,7 @@
         </div>
         <button
           class="dismiss-btn"
-          on:click={dismissWarning}
+          onclick={dismissWarning}
           title="Dismiss"
         >
           <svg viewBox="0 0 20 20" fill="currentColor">
@@ -664,7 +683,7 @@
           class:error-type={type === 'error'}
           class:wrap={wordWrap}
           bind:this={outputElement}
-          on:scroll={() => checkScrollPosition()}
+          onscroll={() => checkScrollPosition()}
         >{@html highlightedContent}</pre>
       </div>
 

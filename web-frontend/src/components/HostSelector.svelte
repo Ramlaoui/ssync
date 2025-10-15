@@ -180,21 +180,6 @@
     color: white;
   }
   
-  
-  /* Compact variant adjustments */
-  .compact .flex.justify-between.items-center {
-    @apply py-2 px-3;
-  }
 
-  .compact .text-sm {
-    @apply text-xs;
-  }
-
-  .compact .px-2\\.5.py-1 {
-    @apply px-2 py-0.5 text-xs min-w-[24px];
-  }
-
-  .compact {
-    @apply gap-2;
-  }
+  /* Compact variant adjustments handled in HTML with Tailwind classes */
 </style>

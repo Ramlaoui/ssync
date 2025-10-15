@@ -4,8 +4,12 @@
   import type { ArrayJobGroup } from '../types/api';
   import { jobUtils } from '../lib/jobUtils';
 
-  export let group: ArrayJobGroup;
-  export let expanded = false;
+  interface Props {
+    group: ArrayJobGroup;
+    expanded?: boolean;
+  }
+
+  let { group, expanded = $bindable(false) }: Props = $props();
 
   function toggleExpanded() {
     expanded = !expanded;
@@ -27,13 +31,13 @@
     return 'CD';
   }
 
-  $: groupState = getGroupState();
+  let groupState = $derived(getGroupState());
 </script>
 
 <div class="array-job-card">
   <button
     class="array-header"
-    on:click={toggleExpanded}
+    onclick={toggleExpanded}
     style="border-left-color: {jobUtils.getStateColor(groupState)}"
   >
     <div class="header-content">
@@ -93,16 +97,16 @@
       {#each group.tasks as task (task.job_id)}
         <button
           class="task-item"
-          on:click={() => selectTask(task.job_id)}
+          onclick={() => selectTask(task.job_id)}
           style="border-left-color: {jobUtils.getStateColor(task.state)}"
         >
-          <span class="task-id">{task.job_id}</span>
+          <span class="task-id">#{task.array_task_id || task.job_id.split('_').pop()}</span>
           <span class="task-state state-{task.state.toLowerCase()}">{task.state}</span>
           {#if task.runtime}
             <span class="task-runtime">{task.runtime}</span>
           {/if}
           {#if task.node_list}
-            <span class="task-node">{task.node_list}</span>
+            <span class="task-node" title={task.node_list}>{task.node_list}</span>
           {/if}
         </button>
       {/each}
@@ -223,7 +227,7 @@
 
   .task-item {
     width: 100%;
-    padding: 8px 12px 8px 40px;
+    padding: 6px 8px 6px 32px;
     background: white;
     border: none;
     border-left: 3px solid transparent;
@@ -232,7 +236,7 @@
     text-align: left;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     transition: background-color 0.2s;
   }
 
@@ -246,9 +250,10 @@
 
   .task-id {
     font-family: 'Courier New', monospace;
-    font-size: 12px;
-    color: #374151;
-    min-width: 100px;
+    font-size: 11px;
+    color: #6b7280;
+    min-width: 32px;
+    font-weight: 600;
   }
 
   .task-state {
@@ -283,10 +288,19 @@
     color: #4b5563;
   }
 
-  .task-runtime,
+  .task-runtime {
+    font-size: 11px;
+    color: #6b7280;
+  }
+
   .task-node {
     font-size: 11px;
     color: #6b7280;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   @media (max-width: 640px) {

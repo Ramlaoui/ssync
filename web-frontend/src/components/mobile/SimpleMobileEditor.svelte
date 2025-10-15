@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher } from 'svelte';
   import CodeMirrorEditor from '../CodeMirrorEditor.svelte';
   
@@ -8,16 +10,27 @@
     openHistory: void;
   }>();
   
-  export let script = '';
-  export let launching = false;
-  export let canLaunch = false;
-  export let validationMessage = '';
+  interface Props {
+    script?: string;
+    launching?: boolean;
+    canLaunch?: boolean;
+    validationMessage?: string;
+  }
+
+  let {
+    script = '',
+    launching = false,
+    canLaunch = false,
+    validationMessage = ''
+  }: Props = $props();
   
-  let editableScript = script;
-  let vimMode = true;
-  let codeMirrorEditor: CodeMirrorEditor;
+  let editableScript = $state(script);
+  let vimMode = $state(true);
+  let codeMirrorEditor: CodeMirrorEditor = $state();
   
-  $: editableScript = script;
+  run(() => {
+    editableScript = script;
+  });
   
   function handleScriptChange(event: CustomEvent<{ content: string }>) {
     editableScript = event.detail.content;
@@ -56,12 +69,12 @@
       <button 
         class="vim-toggle"
         class:active={vimMode}
-        on:click={toggleVimMode}
+        onclick={toggleVimMode}
         title="Toggle Vim Mode"
       >
         VIM
       </button>
-      <button class="history-button" on:click={handleHistory}>
+      <button class="history-button" onclick={handleHistory}>
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M13 3C8.03 3 4 7.03 4 12H1L5 16L9 12H6C6 8.13 9.13 5 13 5C16.87 5 20 8.13 20 12C20 15.87 16.87 19 13 19C11.07 19 9.32 18.21 8.06 16.94L6.64 18.36C8.27 20 10.5 21 13 21C17.97 21 22 16.97 22 12C22 7.03 17.97 3 13 3M12 8V13L16.28 15.54L17 14.33L13.5 12.25V8H12Z" />
         </svg>
@@ -91,7 +104,7 @@
   <!-- Vim Mode Helper -->
   {#if vimMode}
     <div class="vim-helper">
-      <button class="esc-button" on:click={handleEscape}>
+      <button class="esc-button" onclick={handleEscape}>
         ESC
       </button>
       <span class="vim-hint">Vim mode active • Tap ESC button for escape key</span>
@@ -102,7 +115,7 @@
   <div class="action-buttons">
     <button 
       class="launch-button" 
-      on:click={handleLaunch}
+      onclick={handleLaunch}
       disabled={!canLaunch || launching}
     >
       {#if launching}

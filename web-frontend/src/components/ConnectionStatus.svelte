@@ -1,14 +1,14 @@
 <script lang="ts">
   import { jobStateManager } from '../lib/JobStateManager';
   
-  let showDetails = false;
+  let showDetails = $state(false);
   
   const connectionStatus = jobStateManager.getConnectionStatus();
   const managerState = jobStateManager.getState();
   
-  $: isConnected = $connectionStatus.connected;
-  $: connectionClass = $connectionStatus.source === 'websocket' ? 'connected' : 
-                       $connectionStatus.source === 'api' ? 'polling' : 'disconnected';
+  let isConnected = $derived($connectionStatus.connected);
+  let connectionClass = $derived($connectionStatus.source === 'websocket' ? 'connected' : 
+                       $connectionStatus.source === 'api' ? 'polling' : 'disconnected');
   
   function handleReconnect() {
     jobStateManager.forceRefresh();
@@ -25,7 +25,7 @@
 <div class="connection-status {connectionClass}" class:expanded={showDetails}>
   <button 
     class="status-indicator"
-    on:click={() => showDetails = !showDetails}
+    onclick={() => showDetails = !showDetails}
     title="Connection status: {$connectionStatus.source}"
   >
     <span class="status-dot"></span>
@@ -60,7 +60,7 @@
           <span class="text-amber">Paused (Inactive)</span>
         </div>
       {/if}
-      <button class="reconnect-btn" on:click={handleReconnect}>
+      <button class="reconnect-btn" onclick={handleReconnect}>
         Force Refresh
       </button>
     </div>

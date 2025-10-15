@@ -1,105 +1,127 @@
 <script lang="ts">
+  import { run, createBubbler, stopPropagation } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { createEventDispatcher } from 'svelte';
   import { fly, slide } from 'svelte/transition';
   import { api } from '../services/api';
   import type { WatcherAction } from '../types/watchers';
   import { Plus, X, Eye, Zap, Save, ChevronDown, ChevronRight } from 'lucide-svelte';
 
-  export let jobId: string;
-  export let hostname: string;
-  export let isVisible = false;
-  export let copiedWatcherConfig: any = null;
+  interface Props {
+    jobId: string;
+    hostname: string;
+    isVisible?: boolean;
+    copiedWatcherConfig?: any;
+  }
+
+  let {
+    jobId,
+    hostname,
+    isVisible = false,
+    copiedWatcherConfig = null
+  }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
   // Debug logging
-  $: console.log('WatcherCreator props:', { jobId, hostname, isVisible, copiedWatcherConfig });
+  run(() => {
+    console.log('WatcherCreator props:', { jobId, hostname, isVisible, copiedWatcherConfig });
+  });
 
   // Smart defaults for immediate creation
-  let watcherName = '';
-  let pattern = '';
-  let interval = 30;
-  let watcherOutputType: 'stdout' | 'stderr' | 'both' = 'stdout';
+  let watcherName = $state('');
+  let pattern = $state('');
+  let interval = $state(30);
+  let watcherOutputType: 'stdout' | 'stderr' | 'both' = $state('stdout');
 
   // Initialize actions based on whether we're copying or creating new
-  let actions: WatcherAction[] = [];
+  let actions: WatcherAction[] = $state([]);
 
   // Track whether we've already initialized from copy to prevent overwriting user edits
-  let hasInitializedFromCopy = false;
+  let hasInitializedFromCopy = $state(false);
 
   // Initialize from copied configuration if provided
-  $: if (copiedWatcherConfig && isVisible && !hasInitializedFromCopy) {
-    console.log('Initializing from copied config:', copiedWatcherConfig);
-    watcherName = `Copy of ${copiedWatcherConfig.name}`;
-    pattern = copiedWatcherConfig.pattern || '';
-    captures = copiedWatcherConfig.captures || [];
-    interval = copiedWatcherConfig.interval_seconds || copiedWatcherConfig.interval || 30;
-    watcherOutputType = copiedWatcherConfig.output_type || 'stdout';
-    maxTriggers = copiedWatcherConfig.max_triggers || 10;
-    timerModeEnabled = copiedWatcherConfig.timer_mode_enabled || false;
-    timerInterval = copiedWatcherConfig.timer_interval_seconds || 30;
-    if (copiedWatcherConfig.condition) {
-      condition = copiedWatcherConfig.condition;
-    }
-    // Copy actions with all their properties
-    if (copiedWatcherConfig.actions && copiedWatcherConfig.actions.length > 0) {
-      console.log('Copying actions:', copiedWatcherConfig.actions);
-      actions = copiedWatcherConfig.actions.map(action => ({
-        type: action.type,
-        params: { ...action.params }
-      }));
-    } else {
-      // Only set default action if no actions to copy
+  run(() => {
+    if (copiedWatcherConfig && isVisible && !hasInitializedFromCopy) {
+      console.log('Initializing from copied config:', copiedWatcherConfig);
+      watcherName = `Copy of ${copiedWatcherConfig.name}`;
+      pattern = copiedWatcherConfig.pattern || '';
+      captures = copiedWatcherConfig.captures || [];
+      interval = copiedWatcherConfig.interval_seconds || copiedWatcherConfig.interval || 30;
+      watcherOutputType = copiedWatcherConfig.output_type || 'stdout';
+      maxTriggers = copiedWatcherConfig.max_triggers || 10;
+      timerModeEnabled = copiedWatcherConfig.timer_mode_enabled || false;
+      timerInterval = copiedWatcherConfig.timer_interval_seconds || 30;
+      if (copiedWatcherConfig.condition) {
+        condition = copiedWatcherConfig.condition;
+      }
+      // Copy actions with all their properties
+      if (copiedWatcherConfig.actions && copiedWatcherConfig.actions.length > 0) {
+        console.log('Copying actions:', copiedWatcherConfig.actions);
+        actions = copiedWatcherConfig.actions.map(action => ({
+          type: action.type,
+          params: { ...action.params }
+        }));
+      } else {
+        // Only set default action if no actions to copy
+        actions = [{
+          type: 'log_event',
+          params: { message: 'Pattern matched in job output' }
+        }];
+      }
+      hasInitializedFromCopy = true;
+    } else if (!copiedWatcherConfig && actions.length === 0) {
+      // Only set default action for new watchers (not copies)
       actions = [{
         type: 'log_event',
         params: { message: 'Pattern matched in job output' }
       }];
     }
-    hasInitializedFromCopy = true;
-  } else if (!copiedWatcherConfig && actions.length === 0) {
-    // Only set default action for new watchers (not copies)
-    actions = [{
-      type: 'log_event',
-      params: { message: 'Pattern matched in job output' }
-    }];
-  }
+  });
 
   // Reset initialization flag when component is closed or config changes
-  $: if (!isVisible || !copiedWatcherConfig) {
-    hasInitializedFromCopy = false;
-  }
+  run(() => {
+    if (!isVisible || !copiedWatcherConfig) {
+      hasInitializedFromCopy = false;
+    }
+  });
 
   // Update watcher name reactively when jobId changes (only for new watchers)
-  $: if (jobId && !copiedWatcherConfig && !watcherName) {
-    watcherName = `Watcher for Job ${jobId}`;
-  }
+  run(() => {
+    if (jobId && !copiedWatcherConfig && !watcherName) {
+      watcherName = `Watcher for Job ${jobId}`;
+    }
+  });
 
   // Ensure all actions have params initialized (defensive programming)
-  $: actions = actions.map(action => ({
-    ...action,
-    params: action.params || {}
-  }))
+  run(() => {
+    actions = actions.map(action => ({
+      ...action,
+      params: action.params || {}
+    }))
+  });
 
   // Progressive disclosure states
-  let showAdvanced = false;
+  let showAdvanced = $state(false);
   let showPatternHelp = false;
-  let showJobOutput = false;
-  let showTemplates = false;
+  let showJobOutput = $state(false);
+  let showTemplates = $state(false);
 
   // Advanced options
-  let captures: string[] = [];
-  let condition = '';
-  let maxTriggers = 10;
-  let timerModeEnabled = false;
-  let useSeparateTimerInterval = false;
-  let timerInterval = 30;
+  let captures: string[] = $state([]);
+  let condition = $state('');
+  let maxTriggers = $state(10);
+  let timerModeEnabled = $state(false);
+  let useSeparateTimerInterval = $state(false);
+  let timerInterval = $state(30);
 
   // UI state
-  let isSubmitting = false;
-  let error: string | null = null;
-  let success: string | null = null;
-  let jobOutput = '';
-  let loadingOutput = false;
+  let isSubmitting = $state(false);
+  let error: string | null = $state(null);
+  let success: string | null = $state(null);
+  let jobOutput = $state('');
+  let loadingOutput = $state(false);
 
   // Quick templates for common patterns
   const quickTemplates = [
@@ -342,7 +364,7 @@
     }
   }
 
-  let overlayElement: HTMLElement;
+  let overlayElement: HTMLElement = $state();
   let mouseDownInsideDialog = false;
 
   function close() {
@@ -376,14 +398,16 @@
   }
 
   // Auto-fetch job output when output viewer is opened
-  $: if (showJobOutput && !jobOutput && !loadingOutput) {
-    fetchJobOutput();
-  }
+  run(() => {
+    if (showJobOutput && !jobOutput && !loadingOutput) {
+      fetchJobOutput();
+    }
+  });
 </script>
 
 {#if isVisible}
-  <div class="watcher-creator-overlay" bind:this={overlayElement} on:mousedown={handleOverlayMouseDown} on:click={handleOverlayClick}>
-    <div class="watcher-creator" on:mousedown={handleDialogMouseDown} on:click|stopPropagation transition:slide={{ duration: 300 }}>
+  <div class="watcher-creator-overlay" bind:this={overlayElement} onmousedown={handleOverlayMouseDown} onclick={handleOverlayClick} role="presentation">
+    <div class="watcher-creator" onmousedown={handleDialogMouseDown} onclick={stopPropagation(bubble('click'))} onkeydown={() => {}} role="dialog" aria-modal="true" tabindex="-1" transition:slide={{ duration: 300 }}>
     <div class="creator-header">
       <div class="header-info">
         <h3>{copiedWatcherConfig ? 'Copy Watcher' : 'Create Watcher'}</h3>
@@ -395,7 +419,7 @@
           {/if}
         </span>
       </div>
-      <button class="close-btn" on:click={close}>
+      <button class="close-btn" onclick={close}>
         <X class="w-4 h-4" />
       </button>
     </div>
@@ -434,7 +458,7 @@
               Pattern to Watch For
               <button
                 class="help-toggle"
-                on:click={() => showTemplates = !showTemplates}
+                onclick={() => showTemplates = !showTemplates}
               >
                 <Zap class="w-3 h-3" />
                 Templates
@@ -453,7 +477,7 @@
                 {#each quickTemplates as template}
                   <button
                     class="template-suggestion"
-                    on:click={() => applyTemplate(template)}
+                    onclick={() => applyTemplate(template)}
                   >
                     <strong>{template.name}</strong>
                     <span>{template.description}</span>
@@ -496,7 +520,7 @@
       <div class="helper-tools">
         <button
           class="tool-toggle"
-          on:click={() => { showJobOutput = !showJobOutput; }}
+          onclick={() => { showJobOutput = !showJobOutput; }}
         >
           <Eye class="w-4 h-4" />
           <span>Preview Job Output</span>
@@ -508,7 +532,7 @@
             <div class="output-controls">
               <button
                 class="refresh-btn"
-                on:click={fetchJobOutput}
+                onclick={fetchJobOutput}
                 disabled={loadingOutput}
               >
                 {loadingOutput ? 'Loading...' : 'Refresh'}
@@ -523,7 +547,7 @@
       <div class="advanced-section">
         <button
           class="section-toggle"
-          on:click={() => showAdvanced = !showAdvanced}
+          onclick={() => showAdvanced = !showAdvanced}
         >
           <ChevronRight class="w-4 h-4 chevron {showAdvanced ? 'rotated' : ''}" />
           <span>Advanced Options</span>
@@ -554,7 +578,7 @@
                   min="1"
                   max="1000"
                   class="form-input"
-                  on:input={(e) => {
+                  oninput={(e) => {
                     const value = Number(e.target.value);
                     if (!isNaN(value)) {
                       maxTriggers = Math.max(1, Math.min(1000, value));
@@ -594,7 +618,7 @@
                         class="form-input mt-2"
                         min="1"
                         max="3600"
-                        on:input={(e) => {
+                        oninput={(e) => {
                           const value = Number(e.target.value);
                           if (!isNaN(value)) {
                             timerInterval = Math.max(1, Math.min(3600, value));
@@ -615,8 +639,8 @@
             <!-- Simple Actions List -->
             <div class="actions-section">
               <div class="section-header">
-                <label>Actions</label>
-                <button class="add-action-btn" on:click={addSimpleAction}>
+                <span class="section-label">Actions</span>
+                <button class="add-action-btn" onclick={addSimpleAction}>
                   <Plus class="w-3 h-3" />
                   Add
                 </button>
@@ -626,7 +650,7 @@
                 <div class="action-item">
                   <select
                     value={action.type}
-                    on:change={(e) => updateActionType(i, e.target.value)}
+                    onchange={(e) => updateActionType(i, e.target.value)}
                     class="action-type-select">
                     <option value="log_event">Log Event</option>
                     <option value="store_metric">Store Metric</option>
@@ -713,7 +737,7 @@
                       class="action-input"
                       min="0"
                       max="86400"
-                      on:input={(e) => {
+                      oninput={(e) => {
                         const value = Number(e.target.value);
                         if (!isNaN(value)) {
                           action.params.delay = Math.max(0, Math.min(86400, value));
@@ -726,7 +750,7 @@
 
                   <button
                     class="remove-action-btn"
-                    on:click={() => removeAction(i)}
+                    onclick={() => removeAction(i)}
                   >
                     <X class="w-3 h-3" />
                   </button>
@@ -739,12 +763,12 @@
 
       <!-- Action Buttons -->
       <div class="action-buttons">
-        <button class="cancel-btn" on:click={close} disabled={isSubmitting}>
+        <button class="cancel-btn" onclick={close} disabled={isSubmitting}>
           Cancel
         </button>
         <button
           class="create-btn"
-          on:click={createWatcher}
+          onclick={createWatcher}
           disabled={isSubmitting || !pattern.trim()}
         >
           {#if isSubmitting}
@@ -994,15 +1018,6 @@
     background: #f1f5f9;
   }
 
-  .chevron {
-    margin-left: auto;
-    transition: transform 0.2s;
-  }
-
-  .chevron.rotated {
-    transform: rotate(90deg);
-  }
-
   .job-output-preview {
     border-top: 1px solid #e5e7eb;
   }
@@ -1086,7 +1101,7 @@
     margin-bottom: 0.5rem;
   }
 
-  .section-header label {
+  .section-header .section-label {
     font-size: 0.875rem;
     font-weight: 500;
     color: #374151;
@@ -1209,11 +1224,6 @@
   }
 
   /* Timer mode styles */
-  .timer-mode-options {
-    margin-top: 0.5rem;
-    padding-left: 1.5rem;
-  }
-
   .timer-mode-explanation {
     margin-top: 0.5rem;
     padding-left: 1.5rem;
@@ -1300,10 +1310,6 @@
   }
 
   .action-input:invalid {
-    border-color: #ef4444;
-  }
-
-  .form-input.invalid {
     border-color: #ef4444;
   }
 

@@ -1,12 +1,19 @@
 <script lang="ts">
+  import { createBubbler, stopPropagation } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { createEventDispatcher } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { X, Download, Trash2 } from 'lucide-svelte';
 
   const dispatch = createEventDispatcher();
 
-  export let isOpen = false;
-  export let template = null;
+  interface Props {
+    isOpen?: boolean;
+    template?: any;
+  }
+
+  let { isOpen = false, template = null }: Props = $props();
 
   function close() {
     dispatch('close');
@@ -22,13 +29,13 @@
 </script>
 
 {#if isOpen && template}
-  <div class="template-detail-backdrop" on:click={close} transition:fade={{ duration: 200 }}>
-    <div class="template-detail-popup" on:click|stopPropagation transition:fly={{ y: 50, duration: 300, opacity: 0.8 }}>
+  <div class="template-detail-backdrop" onclick={close} onkeydown={() => {}} role="presentation" transition:fade={{ duration: 200 }}>
+    <div class="template-detail-popup" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}} role="dialog" aria-modal="true" tabindex="-1" transition:fly={{ y: 50, duration: 300, opacity: 0.8 }}>
       <div class="detail-popup-header">
         <h3>{template.name}</h3>
         <button
           class="close-btn"
-          on:click={close}
+          onclick={close}
         >
           <X class="w-5 h-5" />
         </button>
@@ -117,20 +124,20 @@
       <div class="detail-popup-footer">
         <button
           class="btn-secondary"
-          on:click={close}
+          onclick={close}
         >
           Close
         </button>
         <button
           class="btn-danger"
-          on:click={deleteTemplate}
+          onclick={deleteTemplate}
         >
           <Trash2 class="w-4 h-4" />
           Delete
         </button>
         <button
           class="btn-primary"
-          on:click={loadTemplate}
+          onclick={loadTemplate}
         >
           <Download class="w-4 h-4" />
           Load Template

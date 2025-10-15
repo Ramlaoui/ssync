@@ -1,26 +1,34 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, createEventDispatcher } from 'svelte';
   import { fade } from 'svelte/transition';
   
-  export let script: string = '';
-  export let readOnly: boolean = false;
-  export let mode: 'normal' | 'vim' = 'normal';
+  interface Props {
+    script?: string;
+    readOnly?: boolean;
+    mode?: 'normal' | 'vim';
+  }
+
+  let { script = $bindable(''), readOnly = false, mode = $bindable('normal') }: Props = $props();
   
   const dispatch = createEventDispatcher<{
     update: { script: string };
     close: void;
   }>();
   
-  let textarea: HTMLTextAreaElement;
+  let textarea: HTMLTextAreaElement = $state();
   let cursorPosition = 0;
-  let vimMode: 'normal' | 'insert' | 'visual' = 'normal';
-  let commandBuffer = '';
+  let vimMode: 'normal' | 'insert' | 'visual' = $state('normal');
+  let commandBuffer = $state('');
   let selectedRange = { start: 0, end: 0 };
-  let showLineNumbers = true;
-  let lines: string[] = [];
+  let showLineNumbers = $state(true);
+  let lines: string[] = $state([]);
   
-  $: lines = script.split('\n');
-  $: lineNumbers = lines.map((_, i) => i + 1).join('\n');
+  run(() => {
+    lines = script.split('\n');
+  });
+  let lineNumbers = $derived(lines.map((_, i) => i + 1).join('\n'));
   
   function handleKeydown(e: KeyboardEvent) {
     if (mode !== 'vim' || vimMode === 'insert') return;
@@ -292,13 +300,13 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
     }
   ];
   
-  let showTemplates = false;
-  let searchQuery = '';
+  let showTemplates = $state(false);
+  let searchQuery = $state('');
   
-  $: filteredLines = lines.map((line, i) => {
+  let filteredLines = $derived(lines.map((line, i) => {
     const matches = searchQuery && line.toLowerCase().includes(searchQuery.toLowerCase());
     return { line, lineNumber: i + 1, matches };
-  });
+  }));
 </script>
 
 <div class="editor-container">
@@ -316,7 +324,7 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
     <div class="editor-actions">
       <button 
         class="icon-btn"
-        on:click={() => showTemplates = !showTemplates}
+        onclick={() => showTemplates = !showTemplates}
         title="Templates"
       >
         <svg viewBox="0 0 24 24">
@@ -326,7 +334,7 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
       
       <button 
         class="icon-btn"
-        on:click={() => showLineNumbers = !showLineNumbers}
+        onclick={() => showLineNumbers = !showLineNumbers}
         title="Toggle line numbers"
       >
         <svg viewBox="0 0 24 24">
@@ -336,7 +344,7 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
       
       <button 
         class="icon-btn"
-        on:click={() => mode = mode === 'vim' ? 'normal' : 'vim'}
+        onclick={() => mode = mode === 'vim' ? 'normal' : 'vim'}
         title="Toggle Vim mode"
       >
         <svg viewBox="0 0 24 24">
@@ -346,7 +354,7 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
       
       <button 
         class="icon-btn close"
-        on:click={() => dispatch('close')}
+        onclick={() => dispatch('close')}
         title="Close"
       >
         <svg viewBox="0 0 24 24">
@@ -361,13 +369,13 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
     <div class="templates-panel" transition:fade={{ duration: 200 }}>
       <div class="templates-header">
         <h4>Quick Templates</h4>
-        <button class="close-btn" on:click={() => showTemplates = false}>×</button>
+        <button class="close-btn" onclick={() => showTemplates = false}>×</button>
       </div>
       <div class="templates-list">
         {#each templates as template}
           <button 
             class="template-item"
-            on:click={() => {
+            onclick={() => {
               insertTemplate(template.script);
               showTemplates = false;
             }}
@@ -408,8 +416,8 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
     <textarea
       bind:this={textarea}
       bind:value={script}
-      on:input={handleInput}
-      on:keydown={handleKeydown}
+      oninput={handleInput}
+      onkeydown={handleKeydown}
       class="editor-textarea"
       class:vim={mode === 'vim'}
       class:insert={vimMode === 'insert'}
@@ -419,7 +427,7 @@ python script.py --task $SLURM_ARRAY_TASK_ID`
       autocomplete="off"
       autocorrect="off"
       autocapitalize="off"
-    />
+></textarea>
   </div>
   
   <!-- Editor Footer -->

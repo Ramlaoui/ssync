@@ -3,6 +3,7 @@ import './global.css';
 import './app.css';
 
 import axios, { type AxiosResponse, type AxiosError } from 'axios';
+import { mount } from "svelte";
 
 axios.interceptors.response.use(
   (response: AxiosResponse) => response,
@@ -12,7 +13,7 @@ axios.interceptors.response.use(
   }
 );
 
-const app = new App({
+const app = mount(App, {
   target: document.getElementById('app')!,
 });
 

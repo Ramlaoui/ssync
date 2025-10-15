@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { api } from "../services/api";
   import type { AxiosError } from "axios";
   import { createEventDispatcher } from "svelte";
@@ -10,19 +12,23 @@
     directoryChanged: string;
   }>();
 
-  export let sourceDir = "";
-  export let initialPath = "/";
+  interface Props {
+    sourceDir?: string;
+    initialPath?: string;
+  }
+
+  let { sourceDir = $bindable(""), initialPath = "/" }: Props = $props();
 
   // Browser state
-  let localEntries: { name: string; path: string; is_dir: boolean }[] = [];
-  let filteredEntries: { name: string; path: string; is_dir: boolean }[] = [];
-  let currentLocalPath = "/";
+  let localEntries: { name: string; path: string; is_dir: boolean }[] = $state([]);
+  let filteredEntries: { name: string; path: string; is_dir: boolean }[] = $state([]);
+  let currentLocalPath = $state("/");
   let maxEntries = 100;
-  let showHiddenFiles = false;
-  let showFilesInBrowser = false;
-  let loading = false;
-  let error: string | null = null;
-  let searchQuery = "";
+  let showHiddenFiles = $state(false);
+  let showFilesInBrowser = $state(false);
+  let loading = $state(false);
+  let error: string | null = $state(null);
+  let searchQuery = $state("");
 
   // Fuzzy search functionality
   function fuzzyMatch(query: string, target: string): { score: number; matches: number[] } {
@@ -84,12 +90,12 @@
   }
 
   // Reactive filtering
-  $: {
+  run(() => {
     // Trigger when either localEntries or searchQuery changes
     localEntries;
     searchQuery;
     filterEntries();
-  }
+  });
 
   // Load directory browser in background on mount
   setTimeout(() => {
@@ -223,7 +229,7 @@
       <div class="flex items-center gap-2">
         <button
           class="inline-flex items-center justify-center p-2 border border-gray-300 rounded-md shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
-          on:click={navigateUp}
+          onclick={navigateUp}
           disabled={currentLocalPath === "/" || loading}
           title="Go up one level"
         >
@@ -231,7 +237,7 @@
         </button>
         <button
           class="inline-flex items-center justify-center p-2 border border-gray-300 rounded-md shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
-          on:click={goToHome}
+          onclick={goToHome}
           disabled={loading}
           title="Go to home"
         >
@@ -239,7 +245,7 @@
         </button>
         <button
           class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
-          on:click={selectCurrentLocalPath}
+          onclick={selectCurrentLocalPath}
           disabled={!currentLocalPath || loading}
         >
           Select Directory
@@ -254,7 +260,7 @@
           <input
             type="checkbox"
             bind:checked={showHiddenFiles}
-            on:change={handleOptionsChange}
+            onchange={handleOptionsChange}
             disabled={loading}
             class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
           />
@@ -265,7 +271,7 @@
           <input
             type="checkbox"
             bind:checked={showFilesInBrowser}
-            on:change={handleOptionsChange}
+            onchange={handleOptionsChange}
             disabled={loading}
             class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
           />
@@ -326,7 +332,7 @@
             class="entry-item"
             class:directory={entry.is_dir}
             class:file={!entry.is_dir}
-            on:click={() => entry.is_dir ? handleDirectoryClick(entry.path) : null}
+            onclick={() => entry.is_dir ? handleDirectoryClick(entry.path) : null}
             disabled={!entry.is_dir}
           >
             <div class="entry-icon">
@@ -386,204 +392,8 @@
 </div>
 
 <style>
-  .file-browser {
-    --border-color: #e2e8f0;
-    --hover-color: #f8fafc;
-    --text-primary: #1f2937;
-    --text-secondary: #6b7280;
-    --text-muted: #9ca3af;
-    background: transparent;
-    border: none;
-    padding: 0;
-  }
-
-  .browser-header {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid #e5e7eb;
-    margin-bottom: 0.75rem;
-  }
-
-  .search-nav-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    justify-content: space-between;
-  }
-
-  .search-container {
-    flex: 1;
-    max-width: 400px;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .search-icon-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.375rem;
-    color: #6b7280;
-    flex-shrink: 0;
-    transition: all 0.15s;
-  }
-
-  .search-icon-button:hover {
-    background: #f9fafb;
-    border-color: #d1d5db;
-  }
-
-  .search-input-wrapper {
-    flex: 1;
-    display: flex;
-    align-items: center;
-  }
-
-  .nav-buttons {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .nav-btn {
-    padding: 0.375rem;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.375rem;
-    color: #6b7280;
-    cursor: pointer;
-    transition: all 0.15s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-  }
-
-  .nav-btn:hover:not(:disabled) {
-    background: #f3f4f6;
-    color: #111827;
-  }
-
-  .nav-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-
-  .path-text {
-    font-size: 0.875rem;
-    color: #374151;
-    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
-    font-weight: 500;
-  }
-
-  .select-btn {
-    padding: 0.375rem 0.875rem;
-    background: #3b82f6;
-    color: white;
-    border: none;
-    border-radius: 0.375rem;
-    font-size: 0.813rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-
-  .select-btn:hover:not(:disabled) {
-    background: #2563eb;
-  }
-
-  .select-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-
-  .search-icon {
-    width: 1rem;
-    height: 1rem;
-    color: #6b7280;
-  }
-
-  .search-input-native {
-    padding: 0.375rem 0.75rem;
-    width: 100%;
-    border-radius: 0.375rem;
-    border: 1px solid #e5e7eb;
-    font-size: 0.875rem;
-    background: white;
-    transition: all 0.15s;
-    height: 32px;
-    line-height: 1.5;
-    box-sizing: border-box;
-  }
-
-  .search-input-native:focus {
-    outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  }
-
-  .search-input-native:disabled {
-    background: #f9fafb;
-    cursor: not-allowed;
-  }
-  .selected-indicator {
-    font-size: 0.75rem;
-    color: #16a34a;
-    font-weight: 600;
-    margin-left: auto;
-    white-space: nowrap;
-  }
-
-  .path-text {
-    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
-    font-size: 0.875rem;
-    color: var(--text-primary);
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   :global(.select-btn) {
     flex-shrink: 0;
-  }
-
-  .options-section {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-    font-size: 0.875rem;
-  }
-
-  .option-checkbox {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
-    color: var(--text-secondary);
-  }
-
-  .option-checkbox input {
-    margin: 0;
-    cursor: pointer;
-  }
-
-  .entry-count {
-    color: var(--text-muted);
-    font-size: 0.875rem;
-    margin-left: auto;
   }
 
   .error-section {
@@ -725,44 +535,6 @@
 
   /* Mobile responsive */
   @media (max-width: 768px) {
-    .browser-header {
-      padding: 0.75rem;
-    }
-
-    .nav-section {
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-
-    .quick-nav {
-      gap: 0.25rem;
-    }
-
-    :global(.quick-nav-btn) {
-      padding: 0.5rem;
-      font-size: 0.75rem;
-    }
-
-    .nav-text {
-      display: none;
-    }
-
-    .path-section {
-      flex-direction: column;
-      gap: 0.75rem;
-      align-items: stretch;
-    }
-
-    .options-section {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.5rem;
-    }
-
-    .entry-count {
-      margin-left: 0;
-    }
-
     .browser-content {
       max-height: 300px;
     }

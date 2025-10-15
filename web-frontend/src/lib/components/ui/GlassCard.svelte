@@ -2,11 +2,24 @@
   import { cn } from "../../utils";
   import Card from "./Card.svelte";
   
-  export let className: string = "";
-  export { className as class };
-  export let hover: boolean = false;
-  export let noPadding: boolean = false;
-  export let blur: 'sm' | 'md' | 'lg' | 'xl' = 'lg';
+  
+  interface Props {
+    class?: string;
+    hover?: boolean;
+    noPadding?: boolean;
+    blur?: 'sm' | 'md' | 'lg' | 'xl';
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let {
+    class: className = "",
+    hover = false,
+    noPadding = false,
+    blur = 'lg',
+    children,
+    ...rest
+  }: Props = $props();
   
   const blurLevels = {
     sm: 'backdrop-blur-sm',
@@ -17,14 +30,14 @@
 </script>
 
 <div class="relative">
-  <div class="absolute inset-0 bg-gradient-to-r from-blue-400/10 via-purple-400/10 to-pink-400/10 rounded-xl blur-2xl" />
+  <div class="absolute inset-0 bg-gradient-to-r from-blue-400/10 via-purple-400/10 to-pink-400/10 rounded-xl blur-2xl"></div>
   <Card 
     variant="glass" 
     {hover} 
     {noPadding}
     class={cn(blurLevels[blur], "relative", className)}
-    {...$$restProps}
+    {...rest}
   >
-    <slot />
+    {@render children?.()}
   </Card>
 </div>

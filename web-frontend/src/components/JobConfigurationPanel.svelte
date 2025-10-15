@@ -1,8 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   
-  export let hostname = '';
-  export let config = {
+  interface Props {
+    hostname?: string;
+    config?: any;
+  }
+
+  let { hostname = '', config = $bindable({
     job_name: '',
     cpus: 4,
     mem: 16, // GB
@@ -15,7 +19,7 @@
     constraint: '',
     output: 'job_%j.out',
     error: 'job_%j.err'
-  };
+  }) }: Props = $props();
   
   const dispatch = createEventDispatcher();
   
@@ -38,8 +42,8 @@
   };
   
   // Validation state
-  let errors: Record<string, string> = {};
-  let warnings: Record<string, string> = {};
+  let errors: Record<string, string> = $state({});
+  let warnings: Record<string, string> = $state({});
   
   function applyPreset(preset: typeof presets[0]) {
     config.cpus = preset.cpus;
@@ -124,14 +128,14 @@
     return preview;
   }
   
-  $: sbatchPreview = generateSBATCHPreview();
-  $: availablePartitions = partitionOptions[hostname] || [];
+  let sbatchPreview = $derived(generateSBATCHPreview());
+  let availablePartitions = $derived(partitionOptions[hostname] || []);
 </script>
 
 <div class="config-panel">
   <div class="panel-header">
     <h3>Job Configuration</h3>
-    <button class="preview-toggle" on:click={() => dispatch('togglePreview')}>
+    <button class="preview-toggle" onclick={() => dispatch('togglePreview')}>
       <svg viewBox="0 0 24 24" fill="currentColor">
         <path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,0 7,12A5,5 0 0,0 12,7A5,5 0 0,0 17,12A5,5 0 0,0 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/>
       </svg>
@@ -146,7 +150,7 @@
       {#each presets as preset}
         <button 
           class="preset-btn"
-          on:click={() => applyPreset(preset)}
+          onclick={() => applyPreset(preset)}
           title="{preset.cpus} CPUs, {preset.mem}GB RAM, {preset.gpus} GPUs, {preset.time} min"
         >
           {preset.name}
@@ -170,7 +174,7 @@
         id="job_name"
         type="text"
         bind:value={config.job_name}
-        on:change={handleChange}
+        onchange={handleChange}
         placeholder="my_experiment"
         class:has-warning={warnings.job_name}
       />
@@ -187,7 +191,7 @@
         <select 
           id="partition"
           bind:value={config.partition}
-          on:change={handleChange}
+          onchange={handleChange}
           class:has-warning={warnings.partition}
         >
           <option value="">Default</option>
@@ -203,7 +207,7 @@
           id="account"
           type="text"
           bind:value={config.account}
-          on:change={handleChange}
+          onchange={handleChange}
           placeholder="Optional"
         />
       </div>
@@ -229,7 +233,7 @@
             id="cpus"
             type="number"
             bind:value={config.cpus}
-            on:change={handleChange}
+            onchange={handleChange}
             min="1"
             max="128"
             class:has-error={errors.cpus}
@@ -238,7 +242,7 @@
           <input 
             type="range"
             bind:value={config.cpus}
-            on:input={handleChange}
+            oninput={handleChange}
             min="1"
             max="128"
             class="slider"
@@ -260,7 +264,7 @@
             id="mem"
             type="number"
             bind:value={config.mem}
-            on:change={handleChange}
+            onchange={handleChange}
             min="1"
             max="512"
             class:has-error={errors.mem}
@@ -269,7 +273,7 @@
           <input 
             type="range"
             bind:value={config.mem}
-            on:input={handleChange}
+            oninput={handleChange}
             min="1"
             max="512"
             class="slider"
@@ -286,14 +290,14 @@
             id="gpus"
             type="number"
             bind:value={config.gpus_per_node}
-            on:change={handleChange}
+            onchange={handleChange}
             min="0"
             max="8"
           />
           <input 
             type="range"
             bind:value={config.gpus_per_node}
-            on:input={handleChange}
+            oninput={handleChange}
             min="0"
             max="8"
             class="slider"
@@ -315,7 +319,7 @@
             id="time"
             type="number"
             bind:value={config.time}
-            on:change={handleChange}
+            onchange={handleChange}
             min="1"
             max="2880"
             class:has-error={errors.time}
@@ -338,7 +342,7 @@
           id="nodes"
           type="number"
           bind:value={config.nodes}
-          on:change={handleChange}
+          onchange={handleChange}
           min="1"
           max="100"
         />
@@ -350,7 +354,7 @@
           id="ntasks"
           type="number"
           bind:value={config.ntasks_per_node}
-          on:change={handleChange}
+          onchange={handleChange}
           min="1"
           max="128"
         />
@@ -363,7 +367,7 @@
         id="constraint"
         type="text"
         bind:value={config.constraint}
-        on:change={handleChange}
+        onchange={handleChange}
         placeholder="e.g., v100-32g"
       />
     </div>
@@ -375,7 +379,7 @@
           id="output"
           type="text"
           bind:value={config.output}
-          on:change={handleChange}
+          onchange={handleChange}
         />
       </div>
       
@@ -385,7 +389,7 @@
           id="error"
           type="text"
           bind:value={config.error}
-          on:change={handleChange}
+          onchange={handleChange}
         />
       </div>
     </div>
@@ -397,7 +401,7 @@
       <label>Generated SBATCH Header</label>
       <button 
         class="copy-btn"
-        on:click={() => navigator.clipboard.writeText(sbatchPreview)}
+        onclick={() => navigator.clipboard.writeText(sbatchPreview)}
       >
         Copy
       </button>

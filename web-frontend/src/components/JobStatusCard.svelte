@@ -2,13 +2,17 @@
   import { jobUtils } from '../lib/jobUtils';
   import type { JobInfo } from '../types/api';
 
-  export let job: JobInfo;
+  interface Props {
+    job: JobInfo;
+  }
+
+  let { job }: Props = $props();
   
-  $: progress = jobUtils.calculateProgress(job);
-  $: timeRemaining = jobUtils.getTimeRemaining(job);
-  $: statusColor = jobUtils.getStateColor(job.state);
-  $: statusLabel = jobUtils.getStateLabel(job.state);
-  $: isActive = jobUtils.isActiveJob(job.state);
+  let progress = $derived(jobUtils.calculateProgress(job));
+  let timeRemaining = $derived(jobUtils.getTimeRemaining(job));
+  let statusColor = $derived(jobUtils.getStateColor(job.state));
+  let statusLabel = $derived(jobUtils.getStateLabel(job.state));
+  let isActive = $derived(jobUtils.isActiveJob(job.state));
   
   function getStatusSubtitle(job: JobInfo): string {
     switch (job.state) {
@@ -183,17 +187,15 @@
 
   /* SVG icon sizing */
   svg {
-    @apply w-6 h-6;
+    width: 1.5rem;
+    height: 1.5rem;
   }
 
   /* Mobile responsive adjustments */
   @media (max-width: 640px) {
-    .relative.w-16.h-16 {
-      @apply w-12 h-12;
-    }
-
     svg {
-      @apply w-5 h-5;
+      width: 1.25rem;
+      height: 1.25rem;
     }
   }
 </style>

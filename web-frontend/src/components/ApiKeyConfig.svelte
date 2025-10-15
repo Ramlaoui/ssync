@@ -4,12 +4,12 @@
   import { push } from 'svelte-spa-router';
   import { ArrowLeft } from 'lucide-svelte';
   
-  let showApiKey = false;
-  let apiKeyInput = '';
-  let testing = false;
-  let testResult: 'success' | 'error' | null = null;
+  let showApiKey = $state(false);
+  let apiKeyInput = $state('');
+  let testing = $state(false);
+  let testResult: 'success' | 'error' | null = $state(null);
   
-  $: isConfigured = $apiConfig.apiKey !== '';
+  let isConfigured = $derived($apiConfig.apiKey !== '');
   
   onMount(async () => {
     if ($apiConfig.apiKey) {
@@ -54,7 +54,7 @@
       <div class="flex h-16 items-center">
         <button
           class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
-          on:click={() => push('/')}
+          onclick={() => push('/')}
         >
           <ArrowLeft class="w-4 h-4" />
           Home
@@ -91,27 +91,27 @@
             type="text"
             placeholder="Enter your API key..."
             bind:value={apiKeyInput}
-            on:keydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+            onkeydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
           />
         {:else}
           <input
             type="password"
             placeholder="Enter your API key..."
             bind:value={apiKeyInput}
-            on:keydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+            onkeydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
           />
         {/if}
         <button
           type="button"
           class="toggle-visibility"
-          on:click={toggleShowApiKey}
+          onclick={toggleShowApiKey}
         >
           {showApiKey ? 'Show' : 'Hide'}
         </button>
         <button
           type="button"
           class="primary"
-          on:click={handleSaveApiKey}
+          onclick={handleSaveApiKey}
           disabled={!apiKeyInput.trim()}
         >
           Save API Key
@@ -128,7 +128,7 @@
       <div class="actions">
         <button
           type="button"
-          on:click={handleTestConnection}
+          onclick={handleTestConnection}
           disabled={testing}
         >
           {testing ? 'Testing...' : 'Test Connection'}
@@ -137,7 +137,7 @@
         <button
           type="button"
           class="danger"
-          on:click={handleClearApiKey}
+          onclick={handleClearApiKey}
         >
           Remove API Key
         </button>

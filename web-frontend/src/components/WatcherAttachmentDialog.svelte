@@ -2,35 +2,46 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import { api } from '../services/api';
   import type { WatcherAction } from '../types/watchers';
+  import Dialog from '../lib/components/ui/Dialog.svelte';
   
-  export let jobId: string;
-  export let hostname: string;
-  export let copiedConfig: any = null;
-  
+  interface Props {
+    jobId: string;
+    hostname: string;
+    copiedConfig?: any;
+    open?: boolean;
+  }
+
+  let {
+    jobId,
+    hostname,
+    copiedConfig = null,
+    open = $bindable(true)
+  }: Props = $props();
+
   const dispatch = createEventDispatcher();
   
   // Form state
-  let watcherName = '';
-  let pattern = '';
-  let interval = 30;
-  let captures: string[] = [];
-  let captureInput = '';
-  let condition = '';
-  let actions: WatcherAction[] = [];
-  let watchMode: 'pattern' | 'timer' = 'pattern';
-  let timerInterval = 30;
+  let watcherName = $state('');
+  let pattern = $state('');
+  let interval = $state(30);
+  let captures: string[] = $state([]);
+  let captureInput = $state('');
+  let condition = $state('');
+  let actions: WatcherAction[] = $state([]);
+  let watchMode: 'pattern' | 'timer' = $state('pattern');
+  let timerInterval = $state(30);
   
   // Action form
-  let actionType = 'log_event';
-  let actionConfig: Record<string, any> = {};
-  let commandType = 'shell';
+  let actionType = $state('log_event');
+  let actionConfig: Record<string, any> = $state({});
+  let commandType = $state('shell');
   
   // UI state
-  let isSubmitting = false;
-  let error: string | null = null;
-  let showTemplates = false;
-  let showAdvanced = false;
-  let activeTab: 'config' | 'actions' = 'config';
+  let isSubmitting = $state(false);
+  let error: string | null = $state(null);
+  let showTemplates = $state(false);
+  let showAdvanced = $state(false);
+  let activeTab: 'config' | 'actions' = $state('config');
   
   // Action types with better descriptions
   const actionTypes = [
@@ -165,7 +176,7 @@
     }
   ];
   
-  let selectedTemplateId: string | null = null;
+  let selectedTemplateId: string | null = $state(null);
   
   onMount(() => {
     if (copiedConfig) {
@@ -316,58 +327,20 @@
     }
   }
   
-  let isSelecting = false;
-  
   function handleClose() {
-    // Don't close if user is selecting text
-    if (isSelecting) {
-      isSelecting = false;
-      return;
-    }
+    open = false;
     dispatch('close');
-  }
-  
-  function handleMouseDown() {
-    const selection = window.getSelection();
-    if (selection && selection.toString().length === 0) {
-      isSelecting = false;
-    }
-  }
-  
-  function handleMouseUp(event: MouseEvent) {
-    const selection = window.getSelection();
-    if (selection && selection.toString().length > 0) {
-      isSelecting = true;
-      event.stopPropagation();
-      event.preventDefault();
-    }
   }
 </script>
 
-<div 
-  class="dialog-overlay" 
-  on:click={handleClose}
-  on:mousedown={handleMouseDown}
-  on:mouseup={handleMouseUp}
+<Dialog
+  bind:open
+  on:close={handleClose}
+  title="Create New Watcher"
+  description="Monitor job output and trigger actions"
+  size="xl"
+  contentClass="watcher-attachment-content"
 >
-  <div 
-    class="dialog-container" 
-    on:click|stopPropagation
-    on:mousedown|stopPropagation
-  >
-    <div class="dialog-header">
-      <div class="header-content">
-        <h2>Create New Watcher</h2>
-        <p class="header-subtitle">Monitor job output and trigger actions</p>
-      </div>
-      <button class="close-btn" on:click={handleClose} aria-label="Close">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-        </svg>
-      </button>
-    </div>
-    
-    <div class="dialog-body">
       {#if error}
         <div class="error-banner">
           <svg class="error-icon" viewBox="0 0 20 20" fill="currentColor">
@@ -381,7 +354,7 @@
       <div class="template-selector">
         <button 
           class="template-toggle"
-          on:click={() => showTemplates = !showTemplates}
+          onclick={() => showTemplates = !showTemplates}
           type="button"
         >
           <svg class="toggle-icon" viewBox="0 0 20 20" fill="currentColor">
@@ -400,7 +373,7 @@
                 type="button"
                 class="template-tile"
                 class:selected={selectedTemplateId === template.id}
-                on:click={() => selectTemplate(template)}
+                onclick={() => selectTemplate(template)}
                 disabled={isSubmitting}
               >
                 <span class="template-icon">{template.icon}</span>
@@ -417,7 +390,7 @@
           type="button"
           class="tab"
           class:active={activeTab === 'config'}
-          on:click={() => activeTab = 'config'}
+          onclick={() => activeTab = 'config'}
         >
           Configuration
         </button>
@@ -425,7 +398,7 @@
           type="button"
           class="tab"
           class:active={activeTab === 'actions'}
-          on:click={() => activeTab = 'actions'}
+          onclick={() => activeTab = 'actions'}
         >
           Actions {#if actions.length > 0}<span class="badge">{actions.length}</span>{/if}
         </button>
@@ -450,13 +423,13 @@
           
           <!-- Watch Mode Toggle -->
           <div class="mode-selector">
-            <label class="mode-label">Watch Mode</label>
+            <span class="mode-label">Watch Mode</span>
             <div class="mode-buttons">
               <button
                 type="button"
                 class="mode-btn"
                 class:active={watchMode === 'pattern'}
-                on:click={() => watchMode = 'pattern'}
+                onclick={() => watchMode = 'pattern'}
                 disabled={isSubmitting}
               >
                 <svg viewBox="0 0 20 20" fill="currentColor">
@@ -469,7 +442,7 @@
                 type="button"
                 class="mode-btn"
                 class:active={watchMode === 'timer'}
-                on:click={() => watchMode = 'timer'}
+                onclick={() => watchMode = 'timer'}
                 disabled={isSubmitting}
               >
                 <svg viewBox="0 0 20 20" fill="currentColor">
@@ -539,7 +512,7 @@
             <button
               type="button"
               class="advanced-toggle"
-              on:click={() => showAdvanced = !showAdvanced}
+              onclick={() => showAdvanced = !showAdvanced}
             >
               <svg class="chevron" class:rotated={showAdvanced} viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
@@ -551,18 +524,18 @@
               <div class="advanced-options">
                 <!-- Capture Groups -->
                 <div class="form-group">
-                  <label>Capture Groups</label>
+                  <span class="section-label">Capture Groups</span>
                   <div class="capture-input">
                     <input
                       type="text"
                       bind:value={captureInput}
                       placeholder="e.g., loss_value"
-                      on:keydown={(e) => e.key === 'Enter' && addCapture()}
+                      onkeydown={(e) => e.key === 'Enter' && addCapture()}
                       disabled={isSubmitting}
                     />
                     <button 
                       type="button" 
-                      on:click={addCapture}
+                      onclick={addCapture}
                       disabled={isSubmitting}
                       class="add-btn"
                     >
@@ -577,7 +550,7 @@
                           ${i + 1}: {capture}
                           <button 
                             type="button"
-                            on:click={() => removeCapture(i)}
+                            onclick={() => removeCapture(i)}
                             disabled={isSubmitting}
                             class="tag-remove"
                           >
@@ -643,7 +616,7 @@
                   type="button"
                   class="action-type-btn"
                   class:selected={actionType === type.value}
-                  on:click={() => { actionType = type.value; actionConfig = {}; }}
+                  onclick={() => { actionType = type.value; actionConfig = {}; }}
                   disabled={isSubmitting}
                 >
                   <span class="action-icon">{type.icon}</span>
@@ -681,19 +654,19 @@
                 </div>
               {:else if actionType === 'run_command'}
                 <div class="form-group">
-                  <label>Command Type</label>
+                  <span class="section-label">Command Type</span>
                   <div class="command-type-toggle">
                     <button
                       type="button"
                       class:active={commandType === 'shell'}
-                      on:click={() => commandType = 'shell'}
+                      onclick={() => commandType = 'shell'}
                     >
                       Shell
                     </button>
                     <button
                       type="button"
                       class:active={commandType === 'python'}
-                      on:click={() => commandType = 'python'}
+                      onclick={() => commandType = 'python'}
                     >
                       Python
                     </button>
@@ -709,12 +682,12 @@
                       placeholder={'# Use $1, $2 for captures\nprint(f"Value: {float(\'$1\')}")'}
                       rows="4"
                       disabled={isSubmitting}
-                      on:input={() => {
+                      oninput={() => {
                         if (actionConfig.pythonCode) {
                           actionConfig.command = `python -c "${actionConfig.pythonCode.replace(/"/g, '\\"').replace(/\n/g, '; ')}"`;
                         }
                       }}
-                    />
+></textarea>
                   </div>
                 {:else}
                   <div class="form-group">
@@ -809,7 +782,7 @@
               
               <button 
                 type="button"
-                on:click={addAction}
+                onclick={addAction}
                 disabled={isSubmitting || (actionType === 'store_metric' && !actionConfig.metric_name)}
                 class="add-action-btn"
               >
@@ -831,7 +804,7 @@
                   <div class="action-summary">{getActionSummary(action)}</div>
                   <button 
                     type="button"
-                    on:click={() => removeAction(i)}
+                    onclick={() => removeAction(i)}
                     disabled={isSubmitting}
                     class="action-remove"
                     aria-label="Remove action"
@@ -855,100 +828,32 @@
           {/if}
         </div>
       {/if}
-    </div>
-    
-    <div class="dialog-footer">
-      <button 
+
+  {#snippet footer()}
+    <div  class="attachment-footer">
+      <button
         type="button"
-        on:click={handleClose}
+        onclick={handleClose}
         disabled={isSubmitting}
         class="btn-secondary"
       >
         Cancel
       </button>
-      <button 
+      <button
         type="button"
-        on:click={handleSubmit}
+        onclick={handleSubmit}
         disabled={isSubmitting || !watcherName || (watchMode === 'pattern' && !pattern) || actions.length === 0}
         class="btn-primary"
       >
         {isSubmitting ? 'Creating...' : 'Create Watcher'}
       </button>
     </div>
-  </div>
-</div>
+  {/snippet}
+</Dialog>
 
 <style>
-  .dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    backdrop-filter: blur(2px);
-  }
-  
-  .dialog-container {
-    background: white;
-    border-radius: 16px;
-    width: 90%;
-    max-width: 800px;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  }
-  
-  .dialog-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-  }
-  
-  .header-content h2 {
-    margin: 0;
-    font-size: 1.5rem;
-    color: #111827;
-    font-weight: 600;
-  }
-  
-  .header-subtitle {
-    margin: 0.25rem 0 0 0;
-    font-size: 0.875rem;
-    color: #6b7280;
-  }
-  
-  .close-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0.5rem;
-    color: #6b7280;
-    transition: all 0.2s;
-    border-radius: 6px;
-  }
-  
-  .close-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
-  }
-  
-  .close-btn svg {
-    width: 20px;
-    height: 20px;
-  }
-  
-  .dialog-body {
-    padding: 1.5rem;
-    overflow-y: auto;
-    flex: 1;
+  :global(.watcher-attachment-content) {
+    padding: 1.5rem !important;
   }
   
   .error-banner {
@@ -1184,11 +1089,19 @@
   .form-group {
     margin-bottom: 1.25rem;
   }
-  
+
   .form-group label {
     display: flex;
     align-items: center;
     gap: 0.25rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+  }
+
+  .section-label {
+    display: block;
     margin-bottom: 0.5rem;
     font-size: 0.875rem;
     font-weight: 500;
@@ -1597,12 +1510,11 @@
   }
   
   /* Footer */
-  .dialog-footer {
+  .attachment-footer {
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;
-    padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
+    width: 100%;
   }
   
   .btn-secondary,
@@ -1643,26 +1555,18 @@
   
   /* Responsive */
   @media (max-width: 640px) {
-    .dialog-container {
-      width: 100%;
-      height: 100%;
-      max-width: none;
-      max-height: none;
-      border-radius: 0;
+    :global(.watcher-attachment-content) {
+      padding: 1rem !important;
     }
-    
-    .dialog-body {
-      padding: 1rem;
-    }
-    
+
     .templates-grid {
       grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
     }
-    
+
     .mode-buttons {
       grid-template-columns: 1fr;
     }
-    
+
     .action-type-selector {
       grid-template-columns: 1fr;
     }

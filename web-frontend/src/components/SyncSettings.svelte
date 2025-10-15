@@ -13,14 +13,18 @@
     };
   }>();
 
-  export let excludePatterns: string[] = ['*.log', '*.tmp', '__pycache__/'];
-  export let includePatterns: string[] = [];
-  export let noGitignore = false;
+  interface Props {
+    excludePatterns?: string[];
+    includePatterns?: string[];
+    noGitignore?: boolean;
+  }
+
+  let { excludePatterns = $bindable(['*.log', '*.tmp', '__pycache__/']), includePatterns = $bindable([]), noGitignore = $bindable(false) }: Props = $props();
 
   // UI state
-  let currentExcludePattern = '';
-  let currentIncludePattern = '';
-  let showHelp = false;
+  let currentExcludePattern = $state('');
+  let currentIncludePattern = $state('');
+  let showHelp = $state(false);
 
   // Preset patterns for quick adding
   const presetExcludePatterns = [
@@ -132,8 +136,8 @@
     return groups;
   }
 
-  $: excludeGroups = groupPresetsByCategory(presetExcludePatterns);
-  $: includeGroups = groupPresetsByCategory(presetIncludePatterns);
+  let excludeGroups = $derived(groupPresetsByCategory(presetExcludePatterns));
+  let includeGroups = $derived(groupPresetsByCategory(presetIncludePatterns));
 </script>
 
 <div class="sync-settings">
@@ -173,7 +177,7 @@
         <input
           type="checkbox"
           bind:checked={noGitignore}
-          on:change={handleGitignoreChange}
+          onchange={handleGitignoreChange}
         />
         <span class="toggle-slider"></span>
       </label>
@@ -242,7 +246,7 @@
               <button
                 type="button"
                 class="remove-tag-btn"
-                on:click={() => removeExcludePattern(index)}
+                onclick={() => removeExcludePattern(index)}
                 title="Remove pattern"
               >
                 <X class="w-3 h-3" />
@@ -274,7 +278,7 @@
                   type="button"
                   class="preset-btn"
                   class:added={excludePatterns.includes(preset.pattern)}
-                  on:click={() => addPresetPattern(preset.pattern, 'exclude')}
+                  onclick={() => addPresetPattern(preset.pattern, 'exclude')}
                   disabled={excludePatterns.includes(preset.pattern)}
                   title={preset.description}
                 >
@@ -344,7 +348,7 @@
               <button
                 type="button"
                 class="remove-tag-btn"
-                on:click={() => removeIncludePattern(index)}
+                onclick={() => removeIncludePattern(index)}
                 title="Remove pattern"
               >
                 <X class="w-3 h-3" />
@@ -376,7 +380,7 @@
                   type="button"
                   class="preset-btn"
                   class:added={includePatterns.includes(preset.pattern)}
-                  on:click={() => addPresetPattern(preset.pattern, 'include')}
+                  onclick={() => addPresetPattern(preset.pattern, 'include')}
                   disabled={includePatterns.includes(preset.pattern)}
                   title={preset.description}
                 >
@@ -448,11 +452,6 @@
     gap: 0.5rem;
     justify-content: flex-end;
     margin-bottom: 1rem;
-  }
-
-  /* Gitignore Section */
-  .gitignore-section {
-    padding: 1rem;
   }
 
   .setting-header {
@@ -545,11 +544,6 @@
   .note-text.warning {
     color: #d97706;
     border-left-color: #d97706;
-  }
-
-  /* Patterns Sections */
-  .patterns-section {
-    padding: 1rem;
   }
 
   .section-header {
@@ -778,11 +772,6 @@
     font-size: 0.75rem;
     color: #6b7280;
     line-height: 1.2;
-  }
-
-  /* Help Section */
-  .help-section {
-    padding: 1rem;
   }
 
   .help-header {

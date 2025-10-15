@@ -140,7 +140,7 @@ export async function streamJobOutput(
 ): Promise<OutputStreamer> {
     // Build the streaming URL
     const baseUrl = import.meta.env.VITE_API_URL || '';
-    const url = `${baseUrl}/api/jobs/${jobId}/output/stream?host=${encodeURIComponent(hostname)}&output_type=${outputType}`;
+    const url = `${baseUrl}/api/jobs/${encodeURIComponent(jobId)}/output/stream?host=${encodeURIComponent(hostname)}&output_type=${outputType}`;
     
     const streamer = new OutputStreamer(onChunk, onComplete, onError);
     await streamer.stream(url);

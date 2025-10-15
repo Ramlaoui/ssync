@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { onMount, onDestroy } from 'svelte';
   import { watcherEvents, eventsLoading } from '../stores/watchers';
   import type { WatcherEvent } from '../types/watchers';
@@ -7,21 +9,21 @@
 
   // View modes for different event perspectives
   type ViewMode = 'latest' | 'by-watcher' | 'timeline';
-  let viewMode: ViewMode = 'latest';
+  let viewMode: ViewMode = $state('latest');
 
   // Filters and search
-  let searchTerm = '';
-  let showFilters = false;
-  let timeFilter: 'all' | '1h' | '24h' | '7d' = '24h';
-  let actionFilter = '';
-  let successFilter: 'all' | 'success' | 'failed' = 'all';
+  let searchTerm = $state('');
+  let showFilters = $state(false);
+  let timeFilter: 'all' | '1h' | '24h' | '7d' = $state('24h');
+  let actionFilter = $state('');
+  let successFilter: 'all' | 'success' | 'failed' = $state('all');
 
   // Auto-refresh for latest events
   let autoRefresh = true;
   let refreshInterval: number | null = null;
 
   // Live event counter for dramatic effect
-  let liveEventCount = 0;
+  let liveEventCount = $state(0);
   let lastEventTime: string | null = null;
 
   onMount(() => {
@@ -64,7 +66,7 @@
   }
 
   // Enhanced filtering and sorting
-  $: filteredEvents = $watcherEvents.filter(event => {
+  let filteredEvents = $derived($watcherEvents.filter(event => {
     // Time filter
     if (!isWithinTimeFilter(event.timestamp)) return false;
 
@@ -95,15 +97,15 @@
     }
 
     return true;
-  });
+  }));
 
   // Sort events by timestamp (newest first)
-  $: sortedEvents = [...filteredEvents].sort((a, b) =>
+  let sortedEvents = $derived([...filteredEvents].sort((a, b) =>
     new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
+  ));
 
   // Group by time periods for "Latest" view
-  $: eventsByTime = (() => {
+  let eventsByTime = $derived((() => {
     const now = new Date();
     const groups = {
       'Just now': [],
@@ -137,10 +139,10 @@
     });
 
     return groups;
-  })();
+  })());
 
   // Group by watcher for "By Watcher" view
-  $: eventsByWatcher = (() => {
+  let eventsByWatcher = $derived((() => {
     const groups: Record<string, WatcherEvent[]> = {};
     sortedEvents.forEach(event => {
       const key = event.watcher_name || 'Unknown';
@@ -148,7 +150,7 @@
       groups[key].push(event);
     });
     return groups;
-  })();
+  })());
 
   // Helper functions
   function formatRelativeTime(timestamp: string): string {
@@ -198,14 +200,16 @@
   }
 
   // Auto-scroll to latest events when view changes
-  $: if (viewMode === 'latest') {
-    setTimeout(() => {
-      const container = document.querySelector('.events-content');
-      if (container) {
-        container.scrollTop = 0;
-      }
-    }, 100);
-  }
+  run(() => {
+    if (viewMode === 'latest') {
+      setTimeout(() => {
+        const container = document.querySelector('.events-content');
+        if (container) {
+          container.scrollTop = 0;
+        }
+      }, 100);
+    }
+  });
 </script>
 
 <div class="modern-events-view">
@@ -239,21 +243,21 @@
       <div class="view-mode-toggle">
         <button
           class="mode-btn {viewMode === 'latest' ? 'mode-btn-active' : ''}"
-          on:click={() => viewMode = 'latest'}
+          onclick={() => viewMode = 'latest'}
         >
           <Zap class="w-4 h-4" />
           Latest
         </button>
         <button
           class="mode-btn {viewMode === 'by-watcher' ? 'mode-btn-active' : ''}"
-          on:click={() => viewMode = 'by-watcher'}
+          onclick={() => viewMode = 'by-watcher'}
         >
           <Activity class="w-4 h-4" />
           By Watcher
         </button>
         <button
           class="mode-btn {viewMode === 'timeline' ? 'mode-btn-active' : ''}"
-          on:click={() => viewMode = 'timeline'}
+          onclick={() => viewMode = 'timeline'}
         >
           <Clock class="w-4 h-4" />
           Timeline
@@ -262,7 +266,7 @@
 
       <button
         class="filter-btn {showFilters ? 'filter-btn-active' : ''}"
-        on:click={() => showFilters = !showFilters}
+        onclick={() => showFilters = !showFilters}
       >
         <Filter class="w-4 h-4" />
         Filters
@@ -283,7 +287,7 @@
             class="search-input"
           />
           {#if searchTerm}
-            <button class="clear-search" on:click={clearSearch}>
+            <button class="clear-search" onclick={clearSearch}>
               <X class="w-4 h-4" />
             </button>
           {/if}
@@ -302,7 +306,7 @@
           <option value="failed">Failed only</option>
         </select>
 
-        <button class="clear-filters" on:click={clearAllFilters}>
+        <button class="clear-filters" onclick={clearAllFilters}>
           Clear all
         </button>
       </div>
@@ -324,7 +328,7 @@
         <h3>No events found</h3>
         <p>Try adjusting your filters or check back later</p>
         {#if searchTerm || timeFilter !== '24h' || actionFilter || successFilter !== 'all'}
-          <button class="reset-filters" on:click={clearAllFilters}>
+          <button class="reset-filters" onclick={clearAllFilters}>
             Reset filters
           </button>
         {/if}
@@ -606,14 +610,6 @@
     position: relative;
     flex: 1;
     min-width: 200px;
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #9ca3af;
   }
 
   .search-input {

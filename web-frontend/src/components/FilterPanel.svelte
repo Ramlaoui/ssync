@@ -2,10 +2,19 @@
   import { createEventDispatcher } from 'svelte';
   import type { JobFilters, HostInfo } from '../types/api';
   
-  export let filters: JobFilters;
-  export let hosts: HostInfo[]; 
-  export let loading = false;
-  export let search = '';
+  interface Props {
+    filters: JobFilters;
+    hosts: HostInfo[];
+    loading?: boolean;
+    search?: string;
+  }
+
+  let {
+    filters = $bindable(),
+    hosts,
+    loading = false,
+    search = $bindable('')
+  }: Props = $props();
   
   const dispatch = createEventDispatcher<{
     change: void;
@@ -52,7 +61,7 @@
     <h3 class="panel-title">Filters</h3>
     <button 
       class="clear-button" 
-      on:click={clearFilters}
+      onclick={clearFilters}
       disabled={loading}
       aria-label="Clear all filters"
     >
@@ -70,7 +79,7 @@
         id="search"
         type="text"
         bind:value={search}
-        on:input={handleChange}
+        oninput={handleChange}
         placeholder="Job name or ID..."
         disabled={loading}
       />
@@ -82,7 +91,7 @@
         id="user"
         type="text"
         bind:value={filters.user}
-        on:input={handleChange}
+        oninput={handleChange}
         placeholder="username"
         disabled={loading}
       />
@@ -91,7 +100,7 @@
     <div class="filter-row">
       <div class="filter-group">
         <label for="since">Time Range</label>
-        <select id="since" bind:value={filters.since} on:change={handleChange} disabled={loading}>
+        <select id="since" bind:value={filters.since} onchange={handleChange} disabled={loading}>
           {#each timeRangeOptions as option}
             <option value={option.value}>{option.label}</option>
           {/each}
@@ -104,7 +113,7 @@
           id="limit"
           type="number"
           bind:value={filters.limit}
-          on:input={handleChange}
+          oninput={handleChange}
           min={1}
           max={100}
           disabled={loading}
@@ -114,7 +123,7 @@
     
     <div class="filter-group">
       <label for="state">State</label>
-      <select id="state" bind:value={filters.state} on:change={handleChange} disabled={loading}>
+      <select id="state" bind:value={filters.state} onchange={handleChange} disabled={loading}>
         {#each stateOptions as option}
           <option value={option.value}>{option.label}</option>
         {/each}
@@ -127,7 +136,7 @@
       <input
         type="checkbox"
         bind:checked={filters.activeOnly}
-        on:change={handleChange}
+        onchange={handleChange}
         disabled={loading}
       />
       <span>Active Jobs Only</span>
@@ -137,7 +146,7 @@
       <input
         type="checkbox"
         bind:checked={filters.completedOnly}
-        on:change={handleChange}
+        onchange={handleChange}
         disabled={loading}
       />
       <span>Completed Jobs Only</span>

@@ -2,9 +2,15 @@
   import { cn } from "../../utils";
   import { getContext } from "svelte";
   
-  export let value: string;
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    value: string;
+    class?: string;
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let { value, class: className = "", children, ...rest }: Props = $props();
+  
   
   const activeValue = getContext<string>("activeTab");
   const changeTab = getContext<(value: string) => void>("changeTab");
@@ -18,8 +24,8 @@
       : "text-muted-foreground hover:text-foreground",
     className
   )}
-  on:click={() => changeTab(value)}
-  {...$$restProps}
+  onclick={() => changeTab(value)}
+  {...rest}
 >
-  <slot />
+  {@render children?.()}
 </button>

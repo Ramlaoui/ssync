@@ -1,63 +1,76 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher, onMount } from 'svelte';
   import { fade, fly, scale, slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { api } from '../services/api';
   import type { WatcherAction } from '../types/watchers';
   import type { JobOutputResponse } from '../types/api';
+  import Dialog from '../lib/components/ui/Dialog.svelte';
   
-  export let jobId: string;
-  export let hostname: string;
-  export let copiedConfig: any = null;
-  
+  interface Props {
+    jobId: string;
+    hostname: string;
+    copiedConfig?: any;
+    open?: boolean;
+  }
+
+  let {
+    jobId,
+    hostname,
+    copiedConfig = null,
+    open = $bindable(true)
+  }: Props = $props();
+
   const dispatch = createEventDispatcher();
   
   // Mobile detection
-  let isMobile = false;
+  let isMobile = $state(false);
   
   // Wizard state - simplified for mobile
   type WizardStep = 'template' | 'pattern' | 'actions' | 'review';
-  let currentStep: WizardStep = 'template';
+  let currentStep: WizardStep = $state('template');
   let completedSteps: Set<WizardStep> = new Set();
   
   // Form state
-  let watcherName = '';
-  let pattern = '';
-  let interval = 30;
-  let captures: string[] = [];
-  let captureInput = '';
+  let watcherName = $state('');
+  let pattern = $state('');
+  let interval = $state(30);
+  let captures: string[] = $state([]);
+  let captureInput = $state('');
   let condition = '';
-  let actions: WatcherAction[] = [];
+  let actions: WatcherAction[] = $state([]);
   let maxTriggers = 10;
   let watcherOutputType: 'stdout' | 'stderr' | 'both' = 'stdout';
   
   // Timer mode settings
-  let timerModeEnabled = false;
-  let timerInterval = 30;
+  let timerModeEnabled = $state(false);
+  let timerInterval = $state(30);
   
   // UI state
-  let isSubmitting = false;
-  let error: string | null = null;
-  let selectedTemplate: any = null;
+  let isSubmitting = $state(false);
+  let error: string | null = $state(null);
+  let selectedTemplate: any = $state(null);
   let showTemplateDetails = false;
-  let testString = '';
-  let testResult: any = null;
-  let patternValid = false;
-  let nameValid = false;
-  let actionsValid = false;
+  let testString = $state('');
+  let testResult: any = $state(null);
+  let patternValid = $state(false);
+  let nameValid = $state(false);
+  let actionsValid = $state(false);
   
   // Job output viewer state
-  let showJobOutput = false;
-  let jobOutput: string = '';
-  let loadingOutput = false;
-  let outputError: string | null = null;
-  let jobOutputType: 'stdout' | 'stderr' | 'both' = 'stdout';
-  let outputLines = 100;
+  let showJobOutput = $state(false);
+  let jobOutput: string = $state('');
+  let loadingOutput = $state(false);
+  let outputError: string | null = $state(null);
+  let jobOutputType: 'stdout' | 'stderr' | 'both' = $state('stdout');
+  let outputLines = $state(100);
   
   // Action builder state
-  let actionType = 'log_event';
-  let actionConfig: Record<string, any> = {};
-  let editingActionIndex: number | null = null;
+  let actionType = $state('log_event');
+  let actionConfig: Record<string, any> = $state({});
+  let editingActionIndex: number | null = $state(null);
   
   // Animation state
   let isTransitioning = false;
@@ -241,24 +254,7 @@
     }
   });
   
-  // Validation
-  $: nameValid = watcherName.length > 0;
-  $: patternValid = pattern.length > 0 && isValidRegex(pattern);
-  $: actionsValid = actions.length > 0;
-  $: canProceed = {
-    template: true,
-    pattern: nameValid && patternValid,
-    actions: actionsValid,
-    review: nameValid && patternValid && actionsValid
-  };
   
-  // Step progress
-  $: stepProgress = {
-    template: 100,
-    pattern: nameValid && patternValid ? 100 : (nameValid ? 50 : (patternValid ? 50 : 0)),
-    actions: actionsValid ? 100 : (actions.length > 0 ? 50 : 0),
-    review: 100
-  };
   
   function isValidRegex(str: string): boolean {
     try {
@@ -445,11 +441,12 @@
       isSubmitting = false;
     }
   }
-  
+
   function handleClose() {
+    open = false;
     dispatch('close');
   }
-  
+
   async function fetchJobOutput() {
     loadingOutput = true;
     outputError = null;
@@ -492,23 +489,45 @@
       handleClose();
     }
   }
+  // Validation
+  run(() => {
+    nameValid = watcherName.length > 0;
+  });
+  run(() => {
+    patternValid = pattern.length > 0 && isValidRegex(pattern);
+  });
+  run(() => {
+    actionsValid = actions.length > 0;
+  });
+  let canProceed = $derived({
+    template: true,
+    pattern: nameValid && patternValid,
+    actions: actionsValid,
+    review: nameValid && patternValid && actionsValid
+  });
+  // Step progress
+  let stepProgress = $derived({
+    template: 100,
+    pattern: nameValid && patternValid ? 100 : (nameValid ? 50 : (patternValid ? 50 : 0)),
+    actions: actionsValid ? 100 : (actions.length > 0 ? 50 : 0),
+    review: 100
+  });
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
-
-<div class="dialog-overlay" on:click={handleClose} on:keydown={() => {}}>
-  <div class="dialog-container" on:click|stopPropagation on:keydown={() => {}}>
-    <div class="dialog-header">
-      <div class="header-content">
-        <h2>{isMobile ? `Watcher: Job #${jobId}` : `Create Watcher for Job #${jobId}`}</h2>
-        {#if !isMobile}<p class="header-subtitle">Configure a watcher to monitor your job output</p>{/if}
-      </div>
-      <button class="close-btn" on:click={handleClose} aria-label="Close">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-        </svg>
-      </button>
+<Dialog
+  bind:open
+  on:close={handleClose}
+  size="full"
+  contentClass="attach-watchers-content"
+  headerClass="attach-watchers-header"
+  footerClass="attach-watchers-footer"
+>
+  {#snippet header()}
+    <div  class="header-wrapper">
+      <h2>{isMobile ? `Watcher: Job #${jobId}` : `Create Watcher for Job #${jobId}`}</h2>
+      {#if !isMobile}<p class="header-subtitle">Configure a watcher to monitor your job output</p>{/if}
     </div>
+  {/snippet}
     
     <!-- Progress Steps -->
     {#if !isMobile}
@@ -528,7 +547,7 @@
             class="progress-step"
             class:active={isActive}
             class:completed={isCompleted}
-            on:click={() => goToStep(step)}
+            onclick={() => goToStep(step)}
             disabled={i > 0 && !completedSteps.has(['template', 'pattern', 'actions', 'review'][i - 1])}
           >
             <div class="step-number">
@@ -597,7 +616,7 @@
                     <button
                       class="template-card"
                       class:selected={selectedTemplate?.id === template.id}
-                      on:click={() => selectTemplate(template)}
+                      onclick={() => selectTemplate(template)}
                     >
                       <div class="template-icon">{template.icon}</div>
                       <div class="template-info">
@@ -630,7 +649,7 @@
           <div class="output-viewer-section">
             <button 
               class="output-toggle"
-              on:click={() => {
+              onclick={() => {
                 showJobOutput = !showJobOutput;
                 if (showJobOutput && !jobOutput) fetchJobOutput();
               }}
@@ -654,29 +673,29 @@
                     <button 
                       class="type-btn" 
                       class:active={jobOutputType === 'stdout'}
-                      on:click={() => { jobOutputType = 'stdout'; fetchJobOutput(); }}
+                      onclick={() => { jobOutputType = 'stdout'; fetchJobOutput(); }}
                     >
                       stdout
                     </button>
                     <button 
                       class="type-btn" 
                       class:active={jobOutputType === 'stderr'}
-                      on:click={() => { jobOutputType = 'stderr'; fetchJobOutput(); }}
+                      onclick={() => { jobOutputType = 'stderr'; fetchJobOutput(); }}
                     >
                       stderr
                     </button>
                     <button 
                       class="type-btn" 
                       class:active={jobOutputType === 'both'}
-                      on:click={() => { jobOutputType = 'both'; fetchJobOutput(); }}
+                      onclick={() => { jobOutputType = 'both'; fetchJobOutput(); }}
                     >
                       both
                     </button>
                   </div>
                   
                   <div class="lines-control">
-                    <label>Lines:</label>
-                    <select bind:value={outputLines} on:change={fetchJobOutput}>
+                    <span class="lines-label">Lines:</span>
+                    <select bind:value={outputLines} onchange={fetchJobOutput}>
                       <option value={50}>50</option>
                       <option value={100}>100</option>
                       <option value={200}>200</option>
@@ -686,7 +705,7 @@
                   
                   <button 
                     class="refresh-btn" 
-                    on:click={fetchJobOutput}
+                    onclick={fetchJobOutput}
                     disabled={loadingOutput}
                   >
                     {#if loadingOutput}
@@ -714,7 +733,7 @@
                     <pre>{jobOutput}</pre>
                     <button 
                       class="copy-to-test-btn"
-                      on:click={() => copyToTestInput(jobOutput)}
+                      onclick={() => copyToTestInput(jobOutput)}
                       title="Copy to test input"
                     >
                       <svg viewBox="0 0 24 24" fill="currentColor">
@@ -739,7 +758,7 @@
               <div class="quick-template-buttons">
                 <button 
                   class="quick-template-btn"
-                  on:click={() => {
+                  onclick={() => {
                     pattern = 'Error|ERROR|error';
                     watcherName = 'Error Monitor';
                   }}
@@ -748,7 +767,7 @@
                 </button>
                 <button 
                   class="quick-template-btn"
-                  on:click={() => {
+                  onclick={() => {
                     pattern = 'GPU memory: (\\d+)/(\\d+)';
                     watcherName = 'GPU Monitor';
                     captures = ['used', 'total'];
@@ -758,7 +777,7 @@
                 </button>
                 <button 
                   class="quick-template-btn"
-                  on:click={() => {
+                  onclick={() => {
                     pattern = 'epoch (\\d+).*loss: ([\\d.]+)';
                     watcherName = 'Training Monitor';
                     captures = ['epoch', 'loss'];
@@ -768,7 +787,7 @@
                 </button>
                 <button 
                   class="quick-template-btn"
-                  on:click={() => {
+                  onclick={() => {
                     pattern = 'DONE|Complete|Finished';
                     watcherName = 'Completion Monitor';
                   }}
@@ -869,7 +888,7 @@
                   placeholder={isMobile ? "e.g., Error: (.*)" : "e.g., GPU memory: (\d+)/(\d+) MB or Error: (.*)"}
                   class:valid={patternValid}
                   class:invalid={pattern && !patternValid}
-                  on:input={() => testResult = null}
+                  oninput={() => testResult = null}
                   autocomplete="off"
                   autocorrect="off"
                   autocapitalize="off"
@@ -878,7 +897,7 @@
                 <button 
                   class="help-btn"
                   title="Pattern help"
-                  on:click={() => window.open('https://regex101.com', '_blank')}
+                  onclick={() => window.open('https://regex101.com', '_blank')}
                 >
                   <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M11,18H13V16H11V18M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,6A4,4 0 0,0 8,10H10A2,2 0 0,1 12,8A2,2 0 0,1 14,10C14,12 11,11.75 11,15H13C13,12.75 16,12.5 16,10A4,4 0 0,0 12,6Z"/>
@@ -899,10 +918,10 @@
                   bind:value={testString}
                   placeholder="Paste sample output from your job to test the pattern..."
                   rows="3"
-                />
+></textarea>
                 <button 
                   class="test-btn"
-                  on:click={testPattern}
+                  onclick={testPattern}
                   disabled={!pattern || !testString}
                 >
                   Test Pattern
@@ -972,9 +991,9 @@
                   type="text"
                   bind:value={captureInput}
                   placeholder="e.g., gpu_memory"
-                  on:keydown={(e) => e.key === 'Enter' && addCapture()}
+                  onkeydown={(e) => e.key === 'Enter' && addCapture()}
                 />
-                <button class="add-btn" on:click={addCapture}>
+                <button class="add-btn" onclick={addCapture}>
                   <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
                   </svg>
@@ -987,7 +1006,7 @@
                   {#each captures as capture, i}
                     <div class="capture-chip" transition:scale={{ duration: 200 }}>
                       <span class="capture-name">${i + 1}: {capture}</span>
-                      <button class="remove-btn" on:click={() => removeCapture(i)}>
+                      <button class="remove-btn" onclick={() => removeCapture(i)} aria-label="Remove capture group">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                           <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
                         </svg>
@@ -1018,7 +1037,7 @@
                       <button
                         class="action-type-btn"
                         class:selected={actionType === action.value}
-                        on:click={() => actionType = action.value}
+                        onclick={() => actionType = action.value}
                       >
                         <span class="action-icon">{action.icon}</span>
                         <div class="action-info">
@@ -1099,7 +1118,7 @@
                       bind:value={actionConfig.message}
                       placeholder="Pattern matched: $0"
                       rows="2"
-                    />
+></textarea>
                   </div>
                 </div>
                 
@@ -1113,7 +1132,7 @@
                       placeholder="cd /path/to/dir && echo 'Match found: $0' >> log.txt"
                       rows="3"
                       style="font-family: monospace;"
-                    />
+></textarea>
                     <small>Use $0 for full match, $1, $2 for capture groups. Commands like 'cd' are allowed.</small>
                   </div>
                 </div>
@@ -1154,7 +1173,7 @@
               <div class="action-buttons">
                 <button 
                   class="btn secondary"
-                  on:click={() => {
+                  onclick={() => {
                     actionConfig = {};
                     editingActionIndex = null;
                   }}
@@ -1163,7 +1182,7 @@
                 </button>
                 <button 
                   class="btn primary"
-                  on:click={addAction}
+                  onclick={addAction}
                 >
                   {editingActionIndex !== null ? 'Update Action' : 'Add Action'}
                 </button>
@@ -1186,12 +1205,12 @@
                         {/if}
                       </div>
                       <div class="action-controls">
-                        <button class="icon-btn" on:click={() => editAction(i)} title="Edit">
+                        <button class="icon-btn" onclick={() => editAction(i)} title="Edit">
                           <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M3,17.25V21H6.75L17.81,9.94L14.06,6.19L3,17.25M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.13,5.12L18.88,8.87L20.71,7.04Z"/>
                           </svg>
                         </button>
-                        <button class="icon-btn" on:click={() => removeAction(i)} title="Remove">
+                        <button class="icon-btn" onclick={() => removeAction(i)} title="Remove">
                           <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/>
                           </svg>
@@ -1294,13 +1313,14 @@
       {/if}
     </div>
     
-    <!-- Dialog Footer -->
-    <div class="dialog-footer">
+
+  {#snippet footer()}
+    <div  class="wizard-footer-content">
       <div class="footer-left">
         {#if currentStep !== 'template'}
-          <button 
+          <button
             class="btn secondary"
-            on:click={prevStep}
+            onclick={prevStep}
             disabled={isSubmitting}
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
@@ -1310,20 +1330,20 @@
           </button>
         {/if}
       </div>
-      
-      <div class="footer-right">
-        <button 
-          class="btn tertiary"
-          on:click={handleClose}
+
+      <div class="footer-actions">
+        <button
+          class="btn secondary"
+          onclick={handleClose}
           disabled={isSubmitting}
         >
           Cancel
         </button>
-        
+
         {#if currentStep === 'review'}
-          <button 
+          <button
             class="btn primary"
-            on:click={handleSubmit}
+            onclick={handleSubmit}
             disabled={isSubmitting || !canProceed.review}
           >
             {#if isSubmitting}
@@ -1337,9 +1357,9 @@
             {/if}
           </button>
         {:else}
-          <button 
+          <button
             class="btn primary"
-            on:click={nextStep}
+            onclick={nextStep}
             disabled={!canProceed[currentStep]}
           >
             Next
@@ -1350,70 +1370,29 @@
         {/if}
       </div>
     </div>
-  </div>
-</div>
+  {/snippet}
+</Dialog>
 
 <style>
-  /* Dialog Base */
-  .dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(4px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.2s ease;
+  /* Custom Dialog Styles */
+  :global(.attach-watchers-content) {
+    padding: 0 !important;
   }
-  
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+
+  :global(.attach-watchers-header) {
+    border-bottom: none !important;
   }
-  
-  .dialog-container {
-    background: white;
-    border-radius: 16px;
-    width: 90%;
-    max-width: 900px;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  :global(.attach-watchers-footer) {
+    border-top: 1px solid #e5e7eb;
   }
-  
-  @keyframes slideUp {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-  
+
   /* Header */
-  .dialog-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+  .header-wrapper {
+    width: 100%;
   }
-  
-  .header-content {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-  }
-  
-  .header-content h2 {
+
+  .header-wrapper h2 {
     margin: 0;
     font-size: 1.5rem;
     color: #1f2937;
@@ -1421,33 +1400,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  
+
   .header-subtitle {
     margin: 0.25rem 0 0 0;
     font-size: 0.875rem;
     color: #6b7280;
-  }
-  
-  .close-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0.5rem;
-    color: #6b7280;
-    border-radius: 8px;
-    transition: all 0.2s;
-    flex-shrink: 0;
-    margin-left: 0.5rem;
-  }
-  
-  .close-btn:hover {
-    background: #f3f4f6;
-    color: #1f2937;
-  }
-  
-  .close-btn svg {
-    width: 24px;
-    height: 24px;
   }
   
   /* Progress Steps */
@@ -1840,18 +1797,16 @@
   }
   
   .form-group input,
-  .form-group textarea,
-  .form-group select {
+  .form-group textarea {
     padding: 0.75rem;
     border: 2px solid #e5e7eb;
     border-radius: 8px;
     font-size: 0.875rem;
     transition: all 0.2s;
   }
-  
+
   .form-group input:focus,
-  .form-group textarea:focus,
-  .form-group select:focus {
+  .form-group textarea:focus {
     outline: none;
     border-color: #667eea;
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -2090,8 +2045,8 @@
     gap: 0.5rem;
     margin-left: auto;
   }
-  
-  .lines-control label {
+
+  .lines-control .lines-label {
     font-size: 0.8125rem;
     color: #6b7280;
   }
@@ -2782,17 +2737,20 @@
   }
   
   /* Dialog Footer */
-  .dialog-footer {
+  .wizard-footer-content {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
+    width: 100%;
     background: #f9fafb;
   }
-  
-  .footer-left,
-  .footer-right {
+
+  .footer-left {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .footer-actions {
     display: flex;
     gap: 0.75rem;
   }
@@ -2833,15 +2791,6 @@
     border-color: #d1d5db;
   }
   
-  .btn.tertiary {
-    background: transparent;
-    color: #6b7280;
-  }
-  
-  .btn.tertiary:hover:not(:disabled) {
-    background: #f3f4f6;
-  }
-  
   .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -2869,43 +2818,6 @@
   /* Responsive */
   /* Mobile Styles */
   @media (max-width: 768px) {
-    .dialog-overlay {
-      padding: 0;
-    }
-    
-    .dialog-container {
-      width: 100%;
-      height: 100%;
-      max-width: none;
-      max-height: none;
-      border-radius: 0;
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-    }
-    
-    .dialog-header {
-      padding: 1rem;
-      border-radius: 0;
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }
-    
-    .dialog-title {
-      font-size: 1.125rem;
-    }
-    
-    .dialog-subtitle {
-      font-size: 0.75rem;
-    }
-    
-    .close-button {
-      width: 36px;
-      height: 36px;
-      min-width: 36px;
-    }
-    
     .wizard-progress {
       padding: 0.75rem 1rem;
       gap: 0.5rem;
@@ -2917,18 +2829,7 @@
       min-width: 80px;
       gap: 0.375rem;
     }
-    
-    .step-icon {
-      width: 32px;
-      height: 32px;
-      font-size: 0.875rem;
-    }
-    
-    .step-icon svg {
-      width: 16px;
-      height: 16px;
-    }
-    
+
     .step-label {
       font-size: 0.625rem;
     }
@@ -2947,15 +2848,7 @@
     .step-header {
       padding: 0 0 0.75rem 0;
     }
-    
-    .step-title {
-      font-size: 1rem;
-    }
-    
-    .step-description {
-      font-size: 0.8125rem;
-    }
-    
+
     .form-row {
       grid-template-columns: 1fr;
       gap: 1rem;
@@ -2989,44 +2882,11 @@
       width: 32px;
       height: 32px;
     }
-    
-    .template-icon svg {
-      width: 18px;
-      height: 18px;
-    }
-    
-    .template-name {
-      font-size: 0.875rem;
-    }
-    
-    .template-description {
-      font-size: 0.6875rem;
-    }
-    
-    .pattern-test {
-      padding: 0.75rem;
-      gap: 0.75rem;
-    }
-    
-    .test-input {
-      font-size: 0.75rem;
-      padding: 0.5rem;
-    }
-    
-    .test-results {
-      padding: 0.5rem;
-      font-size: 0.75rem;
-    }
-    
+
     .output-viewer {
       margin-top: 1rem;
     }
-    
-    .output-header {
-      padding: 0.75rem;
-      gap: 0.75rem;
-    }
-    
+
     .output-content {
       padding: 0.75rem;
       font-size: 0.75rem;
@@ -3036,8 +2896,8 @@
     .lines-control {
       gap: 0.375rem;
     }
-    
-    .lines-control label {
+
+    .lines-control .lines-label {
       font-size: 0.75rem;
     }
     
@@ -3050,74 +2910,16 @@
       padding: 0.875rem;
       margin-bottom: 1rem;
     }
-    
-    .toggle-content {
-      gap: 0.75rem;
-    }
-    
+
     .toggle-label {
       gap: 0.375rem;
     }
-    
-    .toggle-title {
-      font-size: 0.875rem;
-    }
-    
-    .toggle-description {
-      font-size: 0.6875rem;
-    }
-    
-    .timer-interval-input {
-      margin-top: 0.75rem;
-    }
-    
-    .timer-interval-input label {
-      font-size: 0.75rem;
-    }
-    
-    .timer-interval-input input {
-      padding: 0.625rem;
-      font-size: 16px;
-    }
-    
-    .action-list {
-      gap: 0.75rem;
-    }
-    
+
     .action-item {
       padding: 0.875rem;
       gap: 0.75rem;
     }
-    
-    .action-header {
-      gap: 0.5rem;
-    }
-    
-    .action-type-label {
-      font-size: 0.8125rem;
-      padding: 0.25rem 0.5rem;
-    }
-    
-    .action-params {
-      gap: 0.75rem;
-    }
-    
-    .param-group label {
-      font-size: 0.75rem;
-    }
-    
-    .param-group input,
-    .param-group textarea {
-      padding: 0.625rem;
-      font-size: 16px;
-    }
-    
-    .remove-action {
-      width: 28px;
-      height: 28px;
-      min-width: 28px;
-    }
-    
+
     .action-types {
       grid-template-columns: 1fr;
       gap: 0.5rem;
@@ -3128,22 +2930,12 @@
       font-size: 0.75rem;
       gap: 0.5rem;
     }
-    
-    .action-type-btn svg {
-      width: 18px;
-      height: 18px;
-    }
-    
+
     .review-section {
       padding: 0.875rem;
       margin-bottom: 0.75rem;
     }
-    
-    .review-title {
-      font-size: 0.875rem;
-      margin-bottom: 0.5rem;
-    }
-    
+
     .review-item {
       padding: 0.625rem;
       font-size: 0.75rem;
@@ -3157,16 +2949,12 @@
     .review-value {
       font-size: 0.75rem;
     }
-    
-    .dialog-footer {
+
+    .wizard-footer-content {
       padding: 1rem;
       gap: 0.75rem;
-      position: sticky;
-      bottom: 0;
-      background: white;
-      border-top: 1px solid #e5e7eb;
     }
-    
+
     .footer-actions {
       gap: 0.5rem;
     }

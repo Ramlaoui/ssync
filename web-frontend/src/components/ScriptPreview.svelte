@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import { createEventDispatcher, onMount, tick } from "svelte";
   import CodeMirrorEditor from "./CodeMirrorEditor.svelte";
   import SimpleMobileEditor from "./mobile/SimpleMobileEditor.svelte";
@@ -9,38 +11,49 @@
     openHistory: void;
   }>();
 
-  export let generatedScript = "";
-  export let launching = false;
-  export let loading = false;
-  export let validationDetails: { isValid: boolean; missing: string[]; missingText: string } = { isValid: false, missing: [], missingText: 'Missing configuration' };
+  interface Props {
+    generatedScript?: string;
+    launching?: boolean;
+    loading?: boolean;
+    validationDetails?: { isValid: boolean; missing: string[]; missingText: string };
+  }
+
+  let {
+    generatedScript = "",
+    launching = false,
+    loading = false,
+    validationDetails = { isValid: false, missing: [], missingText: 'Missing configuration' }
+  }: Props = $props();
   
   // Editor preferences
-  let vimModeEnabled = true;
+  let vimModeEnabled = $state(true);
 
-  let editableScript = "";
-  let codeMirrorEditor: CodeMirrorEditor;
-  let hasUnsavedChanges = false;
+  let editableScript = $state("");
+  let codeMirrorEditor: CodeMirrorEditor = $state();
+  let hasUnsavedChanges = $state(false);
   let autoSaveTimeout: number | null = null;
-  let lastSavedScript = "";
-  let userHasEdited = false;
-  let showMobileMenu = false;
-  let isMobile = false;
+  let lastSavedScript = $state("");
+  let userHasEdited = $state(false);
+  let showMobileMenu = $state(false);
+  let isMobile = $state(false);
 
   // Initialize editable script when component mounts or generated script changes
   // Only update if user hasn't made manual edits (avoid overwriting user's edits)
   // Reset userHasEdited flag when script is programmatically changed
-  $: if (generatedScript !== lastSavedScript) {
-    if (!userHasEdited || generatedScript === '') {
-      editableScript = generatedScript;
-      lastSavedScript = generatedScript;
-      hasUnsavedChanges = false;
-      userHasEdited = false; // Reset flag when script is externally updated
+  run(() => {
+    if (generatedScript !== lastSavedScript) {
+      if (!userHasEdited || generatedScript === '') {
+        editableScript = generatedScript;
+        lastSavedScript = generatedScript;
+        hasUnsavedChanges = false;
+        userHasEdited = false; // Reset flag when script is externally updated
+      }
     }
-  }
+  });
   
   // Calculate line count for stats display
-  $: currentText = editableScript || generatedScript || "";
-  $: lineCount = Math.max(1, currentText.split("\n").length);
+  let currentText = $derived(editableScript || generatedScript || "");
+  let lineCount = $derived(Math.max(1, currentText.split("\n").length));
 
   function handleScriptChange(event: CustomEvent<{ content: string }>): void {
     const newContent = event.detail.content;
@@ -194,7 +207,7 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  $: stats = getScriptStats();
+  let stats = $derived(getScriptStats());
 
 </script>
 
@@ -317,7 +330,7 @@
         <div class="fab-menu">
           <button
             class="fab-item"
-            on:click={() => { dispatch('openHistory'); showMobileMenu = false; }}
+            onclick={() => { dispatch('openHistory'); showMobileMenu = false; }}
             title="Script History"
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
@@ -328,7 +341,7 @@
           
           <button
             class="fab-item"
-            on:click={() => { copyScript(); showMobileMenu = false; }}
+            onclick={() => { copyScript(); showMobileMenu = false; }}
             disabled={!editableScript && !generatedScript}
             title="Copy Script"
           >
@@ -340,7 +353,7 @@
           
           <button
             class="fab-item"
-            on:click={() => { saveScript(); showMobileMenu = false; }}
+            onclick={() => { saveScript(); showMobileMenu = false; }}
             disabled={!editableScript && !generatedScript}
             title="Download Script"
           >
@@ -353,7 +366,7 @@
         
         <button
           class="fab-toggle fab-close"
-          on:click={() => showMobileMenu = false}
+          onclick={() => showMobileMenu = false}
           aria-label="Close menu"
         >
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -363,7 +376,7 @@
       {:else}
         <button
           class="fab-toggle"
-          on:click={() => showMobileMenu = true}
+          onclick={() => showMobileMenu = true}
           aria-label="More options"
         >
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -378,7 +391,7 @@
     <button
       type="button"
       class="action-btn secondary"
-      on:click={() => dispatch('openHistory')}
+      onclick={() => dispatch('openHistory')}
       title="Browse script history and reuse previous scripts"
     >
       <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -390,7 +403,7 @@
     <button
       type="button"
       class="action-btn secondary"
-      on:click={copyScript}
+      onclick={copyScript}
       disabled={!editableScript && !generatedScript}
       title="Copy script to clipboard"
     >
@@ -405,7 +418,7 @@
     <button
       type="button"
       class="action-btn secondary"
-      on:click={saveScript}
+      onclick={saveScript}
       disabled={!editableScript && !generatedScript}
       title="Download script as file"
     >
@@ -421,7 +434,7 @@
       <button
         type="button"
         class="action-btn warning"
-        on:click={saveChanges}
+        onclick={saveChanges}
         title="Save changes manually"
       >
         <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -435,7 +448,7 @@
       <button
         type="button"
         class="action-btn secondary"
-        on:click={resetScript}
+        onclick={resetScript}
         title="Reset to original script"
       >
         <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -450,7 +463,7 @@
     <button
       type="button"
       class="action-btn primary launch-btn"
-      on:click={handleLaunch}
+      onclick={handleLaunch}
       disabled={launching || loading || !validationDetails.isValid}
       title={validationDetails.isValid
         ? "Launch the job"

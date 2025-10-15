@@ -18,12 +18,16 @@
   } from "lucide-svelte";
   import LoadingSpinner from "./LoadingSpinner.svelte";
 
-  export let job: JobInfo;
+  interface Props {
+    job: JobInfo;
+  }
 
-  let watchers: Watcher[] = [];
-  let loading = true;
-  let error: string | null = null;
-  let expandedWatchers = new Set<number>();
+  let { job }: Props = $props();
+
+  let watchers: Watcher[] = $state([]);
+  let loading = $state(true);
+  let error: string | null = $state(null);
+  let expandedWatchers = $state(new Set<number>());
 
   async function loadWatchers() {
     try {
@@ -125,7 +129,7 @@
     <div class="error-container">
       <AlertCircle class="w-5 h-5 text-red-500" />
       <span class="text-red-700">{error}</span>
-      <button class="btn btn-sm" on:click={loadWatchers}>Retry</button>
+      <button class="btn btn-sm" onclick={loadWatchers}>Retry</button>
     </div>
   {:else if watchers.length === 0}
     <div class="empty-state">
@@ -142,10 +146,11 @@
       </div>
 
       {#each watchers as watcher}
+        {@const SvelteComponent = getStateIcon(watcher.state)}
         <div class="watcher-card" class:expanded={expandedWatchers.has(watcher.id)}>
           <button
             class="watcher-header"
-            on:click={() => toggleWatcher(watcher.id)}
+            onclick={() => toggleWatcher(watcher.id)}
           >
             <div class="header-left">
               <span class="expand-icon">
@@ -160,7 +165,7 @@
                 <span class="watcher-name">{watcher.name}</span>
                 <div class="watcher-meta">
                   <span class="state-badge {getStateColor(watcher.state)}">
-                    <svelte:component this={getStateIcon(watcher.state)} class="w-3 h-3" />
+                    <SvelteComponent class="w-3 h-3" />
                     {watcher.state}
                   </span>
                   <span class="trigger-count">

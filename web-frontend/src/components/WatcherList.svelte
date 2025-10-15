@@ -3,19 +3,23 @@
   import type { Watcher } from '../types/watchers';
   import { pauseWatcher, resumeWatcher } from '../stores/watchers';
   
-  export let watchers: Watcher[] = [];
-  export let loading = false;
+  interface Props {
+    watchers?: Watcher[];
+    loading?: boolean;
+  }
+
+  let { watchers = [], loading = false }: Props = $props();
   
   const dispatch = createEventDispatcher();
   
   // Group watchers by job
-  $: groupedWatchers = watchers.reduce((acc, watcher) => {
+  let groupedWatchers = $derived(watchers.reduce((acc, watcher) => {
     if (!acc[watcher.job_id]) {
       acc[watcher.job_id] = [];
     }
     acc[watcher.job_id].push(watcher);
     return acc;
-  }, {} as Record<string, Watcher[]>);
+  }, {} as Record<string, Watcher[]>));
   
   async function handlePause(watcher: Watcher) {
     try {
@@ -91,7 +95,7 @@
                   {#if watcher.state === 'active'}
                     <button 
                       class="action-btn pause"
-                      on:click={() => handlePause(watcher)}
+                      onclick={() => handlePause(watcher)}
                       title="Pause watcher"
                     >
                       ⏸️
@@ -99,7 +103,7 @@
                   {:else if watcher.state === 'paused'}
                     <button 
                       class="action-btn resume"
-                      on:click={() => handleResume(watcher)}
+                      onclick={() => handleResume(watcher)}
                       title="Resume watcher"
                     >
                       ▶️
@@ -107,7 +111,7 @@
                   {/if}
                   <button 
                     class="action-btn details"
-                    on:click={() => handleViewDetails(watcher)}
+                    onclick={() => handleViewDetails(watcher)}
                     title="View details"
                   >
                     📊

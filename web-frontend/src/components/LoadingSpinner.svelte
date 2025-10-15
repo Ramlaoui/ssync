@@ -1,32 +1,42 @@
 <script lang="ts">
-  export let size: 'sm' | 'md' | 'lg' = 'md';
-  export let message: string = 'Loading...';
-  export let centered: boolean = true;
-  export let showMessage: boolean = true;
-  export let variant: 'default' | 'primary' | 'white' | 'small' = 'default';
+  interface Props {
+    size?: 'sm' | 'md' | 'lg';
+    message?: string;
+    centered?: boolean;
+    showMessage?: boolean;
+    variant?: 'default' | 'primary' | 'white' | 'small';
+  }
 
-  $: sizeClass = {
+  let {
+    size = 'md',
+    message = 'Loading...',
+    centered = true,
+    showMessage = true,
+    variant = 'default'
+  }: Props = $props();
+
+  let sizeClass = $derived({
     sm: 'w-4 h-4',
     md: 'w-8 h-8',
     lg: 'w-12 h-12'
-  }[size];
+  }[size]);
 
   // Use consistent gray spinner like the job page
-  $: colorClass = variant === 'white'
+  let colorClass = $derived(variant === 'white'
     ? 'border-white border-b-white/30'
     : variant === 'primary'
     ? 'border-blue-600 border-b-transparent'
     : variant === 'small'
     ? 'border-gray-300 border-t-blue-600'
-    : 'border-gray-900 border-b-transparent';
+    : 'border-gray-900 border-b-transparent');
 
-  $: textClass = variant === 'white' ? 'text-white' : 'text-gray-500';
+  let textClass = $derived(variant === 'white' ? 'text-white' : 'text-gray-500');
 
-  $: spacingClass = {
+  let spacingClass = $derived({
     sm: 'mb-2',
     md: 'mb-4',
     lg: 'mb-6'
-  }[size];
+  }[size]);
 </script>
 
 {#if centered}

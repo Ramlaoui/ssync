@@ -2,9 +2,15 @@
   import { cn } from "../../utils";
   import { createEventDispatcher } from "svelte";
   
-  export let value: string;
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    value: string;
+    class?: string;
+    children?: import('svelte').Snippet<[any]>;
+    [key: string]: any
+  }
+
+  let { value = $bindable(), class: className = "", children, ...rest }: Props = $props();
+  
   
   const dispatch = createEventDispatcher();
   
@@ -16,7 +22,7 @@
 
 <div
   class={cn("w-full", className)}
-  {...$$restProps}
+  {...rest}
 >
-  <slot {value} {changeTab} />
+  {@render children?.({ value, changeTab, })}
 </div>

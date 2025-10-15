@@ -1,11 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
 
-  export let resetError: () => void = () => {};
+  interface Props {
+    resetError?: () => void;
+    children?: import('svelte').Snippet;
+  }
+
+  let { resetError = () => {}, children }: Props = $props();
   
-  let hasError = false;
-  let errorMessage = '';
-  let errorInfo = '';
+  let hasError = $state(false);
+  let errorMessage = $state('');
+  let errorInfo = $state('');
   let errorCount = 0;
   let lastErrorTime = 0;
   
@@ -85,13 +90,13 @@
         <pre class="error-stack">{errorInfo}</pre>
       {/if}
       <div class="action-buttons">
-        <button class="reset-button" on:click={handleReset}>Try Again</button>
-        <button class="reload-button" on:click={handleReload}>Reload App</button>
+        <button class="reset-button" onclick={handleReset}>Try Again</button>
+        <button class="reload-button" onclick={handleReload}>Reload App</button>
       </div>
     </div>
   </div>
 {:else}
-  <slot></slot>
+  {@render children?.()}
 {/if}
 
 <style>

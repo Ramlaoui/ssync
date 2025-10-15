@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { run, createBubbler, stopPropagation } from 'svelte/legacy';
+
+  const bubble = createBubbler();
   import { createEventDispatcher, onMount } from 'svelte';
   import { slide, fade, fly } from 'svelte/transition';
   import { cn } from '../lib/utils';
@@ -7,6 +10,11 @@
   import Label from '../lib/components/ui/Label.svelte';
   import Select from '../lib/components/ui/Select.svelte';
   import Card from '../lib/components/ui/Card.svelte';
+  import Dropdown from '../lib/components/ui/Dropdown.svelte';
+  import DropdownItem from '../lib/components/ui/DropdownItem.svelte';
+  import DropdownDivider from '../lib/components/ui/DropdownDivider.svelte';
+  import DropdownLabel from '../lib/components/ui/DropdownLabel.svelte';
+  import Sidebar from '../lib/components/ui/Sidebar.svelte';
   import CodeMirrorEditor from './CodeMirrorEditor.svelte';
   import NavigationHeader from './NavigationHeader.svelte';
   import FileBrowser from './FileBrowser.svelte';
@@ -71,8 +79,8 @@
 
   const dispatch = createEventDispatcher();
 
-  // Props
-  export let script = `#!/bin/bash
+  // Component state (not props since this is used standalone)
+  let script = $state(`#!/bin/bash
 #SBATCH --job-name=my_job
 #SBATCH --time=1:00:00
 #SBATCH --mem=4G
@@ -80,11 +88,11 @@
 
 # Your commands here
 echo "Starting job..."
-`;
-  export let launching = false;
-  export let hosts: HostInfo[] = [];
-  export let selectedHost = '';
-  export let loading = false;
+`);
+  let launching = $state(false);
+  let hosts: HostInfo[] = $state([]);
+  let selectedHost = $state('');
+  let loading = $state(false);
 
   // Script Templates
   interface ScriptTemplate {
@@ -99,67 +107,71 @@ echo "Starting job..."
     use_count: number;
   }
 
-  let scriptTemplates: ScriptTemplate[] = loadScriptTemplates();
-  let showSaveTemplateDialog = false;
+  let scriptTemplates: ScriptTemplate[] = $state(loadScriptTemplates());
+  let showSaveTemplateDialog = $state(false);
 
   // Simple shared state for parameters - this is the single source of truth
-  let parameters = {
-    cpus: undefined,
-    memory: undefined,
-    timeLimit: undefined,
-    nodes: undefined,
+  let parameters = $state({
+    cpus: 1,
+    memory: 4,
+    timeLimit: 60,
+    nodes: 1,
     partition: '',
     account: '',
     jobName: '',
     constraint: '',
-    ntasksPerNode: undefined,
-    gpusPerNode: undefined,
+    ntasksPerNode: 1,
+    gpusPerNode: 0,
     gres: '',
     outputFile: '',
     errorFile: '',
     sourceDir: ''
-  };
+  });
 
   // State
-  let showAdvanced = false;
-  let showPresets = false; // Keep for mobile dropdown compatibility
-  let showHistory = false;
-  let showTemplates = false;
-  let showTemplateDetail = false;
-  let selectedTemplate: ScriptTemplate | null = null;
-  let showEditorOptions = false;
-  let showFileBrowser = false;
-  let showSyncSettings = false;
-  let showHostDropdown = false;
-  let isMobile = false;
-  let showMobileConfig = false;
-  let isClosingConfig = false;
-  let mobileConfigView = 'main'; // 'main', 'directory', 'sync'
-  let showValidationInfo = false;
-  let showPresetManager = false;
-  let showPresetSidebar = false; // New unified preset sidebar for desktop/mobile
-  let editingPreset: Preset | null = null;
+  let showAdvanced = $state(false);
+  let showPresets = $state(false); // Keep for mobile dropdown compatibility
+  let showHistory = $state(false);
+  let showTemplates = $state(false);
+  let showTemplateDetail = $state(false);
+  let selectedTemplate: ScriptTemplate | null = $state(null);
+  let showEditorOptions = $state(false);
+  let showFileBrowser = $state(false);
+  let showSyncSettings = $state(false);
+  let showHostDropdown = $state(false);
+  let isMobile = $state(false);
+  let showMobileConfig = $state(false);
+  let mobileConfigView = $state('main'); // 'main', 'directory', 'sync'
+  let showValidationInfo = $state(false);
+  let showPresetManager = $state(false);
+  let showPresetSidebar = $state(false); // New unified preset sidebar for desktop/mobile
+  let editingPreset: Preset | null = $state(null);
+
+  // Trigger element refs for new unified dropdowns
+  let hostDropdownTrigger: HTMLElement | null = $state(null);
+  let editorOptionsDropdownTrigger: HTMLElement | null = $state(null);
+  let presetDropdownTrigger: HTMLElement | null = $state(null);
 
   // Resubmit state
-  let isResubmit = false;
-  let originalJobId: string | null = null;
-  let watcherVariables: Record<string, string> = {};
-  let showCapturedVariables = false;
+  let isResubmit = $state(false);
+  let originalJobId: string | null = $state(null);
+  let watcherVariables: Record<string, string> = $state({});
+  let showCapturedVariables = $state(false);
   let watchers: any[] = [];
-  let showRecentWatchers = false;
-  let allRecentWatchers: any[] = [];  // Store all recent watchers from API
-  let newPreset: Partial<Preset> = {
+  let showRecentWatchers = $state(false);
+  let allRecentWatchers: any[] = $state([]);  // Store all recent watchers from API
+  let newPreset: Partial<Preset> = $state({
     name: '',
     icon: Zap,
     color: 'bg-blue-500'
-  };
-  let showIconDropdown = false;
-  let showColorDropdown = false;
+  });
+  let showIconDropdown = $state(false);
+  let showColorDropdown = $state(false);
 
   // Sync settings state
-  let excludePatterns = ['*.log', '*.tmp', '__pycache__/'];
-  let includePatterns = [];
-  let noGitignore = false;
+  let excludePatterns = $state(['*.log', '*.tmp', '__pycache__/']);
+  let includePatterns = $state([]);
+  let noGitignore = $state(false);
 
   // Parse SBATCH directives from script
   function parseSbatchFromScript(scriptContent: string) {
@@ -439,7 +451,7 @@ echo "Starting job..."
   }
 
   // Editor options with localStorage persistence
-  let editorOptions = {
+  let editorOptions = $state({
     vimMode: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-vim-mode') === 'true' : true,
     theme: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-theme') || 'light' : 'light',
     fontSize: typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('editor-font-size') || '14') : 14,
@@ -447,10 +459,8 @@ echo "Starting job..."
     wordWrap: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-word-wrap') === 'true' : false,
     tabSize: typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('editor-tab-size') || '2') : 2,
     autoIndent: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-auto-indent') !== 'false' : true
-  };
+  });
 
-  // Legacy vim mode for backwards compatibility
-  $: vimMode = editorOptions.vimMode;
 
   // Quick presets for fast job launching
   // Preset types and data
@@ -499,12 +509,27 @@ echo "Starting job..."
     { name: 'Gray', class: 'bg-gray-500' }
   ];
 
-  let defaultPresets: Preset[] = [
+  let defaultPresets: Preset[] = $state([
     { id: 'quick', name: 'Quick Test', icon: Zap, time: 10, memory: 2, cpus: 1, color: 'bg-yellow-500', isDefault: true },
     { id: 'standard', name: 'Standard', icon: Cpu, time: 60, memory: 4, cpus: 2, color: 'bg-blue-500', isDefault: true },
     { id: 'long', name: 'Long Run', icon: Clock, time: 1440, memory: 8, cpus: 4, color: 'bg-green-500', isDefault: true },
     { id: 'gpu', name: 'GPU', icon: Monitor, time: 240, memory: 16, cpus: 4, gpus: 1, color: 'bg-purple-500', isDefault: true }
-  ];
+  ]);
+
+  // Helper function to validate and ensure icon is a valid component
+  function ensureValidIcon(iconValue: any): any {
+    // Check if it's a valid Svelte component (function)
+    if (typeof iconValue === 'function') {
+      return iconValue;
+    }
+    // Check if it's a string matching an icon name
+    if (typeof iconValue === 'string') {
+      const found = iconOptions.find(io => io.name === iconValue);
+      if (found) return found.icon;
+    }
+    // Default fallback
+    return Zap;
+  }
 
   // Load custom presets from localStorage
   function loadCustomPresets(): Preset[] {
@@ -515,7 +540,7 @@ echo "Starting job..."
         const parsedDefaults = JSON.parse(savedDefaults);
         defaultPresets = parsedDefaults.map(p => ({
           ...p,
-          icon: iconOptions.find(io => io.name === p.iconName)?.icon || Zap,
+          icon: ensureValidIcon(p.iconName || p.icon),
           isDefault: true
         }));
       }
@@ -524,15 +549,22 @@ echo "Starting job..."
       const stored = localStorage.getItem('ssync_custom_presets');
       if (stored) {
         const presets = JSON.parse(stored);
-        // Restore icon references
+        // Restore icon references with validation
         return presets.map(p => ({
           ...p,
-          icon: iconOptions.find(io => io.name === p.iconName)?.icon || Zap,
+          icon: ensureValidIcon(p.iconName || p.icon),
           isCustom: true
         }));
       }
     } catch (e) {
       console.error('Failed to load presets:', e);
+      // Clear corrupted data
+      try {
+        localStorage.removeItem('ssync_custom_presets');
+        localStorage.removeItem('ssync_default_presets');
+      } catch (clearError) {
+        console.error('Failed to clear corrupted preset data:', clearError);
+      }
     }
     return [];
   }
@@ -565,26 +597,11 @@ echo "Starting job..."
     }
   }
 
-  let customPresets: Preset[] = loadCustomPresets();
-  // Combine all presets without distinction
-  $: allPresets = [...defaultPresets, ...customPresets];
+  let customPresets: Preset[] = $state(loadCustomPresets());
 
-  // Compute validation details reactively based on parameters
-  $: validationDetails = validateParameters(parameters);
 
-  $: canLaunch = validationDetails.isValid && selectedHost;
 
-  // Fetch recent watchers when host changes
-  $: if (selectedHost) {
-    fetchRecentWatchers();
-  }
 
-  // Get specific message about what's preventing launch
-  $: launchDisabledReason = !selectedHost
-    ? 'Select a host to continue'
-    : !validationDetails.isValid
-    ? (validationDetails.missingText || 'Complete required fields')
-    : '';
 
   function handleScriptChange(event: CustomEvent) {
     handleScriptEdit(event.detail.content);
@@ -681,7 +698,7 @@ echo "Starting job..."
       nodes: preset.nodes,
       partition: preset.partition,
       account: preset.account,
-      icon: preset.icon,
+      icon: ensureValidIcon(preset.icon),
       color: preset.color
     };
   }
@@ -986,7 +1003,6 @@ echo "Starting job..."
     // Load hosts if not provided or empty
     if (!hosts || hosts.length === 0) {
       try {
-        const { api } = await import('../services/api');
         const response = await api.get('/api/hosts');
         hosts = response.data;
 
@@ -1064,24 +1080,7 @@ echo "Starting job..."
     checkMobile();
     window.addEventListener('resize', checkMobile);
 
-    // Click outside handler for dropdowns
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-
-      // Check for host dropdown
-      if (!target.closest('.host-dropdown-container') && showHostDropdown) {
-        showHostDropdown = false;
-      }
-
-      // Check for editor options dropdown
-      if (!target.closest('.editor-options-dropdown') && showEditorOptions) {
-        showEditorOptions = false;
-      }
-    };
-
-    document.addEventListener('click', handleClickOutside);
     return () => {
-      document.removeEventListener('click', handleClickOutside);
       window.removeEventListener('resize', checkMobile);
     };
   });
@@ -1089,13 +1088,35 @@ echo "Starting job..."
   function checkMobile() {
     isMobile = window.innerWidth < 768;
   }
+  // Legacy vim mode for backwards compatibility
+  let vimMode = $derived(editorOptions.vimMode);
+  // Combine all presets without distinction, ensuring all icons are valid
+  let allPresets = $derived([...defaultPresets, ...customPresets].map(p => ({
+    ...p,
+    icon: ensureValidIcon(p.icon)
+  })));
+  // Compute validation details reactively based on parameters
+  let validationDetails = $derived(validateParameters(parameters));
+  let canLaunch = $derived(validationDetails.isValid && selectedHost);
+  // Fetch recent watchers when host changes
+  run(() => {
+    if (selectedHost) {
+      fetchRecentWatchers();
+    }
+  });
+  // Get specific message about what's preventing launch
+  let launchDisabledReason = $derived(!selectedHost
+    ? 'Select a host to continue'
+    : !validationDetails.isValid
+    ? (validationDetails.missingText || 'Complete required fields')
+    : '');
 </script>
 
 <div class="modern-launcher">
   <!-- Mobile Header -->
   {#if isMobile}
     <header class="mobile-header">
-      <button class="mobile-back-btn" on:click={() => window.history.back()}>
+      <button class="mobile-back-btn" onclick={() => window.history.back()} aria-label="Go back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M15 18l-6-6 6-6" />
         </svg>
@@ -1113,7 +1134,7 @@ echo "Starting job..."
           class="mobile-icon-btn validation-dot-mobile"
           class:valid={validationDetails.isValid}
           class:invalid={!validationDetails.isValid}
-          on:click={() => showValidationInfo = !showValidationInfo}
+          onclick={() => showValidationInfo = !showValidationInfo}
           title={validationDetails.isValid ? 'Valid' : 'Invalid'}
         >
           <div class="status-dot-small" class:valid={validationDetails.isValid} class:invalid={!validationDetails.isValid}></div>
@@ -1122,7 +1143,7 @@ echo "Starting job..."
         <!-- Editor Options -->
         <button
           class="mobile-icon-btn"
-          on:click={(e) => {
+          onclick={(e) => {
             e.stopPropagation();
             showEditorOptions = !showEditorOptions;
           }}
@@ -1135,14 +1156,14 @@ echo "Starting job..."
 
         <button
           class="mobile-icon-btn"
-          on:click={handleHistoryClick}
+          onclick={handleHistoryClick}
           title="History"
         >
           <History class="w-3.5 h-3.5" />
         </button>
         <button
           class="mobile-icon-btn"
-          on:click={() => {
+          onclick={() => {
             showTemplates = !showTemplates;
             if (showTemplates) {
               showPresets = false;
@@ -1155,7 +1176,7 @@ echo "Starting job..."
         </button>
         <button
           class="mobile-icon-btn"
-          on:click={() => {
+          onclick={() => {
             showSaveTemplateDialog = true;
           }}
           title="Save Template"
@@ -1164,8 +1185,9 @@ echo "Starting job..."
           <Save class="w-3.5 h-3.5" />
         </button>
         <button
+          bind:this={presetDropdownTrigger}
           class="mobile-icon-btn"
-          on:click={() => {
+          onclick={() => {
             showPresets = !showPresets;
             if (showPresets) {
               showPresetManager = false;
@@ -1179,7 +1201,7 @@ echo "Starting job..."
         </button>
         <button
           class="mobile-icon-btn"
-          on:click={() => showMobileConfig = !showMobileConfig}
+          onclick={() => showMobileConfig = !showMobileConfig}
           title="Options"
         >
           <Sliders class="w-3.5 h-3.5" />
@@ -1206,8 +1228,16 @@ echo "Starting job..."
 
     <!-- Mobile Editor Options Dropdown -->
     {#if showEditorOptions && isMobile}
-      <div class="mobile-options-backdrop" on:click={() => showEditorOptions = false}></div>
-      <div class="mobile-editor-options-menu" transition:slide={{ duration: 200 }} on:click|stopPropagation>
+      <div
+        class="mobile-options-backdrop"
+        role="button"
+        tabindex="0"
+        onclick={() => showEditorOptions = false}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showEditorOptions = false; }}}
+        aria-label="Close editor options"
+      ></div>
+      {@const SvelteComponent = editorOptions.vimMode ? ToggleRight : ToggleLeft}
+      <div class="mobile-editor-options-menu" transition:slide={{ duration: 200 }}>
         <!-- Copy same options as desktop -->
         <!-- Vim Mode Toggle -->
         <div class="option-item">
@@ -1217,9 +1247,9 @@ echo "Starting job..."
           </div>
           <button
             class="option-toggle {editorOptions.vimMode ? 'active' : ''}"
-            on:click={() => updateEditorOption('vimMode', !editorOptions.vimMode)}
+            onclick={() => updateEditorOption('vimMode', !editorOptions.vimMode)}
           >
-            <svelte:component this={editorOptions.vimMode ? ToggleRight : ToggleLeft} class="w-5 h-5" />
+            <SvelteComponent class="w-5 h-5" />
           </button>
         </div>
 
@@ -1232,7 +1262,7 @@ echo "Starting job..."
           <select
             class="option-select"
             bind:value={editorOptions.theme}
-            on:change={(e) => updateEditorOption('theme', e.target.value)}
+            onchange={(e) => updateEditorOption('theme', e.target.value)}
           >
             {#each themeOptions as theme}
               <option value={theme.id}>{theme.name}</option>
@@ -1249,7 +1279,7 @@ echo "Starting job..."
           <select
             class="option-select"
             bind:value={editorOptions.fontSize}
-            on:change={(e) => updateEditorOption('fontSize', parseInt(e.target.value))}
+            onchange={(e) => updateEditorOption('fontSize', parseInt(e.target.value))}
           >
             {#each fontSizeOptions as size}
               <option value={size}>{size}px</option>
@@ -1260,49 +1290,52 @@ echo "Starting job..."
     {/if}
 
     <!-- Mobile Presets Dropdown -->
-    {#if showPresets}
-      <div class="mobile-preset-dropdown" transition:slide={{ duration: 200 }}>
-        <div class="preset-dropdown-header">
-          <span class="preset-dropdown-title">Presets</span>
-          <button
-            class="preset-manage-btn"
-            on:click={() => {
-              showPresetManager = !showPresetManager;
-              showPresets = false;
-            }}
-            title="Manage Presets"
-          >
-            <Settings class="w-3.5 h-3.5" />
-          </button>
-        </div>
-        {#each allPresets as preset}
-          <button
-            class="mobile-preset-option"
-            on:click={() => applyPreset(preset)}
-          >
-            <div class="preset-icon {preset.color}">
-              <svelte:component this={preset.icon} class="w-3 h-3 text-white" />
-            </div>
-            <span class="mobile-preset-name">{preset.name}</span>
-            <span class="mobile-preset-details">
-              {preset.time}m • {preset.memory}GB
-              {#if preset.gpus} • {preset.gpus}GPU{/if}
-            </span>
-          </button>
-        {/each}
+    <Dropdown
+      bind:open={showPresets}
+      triggerRef={presetDropdownTrigger}
+      placement="bottom"
+      align="end"
+      width="240px"
+      on:close={() => showPresets = false}
+    >
+      <div class="preset-dropdown-header">
+        <span class="preset-dropdown-title">Presets</span>
         <button
-          class="mobile-preset-add"
-          on:click={() => {
-            createPresetFromCurrent();
-            showPresetManager = true;
+          class="preset-manage-btn"
+          onclick={() => {
+            showPresetManager = !showPresetManager;
             showPresets = false;
           }}
+          title="Manage Presets"
         >
-          <Plus class="w-3.5 h-3.5" />
-          <span>Create from current</span>
+          <Settings class="w-3.5 h-3.5" />
         </button>
       </div>
-    {/if}
+      {#each allPresets as preset}
+        {@const Icon = preset.icon || Zap}
+        <DropdownItem on:click={() => applyPreset(preset)}>
+          <div class="preset-icon {preset.color}">
+            <Icon class="w-3 h-3 text-white" />
+          </div>
+          <div class="flex-1">
+            <div class="mobile-preset-name">{preset.name}</div>
+            <div class="mobile-preset-details">
+              {preset.time}m • {preset.memory}GB
+              {#if preset.gpus} • {preset.gpus}GPU{/if}
+            </div>
+          </div>
+        </DropdownItem>
+      {/each}
+      <DropdownDivider />
+      <DropdownItem on:click={() => {
+        createPresetFromCurrent();
+        showPresetManager = true;
+        showPresets = false;
+      }}>
+        <Plus class="w-3.5 h-3.5" />
+        <span>Create from current</span>
+      </DropdownItem>
+    </Dropdown>
   {/if}
 
   <!-- Unified Preset Sidebar (Selection + Management) - Works for both mobile and desktop -->
@@ -1310,21 +1343,24 @@ echo "Starting job..."
   {#if showPresetSidebar || showPresetManager}
     <div
       class="preset-manager-overlay"
-      on:click={() => { showPresetSidebar = false; showPresetManager = false; }}
+      role="button"
+      tabindex="0"
+      onclick={() => { showPresetSidebar = false; showPresetManager = false; }}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showPresetSidebar = false; showPresetManager = false; }}}
+      aria-label="Close preset manager"
       transition:fade={{ duration: 200 }}
-      on:introstart
-      on:outrostart
-      on:introend
-      on:outroend
+      onintrostart={bubble('introstart')}
+      onoutrostart={bubble('outrostart')}
+      onintroend={bubble('introend')}
+      onoutroend={bubble('outroend')}
     >
       <div
         class="preset-manager-sidebar"
-        on:click|stopPropagation
         transition:fly={{ x: 400, duration: 300, opacity: 1 }}
       >
         <div class="preset-manager-header">
           <h3>{showPresetManager ? 'Manage Presets' : 'Presets'}</h3>
-          <button class="preset-manager-close" on:click={() => { showPresetSidebar = false; showPresetManager = false; }}>
+          <button class="preset-manager-close" onclick={() => { showPresetSidebar = false; showPresetManager = false; }}>
             <X class="w-4 h-4" />
           </button>
         </div>
@@ -1337,7 +1373,7 @@ echo "Starting job..."
                 <h4>Quick Apply</h4>
                 <button
                   class="preset-manage-toggle-btn"
-                  on:click={() => showPresetManager = true}
+                  onclick={() => showPresetManager = true}
                   title="Manage Presets"
                 >
                   <Settings class="w-4 h-4" />
@@ -1346,15 +1382,16 @@ echo "Starting job..."
 
               <div class="preset-quick-grid">
                 {#each allPresets as preset}
+                  {@const Icon = preset.icon || Zap}
                   <button
                     class="preset-quick-item"
-                    on:click={() => {
+                    onclick={() => {
                       applyPreset(preset);
                       showPresetSidebar = false;
                     }}
                   >
                     <div class="preset-icon {preset.color}">
-                      <svelte:component this={preset.icon} class="h-4 w-4 text-white" />
+                      <Icon class="h-4 w-4 text-white" />
                     </div>
                     <div class="preset-quick-info">
                       <span class="preset-name">{preset.name}</span>
@@ -1369,7 +1406,7 @@ echo "Starting job..."
 
               <button
                 class="preset-create-from-current"
-                on:click={() => {
+                onclick={() => {
                   createPresetFromCurrent();
                   showPresetManager = true;
                 }}
@@ -1380,11 +1417,12 @@ echo "Starting job..."
             </div>
           {:else}
             <!-- Preset Management Mode -->
+            {@const SvelteComponent_1 = newPreset.icon || Zap}
             <div class="preset-management-section">
               <div class="preset-section-header">
                 <button
                   class="preset-back-btn"
-                  on:click={() => showPresetManager = false}
+                  onclick={() => showPresetManager = false}
                   title="Back to presets"
                 >
                   <ChevronLeft class="w-4 h-4" />
@@ -1397,7 +1435,7 @@ echo "Starting job..."
                 <h4>{editingPreset ? 'Edit Preset' : 'New Preset'}</h4>
 
                 <div class="preset-form-field">
-                  <label>Name</label>
+                  <span class="field-label">Name</span>
                   <input
                     type="text"
                     bind:value={newPreset.name}
@@ -1408,14 +1446,14 @@ echo "Starting job..."
 
                 <div class="preset-form-row">
                   <div class="preset-form-field">
-                    <label>Icon</label>
+                    <span class="field-label">Icon</span>
                     <div class="dropdown-container">
                       <button
                         type="button"
                         class="dropdown-trigger"
-                        on:click={() => showIconDropdown = !showIconDropdown}
+                        onclick={() => showIconDropdown = !showIconDropdown}
                       >
-                        <svelte:component this={newPreset.icon || Zap} class="w-4 h-4" />
+                        <SvelteComponent_1 class="w-4 h-4" />
                         <span>{iconOptions.find(o => o.icon === newPreset.icon)?.name || 'Select Icon'}</span>
                         <ChevronDown class="w-4 h-4 ml-auto" />
                       </button>
@@ -1425,12 +1463,12 @@ echo "Starting job..."
                             <button
                               type="button"
                               class="dropdown-item {newPreset.icon === opt.icon ? 'selected' : ''}"
-                              on:click={() => {
+                              onclick={() => {
                                 newPreset.icon = opt.icon;
                                 showIconDropdown = false;
                               }}
                             >
-                              <svelte:component this={opt.icon} class="w-4 h-4" />
+                              <opt.icon class="w-4 h-4" />
                               <span>{opt.name}</span>
                             </button>
                           {/each}
@@ -1440,12 +1478,12 @@ echo "Starting job..."
                   </div>
 
                   <div class="preset-form-field">
-                    <label>Color</label>
+                    <span class="field-label">Color</span>
                     <div class="dropdown-container">
                       <button
                         type="button"
                         class="dropdown-trigger"
-                        on:click={() => showColorDropdown = !showColorDropdown}
+                        onclick={() => showColorDropdown = !showColorDropdown}
                       >
                         <span class="color-preview {newPreset.color}"></span>
                         <span>{colorOptions.find(o => o.class === newPreset.color)?.name || 'Select Color'}</span>
@@ -1457,7 +1495,7 @@ echo "Starting job..."
                             <button
                               type="button"
                               class="dropdown-item {newPreset.color === color.class ? 'selected' : ''}"
-                              on:click={() => {
+                              onclick={() => {
                                 newPreset.color = color.class;
                                 showColorDropdown = false;
                               }}
@@ -1474,7 +1512,7 @@ echo "Starting job..."
 
                 <div class="preset-form-row">
                   <div class="preset-form-field">
-                    <label>CPUs</label>
+                    <span class="field-label">CPUs</span>
                     <input
                       type="number"
                       bind:value={newPreset.cpus}
@@ -1483,7 +1521,7 @@ echo "Starting job..."
                     />
                   </div>
                   <div class="preset-form-field">
-                    <label>Memory (GB)</label>
+                    <span class="field-label">Memory (GB)</span>
                     <input
                       type="number"
                       bind:value={newPreset.memory}
@@ -1495,7 +1533,7 @@ echo "Starting job..."
 
                 <div class="preset-form-row">
                   <div class="preset-form-field">
-                    <label>Time (minutes)</label>
+                    <span class="field-label">Time (minutes)</span>
                     <input
                       type="number"
                       bind:value={newPreset.time}
@@ -1504,7 +1542,7 @@ echo "Starting job..."
                     />
                   </div>
                   <div class="preset-form-field">
-                    <label>GPUs (optional)</label>
+                    <span class="field-label">GPUs (optional)</span>
                     <input
                       type="number"
                       bind:value={newPreset.gpus}
@@ -1517,7 +1555,7 @@ echo "Starting job..."
                 <div class="preset-form-actions">
                   <button
                     class="preset-save-btn"
-                    on:click={savePreset}
+                    onclick={savePreset}
                     disabled={!newPreset.name}
                   >
                     {editingPreset ? 'Update' : 'Create'} Preset
@@ -1525,7 +1563,7 @@ echo "Starting job..."
                   {#if editingPreset}
                     <button
                       class="preset-cancel-btn"
-                      on:click={() => {
+                      onclick={() => {
                         resetPresetForm();
                       }}
                     >
@@ -1539,10 +1577,11 @@ echo "Starting job..."
               <div class="preset-list">
                 <h4>All Presets</h4>
                 {#each allPresets as preset}
+                  {@const Icon = preset.icon || Zap}
                   <div class="preset-item">
                     <div class="preset-item-info">
                       <div class="preset-icon {preset.color}">
-                        <svelte:component this={preset.icon} class="w-3 h-3 text-white" />
+                        <Icon class="w-3 h-3 text-white" />
                       </div>
                       <div>
                         <div class="preset-item-name">{preset.name}</div>
@@ -1555,14 +1594,14 @@ echo "Starting job..."
                     <div class="preset-item-actions">
                       <button
                         class="preset-action-btn"
-                        on:click={() => editPreset(preset)}
+                        onclick={() => editPreset(preset)}
                         title="Edit"
                       >
                         <Edit2 class="w-3.5 h-3.5" />
                       </button>
                       <button
                         class="preset-action-btn delete"
-                        on:click={() => deletePreset(preset)}
+                        onclick={() => deletePreset(preset)}
                         title="Delete"
                       >
                         <Trash2 class="w-3.5 h-3.5" />
@@ -1580,7 +1619,7 @@ echo "Starting job..."
 
   <!-- Template Components -->
   <TemplateSidebar
-    isOpen={showTemplates}
+    bind:isOpen={showTemplates}
     {scriptTemplates}
     on:close={() => showTemplates = false}
     on:select={(e) => {
@@ -1611,7 +1650,7 @@ echo "Starting job..."
 
   <!-- Save Template Dialog -->
   <SaveTemplateDialog
-    isOpen={showSaveTemplateDialog}
+    bind:isOpen={showSaveTemplateDialog}
     {script}
     {parameters}
     {selectedHost}
@@ -1635,123 +1674,130 @@ echo "Starting job..."
     <!-- Desktop only content starts here -->
     <!-- Desktop Navigation Header -->
     <NavigationHeader>
-    <div slot="left" class="host-selector-modern">
-      <div class="host-dropdown-container">
-        <button
-          class="host-dropdown-trigger {showHostDropdown ? 'active' : ''}"
-          on:click={() => showHostDropdown = !showHostDropdown}
-        >
-          <div class="host-trigger-content">
-            <Server class="w-4 h-4" />
-            <span class="host-label">
-              {#if selectedHost}
-                <span class="host-name">{selectedHost}</span>
-              {:else}
-                <span class="placeholder">Select cluster</span>
-              {/if}
-            </span>
-          </div>
-          <ChevronDown class="w-4 h-4 chevron {showHostDropdown ? 'rotate-180' : ''}" />
-        </button>
+    {#snippet left()}
+            <div  class="host-selector-modern">
+        <div class="host-dropdown-container">
+          <button
+            bind:this={hostDropdownTrigger}
+            class="host-dropdown-trigger {showHostDropdown ? 'active' : ''}"
+            onclick={() => showHostDropdown = !showHostDropdown}
+          >
+            <div class="host-trigger-content">
+              <Server class="w-4 h-4" />
+              <span class="host-label">
+                {#if selectedHost}
+                  <span class="host-name">{selectedHost}</span>
+                {:else}
+                  <span class="placeholder">Select cluster</span>
+                {/if}
+              </span>
+            </div>
+            <ChevronDown class="w-4 h-4 chevron {showHostDropdown ? 'rotate-180' : ''}" />
+          </button>
 
-        {#if showHostDropdown}
-          <div class="host-dropdown" transition:slide={{ duration: 200 }}>
+          <Dropdown
+            bind:open={showHostDropdown}
+            triggerRef={hostDropdownTrigger}
+            placement="bottom"
+            align="start"
+            width="auto"
+            on:close={() => showHostDropdown = false}
+          >
             {#each hosts as host}
-              <button
-                class="host-option {selectedHost === host.hostname ? 'selected' : ''}"
+              <DropdownItem
+                active={selectedHost === host.hostname}
                 on:click={() => {
                   selectedHost = host.hostname;
-                  showHostDropdown = false;
                   handleConfigChange();
                 }}
               >
-                <div class="host-option-content">
-                  <Server class="w-4 h-4" />
-                  <span class="host-option-name">{host.hostname}</span>
-                </div>
+                <Server class="w-4 h-4" />
+                <span>{host.hostname}</span>
                 {#if selectedHost === host.hostname}
-                  <Check class="w-4 h-4 check-icon" />
+                  <Check class="w-4 h-4 ml-auto" />
                 {/if}
-              </button>
+              </DropdownItem>
             {/each}
             {#if hosts.length === 0}
-              <div class="host-empty">
+              <DropdownItem disabled>
                 <AlertCircle class="w-4 h-4" />
                 <span>No clusters available</span>
-              </div>
+              </DropdownItem>
             {/if}
+          </Dropdown>
+        </div>
+
+        {#if selectedHost}
+          <div class="connection-indicator">
+            <div class="pulse-dot"></div>
           </div>
         {/if}
       </div>
+          {/snippet}
 
-      {#if selectedHost}
-        <div class="connection-indicator">
-          <div class="pulse-dot"></div>
-        </div>
-      {/if}
-    </div>
-
-    <div slot="actions" class="flex items-center space-x-3">
-      <!-- Presets - Now opens sidebar on desktop too -->
-      <button
-        class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        on:click={() => showPresetSidebar = !showPresetSidebar}
-        title="Presets"
-      >
-        <Zap class="w-4 h-4" />
-        <span class="hidden sm:inline">Presets</span>
-      </button>
+    {#snippet actions()}
+            <div  class="flex items-center space-x-3">
+        <!-- Presets - Now opens sidebar on desktop too -->
+        <button
+          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          onclick={() => showPresetSidebar = !showPresetSidebar}
+          title="Presets"
+        >
+          <Zap class="w-4 h-4" />
+          <span class="hidden sm:inline">Presets</span>
+        </button>
 
 
-      <!-- Script Templates -->
-      <button
-        class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        on:click={() => showTemplates = !showTemplates}
-        title="Script Templates"
-      >
-        <FileText class="w-4 h-4" />
-        <span class="hidden sm:inline">Templates</span>
-      </button>
+        <!-- Script Templates -->
+        <button
+          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          onclick={() => showTemplates = !showTemplates}
+          title="Script Templates"
+        >
+          <FileText class="w-4 h-4" />
+          <span class="hidden sm:inline">Templates</span>
+        </button>
 
-      <!-- Script History -->
-      <button
-        class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        on:click={handleHistoryClick}
-        title="Script History"
-      >
-        <History class="w-4 h-4" />
-        <span class="hidden sm:inline">History</span>
-      </button>
+        <!-- Script History -->
+        <button
+          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          onclick={handleHistoryClick}
+          title="Script History"
+        >
+          <History class="w-4 h-4" />
+          <span class="hidden sm:inline">History</span>
+        </button>
 
-      <!-- Save as Template -->
-      <button
-        class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        on:click={() => showSaveTemplateDialog = true}
-        title="Save current script as template"
-        disabled={!script || script.trim() === ''}
-      >
-        <Save class="w-4 h-4" />
-        <span class="hidden sm:inline">Save Template</span>
-      </button>
+        <!-- Save as Template -->
+        <button
+          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          onclick={() => showSaveTemplateDialog = true}
+          title="Save current script as template"
+          disabled={!script || script.trim() === ''}
+        >
+          <Save class="w-4 h-4" />
+          <span class="hidden sm:inline">Save Template</span>
+        </button>
 
 
-      <!-- Launch Button -->
-      <Button
-        on:click={handleLaunch}
-        disabled={!canLaunch || launching}
-        class="launch-header-button"
-        size="default"
-        title={!canLaunch ? launchDisabledReason : ''}
-      >
-        {#if launching}
-          <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
-          Launching...
-        {:else}
-          <Play class="mr-2 h-4 w-4" />
-          Launch Job
-        {/if}
-      </Button>
-    </div>
+        <!-- Launch Button -->
+        <Button
+          on:click={handleLaunch}
+          disabled={!canLaunch || launching}
+          class="launch-header-button"
+          size="default"
+          title={!canLaunch ? launchDisabledReason : ''}
+        >
+          {#if launching}
+            <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
+            Launching...
+          {:else}
+            <Play class="mr-2 h-4 w-4" />
+            Launch Job
+          {/if}
+        </Button>
+      </div>
+          {/snippet}
   </NavigationHeader>
   {/if}
 
@@ -1769,8 +1815,9 @@ echo "Starting job..."
             <!-- Editor Options Dropdown -->
             <div class="editor-options-dropdown">
               <button
+                bind:this={editorOptionsDropdownTrigger}
                 class="editor-options-trigger"
-                on:click={(e) => {
+                onclick={(e) => {
                   e.stopPropagation();
                   showEditorOptions = !showEditorOptions;
                 }}
@@ -1779,9 +1826,18 @@ echo "Starting job..."
                 <MoreHorizontal class="w-4 h-4" />
               </button>
 
-            {#if showEditorOptions}
-              <div class="editor-options-menu" transition:slide={{ duration: 200 }} on:click|stopPropagation>
+              <Dropdown
+                bind:open={showEditorOptions}
+                triggerRef={editorOptionsDropdownTrigger}
+                placement="bottom"
+                align="end"
+                width="320px"
+                maxHeight="400px"
+                closeOnSelect={false}
+                on:close={() => showEditorOptions = false}
+              >
                 <!-- Vim Mode Toggle -->
+                {@const SvelteComponent_2 = editorOptions.vimMode ? ToggleRight : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Vim Mode</span>
@@ -1789,11 +1845,13 @@ echo "Starting job..."
                   </div>
                   <button
                     class="option-toggle {editorOptions.vimMode ? 'active' : ''}"
-                    on:click={() => updateEditorOption('vimMode', !editorOptions.vimMode)}
+                    onclick={() => updateEditorOption('vimMode', !editorOptions.vimMode)}
                   >
-                    <svelte:component this={editorOptions.vimMode ? ToggleRight : ToggleLeft} class="w-5 h-5" />
+                    <SvelteComponent_2 class="w-5 h-5" />
                   </button>
                 </div>
+
+                <DropdownDivider />
 
                 <!-- Theme Selection -->
                 <div class="option-item">
@@ -1804,7 +1862,7 @@ echo "Starting job..."
                   <select
                     class="option-select"
                     bind:value={editorOptions.theme}
-                    on:change={(e) => updateEditorOption('theme', e.target.value)}
+                    onchange={(e) => updateEditorOption('theme', e.target.value)}
                   >
                     {#each themeOptions as theme}
                       <option value={theme.id}>{theme.name}</option>
@@ -1821,7 +1879,7 @@ echo "Starting job..."
                   <select
                     class="option-select"
                     bind:value={editorOptions.fontSize}
-                    on:change={(e) => updateEditorOption('fontSize', parseInt(e.target.value))}
+                    onchange={(e) => updateEditorOption('fontSize', parseInt(e.target.value))}
                   >
                     {#each fontSizeOptions as size}
                       <option value={size}>{size}px</option>
@@ -1829,7 +1887,10 @@ echo "Starting job..."
                   </select>
                 </div>
 
+                <DropdownDivider />
+
                 <!-- Line Numbers -->
+                {@const SvelteComponent_3 = editorOptions.lineNumbers ? ToggleRight : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Line Numbers</span>
@@ -1837,13 +1898,14 @@ echo "Starting job..."
                   </div>
                   <button
                     class="option-toggle {editorOptions.lineNumbers ? 'active' : ''}"
-                    on:click={() => updateEditorOption('lineNumbers', !editorOptions.lineNumbers)}
+                    onclick={() => updateEditorOption('lineNumbers', !editorOptions.lineNumbers)}
                   >
-                    <svelte:component this={editorOptions.lineNumbers ? ToggleRight : ToggleLeft} class="w-5 h-5" />
+                    <SvelteComponent_3 class="w-5 h-5" />
                   </button>
                 </div>
 
                 <!-- Word Wrap -->
+                {@const SvelteComponent_4 = editorOptions.wordWrap ? ToggleRight : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Word Wrap</span>
@@ -1851,9 +1913,9 @@ echo "Starting job..."
                   </div>
                   <button
                     class="option-toggle {editorOptions.wordWrap ? 'active' : ''}"
-                    on:click={() => updateEditorOption('wordWrap', !editorOptions.wordWrap)}
+                    onclick={() => updateEditorOption('wordWrap', !editorOptions.wordWrap)}
                   >
-                    <svelte:component this={editorOptions.wordWrap ? ToggleRight : ToggleLeft} class="w-5 h-5" />
+                    <SvelteComponent_4 class="w-5 h-5" />
                   </button>
                 </div>
 
@@ -1866,7 +1928,7 @@ echo "Starting job..."
                   <select
                     class="option-select"
                     bind:value={editorOptions.tabSize}
-                    on:change={(e) => updateEditorOption('tabSize', parseInt(e.target.value))}
+                    onchange={(e) => updateEditorOption('tabSize', parseInt(e.target.value))}
                   >
                     {#each tabSizeOptions as size}
                       <option value={size}>{size} spaces</option>
@@ -1875,6 +1937,7 @@ echo "Starting job..."
                 </div>
 
                 <!-- Auto Indent -->
+                {@const SvelteComponent_5 = editorOptions.autoIndent ? ToggleRight : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Auto Indent</span>
@@ -1882,13 +1945,12 @@ echo "Starting job..."
                   </div>
                   <button
                     class="option-toggle {editorOptions.autoIndent ? 'active' : ''}"
-                    on:click={() => updateEditorOption('autoIndent', !editorOptions.autoIndent)}
+                    onclick={() => updateEditorOption('autoIndent', !editorOptions.autoIndent)}
                   >
-                    <svelte:component this={editorOptions.autoIndent ? ToggleRight : ToggleLeft} class="w-5 h-5" />
+                    <SvelteComponent_5 class="w-5 h-5" />
                   </button>
                 </div>
-              </div>
-            {/if}
+              </Dropdown>
           </div>
 
           {#if validationDetails.isValid}
@@ -1943,11 +2005,11 @@ echo "Starting job..."
               bind:value={parameters.sourceDir}
               placeholder="/path/to/your/project"
               class="directory-input-full"
-              on:input={handleConfigChange}
+              oninput={handleConfigChange}
             />
             <button
               class="directory-browse-btn-inline"
-              on:click={() => showFileBrowser = !showFileBrowser}
+              onclick={() => showFileBrowser = !showFileBrowser}
               title="{showFileBrowser ? 'Close' : 'Browse'} directory browser"
             >
               {#if showFileBrowser}
@@ -1964,7 +2026,7 @@ echo "Starting job..."
         {#if showFileBrowser}
           <div class="directory-browser-seamless" transition:slide={{ duration: 200 }}>
             <FileBrowser
-              sourceDir={parameters.sourceDir}
+              bind:sourceDir={parameters.sourceDir}
               initialPath={parameters.sourceDir || '/'}
               on:pathSelected={handleDirectorySelect}
             />
@@ -1978,7 +2040,7 @@ echo "Starting job..."
           <div class="section-header">
             <button
               class="section-header-toggle {showCapturedVariables ? 'active' : ''}"
-              on:click={() => showCapturedVariables = !showCapturedVariables}
+              onclick={() => showCapturedVariables = !showCapturedVariables}
             >
               <div class="section-header-content">
                 <h3 class="section-title">
@@ -2000,7 +2062,7 @@ echo "Starting job..."
                       <span class="variable-name">{key}</span>
                       <button
                         class="copy-btn"
-                        on:click={() => navigator.clipboard.writeText(value)}
+                        onclick={() => navigator.clipboard.writeText(value)}
                         title="Copy value"
                       >
                         <Copy class="w-3 h-3" />
@@ -2028,7 +2090,7 @@ echo "Starting job..."
           <div class="section-header">
             <button
               class="section-header-toggle {showRecentWatchers ? 'active' : ''}"
-              on:click={() => showRecentWatchers = !showRecentWatchers}
+              onclick={() => showRecentWatchers = !showRecentWatchers}
             >
               <div class="section-header-content">
                 <h3 class="section-title">
@@ -2057,7 +2119,7 @@ echo "Starting job..."
                       </div>
                       <button
                         class="copy-watcher-btn"
-                        on:click={() => {
+                        onclick={() => {
                           const watcherCode = JSON.stringify(watcher.actions, null, 2);
                           navigator.clipboard.writeText(watcherCode);
                         }}
@@ -2114,7 +2176,7 @@ echo "Starting job..."
         <div class="section-header">
           <button
             class="section-header-toggle {showSyncSettings ? 'active' : ''}"
-            on:click={() => showSyncSettings = !showSyncSettings}
+            onclick={() => showSyncSettings = !showSyncSettings}
           >
             <div class="section-header-content">
               <h3 class="section-title">
@@ -2130,9 +2192,9 @@ echo "Starting job..."
         {#if showSyncSettings}
           <div class="sync-settings-content" transition:slide={{ duration: 200 }}>
             <SyncSettings
-              {excludePatterns}
-              {includePatterns}
-              {noGitignore}
+              bind:excludePatterns
+              bind:includePatterns
+              bind:noGitignore
               on:settingsChanged={handleSyncSettingsChange}
             />
           </div>
@@ -2205,7 +2267,7 @@ echo "Starting job..."
           </div>
           <button
             class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
-            on:click={() => showAdvanced = !showAdvanced}
+            onclick={() => showAdvanced = !showAdvanced}
           >
             <Settings class="w-4 h-4" />
             {showAdvanced ? 'Hide Advanced' : 'Show Advanced'}
@@ -2374,24 +2436,30 @@ echo "Starting job..."
   </div>
 
   <!-- Mobile Configuration Sidebar -->
-  {#if isMobile && showMobileConfig}
-    <div class="mobile-config-overlay" class:closing={isClosingConfig} on:click={() => {
-      isClosingConfig = true;
-      setTimeout(() => {
+  {#if isMobile}
+    <Sidebar
+      bind:open={showMobileConfig}
+      position="right"
+      size="full"
+      closeOnBackdropClick={true}
+      closeOnEscape={true}
+      on:close={() => {
         showMobileConfig = false;
-        isClosingConfig = false;
-      }, 300);
-    }}>
-      <div class="mobile-config-sidebar" on:click|stopPropagation>
-        <div class="mobile-config-header">
+        mobileConfigView = 'main';
+      }}
+    >
+      {#snippet header()}
+            <div  class="flex items-center gap-3 w-full">
           {#if mobileConfigView !== 'main'}
-            <button class="mobile-config-back" on:click={() => mobileConfigView = 'main'}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M15 18l-6-6 6-6" />
-              </svg>
+            <button
+              class="mobile-config-back"
+              onclick={() => mobileConfigView = 'main'}
+              type="button"
+            >
+              <ChevronLeft class="w-5 h-5" />
             </button>
           {/if}
-          <h3>
+          <h3 class="flex-1">
             {#if mobileConfigView === 'directory'}
               Select Directory
             {:else if mobileConfigView === 'sync'}
@@ -2400,25 +2468,14 @@ echo "Starting job..."
               Configuration
             {/if}
           </h3>
-          <button class="mobile-config-close" on:click={() => {
-            isClosingConfig = true;
-            setTimeout(() => {
-              showMobileConfig = false;
-              isClosingConfig = false;
-              mobileConfigView = 'main';
-            }, 300);
-          }}>
-            <X class="w-4 h-4" />
-          </button>
         </div>
-
-        <div class="mobile-config-content">
+          {/snippet}
           {#if mobileConfigView === 'main'}
             <!-- Directory Selection -->
             <div class="mobile-config-section">
               <button
                 class="mobile-dir-selector"
-                on:click={() => mobileConfigView = 'directory'}
+                onclick={() => mobileConfigView = 'directory'}
               >
                 <Folder class="w-4 h-4 flex-shrink-0" />
                 <span>{parameters.sourceDir || 'Select directory...'}</span>
@@ -2530,7 +2587,7 @@ echo "Starting job..."
           <div class="mobile-config-section">
             <button
               class="mobile-advanced-toggle"
-              on:click={() => showAdvanced = !showAdvanced}
+              onclick={() => showAdvanced = !showAdvanced}
             >
               <Settings class="w-4 h-4" />
               <span>{showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}</span>
@@ -2606,7 +2663,7 @@ echo "Starting job..."
             <div class="mobile-config-section">
               <button
                 class="mobile-advanced-toggle"
-                on:click={() => showCapturedVariables = !showCapturedVariables}
+                onclick={() => showCapturedVariables = !showCapturedVariables}
               >
                 <Database class="w-4 h-4" />
                 <span>Variables from Job #{originalJobId}</span>
@@ -2623,7 +2680,7 @@ echo "Starting job..."
                         <span class="mobile-variable-name">{key}</span>
                         <button
                           class="mobile-copy-btn"
-                          on:click={() => navigator.clipboard.writeText(value)}
+                          onclick={() => navigator.clipboard.writeText(value)}
                           title="Copy value"
                         >
                           <Copy class="w-3 h-3" />
@@ -2648,7 +2705,7 @@ echo "Starting job..."
             <div class="mobile-config-section">
               <button
                 class="mobile-advanced-toggle"
-                on:click={() => showRecentWatchers = !showRecentWatchers}
+                onclick={() => showRecentWatchers = !showRecentWatchers}
               >
                 <Eye class="w-4 h-4" />
                 <span>Recent Watchers</span>
@@ -2668,7 +2725,7 @@ echo "Starting job..."
                         </div>
                         <button
                           class="mobile-copy-btn"
-                          on:click={() => {
+                          onclick={() => {
                             const watcherCode = JSON.stringify(watcher.actions, null, 2);
                             navigator.clipboard.writeText(watcherCode);
                           }}
@@ -2723,7 +2780,7 @@ echo "Starting job..."
             <div class="mobile-config-section">
               <button
                 class="mobile-sync-settings-btn"
-                on:click={() => mobileConfigView = 'sync'}
+                onclick={() => mobileConfigView = 'sync'}
               >
                 <GitBranch class="w-4 h-4 flex-shrink-0" />
                 <span>Sync Settings</span>
@@ -2752,6 +2809,7 @@ echo "Starting job..."
             <!-- Directory Browser View -->
             <div class="mobile-nested-view">
               <FileBrowser
+                bind:sourceDir={parameters.sourceDir}
                 initialPath={parameters.sourceDir || ''}
                 on:pathSelected={handleDirectorySelect}
                 class="mobile-file-browser"
@@ -2769,16 +2827,14 @@ echo "Starting job..."
               />
             </div>
           {/if}
-        </div>
-      </div>
-    </div>
+    </Sidebar>
   {/if}
 
   <!-- Mobile Floating Launch Button -->
   {#if isMobile && !showMobileConfig}
     <button
       class="mobile-launch-fab"
-      on:click={handleLaunch}
+      onclick={handleLaunch}
       disabled={!canLaunch || launching}
     >
       {#if launching}
@@ -2792,7 +2848,7 @@ echo "Starting job..."
   <!-- Script History Modal -->
   {#if showHistory}
     <ScriptHistory
-      isOpen={true}
+      bind:isOpen={showHistory}
       currentHost={selectedHost}
       on:select={(e) => {
         script = e.detail.content || e.detail.script || e.detail.script_content || '';
@@ -4310,7 +4366,7 @@ echo "Starting job..."
     margin-bottom: 1rem;
   }
 
-  .preset-form-field label {
+  .preset-form-field .field-label {
     display: block;
     font-size: 0.75rem;
     font-weight: 500;
@@ -4421,12 +4477,6 @@ echo "Starting job..."
     border: 1px solid #e5e7eb;
     border-radius: 0.375rem;
     margin-bottom: 1rem;
-  }
-
-  .preset-preview span {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #374151;
   }
 
   .preset-form-actions {
@@ -4545,11 +4595,6 @@ echo "Starting job..."
     color: #6b7280;
   }
 
-  .preset-empty p {
-    margin: 0;
-    font-size: 0.875rem;
-  }
-
   .preset-empty-hint {
     margin-top: 0.5rem !important;
     font-size: 0.75rem !important;
@@ -4593,10 +4638,6 @@ echo "Starting job..."
     animation: fadeIn 0.3s ease-out;
   }
 
-  .mobile-config-overlay.closing {
-    animation: fadeOut 0.3s ease-out;
-  }
-
   .mobile-config-sidebar {
     position: fixed;
     top: 0;
@@ -4609,10 +4650,6 @@ echo "Starting job..."
     display: flex;
     flex-direction: column;
     animation: slideInRight 0.3s ease-out;
-  }
-
-  .mobile-config-overlay.closing .mobile-config-sidebar {
-    animation: slideOutRight 0.3s ease-out;
   }
 
   @keyframes fadeIn {
@@ -4643,15 +4680,6 @@ echo "Starting job..."
     border-bottom: 1px solid #e5e7eb;
   }
 
-  .mobile-config-header h3 {
-    flex: 1;
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: #111827;
-    text-align: center;
-    margin-right: 28px; /* Balance with close button */
-  }
-
   .mobile-config-back {
     padding: 0;
     border: none;
@@ -4663,11 +4691,6 @@ echo "Starting job..."
     width: 28px;
     height: 28px;
     margin-right: 0.5rem;
-  }
-
-  .mobile-config-back svg {
-    width: 20px;
-    height: 20px;
   }
 
   .mobile-config-close {
@@ -4830,11 +4853,6 @@ echo "Starting job..."
   .mobile-advanced-toggle span {
     flex: 1;
     text-align: left;
-  }
-
-  .mobile-advanced-toggle .chevron {
-    margin-left: auto;
-    transition: transform 0.2s ease;
   }
 
   .mobile-variables-grid {
@@ -5141,11 +5159,6 @@ echo "Starting job..."
       font-size: 0.875rem;
     }
 
-    /* Hide desktop launch section on mobile */
-    .launcher-content Card:last-child {
-      display: none;
-    }
-
     .form-row {
       flex-direction: column;
     }
@@ -5423,12 +5436,6 @@ echo "Starting job..."
     justify-content: space-between;
   }
 
-  .dialog-header h3 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #111827;
-  }
-
   .close-btn {
     background: none;
     border: none;
@@ -5482,14 +5489,6 @@ echo "Starting job..."
     margin-bottom: 1.25rem;
   }
 
-  .form-group label {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #374151;
-    margin-bottom: 0.5rem;
-  }
-
   .form-input,
   .form-textarea {
     width: 100%;
@@ -5519,13 +5518,6 @@ echo "Starting job..."
     padding: 1rem;
     max-height: 200px;
     overflow-y: auto;
-  }
-
-  .script-preview pre {
-    font-family: 'Monaco', 'Courier New', monospace;
-    font-size: 0.8rem;
-    color: #4b5563;
-    margin: 0;
   }
 
   .saved-params {

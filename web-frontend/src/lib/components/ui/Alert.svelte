@@ -1,9 +1,15 @@
 <script lang="ts">
   import { cn } from "../../utils";
   
-  export let variant: "default" | "destructive" = "default";
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    variant?: "default" | "destructive";
+    class?: string;
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let { variant = "default", class: className = "", children, ...rest }: Props = $props();
+  
   
   const variants = {
     default: "bg-background text-foreground border-border",
@@ -18,7 +24,7 @@
     className
   )}
   role="alert"
-  {...$$restProps}
+  {...rest}
 >
-  <slot />
+  {@render children?.()}
 </div>

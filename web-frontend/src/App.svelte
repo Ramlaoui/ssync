@@ -1,19 +1,21 @@
 <script lang="ts">
+  import { run } from 'svelte/legacy';
+
   import type { AxiosError } from "axios";
   import { onMount } from "svelte";
   import Router, { push, link, location } from "svelte-spa-router";
-  import { wrap } from "svelte-spa-router/wrap";
   import ErrorBoundary from "./components/ErrorBoundary.svelte";
-  import JobLauncher from "./components/JobLauncher.svelte";
   import PerformanceMonitor from "./components/PerformanceMonitor.svelte";
-  import DashboardPage from "./pages/DashboardPage.svelte";
+  import HomePage from "./pages/HomePage.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
   import JobPage from "./pages/JobPage.svelte";
+  import LaunchPage from "./pages/LaunchPage.svelte";
   import WatchersPage from "./pages/WatchersPage.svelte";
   import SettingsPage from "./pages/SettingsPage.svelte";
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";
   import { navigationActions } from "./stores/navigation";
+  import { connectAllJobsWebSocket } from "./stores/jobWebSocket";
   import {
     Home,
     Play,
@@ -25,41 +27,42 @@
 
   let hosts: HostInfo[] = [];
   let hostsLoading = false;
-  let error: string | null = null;
+  let error: string | null = $state(null);
 
   // Mobile detection
-  let isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  
-  // Define routes - on mobile, home redirects to jobs
+  let isMobile = $state(typeof window !== 'undefined' && window.innerWidth < 768);
+
+  // Define routes - HomePage handles mobile/desktop switching internally
   const routes = {
-    '/': isMobile ? JobsPage : DashboardPage,
+    '/': HomePage,
     '/jobs': JobsPage,
     '/jobs/:id/:host': JobPage,
-    '/launch': wrap({
-      component: JobLauncher,
-      props: { hosts }
-    }),
+    '/launch': LaunchPage,
     '/watchers': WatchersPage,
     '/settings': SettingsPage
   };
 
   // Derive active tab from location
-  $: activeTab = $location === '/launch' ? 'launch' :
+  let activeTab = $derived($location === '/launch' ? 'launch' :
                  $location === '/settings' ? 'settings' :
                  $location === '/watchers' ? 'watchers' :
                  $location === '/jobs' || $location.startsWith('/jobs/') ? 'jobs' :
-                 'home';
+                 'home');
 
   // Track route changes for back navigation
-  let previousLocation: string | undefined;
+  let previousLocation: string | undefined = $state();
 
-  // Import navigationState to check skipNextUpdate flag
+  // Import navigationState and get function for non-reactive reads
   import { navigationState } from "./stores/navigation";
+  import { get } from "svelte/store";
 
-  $: {
+  // Combine navigation tracking and document title update into a single reactive block
+  // This prevents recursive reactive cycles that cause warnings
+  run(() => {
+    // Track navigation changes
     if ($location && previousLocation && $location !== previousLocation) {
-      // Check if we should skip this update (e.g., during back navigation)
-      const currentState = $navigationState;
+      // Use get() to read current state without subscribing (avoids recursive reactivity)
+      const currentState = get(navigationState);
       if (currentState.skipNextUpdate) {
         // Clear the skip flag
         navigationState.update(state => ({
@@ -72,10 +75,8 @@
       }
     }
     previousLocation = $location;
-  }
 
-  // Update document title based on current route
-  $: {
+    // Update document title based on current route
     if ($location === '/') {
       document.title = 'Dashboard | ssync';
     } else if ($location === '/jobs') {
@@ -99,7 +100,7 @@
     } else {
       document.title = 'ssync';
     }
-  }
+  });
 
   function checkMobile() {
     isMobile = window.innerWidth < 768;
@@ -115,6 +116,8 @@
     testConnection().then((connected) => {
       if (connected) {
         loadHosts();
+        // Initialize WebSocket connection for real-time job updates
+        connectAllJobsWebSocket();
       } else if (!$apiConfig.apiKey) {
         push('/settings');
         error = "Please configure your API key to use the application";
@@ -162,7 +165,7 @@
           <div class="flex items-center space-x-2 md:space-x-4">
             <button
               class="text-base md:text-lg font-semibold text-black hover:opacity-70 transition-opacity duration-200"
-              on:click={() => push('/')}
+              onclick={() => push('/')}
             >
               ssync
             </button>
@@ -269,7 +272,7 @@
               <p class="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
             </div>
             <button 
-              on:click={() => window.location.reload()} 
+              onclick={() => window.location.reload()} 
               class="inline-flex items-center space-x-1 text-sm font-medium text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300"
             >
               <RefreshCw class="h-4 w-4" />

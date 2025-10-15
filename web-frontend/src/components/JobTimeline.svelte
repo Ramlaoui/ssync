@@ -2,7 +2,11 @@
   import { jobUtils } from '../lib/jobUtils';
   import type { JobInfo } from '../types/api';
 
-  export let job: JobInfo;
+  interface Props {
+    job: JobInfo;
+  }
+
+  let { job }: Props = $props();
   
   interface TimelineStep {
     id: string;
@@ -14,8 +18,6 @@
     icon: string;
   }
   
-  $: steps = createTimelineSteps(job);
-  $: currentStepIndex = getCurrentStepIndex(job);
   
   function createTimelineSteps(job: JobInfo): TimelineStep[] {
     const steps: TimelineStep[] = [
@@ -137,6 +139,8 @@
     if (time === 'now') return 'now';
     return jobUtils.formatTime(time);
   }
+  let steps = $derived(createTimelineSteps(job));
+  let currentStepIndex = $derived(getCurrentStepIndex(job));
 </script>
 
 <div class="timeline-container">

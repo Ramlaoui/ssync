@@ -208,19 +208,19 @@ echo "Test completed successfully"`,
     }
   ];
   
-  let selectedCategory = '';
-  let searchTerm = '';
+  let selectedCategory = $state('');
+  let searchTerm = $state('');
   
-  $: categories = [...new Set(templates.map(t => t.category))];
+  let categories = $derived([...new Set(templates.map(t => t.category))]);
   
-  $: filteredTemplates = templates.filter(template => {
+  let filteredTemplates = $derived(templates.filter(template => {
     const matchesCategory = !selectedCategory || template.category === selectedCategory;
     const matchesSearch = !searchTerm || 
       template.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       template.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       template.category.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesCategory && matchesSearch;
-  });
+  }));
   
   function selectTemplate(template: Template) {
     dispatch('select', { script: template.script });
@@ -241,7 +241,7 @@ echo "Test completed successfully"`,
       <button 
         class="category-pill"
         class:active={!selectedCategory}
-        on:click={() => selectedCategory = ''}
+        onclick={() => selectedCategory = ''}
       >
         All
       </button>
@@ -249,7 +249,7 @@ echo "Test completed successfully"`,
         <button 
           class="category-pill"
           class:active={selectedCategory === category}
-          on:click={() => selectedCategory = category}
+          onclick={() => selectedCategory = category}
         >
           {category}
         </button>
@@ -262,7 +262,7 @@ echo "Test completed successfully"`,
     {#each filteredTemplates as template}
       <div 
         class="template-card"
-        on:click={() => selectTemplate(template)}
+        onclick={() => selectTemplate(template)}
       >
         <div class="template-icon">{template.icon}</div>
         

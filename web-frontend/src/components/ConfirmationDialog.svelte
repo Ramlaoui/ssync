@@ -1,18 +1,31 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import Dialog from '../lib/components/ui/Dialog.svelte';
 
   const dispatch = createEventDispatcher<{
     confirm: void;
     cancel: void;
   }>();
 
-  export let show = false;
-  export let title = 'Confirm Action';
-  export let message = 'Are you sure you want to proceed?';
-  export let confirmText = 'Confirm';
-  export let cancelText = 'Cancel';
-  export let confirmButtonClass = 'primary';
-  export let stats: { file_count: number; size_mb: number; dangerous_path: boolean; gitignore_applied?: boolean } | null = null;
+  interface Props {
+    show?: boolean;
+    title?: string;
+    message?: string;
+    confirmText?: string;
+    cancelText?: string;
+    confirmButtonClass?: string;
+    stats?: { file_count: number; size_mb: number; dangerous_path: boolean; gitignore_applied?: boolean } | null;
+  }
+
+  let {
+    show = $bindable(false),
+    title = 'Confirm Action',
+    message = 'Are you sure you want to proceed?',
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    confirmButtonClass = 'primary',
+    stats = null
+  }: Props = $props();
 
   function handleConfirm() {
     dispatch('confirm');
@@ -24,180 +37,77 @@
     show = false;
   }
 
-  function handleBackdropClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
-      handleCancel();
-    }
-  }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      handleCancel();
-    } else if (event.key === 'Enter' && event.ctrlKey) {
-      handleConfirm();
-    }
+  function handleClose() {
+    handleCancel();
   }
 </script>
 
-{#if show}
-  <div 
-    class="dialog-overlay" 
-    on:click={handleBackdropClick} 
-    on:keydown={handleKeydown}
-    role="dialog" 
-    aria-modal="true"
-    aria-labelledby="dialog-title"
-    aria-describedby="dialog-message"
-  >
-    <div class="dialog-container">
-      <div class="dialog-header">
-        <h2 id="dialog-title">{title}</h2>
-        <button 
-          class="dialog-close" 
-          on:click={handleCancel}
-          aria-label="Close dialog"
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />
-          </svg>
-        </button>
-      </div>
+<Dialog
+  open={show}
+  {title}
+  size="md"
+  onClose={handleClose}
+>
+  <div class="dialog-message">
+    {message}
+  </div>
 
-      <div class="dialog-content">
-        <div id="dialog-message" class="dialog-message">
-          {message}
+  {#if stats}
+    <div class="directory-stats">
+      <h3>Directory Information</h3>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Files:</div>
+          <div class="stat-value">{stats.file_count.toLocaleString()}</div>
         </div>
-
-        {#if stats}
-          <div class="directory-stats">
-            <h3>Directory Information</h3>
-            <div class="stats-grid">
-              <div class="stat-item">
-                <div class="stat-label">Files:</div>
-                <div class="stat-value">{stats.file_count.toLocaleString()}</div>
-              </div>
-              <div class="stat-item">
-                <div class="stat-label">Size:</div>
-                <div class="stat-value">{stats.size_mb.toFixed(2)} MB</div>
-              </div>
-              {#if stats.dangerous_path}
-                <div class="stat-item warning">
-                  <div class="stat-label">⚠️ System Directory:</div>
-                  <div class="stat-value">Yes</div>
-                </div>
-              {/if}
-              {#if stats.gitignore_applied}
-                <div class="stat-item info">
-                  <div class="stat-label">📋 .gitignore Applied:</div>
-                  <div class="stat-value">Yes</div>
-                </div>
-              {/if}
-            </div>
+        <div class="stat-item">
+          <div class="stat-label">Size:</div>
+          <div class="stat-value">{stats.size_mb.toFixed(2)} MB</div>
+        </div>
+        {#if stats.dangerous_path}
+          <div class="stat-item warning">
+            <div class="stat-label">⚠️ System Directory:</div>
+            <div class="stat-value">Yes</div>
           </div>
         {/if}
-
-        <div class="dialog-notice">
-          <svg class="notice-icon" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
-          </svg>
-          <p>
-            This action cannot be undone. Large directories may take considerable time to sync and could impact server performance.
-          </p>
-        </div>
-      </div>
-
-      <div class="dialog-actions">
-        <button 
-          class="action-btn secondary" 
-          on:click={handleCancel}
-        >
-          {cancelText}
-        </button>
-        <button 
-          class="action-btn {confirmButtonClass}" 
-          on:click={handleConfirm}
-        >
-          {confirmText}
-        </button>
+        {#if stats.gitignore_applied}
+          <div class="stat-item info">
+            <div class="stat-label">📋 .gitignore Applied:</div>
+            <div class="stat-value">Yes</div>
+          </div>
+        {/if}
       </div>
     </div>
+  {/if}
+
+  <div class="dialog-notice">
+    <svg class="notice-icon" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
+    </svg>
+    <p>
+      This action cannot be undone. Large directories may take considerable time to sync and could impact server performance.
+    </p>
   </div>
-{/if}
+
+  {#snippet footer()}
+    <div  class="dialog-actions">
+      <button
+        class="action-btn secondary"
+        onclick={handleCancel}
+      >
+        {cancelText}
+      </button>
+      <button
+        class="action-btn {confirmButtonClass}"
+        onclick={handleConfirm}
+      >
+        {confirmText}
+      </button>
+    </div>
+  {/snippet}
+</Dialog>
 
 <style>
-  .dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(4px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.2s ease;
-  }
-
-  .dialog-container {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-    max-width: 500px;
-    width: 90vw;
-    max-height: 90vh;
-    overflow: hidden;
-    animation: slideUp 0.2s ease;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
-    flex-shrink: 0;
-  }
-
-  .dialog-header h2 {
-    margin: 0;
-    color: #374151;
-    font-size: 1.25rem;
-    font-weight: 600;
-  }
-
-  .dialog-close {
-    background: none;
-    border: none;
-    padding: 0.5rem;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #6b7280;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-  }
-
-  .dialog-close:hover {
-    background: #f3f4f6;
-    color: #374151;
-  }
-
-  .dialog-close svg {
-    width: 20px;
-    height: 20px;
-  }
-
-  .dialog-content {
-    padding: 1.5rem;
-    flex: 1;
-    overflow-y: auto;
-  }
-
   .dialog-message {
     color: #374151;
     line-height: 1.6;
@@ -289,10 +199,7 @@
   .dialog-actions {
     display: flex;
     gap: 0.75rem;
-    padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
     justify-content: flex-end;
-    flex-shrink: 0;
   }
 
   .action-btn {
@@ -333,35 +240,8 @@
     box-shadow: 0 4px 16px rgba(239, 68, 68, 0.4);
   }
 
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-
-  @keyframes slideUp {
-    from { 
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to { 
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
   /* Mobile responsive */
   @media (max-width: 640px) {
-    .dialog-container {
-      width: 95vw;
-      margin: 0.5rem;
-    }
-
-    .dialog-header,
-    .dialog-content,
-    .dialog-actions {
-      padding: 1rem;
-    }
-
     .dialog-actions {
       flex-direction: column;
     }

@@ -1,10 +1,22 @@
 <script lang="ts">
   import { cn } from "../../utils";
   
-  export let className: string = "";
-  export { className as class };
-  export let hover: boolean = false;
-  export let noPadding: boolean = false;
+  
+  interface Props {
+    class?: string;
+    hover?: boolean;
+    noPadding?: boolean;
+    children?: import('svelte').Snippet;
+    [key: string]: any
+  }
+
+  let {
+    class: className = "",
+    hover = false,
+    noPadding = false,
+    children,
+    ...rest
+  }: Props = $props();
 </script>
 
 <div
@@ -16,7 +28,7 @@
     },
     className
   )}
-  {...$$restProps}
+  {...rest}
 >
-  <slot />
+  {@render children?.()}
 </div>

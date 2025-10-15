@@ -1,9 +1,14 @@
 <script lang="ts">
   import { cn } from "../../utils";
   
-  export let orientation: "horizontal" | "vertical" = "horizontal";
-  export let className: string = "";
-  export { className as class };
+  interface Props {
+    orientation?: "horizontal" | "vertical";
+    class?: string;
+    [key: string]: any
+  }
+
+  let { orientation = "horizontal", class: className = "", ...rest }: Props = $props();
+  
 </script>
 
 <div
@@ -12,5 +17,5 @@
     orientation === "horizontal" ? "h-[1px] w-full" : "h-full w-[1px]",
     className
   )}
-  {...$$restProps}
-/>
+  {...rest}
+></div>
