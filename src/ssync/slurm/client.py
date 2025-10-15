@@ -764,12 +764,35 @@ class SlurmClient:
             return user
 
         try:
-            result = conn.run("whoami", hide=True, timeout=3, warn=True, pty=True)
+            # Increase timeout to handle slow SSH connections
+            result = conn.run("whoami", hide=True, timeout=5, warn=True, pty=True)
             if result.ok and result.stdout.strip():
-                return result.stdout.strip()
+                username = result.stdout.strip()
+                logger.debug(f"Detected username from whoami: {username}")
+                return username
         except Exception as e:
-            logger.debug(f"Failed to get current user: {e}")
+            logger.warning(f"Failed to get current user via whoami: {e}")
 
+        # FALLBACK: Try to get username from SSH connection object
+        try:
+            if hasattr(conn, 'user'):
+                username = conn.user
+                logger.info(f"Using SSH connection username as fallback: {username}")
+                return username
+        except Exception as e:
+            logger.debug(f"Could not get username from SSH connection: {e}")
+
+        # Last resort - try environment variable from connection
+        try:
+            result = conn.run("echo $USER", hide=True, timeout=5, warn=True, pty=True)
+            if result.ok and result.stdout.strip():
+                username = result.stdout.strip()
+                logger.info(f"Got username from $USER environment variable: {username}")
+                return username
+        except Exception as e:
+            logger.debug(f"Could not get username from $USER: {e}")
+
+        logger.error("⚠️  Could not determine username - SLURM query will fetch ALL users' jobs!")
         return None
 
     def get_job_details(

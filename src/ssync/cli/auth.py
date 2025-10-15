@@ -172,7 +172,7 @@ def show(reveal):
 @auth.command()
 def test():
     """Test API authentication."""
-    from ..web.client_auth import AuthenticatedSlurmApiClient
+    from ..web.client import AuthenticatedSlurmApiClient
 
     client = AuthenticatedSlurmApiClient()
 
