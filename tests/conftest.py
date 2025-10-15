@@ -28,6 +28,8 @@ def test_cache(temp_dir):
 @pytest.fixture
 def sample_job_info():
     """Create a sample JobInfo object for testing."""
+    from datetime import datetime, timezone
+
     return JobInfo(
         job_id="12345",
         name="test_job",
@@ -43,13 +45,15 @@ def sample_job_info():
         work_dir="/home/testuser/work",
         stdout_file="/home/testuser/work/slurm-12345.out",
         stderr_file="/home/testuser/work/slurm-12345.err",
-        submit_time="2024-01-15T10:30:00",
+        submit_time=datetime.now(timezone.utc).isoformat(),
     )
 
 
 @pytest.fixture
 def sample_array_job_info():
     """Create a sample array job JobInfo object for testing."""
+    from datetime import datetime, timezone
+
     return JobInfo(
         job_id="54321_0",
         name="array_job",
@@ -59,7 +63,7 @@ def sample_array_job_info():
         partition="cpu",
         array_job_id="54321",
         array_task_id="0",
-        submit_time="2024-01-15T11:00:00",
+        submit_time=datetime.now(timezone.utc).isoformat(),
     )
 
 

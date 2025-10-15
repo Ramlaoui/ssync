@@ -401,7 +401,9 @@ class JobDataCache:
             local_source_dir: Optional local source directory that was synced
         """
         now = datetime.now()
-        is_active = job_info.state in ["PD", "R"]
+        # Check if job is in active state (Pending or Running)
+        from .models.job import JobState as JS
+        is_active = job_info.state in [JS.PENDING, JS.RUNNING]
 
         existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
 
@@ -1511,12 +1513,12 @@ class JobDataCache:
             cursor = conn.execute("DELETE FROM cached_jobs")
             deleted_count += cursor.rowcount
 
-            # Clear date range cache
-            cursor = conn.execute("DELETE FROM date_range_cache")
+            # Clear date range cache (correct table name)
+            cursor = conn.execute("DELETE FROM cached_job_ranges")
             deleted_count += cursor.rowcount
 
-            # Clear last fetch state
-            cursor = conn.execute("DELETE FROM incremental_fetch_state")
+            # Clear host fetch state
+            cursor = conn.execute("DELETE FROM host_fetch_state")
             deleted_count += cursor.rowcount
 
             conn.commit()
