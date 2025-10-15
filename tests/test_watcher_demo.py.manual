@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Demo script to show watchers in action (without SLURM)."""
+
+import asyncio
+
+# Add project to path
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from src.ssync.cache import get_cache
+from src.ssync.script_processor import ScriptProcessor
+from src.ssync.watchers.engine import WatcherEngine
+
+
+async def simulate_watcher():
+    """Simulate watcher functionality without SLURM."""
+
+    print("=" * 60)
+    print("WATCHER SIMULATION DEMO")
+    print("=" * 60)
+
+    # Parse a test script
+    script_content = """#!/bin/bash
+#WATCHER pattern="ERROR" action=log_event(message="Error found!")
+#WATCHER pattern="Step (\d+)/(\d+)" captures=[current,total] action=store_metric(name="step", value="${current}")
+#WATCHER pattern="Loss: ([\d.]+)" captures=[loss] condition="float(loss) > 5" action=log_event(message="High loss: ${loss}")
+
+echo "Step 1/10"
+echo "Loss: 3.2"
+echo "Step 5/10"
+echo "ERROR: Something failed"
+echo "Loss: 7.5"
+echo "Step 10/10"
+"""
+
+    print("\n1. Parsing watchers from script...")
+    watchers, clean_script = ScriptProcessor.extract_watchers(script_content)
+    print(f"   Found {len(watchers)} watchers")
+
+    for i, w in enumerate(watchers, 1):
+        print(f"   Watcher {i}: pattern='{w.pattern}'")
+        if w.captures:
+            print(f"      Captures: {w.captures}")
+        if w.condition:
+            print(f"      Condition: {w.condition}")
+
+    print("\n2. Simulating watcher storage in database...")
+
+    # Create a fake job
+    job_id = "test_123"
+    hostname = "test_host"
+
+    # Store watchers in database
+    engine = WatcherEngine()
+    cache = get_cache()
+
+    watcher_ids = []
+    for watcher_def in watchers:
+        watcher_id = engine._store_watcher(job_id, hostname, watcher_def)
+        if watcher_id:
+            watcher_ids.append(watcher_id)
+            print(f"   Stored watcher {watcher_id}: {watcher_def.pattern[:30]}...")
+
+    print("\n3. Checking patterns against output...")
+
+    # Simulate job output
+    output_lines = [
+        "Step 1/10",
+        "Loss: 3.2",
+        "Step 5/10",
+        "ERROR: Something failed",
+        "Loss: 7.5",
+        "Step 10/10",
+    ]
+
+    # Check each watcher against output
+    for watcher_id in watcher_ids:
+        watcher = engine._get_watcher(watcher_id)
+        if watcher:
+            print(
+                f"\n   Checking watcher {watcher_id} (pattern: {watcher.definition.pattern[:30]}...)"
+            )
+
+            for line in output_lines:
+                matches = engine._check_patterns(watcher, line)
+                if matches:
+                    print(f"      ✓ Matched line: '{line}'")
+
+    print("\n4. Checking watcher events in database...")
+
+    with cache._get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT action_type, matched_text, captured_vars_json, action_result
+            FROM watcher_events
+            WHERE job_id = ?
+            ORDER BY timestamp
+        """,
+            (job_id,),
+        )
+
+        events = cursor.fetchall()
+        if events:
+            print(f"   Found {len(events)} events:")
+            for event in events:
+                print(f"      - Action: {event['action_type']}")
+                print(f"        Matched: '{event['matched_text'][:50]}...'")
+                if event["captured_vars_json"]:
+                    print(f"        Variables: {event['captured_vars_json']}")
+        else:
+            print("   No events recorded (actions may need async execution)")
+
+    print("\n5. Cleaning up test data...")
+
+    # Clean up test data
+    with cache._get_connection() as conn:
+        conn.execute("DELETE FROM job_watchers WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM watcher_events WHERE job_id = ?", (job_id,))
+        conn.execute(
+            "DELETE FROM watcher_variables WHERE watcher_id IN (SELECT id FROM job_watchers WHERE job_id = ?)",
+            (job_id,),
+        )
+        conn.commit()
+
+    print("   Test data cleaned up")
+
+    print("\n" + "=" * 60)
+    print("DEMO COMPLETED")
+    print("=" * 60)
+    print("\nNOTE: In production, watchers run asynchronously and monitor")
+    print("job output files continuously. Actions are executed when patterns")
+    print("match and conditions are met.")
+
+
+def main():
+    """Run the simulation."""
+    try:
+        asyncio.run(simulate_watcher())
+    except KeyboardInterrupt:
+        print("\nDemo interrupted")
+    except Exception as e:
+        print(f"\nError: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()

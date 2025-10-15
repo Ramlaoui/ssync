@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Test script to verify watcher parsing functionality."""
+
+import json
+from pathlib import Path
+
+from src.ssync.script_processor import ScriptProcessor
+
+
+def test_parse_watchers(script_path: str):
+    """Parse and display watchers from a script."""
+    print(f"\n{'=' * 60}")
+    print(f"Testing: {script_path}")
+    print("=" * 60)
+
+    # Read script content
+    script_content = Path(script_path).read_text()
+
+    # Extract watchers
+    watchers, clean_script = ScriptProcessor.extract_watchers(script_content)
+
+    print(f"Found {len(watchers)} watchers:")
+
+    for i, watcher in enumerate(watchers, 1):
+        print(f"\nWatcher {i}:")
+        if watcher.name:
+            print(f"  Name: {watcher.name}")
+        print(f"  Pattern: {watcher.pattern}")
+        print(f"  Interval: {watcher.interval_seconds}s")
+        if watcher.captures:
+            print(f"  Captures: {watcher.captures}")
+        if watcher.condition:
+            print(f"  Condition: {watcher.condition}")
+        print("  Actions:")
+        for action in watcher.actions:
+            print(f"    - Type: {action.type.value}")
+            if action.params:
+                print(f"      Params: {json.dumps(action.params, indent=8)}")
+            if action.condition:
+                print(f"      Condition: {action.condition}")
+
+    # Show first few lines of cleaned script
+    clean_lines = clean_script.split("\n")[:10]
+    print("\nCleaned script (first 10 lines):")
+    for line in clean_lines:
+        if line.strip():
+            print(f"  {line}")
+
+    return watchers
+
+
+def test_watcher_condition_evaluation():
+    """Test condition evaluation logic."""
+    print(f"\n{'=' * 60}")
+    print("Testing Condition Evaluation")
+    print("=" * 60)
+
+    # Simulate the condition evaluation logic
+    test_cases = [
+        ("float(loss) > 5.0", {"loss": "7.5"}, True),
+        ("float(loss) > 5.0", {"loss": "3.2"}, False),
+        ("int(temp) > 80", {"temp": "85"}, True),
+        ("int(temp) > 80", {"temp": "75"}, False),
+        ("int(progress) % 25 == 0", {"progress": "50"}, True),
+        ("int(progress) % 25 == 0", {"progress": "33"}, False),
+    ]
+
+    for condition, variables, expected in test_cases:
+        # Create safe evaluation context
+        safe_context = {
+            "float": float,
+            "int": int,
+            "str": str,
+            "len": len,
+            "abs": abs,
+            "min": min,
+            "max": max,
+        }
+        safe_context.update(variables)
+
+        try:
+            result = eval(condition, {"__builtins__": {}}, safe_context)
+            result = bool(result)
+            status = "✓" if result == expected else "✗"
+            print(f"  {status} Condition: {condition}")
+            print(f"    Variables: {variables}")
+            print(f"    Result: {result} (expected {expected})")
+        except Exception as e:
+            print(f"  ✗ Error evaluating {condition}: {e}")
+
+
+def verify_database_schema():
+    """Verify that watcher tables exist in the database."""
+    print(f"\n{'=' * 60}")
+    print("Verifying Database Schema")
+    print("=" * 60)
+
+    try:
+        from src.ssync.cache import get_cache
+
+        cache = get_cache()
+
+        with cache._get_connection() as conn:
+            # Check for watcher tables
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name LIKE '%watcher%'
+            """)
+
+            tables = [row[0] for row in cursor.fetchall()]
+
+            expected_tables = ["job_watchers", "watcher_events", "watcher_variables"]
+
+            for table in expected_tables:
+                if table in tables:
+                    print(f"  ✓ Table '{table}' exists")
+
+                    # Get column info
+                    cursor = conn.execute(f"PRAGMA table_info({table})")
+                    columns = [row[1] for row in cursor.fetchall()]
+                    print(f"    Columns: {', '.join(columns)}")
+                else:
+                    print(f"  ✗ Table '{table}' not found")
+
+            # Check for indices
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='index' AND name LIKE '%watcher%'
+            """)
+
+            indices = [row[0] for row in cursor.fetchall()]
+            if indices:
+                print(f"\n  Indices: {', '.join(indices)}")
+
+    except Exception as e:
+        print(f"  ✗ Error checking database: {e}")
+
+
+def main():
+    """Run all tests."""
+    print("\n" + "=" * 60)
+    print("WATCHER FUNCTIONALITY TESTS")
+    print("=" * 60)
+
+    # Test parsing for each script
+    test_scripts = [
+        "test_watchers_basic.sh",
+        "test_watchers_ml.sh",
+        "test_watchers_actions.sh",
+        "test_watcher_example.sh",  # The original example
+    ]
+
+    for script in test_scripts:
+        if Path(script).exists():
+            try:
+                test_parse_watchers(script)
+            except Exception as e:
+                print(f"  ✗ Error parsing {script}: {e}")
+        else:
+            print(f"  ⚠ Script {script} not found")
+
+    # Test condition evaluation
+    test_watcher_condition_evaluation()
+
+    # Verify database schema
+    verify_database_schema()
+
+    print("\n" + "=" * 60)
+    print("TESTS COMPLETED")
+    print("=" * 60)
+    print("\nTo actually run watchers with a job, use:")
+    print("  ssync submit test_watchers_basic.sh --host <hostname>")
+    print("\nOr via the launch command:")
+    print("  ssync launch test_watchers_ml.sh . --host <hostname>")
+    print("\nThen monitor watcher events in the database or logs.")
+
+
+if __name__ == "__main__":
+    main()
