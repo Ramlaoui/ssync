@@ -1,0 +1,5 @@
+from ssync.manager import SlurmManager
+from ssync.utils.config import config
+
+manager = SlurmManager(config.load_config())
+breakpoint()
