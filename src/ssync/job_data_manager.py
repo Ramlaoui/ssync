@@ -221,11 +221,11 @@ class JobDataManager:
             try:
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
-                    timeout=15.0,  # Increased from 10s to 15s for initial connection
+                    timeout=5.0,  # Reduced to 5s for faster failure on unreachable hosts
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Connection to {hostname} timed out after 15s, attempting connection refresh..."
+                    f"Connection to {hostname} timed out after 5s, attempting connection refresh..."
                 )
                 # Try a gentle refresh first (not force) - this preserves more state
                 try:
@@ -235,7 +235,7 @@ class JobDataManager:
                             slurm_host.host,
                             False,  # Don't force
                         ),
-                        timeout=20.0,  # Give 20s for retry
+                        timeout=5.0,  # Give 5s for retry (faster failure)
                     )
                 except asyncio.TimeoutError:
                     logger.error(

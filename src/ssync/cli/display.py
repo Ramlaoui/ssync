@@ -1,5 +1,6 @@
 """Job display utilities for CLI."""
 
+from collections import defaultdict
 from typing import Dict, List
 
 import click
@@ -11,10 +12,58 @@ class JobDisplay:
     """Handles formatting and displaying job information."""
 
     @staticmethod
+    def filter_array_jobs(jobs: List[JobInfo]) -> List[JobInfo]:
+        """Filter out array parent entries when individual tasks exist.
+
+        SLURM returns both array parent entries (e.g., 443214_[2-3%4]) and individual
+        tasks (e.g., 443214_0, 443214_1). The parent entry only shows the state of
+        REMAINING tasks, which is misleading. This method filters them out.
+
+        Args:
+            jobs: List of jobs from SLURM
+
+        Returns:
+            Filtered list with array parent entries removed when tasks exist
+        """
+        # Separate array tasks from regular jobs
+        array_tasks = defaultdict(list)
+        parent_jobs = {}
+        regular_jobs = []
+
+        for job in jobs:
+            # Check if this is an array task (numeric task ID)
+            if job.array_job_id and job.array_task_id and job.array_task_id.isdigit():
+                # This is an individual array task
+                array_tasks[job.array_job_id].append(job)
+            # Check if this is a parent job entry (has brackets like [0-4])
+            elif (job.array_job_id and job.array_task_id and
+                  '[' in job.array_task_id and ']' in job.array_task_id):
+                # This is a parent job entry - store it for potential removal
+                parent_jobs[job.array_job_id] = job
+            else:
+                # Regular non-array job
+                regular_jobs.append(job)
+
+        # Add back individual array tasks (these are the real jobs)
+        for array_job_id, tasks in array_tasks.items():
+            regular_jobs.extend(tasks)
+
+        # Only add parent entries if they have NO individual tasks
+        # (This handles the case where only the parent entry exists)
+        for array_job_id, parent_job in parent_jobs.items():
+            if array_job_id not in array_tasks:
+                regular_jobs.append(parent_job)
+
+        return regular_jobs
+
+    @staticmethod
     def group_jobs_by_host(jobs: List[JobInfo]) -> Dict[str, List[JobInfo]]:
         """Group jobs by hostname for display."""
+        # First filter out misleading array parent entries
+        filtered_jobs = JobDisplay.filter_array_jobs(jobs)
+
         jobs_by_host = {}
-        for job in jobs:
+        for job in filtered_jobs:
             if job.hostname not in jobs_by_host:
                 jobs_by_host[job.hostname] = []
             jobs_by_host[job.hostname].append(job)

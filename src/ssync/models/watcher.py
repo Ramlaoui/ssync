@@ -14,6 +14,7 @@ class WatcherState(Enum):
     TRIGGERED = "triggered"
     DISABLED = "disabled"
     COMPLETED = "completed"
+    STATIC = "static"  # Static watcher for completed/canceled jobs (runs on manual trigger only)
 
 
 class ActionType(Enum):

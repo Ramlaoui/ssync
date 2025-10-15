@@ -80,6 +80,7 @@ class SlurmManager:
         active_only: bool = False,
         completed_only: bool = False,
         skip_user_detection: bool = False,
+        force_refresh: bool = False,
     ) -> List[JobInfo]:
         """Get all jobs from a SLURM host via JobDataManager."""
         from .job_data_manager import get_job_data_manager
@@ -98,6 +99,7 @@ class SlurmManager:
             active_only=active_only,
             completed_only=completed_only,
             skip_user_detection=skip_user_detection,
+            force_refresh=force_refresh,
         )
         return jobs
 

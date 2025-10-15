@@ -234,10 +234,11 @@ class SSHConnection:
             temp_file = None
 
         try:
-            # Use scp through the control master
-            control_path = NativeSSH.ensure_control_master(
-                self.host_config, self.host_id
-            )
+            # Check if this host needs password auth
+            password = None
+            if isinstance(self.host_config, dict):
+                connect_kwargs = self.host_config.get("connect_kwargs", {})
+                password = connect_kwargs.get("password")
 
             # Determine the host string for scp
             if isinstance(self.host_config, str):
@@ -251,17 +252,33 @@ class SSHConnection:
                 if "user" in self.host_config:
                     host_for_scp = f"{self.host_config['user']}@{host_for_scp}"
 
-            if control_path:
+            # For password auth, use sshpass
+            if password:
                 scp_cmd = [
+                    "sshpass",
+                    "-p",
+                    password,
                     "scp",
-                    "-o",
-                    f"ControlPath={control_path}",
                     local_path,
                     f"{host_for_scp}:{remote}",
                 ]
             else:
-                # Fallback to direct scp
-                scp_cmd = ["scp", local_path, f"{host_for_scp}:{remote}"]
+                # Use scp through the control master for key-based auth
+                control_path = NativeSSH.ensure_control_master(
+                    self.host_config, self.host_id
+                )
+
+                if control_path:
+                    scp_cmd = [
+                        "scp",
+                        "-o",
+                        f"ControlPath={control_path}",
+                        local_path,
+                        f"{host_for_scp}:{remote}",
+                    ]
+                else:
+                    # Fallback to direct scp
+                    scp_cmd = ["scp", local_path, f"{host_for_scp}:{remote}"]
 
             # Run scp locally, not through SSH
             import subprocess
@@ -306,10 +323,11 @@ class SSHConnection:
             is_file_obj = False
 
         try:
-            # Use scp through the control master
-            control_path = NativeSSH.ensure_control_master(
-                self.host_config, self.host_id
-            )
+            # Check if this host needs password auth
+            password = None
+            if isinstance(self.host_config, dict):
+                connect_kwargs = self.host_config.get("connect_kwargs", {})
+                password = connect_kwargs.get("password")
 
             # Determine the host string for scp
             if isinstance(self.host_config, str):
@@ -323,17 +341,33 @@ class SSHConnection:
                 if "user" in self.host_config:
                     host_for_scp = f"{self.host_config['user']}@{host_for_scp}"
 
-            if control_path:
+            # For password auth, use sshpass
+            if password:
                 scp_cmd = [
+                    "sshpass",
+                    "-p",
+                    password,
                     "scp",
-                    "-o",
-                    f"ControlPath={control_path}",
                     f"{host_for_scp}:{remote}",
                     local_path,
                 ]
             else:
-                # Fallback to direct scp
-                scp_cmd = ["scp", f"{host_for_scp}:{remote}", local_path]
+                # Use scp through the control master for key-based auth
+                control_path = NativeSSH.ensure_control_master(
+                    self.host_config, self.host_id
+                )
+
+                if control_path:
+                    scp_cmd = [
+                        "scp",
+                        "-o",
+                        f"ControlPath={control_path}",
+                        f"{host_for_scp}:{remote}",
+                        local_path,
+                    ]
+                else:
+                    # Fallback to direct scp
+                    scp_cmd = ["scp", f"{host_for_scp}:{remote}", local_path]
 
             # Run scp locally, not through SSH
             import subprocess

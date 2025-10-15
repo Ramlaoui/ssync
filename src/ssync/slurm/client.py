@@ -284,6 +284,115 @@ class SlurmClient:
 
         return jobs
 
+    def get_job_final_state(
+        self,
+        conn: SSHConnection,
+        hostname: str,
+        job_id: str,
+    ) -> Optional[JobInfo]:
+        """
+        Get final state of a specific job from sacct.
+
+        This is used to fetch the final state of jobs that have completed/failed/cancelled
+        but are no longer in the active queue.
+
+        For array jobs with bracket notation (e.g., "24322_[0-3%4]"), queries the base
+        job ID and aggregates states from individual tasks.
+
+        Args:
+            conn: SSH connection
+            hostname: Target hostname
+            job_id: Job ID to query (can include array notation like "123_[0-3%4]")
+
+        Returns:
+            JobInfo with final state, or None if job not found
+        """
+        try:
+            # Get cluster-specific available fields
+            available_fields = self.get_available_sacct_fields(conn, hostname)
+            format_str = ",".join(available_fields)
+
+            # For array jobs with brackets, extract base job ID
+            query_job_id = job_id
+            is_array_parent = False
+            if "_[" in job_id and "]" in job_id:
+                # This is an array job parent entry like "24322_[0-3%4]"
+                query_job_id = job_id.split("_[")[0]
+                is_array_parent = True
+                logger.debug(
+                    f"Array parent job detected: {job_id}, querying base ID: {query_job_id}"
+                )
+
+            # Query sacct for this specific job
+            cmd = f"sacct -X --format={format_str} --parsable2 --noheader --jobs={query_job_id}"
+
+            logger.debug(f"Fetching final state for job {job_id} on {hostname}")
+            result = conn.run(cmd, hide=True, timeout=30, warn=True, pty=True)
+
+            if not result.ok or not result.stdout.strip():
+                logger.debug(f"No sacct data found for job {job_id} on {hostname}")
+                return None
+
+            lines = result.stdout.strip().split("\n")
+
+            if is_array_parent and len(lines) > 1:
+                # For array parent, aggregate info from all tasks
+                # Use first task's info as base, but aggregate states
+                first_line = lines[0].strip().split("|")
+                if len(first_line) >= len(available_fields):
+                    job_info = self.parser.from_sacct_fields(
+                        first_line, hostname, available_fields
+                    )
+
+                    # Restore the original job_id with brackets
+                    job_info.job_id = job_id
+
+                    # Count states across all tasks
+                    states = {}
+                    for line in lines:
+                        fields = line.strip().split("|")
+                        if len(fields) >= 3:
+                            state_str = fields[2]
+                            state = self.parser.map_slurm_state(state_str, from_sacct=True)
+                            states[state.value] = states.get(state.value, 0) + 1
+
+                    # Determine overall state (prioritize failures/cancellations)
+                    if "F" in states or "TO" in states:
+                        from ..models.job import JobState
+                        job_info.state = JobState.FAILED if "F" in states else JobState.TIMEOUT
+                    elif "CA" in states:
+                        from ..models.job import JobState
+                        job_info.state = JobState.CANCELLED
+                    # else keep COMPLETED or whatever the first task had
+
+                    logger.info(
+                        f"Retrieved final state for array job {job_id}: {job_info.state.value} "
+                        f"(task states: {states})"
+                    )
+                    return job_info
+            else:
+                # Single job or single task
+                line = lines[0]
+                fields = line.strip().split("|")
+
+                if len(fields) >= len(available_fields):
+                    job_info = self.parser.from_sacct_fields(
+                        fields, hostname, available_fields
+                    )
+                    logger.info(
+                        f"Retrieved final state for job {job_id}: {job_info.state.value}"
+                    )
+                    return job_info
+                else:
+                    logger.warning(
+                        f"Invalid sacct output for job {job_id}: got {len(fields)} fields, expected {len(available_fields)}"
+                    )
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error fetching final state for job {job_id}: {e}")
+            return None
+
     def get_completed_jobs(
         self,
         conn: SSHConnection,

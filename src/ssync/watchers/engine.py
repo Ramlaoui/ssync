@@ -103,6 +103,7 @@ class WatcherEngine:
                     JobState.FAILED,
                     JobState.CANCELLED,
                     JobState.TIMEOUT,
+                    JobState.UNKNOWN,
                 ]:
                     logger.info(
                         f"Job {job_id} is {job_info.state}, stopping watcher {watcher_id}"
@@ -226,6 +227,7 @@ class WatcherEngine:
                         JobState.FAILED,
                         JobState.CANCELLED,
                         JobState.TIMEOUT,
+                        JobState.UNKNOWN,
                     ]:
                         logger.info(
                             f"Job {job_id} finished with state {job_info.state}, stopping watcher {watcher_id}"

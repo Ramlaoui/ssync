@@ -144,6 +144,8 @@ class ApiClient:
                     start_time=job_data.get("start_time"),
                     end_time=job_data.get("end_time"),
                     node_list=job_data.get("node_list"),
+                    array_job_id=job_data.get("array_job_id"),
+                    array_task_id=job_data.get("array_task_id"),
                     alloc_tres=job_data.get("alloc_tres"),
                     req_tres=job_data.get("req_tres"),
                     cpu_time=job_data.get("cpu_time"),
