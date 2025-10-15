@@ -956,11 +956,8 @@ echo "Starting job..."
           sampleJobIds.push(originalJobId);
         }
 
-        // Add some hardcoded job IDs for testing (you can replace with actual recent job IDs)
-        // These would normally come from a jobs list API or localStorage
-        if (selectedHost === 'adastra') {
-          sampleJobIds.push('4052339'); // Known job with watchers
-        }
+        // Note: In the future, we could fetch recent job IDs from localStorage or the jobs list API
+        // to populate sampleJobIds with more watchers
 
         const watcherPromises = sampleJobIds.map(async (jobId: string) => {
           try {

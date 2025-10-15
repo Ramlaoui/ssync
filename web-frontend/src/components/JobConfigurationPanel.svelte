@@ -33,13 +33,8 @@
     { name: 'Memory Heavy', cpus: 4, mem: 256, gpus: 0, time: 120 }
   ];
   
-  // Partition options per cluster
-  const partitionOptions: Record<string, string[]> = {
-    jz: ['cpu_p1', 'gpu_p1', 'gpu_p2', 'gpu_p5'],
-    adastra: ['cpu', 'gpu', 'bigmem'],
-    entalpic: ['cpu', 'gpu'],
-    mbp: ['local']
-  };
+  // Partition options should come from the host configuration
+  // For now, we allow free-form text input for flexibility
   
   // Validation state
   let errors: Record<string, string> = $state({});
@@ -129,7 +124,6 @@
   }
   
   let sbatchPreview = $derived(generateSBATCHPreview());
-  let availablePartitions = $derived(partitionOptions[hostname] || []);
 </script>
 
 <div class="config-panel">
@@ -188,17 +182,14 @@
             <span class="warning">⚠ {warnings.partition}</span>
           {/if}
         </label>
-        <select 
+        <input
           id="partition"
+          type="text"
           bind:value={config.partition}
           onchange={handleChange}
+          placeholder="e.g., cpu, gpu, gpu_p1"
           class:has-warning={warnings.partition}
-        >
-          <option value="">Default</option>
-          {#each availablePartitions as partition}
-            <option value={partition}>{partition}</option>
-          {/each}
-        </select>
+        />
       </div>
       
       <div class="form-group">

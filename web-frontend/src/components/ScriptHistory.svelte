@@ -45,6 +45,7 @@
   let showPreview = $state(false);
   let previewContent = $state('');
   let errorMessage = $state('');
+  let availableHosts: string[] = $state([]);
   
   // Infinite scroll
   let displayCount = $state(20);
@@ -85,9 +86,10 @@
           hosts = hostsResponse.data.map(host => host.hostname);
           console.log('Available hosts:', hosts);
         } catch (e) {
-          console.warn('Failed to fetch hosts, using fallback:', e);
-          // Fallback to hardcoded hosts if API fails
-          hosts = ['jz', 'adastra', 'entalpic'];
+          console.error('Failed to fetch hosts:', e);
+          errorMessage = 'Failed to fetch hosts. Please check your connection and try again.';
+          scripts = [];
+          return;
         }
       }
 
@@ -188,7 +190,11 @@
         const dateB = new Date(b.submit_time || 0).getTime();
         return dateB - dateA;
       });
-      
+
+      // Extract unique hosts from scripts for the filter dropdown
+      availableHosts = Array.from(new Set(scripts.map(s => s.hostname))).sort();
+      console.log('Available hosts for filter:', availableHosts);
+
       console.log('After sorting, scripts array:', scripts);
       filterScripts();
       console.log('After filtering, filteredScripts:', filteredScripts);
@@ -338,10 +344,9 @@
       {#if !embedded}
         <select bind:value={filterHost} class="filter-select">
           <option value="all">All Hosts</option>
-          <option value="jz">Jean Zay</option>
-          <option value="adastra">Adastra</option>
-          <option value="entalpic">Entalpic</option>
-          <option value="mbp">Local</option>
+          {#each availableHosts as host}
+            <option value={host}>{host}</option>
+          {/each}
         </select>
       {/if}
       
