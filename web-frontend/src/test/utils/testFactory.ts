@@ -9,6 +9,7 @@
 import { vi } from 'vitest';
 import { writable } from 'svelte/store';
 import { JobStateManager } from '../../lib/JobStateManager';
+import { mockJobs } from './mockData';
 import type {
   JobStateManagerDependencies,
   IApiClient,
@@ -20,36 +21,91 @@ import type {
 } from '../../lib/JobStateManager.types';
 
 /**
- * Create a mock API client
+ * Create a mock API client with call tracking and configurable responses
+ *
+ * @param customResponses - Optional map of URL patterns to response data
  */
-export function createMockApiClient(): IApiClient {
+export function createMockApiClient(
+  customResponses?: Map<string, any>
+): IApiClient & { getCallCount: () => number; clearCalls: () => void; setResponse: (url: string, data: any) => void } {
+  const calls: string[] = [];
+  const responses = customResponses || new Map<string, any>();
+
+  const get = vi.fn().mockImplementation((url: string) => {
+    // Track this call
+    calls.push(url);
+
+    // Check for custom responses first (exact match or pattern match)
+    for (const [pattern, data] of responses.entries()) {
+      if (url.includes(pattern)) {
+        return Promise.resolve({ data });
+      }
+    }
+
+    // Parse URL to handle query parameters properly
+    const urlObj = new URL(url, 'http://localhost');
+    const pathname = urlObj.pathname;
+    const searchParams = urlObj.searchParams;
+
+    // Mock /api/hosts endpoint
+    if (pathname === '/api/hosts') {
+      return Promise.resolve({
+        data: [
+          { hostname: 'cluster1.example.com', display_name: 'Cluster 1' },
+          { hostname: 'cluster2.example.com', display_name: 'Cluster 2' },
+        ]
+      });
+    }
+
+    // Mock /api/status endpoint
+    if (pathname === '/api/status' || url.includes('/api/status')) {
+      const host = searchParams.get('host');
+      const forceRefresh = searchParams.get('force_refresh') === 'true';
+
+      return Promise.resolve({
+        data: {
+          hostname: host || 'cluster1.example.com',
+          jobs: mockJobs.slice(0, 3), // Return some default jobs for tests
+          timestamp: new Date().toISOString(),
+          query_time: forceRefresh ? '0.450s' : '0.123s',
+          array_groups: [],
+        }
+      });
+    }
+
+    // Mock /api/jobs/:jobId endpoint
+    if (pathname.includes('/api/jobs/')) {
+      const jobId = pathname.split('/api/jobs/')[1];
+      const host = searchParams.get('host') || 'test.com';
+
+      return Promise.resolve({
+        data: {
+          job_id: jobId,
+          hostname: host,
+          name: `mock-job-${jobId}`,
+          state: 'R',
+          user: 'testuser',
+          partition: 'main',
+          submit_time: new Date().toISOString(),
+          start_time: new Date().toISOString(),
+          time_limit: '01:00:00',
+          nodes: '1',
+          cpus: '4',
+          memory: '8G',
+        }
+      });
+    }
+
+    // Default response
+    return Promise.resolve({ data: {} });
+  });
+
   return {
-    get: vi.fn().mockImplementation((url: string) => {
-      // Mock /api/hosts endpoint
-      if (url === '/api/hosts') {
-        return Promise.resolve({
-          data: [
-            { hostname: 'cluster1.example.com', display_name: 'Cluster 1' },
-            { hostname: 'cluster2.example.com', display_name: 'Cluster 2' },
-          ]
-        });
-      }
-      // Mock /api/status endpoint
-      if (url.includes('/api/status')) {
-        return Promise.resolve({
-          data: {
-            hostname: 'cluster1.example.com',
-            jobs: [],
-            timestamp: new Date().toISOString(),
-            query_time: '0.123s',
-            array_groups: [],
-          }
-        });
-      }
-      // Default response
-      return Promise.resolve({ data: {} });
-    }),
+    get,
     post: vi.fn().mockResolvedValue({ data: {} }),
+    getCallCount: () => calls.length,
+    clearCalls: () => { calls.length = 0; },
+    setResponse: (url: string, data: any) => responses.set(url, data),
   };
 }
 

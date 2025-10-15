@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Resubmit Flow with Captured Variables</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .test-section {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        .success { color: #0f9d58; }
+        .error { color: #ea4335; }
+        .info { color: #4285f4; }
+        .warning { color: #fbbc04; }
+
+        .step {
+            margin: 15px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 5px;
+            border-left: 4px solid #4285f4;
+        }
+
+        .code-block {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #357ae8;
+        }
+
+        .result {
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 5px;
+            background: white;
+        }
+
+        .variables-display {
+            background: #e8f5e9;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .variable-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #c8e6c9;
+        }
+
+        .variable-item:last-child {
+            border-bottom: none;
+        }
+
+        .variable-name {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+
+        .variable-value {
+            color: #424242;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test Resubmit Flow with Captured Variables</h1>
+
+    <div class="test-section">
+        <h2>🎯 Test Objective</h2>
+        <p>Verify that when resubmitting a job with captured variables from watchers:</p>
+        <ul>
+            <li>✅ The JobHeader component fetches captured variables from the original job's watchers</li>
+            <li>✅ The captured variables are stored in the resubmitStore with the original job ID</li>
+            <li>✅ The JobLauncher component displays the captured variables in a collapsible section</li>
+            <li>✅ The UI correctly shows the original job ID in the section title</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>📋 Test Steps</h2>
+
+        <div class="step">
+            <h3>Step 1: Select a Job with Watchers</h3>
+            <p>We'll use Job #4052339 on adastra which has captured variables:</p>
+            <div class="code-block">
+                Job ID: 4052339
+                Host: adastra
+                Variables captured: SLURM_JOB_ID, SLURM_JOB_NAME, etc.
+            </div>
+            <button onclick="testWatcherVariables()">Test Watcher API</button>
+            <div id="watcher-result"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 2: Navigate to Job Detail Page</h3>
+            <p>Open the job detail page with correct hostname:</p>
+            <a href="http://localhost:8081/#/jobs/4052339/adastra" target="_blank">
+                <button>Open Job Detail Page</button>
+            </a>
+        </div>
+
+        <div class="step">
+            <h3>Step 3: Click Resubmit in the Three-Dots Menu</h3>
+            <p>In the job header, click the three-dots menu and select "Resubmit Job"</p>
+            <button onclick="simulateResubmit()">Simulate Resubmit Click</button>
+            <div id="resubmit-result"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 4: Verify Captured Variables Section</h3>
+            <p>On the Job Launcher page, verify:</p>
+            <ul>
+                <li>A new section appears: "📊 Captured Variables from Job #4052339"</li>
+                <li>The section is collapsible (click to expand/collapse)</li>
+                <li>Variables are displayed in a grid with copy buttons</li>
+                <li>An info message explains these are from the original job</li>
+            </ul>
+            <button onclick="checkLauncherPage()">Check Launcher Page</button>
+            <div id="launcher-result"></div>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>🔍 Manual Testing Instructions</h2>
+        <ol>
+            <li><strong>Open the application:</strong> Go to <a href="http://localhost:8081" target="_blank">http://localhost:8081</a></li>
+            <li><strong>Navigate to Jobs page:</strong> Click on "Jobs" in the navigation</li>
+            <li><strong>Select a job with watchers:</strong> Find job 4052339 or any job with watchers</li>
+            <li><strong>Open job details:</strong> Click on the job to view details</li>
+            <li><strong>Check Watchers tab:</strong> Verify captured variables are shown</li>
+            <li><strong>Resubmit the job:</strong> Click three-dots menu → "Resubmit Job"</li>
+            <li><strong>Verify captured variables section:</strong> On the launcher page, look for the new section</li>
+            <li><strong>Test collapsible behavior:</strong> Click to expand/collapse the section</li>
+            <li><strong>Test copy buttons:</strong> Try copying variable values</li>
+        </ol>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8081';
+
+        async function testWatcherVariables() {
+            const resultDiv = document.getElementById('watcher-result');
+            resultDiv.innerHTML = '<p class="info">Testing watcher API...</p>';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/jobs/4052339/watchers?host=adastra`);
+                const data = await response.json();
+
+                let html = '<div class="result">';
+                html += `<p class="success">✅ API Response Successful</p>`;
+                html += `<p>Found ${data.count} watcher(s)</p>`;
+
+                if (data.watchers && data.watchers.length > 0) {
+                    data.watchers.forEach((watcher, index) => {
+                        html += `<h4>Watcher ${index + 1}: ${watcher.name || 'Unnamed'}</h4>`;
+
+                        if (watcher.variables && Object.keys(watcher.variables).length > 0) {
+                            html += '<div class="variables-display">';
+                            html += '<p class="success">✅ Captured Variables:</p>';
+                            for (const [key, value] of Object.entries(watcher.variables)) {
+                                html += `<div class="variable-item">
+                                    <span class="variable-name">${key}:</span>
+                                    <span class="variable-value">${value}</span>
+                                </div>`;
+                            }
+                            html += '</div>';
+                        } else {
+                            html += '<p class="warning">⚠️ No captured variables for this watcher</p>';
+                        }
+                    });
+                } else {
+                    html += '<p class="error">❌ No watchers found</p>';
+                }
+
+                html += '</div>';
+                resultDiv.innerHTML = html;
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="result"><p class="error">❌ Error: ${error.message}</p></div>`;
+            }
+        }
+
+        async function simulateResubmit() {
+            const resultDiv = document.getElementById('resubmit-result');
+            resultDiv.innerHTML = '<p class="info">Simulating resubmit flow...</p>';
+
+            try {
+                // Fetch job script
+                const scriptResponse = await fetch(`${API_BASE}/api/jobs/4052339/script?host=adastra`);
+                const scriptData = await scriptResponse.json();
+
+                // Fetch watchers with variables
+                const watchersResponse = await fetch(`${API_BASE}/api/jobs/4052339/watchers?host=adastra`);
+                const watchersData = await watchersResponse.json();
+
+                let html = '<div class="result">';
+                html += '<p class="success">✅ Resubmit data prepared</p>';
+                html += '<h4>Script Content:</h4>';
+                html += `<div class="code-block">${scriptData.script_content ?
+                    scriptData.script_content.substring(0, 200) + '...' :
+                    'No script content'}</div>`;
+
+                // Extract variables
+                let watcherVariables = {};
+                if (watchersData.watchers && watchersData.watchers.length > 0) {
+                    watchersData.watchers.forEach(watcher => {
+                        if (watcher.variables) {
+                            Object.entries(watcher.variables).forEach(([key, value]) => {
+                                const varKey = watchersData.watchers.length > 1 && watcher.name
+                                    ? `${watcher.name}_${key}`
+                                    : key;
+                                watcherVariables[varKey] = value;
+                            });
+                        }
+                    });
+                }
+
+                html += '<h4>Captured Variables to be passed:</h4>';
+                if (Object.keys(watcherVariables).length > 0) {
+                    html += '<div class="variables-display">';
+                    for (const [key, value] of Object.entries(watcherVariables)) {
+                        html += `<div class="variable-item">
+                            <span class="variable-name">${key}:</span>
+                            <span class="variable-value">${value}</span>
+                        </div>`;
+                    }
+                    html += '</div>';
+                } else {
+                    html += '<p class="warning">No variables to pass</p>';
+                }
+
+                html += '<p class="info">ℹ️ In the actual flow, this data would be stored in resubmitStore and navigation would occur to /launch</p>';
+                html += '</div>';
+
+                resultDiv.innerHTML = html;
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="result"><p class="error">❌ Error: ${error.message}</p></div>`;
+            }
+        }
+
+        function checkLauncherPage() {
+            const resultDiv = document.getElementById('launcher-result');
+            resultDiv.innerHTML = `
+                <div class="result">
+                    <p class="info">ℹ️ To verify the launcher page:</p>
+                    <ol>
+                        <li>Navigate to a job with watchers (e.g., 4052339)</li>
+                        <li>Click "Resubmit Job" from the three-dots menu</li>
+                        <li>On the launcher page, look for the section titled:
+                            <strong>"Captured Variables from Job #4052339"</strong></li>
+                        <li>Click the section header to expand/collapse</li>
+                        <li>Variables should appear in a grid format with copy buttons</li>
+                    </ol>
+                    <p>Expected UI elements:</p>
+                    <ul>
+                        <li>✅ Database icon in section header</li>
+                        <li>✅ Collapsible chevron that rotates when clicked</li>
+                        <li>✅ Green-highlighted variable names</li>
+                        <li>✅ Copy buttons for each variable value</li>
+                        <li>✅ Info message with AlertCircle icon</li>
+                    </ul>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

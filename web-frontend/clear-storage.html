@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear ssync Storage</title>
+</head>
+<body>
+    <h1>Clear ssync LocalStorage</h1>
+    <button onclick="clearStorage()">Clear All ssync Data</button>
+    <pre id="output"></pre>
+
+    <script>
+        function clearStorage() {
+            const output = document.getElementById('output');
+            const keys = [];
+
+            // Find all ssync keys
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('ssync_')) {
+                    keys.push(key);
+                }
+            }
+
+            // Clear them
+            keys.forEach(key => {
+                output.textContent += `Clearing: ${key}\n`;
+                localStorage.removeItem(key);
+            });
+
+            output.textContent += `\nCleared ${keys.length} items\n`;
+            output.textContent += 'Please refresh the main application';
+        }
+    </script>
+</body>
+</html>

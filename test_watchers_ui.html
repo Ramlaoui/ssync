@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Watchers UI</title>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .success { color: green; }
+        .error { color: red; }
+        .variable-box { background: #e8f5e9; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Test Watchers UI for Job 4052339</h1>
+
+    <div class="test-section">
+        <h2>Direct API Test</h2>
+        <p>Testing API endpoint: <code>/api/jobs/4052339/watchers?host=adastra</code></p>
+        <button onclick="testAPI()">Test API</button>
+        <div id="api-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Access Job in UI</h2>
+        <p>To view the job with watchers in the UI, use this URL:</p>
+        <p><strong>Correct URL (with adastra hostname):</strong><br>
+        <a href="http://localhost:8081/#/jobs/4052339/adastra" target="_blank">
+            http://localhost:8081/#/jobs/4052339/adastra
+        </a></p>
+
+        <p><strong>Incorrect URL (with wrong hostname):</strong><br>
+        <a href="http://localhost:8081/#/jobs/4052339/jeanzay" target="_blank">
+            http://localhost:8081/#/jobs/4052339/jeanzay
+        </a> - This will NOT show watchers!</p>
+    </div>
+
+    <script>
+        async function testAPI() {
+            const resultDiv = document.getElementById('api-result');
+            resultDiv.innerHTML = 'Loading...';
+
+            try {
+                // Test with correct hostname
+                const response = await fetch('http://localhost:8081/api/jobs/4052339/watchers?host=adastra');
+                const data = await response.json();
+
+                let html = '<h3 class="success">✓ API Response Successful</h3>';
+                html += `<p>Found ${data.count} watcher(s)</p>`;
+
+                if (data.watchers && data.watchers.length > 0) {
+                    const watcher = data.watchers[0];
+                    html += '<h4>Watcher Details:</h4>';
+                    html += `<pre>${JSON.stringify(watcher, null, 2)}</pre>`;
+
+                    if (watcher.variables && Object.keys(watcher.variables).length > 0) {
+                        html += '<div class="variable-box">';
+                        html += '<h4 class="success">✓ Captured Variables Found!</h4>';
+                        for (const [key, value] of Object.entries(watcher.variables)) {
+                            html += `<p><strong>${key}:</strong> ${value}</p>`;
+                        }
+                        html += '</div>';
+                    } else {
+                        html += '<p class="error">✗ No captured variables found</p>';
+                    }
+                }
+
+                resultDiv.innerHTML = html;
+            } catch (error) {
+                resultDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

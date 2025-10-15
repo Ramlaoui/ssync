@@ -1,0 +1,9 @@
+// This is a placeholder for Xcode project file
+// You'll need to create this in Xcode by:
+// 1. Opening Xcode
+// 2. File -> New -> Project
+// 3. Choose iOS App
+// 4. Product Name: SlurmManager
+// 5. Interface: SwiftUI
+// 6. Language: Swift
+// 7. Use the files we're creating here

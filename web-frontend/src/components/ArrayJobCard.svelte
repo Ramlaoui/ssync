@@ -94,14 +94,14 @@
 
   {#if expanded}
     <div class="task-list">
-      {#each group.tasks as task (task.job_id)}
+      {#each group.tasks.filter(task => task && task.job_id) as task (task.job_id)}
         <button
           class="task-item"
           onclick={() => selectTask(task.job_id)}
-          style="border-left-color: {jobUtils.getStateColor(task.state)}"
+          style="border-left-color: {task.state ? jobUtils.getStateColor(task.state) : '#d1d5db'}"
         >
           <span class="task-id">#{task.array_task_id || task.job_id.split('_').pop()}</span>
-          <span class="task-state state-{task.state.toLowerCase()}">{task.state}</span>
+          <span class="task-state state-{task.state ? task.state.toLowerCase() : 'unknown'}">{task.state || 'Unknown'}</span>
           {#if task.runtime}
             <span class="task-runtime">{task.runtime}</span>
           {/if}
