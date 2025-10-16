@@ -456,17 +456,14 @@
       initializeContent();
     }
   });
-  run(() => {
-    lines = renderedContent.split('\n');
-    updateFilteredLines();
-  });
+
+  // React to search query changes
   run(() => {
     if (searchQuery) {
       highlightSearchResults();
-    } else {
-      highlightedContent = escapeHtml(renderedContent);
     }
   });
+
   // Auto-scroll to bottom when new content arrives (if enabled and user is at bottom)
   run(() => {
     if (autoScroll && isAtBottom && outputElement && renderedContent) {

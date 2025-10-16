@@ -334,11 +334,16 @@ class JobStateManager {
       const hostsInUpdate = Object.keys(data.jobs);
       console.log(`[JobStateManager] Processing initial data with ${totalJobs} total jobs from ${hostsInUpdate.length} hosts: ${hostsInUpdate.join(', ')}`);
 
-      // Mark that we've received initial WebSocket data
-      this.updateState({
-        wsInitialDataReceived: true,
-        wsInitialDataTimestamp: Date.now()
-      });
+      // Only mark initial data as received if it actually contains jobs
+      // Empty initial data (0 jobs from 0 hosts) should not block API syncs
+      if (totalJobs > 0 || hostsInUpdate.length > 0) {
+        this.updateState({
+          wsInitialDataReceived: true,
+          wsInitialDataTimestamp: Date.now()
+        });
+      } else {
+        console.log('[JobStateManager] Initial WebSocket data is empty (0 jobs, 0 hosts) - will allow API sync to proceed');
+      }
 
       // Only clear cache for hosts that are included in this update
       // This prevents losing jobs from hosts that timed out or weren't included
@@ -470,7 +475,8 @@ class JobStateManager {
       : CONFIG.syncIntervals.background;
     
     this.pollTimer = setInterval(() => {
-      this.syncAllHosts();
+      // Force sync to bypass cache during polling - we want fresh data when in fallback mode
+      this.syncAllHosts(true);
     }, interval);
     
     this.updateState({ pollingActive: true });
