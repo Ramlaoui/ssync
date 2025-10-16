@@ -41,6 +41,14 @@
   // Track whether we've already initialized from copy to prevent overwriting user edits
   let hasInitializedFromCopy = $state(false);
 
+  // Advanced options - declare before run() blocks that use them
+  let captures: string[] = $state([]);
+  let condition = $state('');
+  let maxTriggers = $state(10);
+  let timerModeEnabled = $state(false);
+  let useSeparateTimerInterval = $state(false);
+  let timerInterval = $state(30);
+
   // Initialize from copied configuration if provided
   run(() => {
     if (copiedWatcherConfig && isVisible && !hasInitializedFromCopy) {
@@ -107,14 +115,6 @@
   let showPatternHelp = false;
   let showJobOutput = $state(false);
   let showTemplates = $state(false);
-
-  // Advanced options
-  let captures: string[] = $state([]);
-  let condition = $state('');
-  let maxTriggers = $state(10);
-  let timerModeEnabled = $state(false);
-  let useSeparateTimerInterval = $state(false);
-  let timerInterval = $state(30);
 
   // UI state
   let isSubmitting = $state(false);
