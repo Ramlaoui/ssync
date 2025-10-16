@@ -289,7 +289,7 @@
   <button
     class="toggle-btn"
     class:collapsed={actuallyCollapsed}
-    on:click={() => collapsed = !collapsed}
+    onclick={() => collapsed = !collapsed}
     aria-label="{actuallyCollapsed ? 'Show' : 'Hide'} job sidebar"
   >
     <svg viewBox="0 0 24 24" fill="currentColor">
@@ -310,7 +310,7 @@
       <button
         class="icon-btn search-toggle"
         class:active={showSearch}
-        on:click={toggleSearch}
+        onclick={toggleSearch}
         aria-label="Search jobs"
         title="Search jobs"
       >
@@ -323,7 +323,7 @@
       <button
         class="icon-btn"
         class:active={$preferences.groupArrayJobs}
-        on:click={async () => {
+        onclick={async () => {
           preferencesActions.toggleArrayGrouping();
           // Trigger a refresh to fetch data with new grouping preference
           await loadJobs(true);
@@ -341,13 +341,13 @@
       </button>
 
       <!-- Refresh button -->
-      <button class="icon-btn" on:click={() => loadJobs(true)} disabled={loading || isLoading} aria-label="Refresh jobs">
+      <button class="icon-btn" onclick={() => loadJobs(true)} disabled={loading || isLoading} aria-label="Refresh jobs">
         <svg viewBox="0 0 24 24" fill="currentColor" class:spinning={loading || isLoading}>
           <path d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12C4,13.57 4.46,15.03 5.24,16.26L6.7,14.8C6.25,13.97 6,13 6,12A6,6 0 0,1 12,6M18.76,7.74L17.3,9.2C17.74,10.04 18,11 18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12C20,10.43 19.54,8.97 18.76,7.74Z" />
         </svg>
       </button>
       {#if isMobile && onClose}
-        <button class="close-btn" on:click={() => {
+        <button class="close-btn" onclick={() => {
           isClosing = true;
           hamburgerToX = false;  // Start morphing back to hamburger
           setTimeout(() => {
@@ -378,13 +378,13 @@
           class="sidebar-search-input"
           placeholder="Search jobs..."
           bind:value={searchInputValue}
-          on:focus={() => searchFocused = true}
-          on:blur={() => searchFocused = false}
+          onfocus={() => searchFocused = true}
+          onblur={() => searchFocused = false}
         />
         {#if searchInputValue}
           <button
             class="clear-btn"
-            on:click={clearSearch}
+            onclick={clearSearch}
             aria-label="Clear search"
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
@@ -424,10 +424,10 @@
 
             <!-- Then individual running jobs -->
             {#each filteredRunningJobs as job (job.job_id + job.hostname)}
-              <button 
+              <button
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
-                on:click={() => selectJob(job)}
+                onclick={() => selectJob(job)}
               >
                 <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
                 <div class="job-info">
@@ -477,10 +477,10 @@
 
             <!-- Then individual pending jobs -->
             {#each filteredPendingJobs as job (job.job_id + job.hostname)}
-              <button 
+              <button
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
-                on:click={() => selectJob(job)}
+                onclick={() => selectJob(job)}
               >
                 <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
                 <div class="job-info">
@@ -514,7 +514,7 @@
         <div class="job-section">
           <CollapsibleSection
             title="Completed Array Jobs"
-            badge="{completedArrayGroups.length}"
+            badge={completedArrayGroups.length}
             defaultExpanded={false}
             storageKey="sidebar-completed-arrays-expanded"
           >
@@ -543,7 +543,7 @@
               <button
                 class="job-item"
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
-                on:click={() => selectJob(job)}
+                onclick={() => selectJob(job)}
               >
                 <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
                 <div class="job-info">
