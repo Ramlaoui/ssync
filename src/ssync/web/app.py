@@ -3882,7 +3882,8 @@ async def monitor_all_jobs_singleton():
         job_states = {}
 
         while True:
-            await asyncio.sleep(30)  # Check every 30 seconds
+            # ⚡ PERFORMANCE: Reduced from 30s to 10s for faster updates without overloading SLURM
+            await asyncio.sleep(10)  # Check every 10 seconds (3x faster than before)
 
             # If no clients are connected, stop the task
             if not _all_jobs_websockets:
@@ -3890,13 +3891,18 @@ async def monitor_all_jobs_singleton():
                 break
 
             try:
-                # Every 30 seconds: Check all recent jobs
+                # ⚡ DIAGNOSTIC: Log monitoring task activity
+                logger.debug(f"Monitor task running - {len(_all_jobs_websockets)} clients connected")
+
+                # Every 10 seconds: Check all recent jobs for updates
                 all_jobs = await job_data_manager.fetch_all_jobs(
                     hostname=None,
-                    limit=500,  # Increased from 200 to catch more jobs
+                    limit=500,  # Catch more jobs for comprehensive updates
                     active_only=False,
                     since="1d",  # Only check jobs from last day
                 )
+
+                logger.debug(f"Monitor task fetched {len(all_jobs)} jobs")
 
                 current_job_ids = set()
                 updates = []
@@ -3905,7 +3911,15 @@ async def monitor_all_jobs_singleton():
                     job_key = f"{job.hostname}:{job.job_id}"
                     current_job_ids.add(job_key)
 
-                    if job_key not in job_states or job_states[job_key] != job.state:
+                    # ⚡ PERFORMANCE FIX: Send updates when:
+                    # 1. Job is new (not in job_states)
+                    # 2. Job state changed
+                    # 3. Job is RUNNING (to update elapsed_time in UI)
+                    is_new = job_key not in job_states
+                    state_changed = not is_new and job_states[job_key] != job.state
+                    is_running = job.state == "R"
+
+                    if is_new or state_changed or is_running:
                         old_state = job_states.get(job_key)
                         job_states[job_key] = job.state
 
@@ -3952,6 +3966,13 @@ async def monitor_all_jobs_singleton():
 
                 # Broadcast to all connected clients
                 if updates:
+                    # ⚡ DIAGNOSTIC: Count update types
+                    new_jobs = sum(1 for u in updates if u["type"] == "job_update" and not any(j for j in job_states if j.split(':')[1] == u["job_id"]))
+                    state_changes = sum(1 for u in updates if u["type"] == "state_change")
+                    running_refreshes = len(updates) - new_jobs - state_changes
+
+                    logger.info(f"Broadcasting {len(updates)} updates ({new_jobs} new, {state_changes} state changes, {running_refreshes} running refreshes) to {len(_all_jobs_websockets)} clients")
+
                     message = {
                         "type": "batch_update",
                         "updates": updates,
@@ -3994,10 +4015,10 @@ async def websocket_all_jobs(websocket: WebSocket):
             manager = get_slurm_manager()
             job_data_manager = get_job_data_manager()
 
-            # Fetch recent jobs from all hosts (both active and recently completed)
+            # ⚡ PERFORMANCE: Fetch more jobs initially for comprehensive view
             all_jobs = await job_data_manager.fetch_all_jobs(
                 hostname=None,
-                limit=100,
+                limit=500,  # Increased from 100 to 500 for more complete initial data
                 active_only=False,  # Include completed jobs to show accurate states
             )
 
@@ -4009,6 +4030,9 @@ async def websocket_all_jobs(websocket: WebSocket):
                 jobs_by_host[job.hostname].append(
                     JobInfoWeb.from_job_info(job).model_dump()
                 )
+
+            # ⚡ PERFORMANCE: Log initial data size for monitoring
+            logger.info(f"Sending initial WebSocket data: {len(all_jobs)} jobs from {len(jobs_by_host)} hosts")
 
             await websocket.send_json(
                 {"type": "initial", "jobs": jobs_by_host, "total": len(all_jobs)}
@@ -4044,8 +4068,18 @@ async def websocket_all_jobs(websocket: WebSocket):
             try:
                 data = await websocket.receive_text()
 
-                if data == "ping":
-                    await websocket.send_text("pong")
+                # ⚡ PERFORMANCE: Handle both JSON and text ping messages
+                try:
+                    import json
+                    parsed = json.loads(data)
+                    if parsed.get("type") == "ping":
+                        await websocket.send_json({"type": "pong"})
+                        logger.debug("Received JSON ping, sent pong response")
+                except json.JSONDecodeError:
+                    # Handle old-style text ping for backward compatibility
+                    if data == "ping":
+                        await websocket.send_text("pong")
+                        logger.debug("Received text ping, sent pong response")
 
             except WebSocketDisconnect:
                 job_manager.disconnect(websocket)

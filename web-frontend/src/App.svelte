@@ -15,7 +15,8 @@
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";
   import { navigationActions } from "./stores/navigation";
-  import { connectAllJobsWebSocket } from "./stores/jobWebSocket";
+  // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - now using centralized JobStateManager
+  // import { connectAllJobsWebSocket } from "./stores/jobWebSocket";
   import {
     Home,
     Play,
@@ -116,8 +117,8 @@
     testConnection().then((connected) => {
       if (connected) {
         loadHosts();
-        // Initialize WebSocket connection for real-time job updates
-        connectAllJobsWebSocket();
+        // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - JobStateManager handles WebSocket now
+        // connectAllJobsWebSocket();
       } else if (!$apiConfig.apiKey) {
         push('/settings');
         error = "Please configure your API key to use the application";
