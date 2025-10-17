@@ -105,10 +105,10 @@ interface PerformanceMetrics {
 const CONFIG = {
   // Update strategies
   updateStrategy: {
-    batchSize: 50,
-    batchDelay: 100,
+    batchSize: 100, // Increased from 50 for faster bulk processing
+    batchDelay: 10, // Reduced from 100ms for faster updates
     batchDelayImmediate: 0, // For forced refreshes
-    deduplicateWindow: 500, // Increased from 50ms to catch updates from different sources
+    deduplicateWindow: 100, // Reduced from 500ms for faster deduplication
   },
   
   // Cache lifetimes based on job state
@@ -121,9 +121,9 @@ const CONFIG = {
   
   // Sync intervals
   syncIntervals: {
-    websocket: 0,       // Realtime
-    active: 60000,      // 1 min when active
-    background: 300000, // 5 min in background
+    websocket: 0,       // Realtime via WebSocket
+    active: 30000,      // 30 sec when active (reduced from 60s)
+    background: 60000,  // 1 min in background (reduced from 5 min)
     paused: 0,          // No sync when paused
   },
   
@@ -170,6 +170,7 @@ class JobStateManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   // Injected dependencies
   private api: IApiClient;
@@ -246,49 +247,62 @@ class JobStateManager {
   // ========================================================================
   
   public connectWebSocket(): void {
+    console.log('[JobStateManager] 🔌 Attempting to connect WebSocket...');
+
     // Check if WebSocket is available (not in test environment without proper mock)
     if (!this.environment.hasWebSocket) {
-      console.warn('[JobStateManager] WebSocket not available');
+      console.warn('[JobStateManager] ⚠️ WebSocket not available in this environment');
       return;
     }
 
     // Check if already open (readyState 1 = OPEN)
-    if (this.ws?.readyState === 1) return;
+    if (this.ws?.readyState === 1) {
+      console.log('[JobStateManager] ℹ️ WebSocket already open, skipping reconnect');
+      return;
+    }
 
     // Get location from environment
     const location = this.environment.location;
     if (!location) {
-      console.warn('[JobStateManager] Location not available');
+      console.warn('[JobStateManager] ⚠️ Location not available');
       return;
     }
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${location.host}/ws/jobs`;
+    console.log('[JobStateManager] 🌐 WebSocket URL:', wsUrl);
 
     this.ws = this.wsFactory.create(wsUrl) as WebSocket;
+    console.log('[JobStateManager] 📡 WebSocket object created, waiting for connection...');
     
     this.ws.onopen = () => {
-      this.updateState({ 
-        wsConnected: true, 
+      this.updateState({
+        wsConnected: true,
         wsHealthy: true,
         dataSource: 'websocket',
         lastActivity: Date.now(),
       });
       this.stopPolling();
-      console.log('[JobStateManager] WebSocket connected');
+      this.startPing();
+      console.log('[JobStateManager] ✅ WebSocket connected successfully to', wsUrl);
+      console.log('[JobStateManager] WebSocket readyState:', this.ws?.readyState);
     };
     
     this.ws.onmessage = (event) => {
       try {
+        console.log('[JobStateManager] 📨 WebSocket message received, size:', event.data.length, 'bytes');
         const data = JSON.parse(event.data);
+        console.log('[JobStateManager] 📨 Parsed message type:', data.type);
         this.handleWebSocketMessage(data);
         this.updateState({ lastActivity: Date.now() });
       } catch (e) {
-        console.error('[JobStateManager] Failed to parse WebSocket message:', e);
+        console.error('[JobStateManager] ❌ Failed to parse WebSocket message:', e);
       }
     };
     
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      console.log('[JobStateManager] ❌ WebSocket closed. Code:', event.code, 'Reason:', event.reason);
+      this.stopPing();
       this.updateState({
         wsConnected: false,
         wsHealthy: false,
@@ -299,11 +313,12 @@ class JobStateManager {
       this.startPolling();
 
       // Reconnect after delay
+      console.log('[JobStateManager] 🔄 Will reconnect WebSocket in', CONFIG.health.retryDelay / 1000, 'seconds');
       setTimeout(() => this.connectWebSocket(), CONFIG.health.retryDelay);
     };
-    
+
     this.ws.onerror = (error) => {
-      console.error('[JobStateManager] WebSocket error:', error);
+      console.error('[JobStateManager] ❌ WebSocket error:', error);
     };
   }
   
@@ -320,7 +335,11 @@ class JobStateManager {
   }
 
   private handleWebSocketMessage(data: any): void {
-    if (data.type === 'pong') return;
+    // ⚡ PERFORMANCE FIX: Update lastActivity even for pong messages to keep connection healthy
+    if (data.type === 'pong') {
+      this.updateState({ lastActivity: Date.now() });
+      return;
+    }
 
     console.log('[JobStateManager] WebSocket message received:', data.type, data);
 
@@ -367,25 +386,49 @@ class JobStateManager {
         return s;
       });
 
+      // ⚡ PERFORMANCE: Process all jobs in a single batch for faster UI update
+      const allUpdates: JobUpdate[] = [];
+      const timestamp = Date.now();
+
+      console.log('[JobStateManager] 📦 Processing initial data.jobs:', Object.keys(data.jobs));
+      console.log('[JobStateManager] 📦 data.jobs type:', typeof data.jobs, 'is array?', Array.isArray(data.jobs));
+
       for (const [hostname, jobs] of Object.entries(data.jobs)) {
+        console.log(`[JobStateManager] 📦 Checking hostname="${hostname}", jobs type:`, typeof jobs, 'is array?', Array.isArray(jobs), 'length:', Array.isArray(jobs) ? jobs.length : 'N/A');
         if (Array.isArray(jobs)) {
-          console.log(`[JobStateManager] Processing ${jobs.length} jobs for ${hostname}`);
+          console.log(`[JobStateManager] Preparing ${jobs.length} jobs for ${hostname}`);
           jobs.forEach((job: any) => {
             if (job.job_id && hostname) {
               // ALWAYS set hostname from the key to ensure consistency
               job.hostname = hostname;
-              this.queueUpdate({
+              allUpdates.push({
                 jobId: job.job_id,
                 hostname: hostname,  // Use hostname from the key, not from job object
                 job: job,
                 source: 'websocket',
-                timestamp: Date.now(),
+                timestamp: timestamp,
                 priority: 'high',
                 messageType: 'initial',
-              }, true); // Immediate for initial data
+              });
+            } else {
+              console.warn(`[JobStateManager] ⚠️ Skipping job without job_id:`, job);
             }
           });
+        } else {
+          console.warn(`[JobStateManager] ⚠️ Jobs for ${hostname} is not an array:`, typeof jobs);
         }
+      }
+
+      // Queue all updates at once for immediate batch processing
+      console.log(`[JobStateManager] Queueing ${allUpdates.length} jobs for immediate processing`);
+      allUpdates.forEach(update => this.queueUpdate(update, false));
+      // Force immediate processing after all are queued
+      if (allUpdates.length > 0) {
+        if (this.updateTimer) {
+          clearTimeout(this.updateTimer);
+          this.updateTimer = null;
+        }
+        this.processUpdateQueue();
       }
     } else if (data.type === 'job_update' || data.type === 'state_change') {
       // Check if this is the currently viewed job
@@ -465,22 +508,29 @@ class JobStateManager {
   // ========================================================================
   
   private startPolling(): void {
-    if (this.pollTimer) return;
-    
+    if (this.pollTimer) {
+      console.log('[JobStateManager] ⚠️ Polling already running, skipping start');
+      return;
+    }
+
     const state = get(this.state);
-    if (state.isPaused || state.wsHealthy) return;
-    
-    const interval = state.isTabActive 
-      ? CONFIG.syncIntervals.active 
+    if (state.isPaused || state.wsHealthy) {
+      console.log('[JobStateManager] ℹ️ Skipping polling - paused:', state.isPaused, 'wsHealthy:', state.wsHealthy);
+      return;
+    }
+
+    const interval = state.isTabActive
+      ? CONFIG.syncIntervals.active
       : CONFIG.syncIntervals.background;
-    
+
+    console.log(`[JobStateManager] 🔄 Starting fallback polling (${interval/1000}s interval) - tab active: ${state.isTabActive}, WS connected: ${state.wsConnected}, WS healthy: ${state.wsHealthy}`);
+
     this.pollTimer = setInterval(() => {
       // Force sync to bypass cache during polling - we want fresh data when in fallback mode
       this.syncAllHosts(true);
     }, interval);
-    
+
     this.updateState({ pollingActive: true });
-    console.log(`[JobStateManager] Polling started (${interval/1000}s interval)`);
   }
   
   private stopPolling(): void {
@@ -488,10 +538,43 @@ class JobStateManager {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
       this.updateState({ pollingActive: false });
-      console.log('[JobStateManager] Polling stopped');
+      console.log('[JobStateManager] ⏹️ Polling stopped - switching to WebSocket updates');
     }
   }
-  
+
+  // ========================================================================
+  // WebSocket Ping/Keepalive
+  // ========================================================================
+
+  private startPing(): void {
+    if (this.pingTimer) {
+      console.log('[JobStateManager] ⚠️ Ping already running, skipping start');
+      return;
+    }
+
+    // Send ping every 30 seconds to keep connection alive
+    this.pingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === 1) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+          console.log('[JobStateManager] 🏓 Sent ping to keep WebSocket alive');
+        } catch (e) {
+          console.error('[JobStateManager] ❌ Failed to send ping:', e);
+        }
+      }
+    }, 30000); // Ping every 30 seconds (well under the 45s health timeout)
+
+    console.log('[JobStateManager] 🏓 Started WebSocket ping (30s interval)');
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+      console.log('[JobStateManager] 🏓 Stopped WebSocket ping');
+    }
+  }
+
   // ========================================================================
   // Data Synchronization
   // ========================================================================
@@ -500,13 +583,9 @@ class JobStateManager {
     const state = get(this.state);
     if (!forceSync && state.isPaused) return;
 
-    // Skip API sync if we just received WebSocket initial data (unless forcing)
-    // When forceSync=true, this check is bypassed to ensure fresh data from SLURM
-    if (!forceSync && state.wsInitialDataReceived &&
-        (Date.now() - state.wsInitialDataTimestamp < 5000)) {
-      console.log('[JobStateManager] Skipping API sync - WebSocket initial data is fresh (use force refresh to override)');
-      return;
-    }
+    // ⚡ PERFORMANCE: Removed WebSocket wait check - always fetch for fastest UI update
+    // WebSocket and API work in parallel, whoever is faster wins
+    // This ensures blazing fast refresh when user clicks refresh button
 
     try {
       console.log(`[JobStateManager] Starting sync for all hosts${forceSync ? ' (FORCE REFRESH - bypassing all caches)' : ''}`);
@@ -548,15 +627,28 @@ class JobStateManager {
       });
       
       // Sync each host in parallel
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         hosts.map(host => this.syncHost(host.hostname, forceSync))
       );
+
+      console.log('[JobStateManager] ✅ All host syncs completed');
+      results.forEach((result, index) => {
+        const hostname = hosts[index].hostname;
+        if (result.status === 'fulfilled') {
+          console.log(`[JobStateManager] ✓ ${hostname} sync succeeded`);
+        } else {
+          console.log(`[JobStateManager] ✗ ${hostname} sync failed:`, result.reason);
+        }
+      });
     } catch (error) {
       console.error('[JobStateManager] Failed to sync hosts:', error);
     }
   }
   
   public async syncHost(hostname: string, forceSync = false): Promise<void> {
+    const syncStartTime = Date.now();
+    console.log(`[JobStateManager] 🔄 Starting sync for ${hostname}${forceSync ? ' (forced)' : ''}`);
+
     const state = get(this.state);
     const hostState = state.hostStates.get(hostname);
 
@@ -575,8 +667,6 @@ class JobStateManager {
       }
     }
 
-    console.log(`[JobStateManager] Syncing host ${hostname}${forceSync ? ' (forced)' : ''}`);
-
     const now = Date.now();
 
     // Update host status
@@ -593,9 +683,9 @@ class JobStateManager {
     try {
       this.updateMetric('apiCalls', 1);
 
-      // Set a timeout for the API call
+      // ⚡ PERFORMANCE: Reduced timeout for faster failure detection and UI responsiveness
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Request timeout')), 30000); // 30s timeout
+        setTimeout(() => reject(new Error('Request timeout')), 10000); // 10s timeout (reduced from 30s)
       });
 
       // Build URL with array grouping parameter
@@ -681,7 +771,28 @@ class JobStateManager {
         });
 
         // Queue all job updates after state update
-        jobsToQueue.forEach(update => this.queueUpdate(update, forceSync));
+        console.log(`[JobStateManager] 📤 ${hostname} - About to queue ${jobsToQueue.length} jobs...`);
+        // ⚡ PERFORMANCE FIX: Queue all jobs without immediate processing to avoid hanging
+        // When forceSync=true and there are many jobs, calling queueUpdate with immediate=true
+        // causes synchronous processUpdateQueue() for EACH job, which can hang the browser.
+        // Instead, queue all jobs first, then trigger a single batch process at the end.
+        jobsToQueue.forEach(update => this.queueUpdate(update, false));
+        console.log(`[JobStateManager] 📥 ${hostname} - Finished queueing ${jobsToQueue.length} jobs, forcing batch process...`);
+
+        // Force immediate batch processing of all queued jobs
+        if (jobsToQueue.length > 0) {
+          // Clear any pending timer and process immediately
+          if (this.updateTimer) {
+            clearTimeout(this.updateTimer);
+            this.updateTimer = null;
+          }
+          console.log(`[JobStateManager] 🔄 ${hostname} - Triggering immediate batch processing...`);
+          this.processUpdateQueue();
+          console.log(`[JobStateManager] ✓ ${hostname} - Batch processing complete`);
+        }
+
+        const syncDuration = Date.now() - syncStartTime;
+        console.log(`[JobStateManager] ✅ ${hostname} sync completed in ${syncDuration}ms (${jobsToQueue.length} jobs)`);
       } else {
         // Still mark as connected even if no jobs
         this.state.update(s => {
@@ -699,12 +810,16 @@ class JobStateManager {
           s.hostStates = newHostStates;
           return s;
         });
+
+        const syncDuration = Date.now() - syncStartTime;
+        console.log(`[JobStateManager] ✅ ${hostname} sync completed in ${syncDuration}ms (no jobs)`);
       }
     } catch (error: any) {
       const isTimeout = error?.message?.includes('timeout') || error?.message?.includes('Timeout');
       const errorMessage = error?.response?.data?.detail || error?.message || 'Unknown error';
+      const syncDuration = Date.now() - syncStartTime;
 
-      console.error(`[JobStateManager] Failed to sync host ${hostname}:`, errorMessage, isTimeout ? '(TIMEOUT)' : '');
+      console.error(`[JobStateManager] ❌ ${hostname} sync failed after ${syncDuration}ms:`, errorMessage, isTimeout ? '(TIMEOUT)' : '');
 
       this.state.update(s => {
         const newHostStates = new Map(s.hostStates);
@@ -732,6 +847,9 @@ class JobStateManager {
         });
       }
     }
+
+    const totalSyncDuration = Date.now() - syncStartTime;
+    console.log(`[JobStateManager] 🏁 ${hostname} sync function exiting after ${totalSyncDuration}ms`);
   }
   
   // ========================================================================
@@ -778,7 +896,7 @@ class JobStateManager {
 
       return s;
     });
-    
+
     // Process immediately or schedule
     if (immediate) {
       // Process synchronously for immediate updates
@@ -788,9 +906,10 @@ class JobStateManager {
       }
       this.processUpdateQueue();
     } else if (!this.updateTimer) {
-      // Use a very short delay to allow batching but process quickly
-      // For initial load (empty cache), use minimal delay
-      const delay = get(this.state).jobCache.size === 0 ? 0 : CONFIG.updateStrategy.batchDelay;
+      // ⚡ PERFORMANCE: Use zero delay for empty cache (initial load) for instant UI update
+      // For subsequent updates, use minimal delay to allow batching
+      const state = get(this.state);
+      const delay = state.jobCache.size === 0 ? 0 : 10; // Reduced from 100ms to 10ms
       this.updateTimer = setTimeout(() => {
         this.processUpdateQueue();
       }, delay);
@@ -1021,7 +1140,13 @@ class JobStateManager {
   // ========================================================================
   
   public async initialize(): Promise<void> {
-    console.log('[JobStateManager] Initializing...');
+    console.log('[JobStateManager] 🚀 INITIALIZING JobStateManager...');
+    console.log('[JobStateManager] Current environment:', {
+      hasWebSocket: this.environment.hasWebSocket,
+      hasDocument: this.environment.hasDocument,
+      location: this.environment.location?.host,
+    });
+
     // Clear any existing state first
     this.state.update(s => ({
       ...s,
@@ -1031,20 +1156,25 @@ class JobStateManager {
       wsInitialDataReceived: false,
       wsInitialDataTimestamp: 0,
     }));
-    // Connect WebSocket first for real-time updates
+
+    console.log('[JobStateManager] ⚡ Starting initial API sync first...');
+    // ⚡ PERFORMANCE FIX: Do API sync FIRST to avoid race condition with WebSocket
+    // The backend prevents concurrent fetches per host, so if we start both in parallel,
+    // the WebSocket gets 0 jobs because all hosts are locked by the API fetch.
+    await this.forceInitialSync();
+
+    console.log('[JobStateManager] ⚡ Now connecting WebSocket for real-time updates...');
+    // Connect WebSocket AFTER initial data is loaded
+    // This way the WebSocket receives the full initial state and then only updates
     this.connectWebSocket();
-    // Wait a bit for WebSocket to connect and send initial data
-    await new Promise(resolve => setTimeout(resolve, 500));
-    // Only sync if WebSocket hasn't provided data
-    const state = get(this.state);
-    if (!state.wsInitialDataReceived) {
-      await this.forceInitialSync();
-    }
+
+    console.log('[JobStateManager] ✅ Initialization complete');
   }
   
   public destroy(): void {
     this.ws?.close();
     this.stopPolling();
+    this.stopPing();
     if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
     if (this.updateTimer) clearTimeout(this.updateTimer);
   }
