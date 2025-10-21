@@ -71,22 +71,22 @@
     isClosingSidebar = false;
   }
 
-  // Load job data using JobStateManager
-  async function loadJob(forceRefresh = false) {
+  // Load job data using JobStateManager (backend handles caching)
+  async function loadJob() {
     if (!params.id || !params.host) {
       error = "Invalid job parameters";
       return;
     }
 
-    // For initial load or force refresh, show loading state
-    if (!initialLoadComplete || forceRefresh) {
+    // Show loading state for initial load
+    if (!initialLoadComplete) {
       loading = true;
     }
     error = null;
 
     try {
       // Fetch the job data (will update the store automatically)
-      const jobData = await jobStateManager.fetchSingleJob(params.id, params.host, forceRefresh);
+      const jobData = await jobStateManager.fetchJob(params.id, params.host);
 
       if (!jobData) {
         error = "Job not found";
@@ -123,7 +123,7 @@
     }
   }
 
-  // Refresh output data
+  // Refresh output data (backend handles caching)
   async function refreshOutput() {
     if (!job) return;
 
@@ -131,7 +131,7 @@
     outputError = null;
 
     try {
-      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}&force=true`);
+      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}`);
       outputData = response.data;
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
@@ -170,8 +170,8 @@
 
     try {
       await api.post(`/api/jobs/${params.id}/cancel?host=${params.host}`);
-      // Force refresh through JobStateManager
-      await loadJob(true);
+      // Refresh job data
+      await loadJob();
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
       error = `Failed to cancel job: ${axiosError.message}`;
