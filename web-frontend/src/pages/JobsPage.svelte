@@ -210,7 +210,6 @@
   
   // Compute loading states from manager
   let progressiveLoading = $derived(Array.from($managerState.hostStates.values()).some(h => h.status === 'loading'));
-  let dataFromCache = $derived($managerState.dataSource === 'cache');
 
   // Track hosts with errors
   let hostsWithErrors = $derived(Array.from($hostStates.values()).filter(h => h.status === 'error'));
@@ -235,19 +234,17 @@
     }
   }
 
-  async function loadJobs(forceRefresh = false): Promise<void> {
+  async function loadJobs(): Promise<void> {
     error = null;
     loading = true;
 
     try {
-      if (forceRefresh) {
-        await jobStateManager.forceRefresh();
-      } else if (filters.host) {
+      if (filters.host) {
         // Sync specific host
         await jobStateManager.syncHost(filters.host);
       } else {
-        // Sync all hosts
-        await jobStateManager.syncAllHosts();
+        // Sync all hosts (backend handles caching)
+        await jobStateManager.refresh();
       }
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
@@ -276,7 +273,7 @@
 
   function handleManualRefresh(): void {
     if (!loading) {
-      loadJobs(true);
+      loadJobs();
     }
   }
 
@@ -329,14 +326,9 @@
     // Load hosts first
     await loadHosts();
 
-    // Only refresh jobs if we don't have any data
-    const currentJobs = get(allJobs);
-    if (currentJobs.length === 0) {
-      await jobStateManager.forceRefresh();
-    } else {
-      // We have data, just do a gentle sync without clearing cache
-      await jobStateManager.syncAllHosts();
-    }
+    // Refresh jobs (backend handles caching efficiently)
+    await jobStateManager.refresh();
+
     checkMobile();
     window.addEventListener("resize", checkMobile);
 
@@ -387,12 +379,6 @@
               <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
               <span class="text-xs text-slate-500">jobs</span>
             </div>
-            {#if dataFromCache}
-              <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-gray-200 ml-4">
-                <Clock class="h-4 w-4 text-muted-foreground" />
-                <Badge variant="secondary">Cached</Badge>
-              </div>
-            {/if}
           </div>
 
           <!-- WebSocket Status -->

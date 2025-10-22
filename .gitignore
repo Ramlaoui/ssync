@@ -14,3 +14,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Node.js / Frontend
+node_modules/
+web-frontend/dist/
+web-frontend/.svelte-kit/
+*.log
+package-lock.json.bak

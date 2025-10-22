@@ -212,18 +212,15 @@
   // Track loading state
   let isLoading = $derived(Array.from($managerState.hostStates.values()).some(h => h.status === 'loading'));
   
-  async function loadJobs(forceRefresh = false) {
+  async function loadJobs() {
     if (loading) return;
-    
+
     try {
       loading = true;
-      
-      if (forceRefresh) {
-        await jobStateManager.forceRefresh();
-      } else {
-        await jobStateManager.syncAllHosts();
-      }
-      
+
+      // Refresh all jobs (backend handles caching)
+      await jobStateManager.refresh();
+
       setTimeout(() => loading = false, 500);
     } catch (error) {
       console.error('Error loading jobs for sidebar:', error);
