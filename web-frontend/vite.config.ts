@@ -11,6 +11,8 @@ export default defineConfig({
     }
   },
   build: {
+    // Enable source maps for production debugging ('hidden' keeps them separate from bundle)
+    sourcemap: 'hidden',
     // Disable compressed size reporting for faster builds
     reportCompressedSize: false,
     // Use esbuild for faster minification (default in Vite)

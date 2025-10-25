@@ -129,13 +129,13 @@
         jobs = jobs.filter(j => j.user?.toLowerCase().includes(filters.user.toLowerCase()));
       }
       if (filters.state) {
-        jobs = jobs.filter(j => j.state === filters.state);
+        jobs = jobs.filter(j => j && j.state === filters.state);
       }
       if (filters.activeOnly) {
-        jobs = jobs.filter(j => j.state === 'R' || j.state === 'PD');
+        jobs = jobs.filter(j => j && j.state && (j.state === 'R' || j.state === 'PD'));
       }
       if (filters.completedOnly) {
-        jobs = jobs.filter(j => j.state === 'CD' || j.state === 'F' || j.state === 'CA' || j.state === 'TO');
+        jobs = jobs.filter(j => j && j.state && (j.state === 'CD' || j.state === 'F' || j.state === 'CA' || j.state === 'TO'));
       }
 
       // Apply search with ranking

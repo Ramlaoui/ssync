@@ -364,7 +364,7 @@
         }
       }
 
-      if (scrollPercentage > 0.8 && !loadingMore && currentOffset < totalContentSize) {
+      if (scrollPercentage > 0.8 && !loadingMore && windowEnd < totalContentSize) {
         loadMoreContentChunk();
       }
     }
@@ -407,7 +407,7 @@
   
   function copyToClipboard() {
     // For large files, warn before copying entire content
-    if (isLargeFile && currentOffset < totalContentSize) {
+    if (isLargeFile && windowEnd < totalContentSize) {
       if (!confirm(`This will copy the entire script (${formatBytes(totalContentSize)}) to clipboard. Continue?`)) {
         return;
       }

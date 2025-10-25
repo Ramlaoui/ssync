@@ -183,6 +183,7 @@
       if (partitionLower.includes(query)) return true;
     }
 
+    if (!job.state) return false;
     const stateNameLower = jobUtils.getStateLabel(job.state).toLowerCase();
     return stateNameLower.includes(query);
   }
@@ -429,7 +430,7 @@
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 onclick={() => selectJob(job)}
               >
-                <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
+                <div class="job-status" style="background-color: {job.state ? jobUtils.getStateColor(job.state) : '#9ca3af'}"></div>
                 <div class="job-info">
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
@@ -482,7 +483,7 @@
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 onclick={() => selectJob(job)}
               >
-                <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
+                <div class="job-status" style="background-color: {job.state ? jobUtils.getStateColor(job.state) : '#9ca3af'}"></div>
                 <div class="job-info">
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
@@ -545,7 +546,7 @@
                 class:selected={currentJobId === job.job_id && currentHost === job.hostname}
                 onclick={() => selectJob(job)}
               >
-                <div class="job-status" style="background-color: {jobUtils.getStateColor(job.state)}"></div>
+                <div class="job-status" style="background-color: {job.state ? jobUtils.getStateColor(job.state) : '#9ca3af'}"></div>
                 <div class="job-info">
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
@@ -555,7 +556,7 @@
                   </div>
                   <div class="job-content">
                     <span class="job-name">{formatJobName(job.name)}</span>
-                    <span class="job-state-label state-{job.state.toLowerCase()}">{jobUtils.getStateLabel(job.state)}</span>
+                    <span class="job-state-label state-{job.state ? job.state.toLowerCase() : 'unknown'}">{job.state ? jobUtils.getStateLabel(job.state) : 'Unknown'}</span>
                   </div>
                   <div class="job-meta">
                     <span class="job-host">{job.hostname.toUpperCase()}</span>

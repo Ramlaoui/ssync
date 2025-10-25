@@ -378,10 +378,10 @@
       job_name: jobInfo?.name || watcher.job_name || null
     };
   }));
-  let activeCount = $derived($watchers.filter(w => w.state === 'active').length);
-  let pausedCount = $derived($watchers.filter(w => w.state === 'paused').length);
-  let staticCount = $derived($watchers.filter(w => w.state === 'static').length);
-  let completedCount = $derived($watchers.filter(w => w.state === 'completed').length);
+  let activeCount = $derived($watchers.filter(w => w && w.state === 'active').length);
+  let pausedCount = $derived($watchers.filter(w => w && w.state === 'paused').length);
+  let staticCount = $derived($watchers.filter(w => w && w.state === 'static').length);
+  let completedCount = $derived($watchers.filter(w => w && w.state === 'completed').length);
   let totalCount = $derived($watchers.length);
   // Create a map of latest events by watcher_id for quick lookup
   let latestEventsByWatcher = $derived((() => {
@@ -423,11 +423,13 @@
 
       groups[jobKey].watchers.push(watcher);
 
-      // Update stats
-      if (watcher.state === 'active') groups[jobKey].stats.active++;
-      else if (watcher.state === 'paused') groups[jobKey].stats.paused++;
-      else if (watcher.state === 'static') groups[jobKey].stats.static++;
-      else if (watcher.state === 'completed') groups[jobKey].stats.completed++;
+      // Update stats (check for undefined state)
+      if (watcher.state) {
+        if (watcher.state === 'active') groups[jobKey].stats.active++;
+        else if (watcher.state === 'paused') groups[jobKey].stats.paused++;
+        else if (watcher.state === 'static') groups[jobKey].stats.static++;
+        else if (watcher.state === 'completed') groups[jobKey].stats.completed++;
+      }
     });
 
     return groups;

@@ -2,6 +2,57 @@ import { writable, derived } from 'svelte/store';
 import type { Watcher, WatcherEvent, WatcherStats, WatchersResponse, WatcherEventsResponse } from '../types/watchers';
 import { api } from '../services/api';
 
+// Debug mode - set to true to enable verbose logging
+const DEBUG_WATCHERS = true;
+
+// Validate and sanitize watcher data
+function validateWatcher(watcher: any, source: string): Watcher | null {
+  if (!watcher) {
+    if (DEBUG_WATCHERS) {
+      console.warn(`[Watchers] Null/undefined watcher from ${source}`, { watcher });
+    }
+    return null;
+  }
+
+  const hasRequiredFields = watcher.id != null && watcher.state != null && watcher.job_id != null;
+
+  if (!hasRequiredFields) {
+    if (DEBUG_WATCHERS) {
+      console.error(`[Watchers] Invalid watcher from ${source} - missing required fields:`, {
+        watcher,
+        hasId: watcher.id != null,
+        hasState: watcher.state != null,
+        hasJobId: watcher.job_id != null,
+        stack: new Error().stack
+      });
+    }
+    return null;
+  }
+
+  return watcher as Watcher;
+}
+
+// Validate array of watchers
+function validateWatchers(watchers: any[], source: string): Watcher[] {
+  if (!Array.isArray(watchers)) {
+    if (DEBUG_WATCHERS) {
+      console.error(`[Watchers] Expected array from ${source}, got:`, typeof watchers);
+    }
+    return [];
+  }
+
+  const validated = watchers
+    .map(w => validateWatcher(w, source))
+    .filter((w): w is Watcher => w !== null);
+
+  const invalidCount = watchers.length - validated.length;
+  if (invalidCount > 0 && DEBUG_WATCHERS) {
+    console.warn(`[Watchers] Filtered out ${invalidCount} invalid watchers from ${source}`);
+  }
+
+  return validated;
+}
+
 // Store for all watchers
 export const watchers = writable<Watcher[]>([]);
 
@@ -22,7 +73,7 @@ export const statsLoading = writable(false);
 // Derived store for active watchers
 export const activeWatchers = derived(
   watchers,
-  $watchers => $watchers.filter(w => w.state === 'active')
+  $watchers => $watchers.filter(w => w && w.state === 'active')
 );
 
 // Derived store for watchers by job
@@ -52,10 +103,17 @@ export async function fetchJobWatchers(jobId: string, host?: string): Promise<vo
     
     // Update watchers store with job-specific watchers
     watchers.update(current => {
+      // Validate incoming watchers
+      const newWatchers = validateWatchers(response.data.watchers || [], `fetchJobWatchers(${jobId})`);
+
+      if (DEBUG_WATCHERS) {
+        console.log(`[Watchers] Fetched ${newWatchers.length} watchers for job ${jobId}`, newWatchers);
+      }
+
       // Remove old watchers for this job
       const filtered = current.filter(w => w.job_id !== jobId);
-      // Add new watchers
-      return [...filtered, ...response.data.watchers];
+      // Add new validated watchers
+      return [...filtered, ...newWatchers];
     });
   } catch (error) {
     console.error('Failed to fetch job watchers:', error);
@@ -72,8 +130,14 @@ export async function fetchAllWatchers(): Promise<void> {
     const response = await api.get<WatchersResponse>('/api/watchers', {
       params: { limit: 100 }
     });
-    
-    watchers.set(response.data.watchers);
+
+    const validatedWatchers = validateWatchers(response.data.watchers || [], 'fetchAllWatchers');
+
+    if (DEBUG_WATCHERS) {
+      console.log(`[Watchers] Fetched ${validatedWatchers.length} watchers globally`, validatedWatchers);
+    }
+
+    watchers.set(validatedWatchers);
   } catch (error) {
     console.error('Failed to fetch all watchers:', error);
     throw error;
@@ -176,11 +240,15 @@ export function connectWatcherWebSocket(jobId?: string): void {
   watcherWs.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      
+
+      if (DEBUG_WATCHERS) {
+        console.log('[Watchers] WebSocket message:', data);
+      }
+
       if (data.type === 'watcher_event') {
         // Add new event to the store
         watcherEvents.update(events => [data.event, ...events]);
-        
+
         // Update watcher trigger count
         watchers.update(current =>
           current.map(w =>
@@ -190,6 +258,11 @@ export function connectWatcherWebSocket(jobId?: string): void {
           )
         );
       } else if (data.type === 'watcher_state_change') {
+        if (!data.state) {
+          console.error('[Watchers] WebSocket watcher_state_change with undefined state:', data);
+          return;
+        }
+
         // Update watcher state
         watchers.update(current =>
           current.map(w =>
@@ -198,9 +271,19 @@ export function connectWatcherWebSocket(jobId?: string): void {
               : w
           )
         );
+      } else if (data.type === 'watcher_update') {
+        // Full watcher update from WebSocket
+        const validatedWatcher = validateWatcher(data.watcher, 'WebSocket watcher_update');
+        if (validatedWatcher) {
+          watchers.update(current =>
+            current.map(w =>
+              w.id === validatedWatcher.id ? validatedWatcher : w
+            )
+          );
+        }
       }
     } catch (error) {
-      console.error('Failed to parse WebSocket message:', error);
+      console.error('[Watchers] Failed to parse WebSocket message:', error);
     }
   };
   

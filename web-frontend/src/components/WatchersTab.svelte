@@ -38,7 +38,8 @@
         `/api/jobs/${job.job_id}/watchers?host=${job.hostname}`
       );
 
-      watchers = response.data.watchers || [];
+      // Filter out any null/undefined watchers and ensure required properties exist
+      watchers = (response.data.watchers || []).filter(w => w != null && w.state != null && w.id != null);
     } catch (err: any) {
       error = err.response?.data?.detail || err.message || "Failed to load watchers";
     } finally {
@@ -55,7 +56,9 @@
     expandedWatchers = expandedWatchers;
   }
 
-  function getStateIcon(state: string) {
+  function getStateIcon(state: string | undefined) {
+    if (!state) return AlertCircle;
+
     switch (state) {
       case 'active':
         return Activity;
@@ -70,7 +73,9 @@
     }
   }
 
-  function getStateColor(state: string) {
+  function getStateColor(state: string | undefined) {
+    if (!state) return 'text-gray-600';
+
     switch (state) {
       case 'active':
         return 'text-green-600';
@@ -146,6 +151,7 @@
       </div>
 
       {#each watchers as watcher}
+        {#if watcher}
         {@const SvelteComponent = getStateIcon(watcher.state)}
         <div class="watcher-card" class:expanded={expandedWatchers.has(watcher.id)}>
           <button
@@ -281,6 +287,7 @@
             </div>
           {/if}
         </div>
+        {/if}
       {/each}
     </div>
   {/if}

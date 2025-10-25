@@ -115,9 +115,9 @@ https://svelte.dev/e/element_invalid_closing_tag -->
   
   // Stats calculations
   $: totalWatchers = $watchers.length;
-  $: activeCount = $watchers.filter(w => w.state === 'active').length;
-  $: pausedCount = $watchers.filter(w => w.state === 'paused').length;
-  $: completedCount = $watchers.filter(w => w.state === 'completed').length;
+  $: activeCount = $watchers.filter(w => w && w.state === 'active').length;
+  $: pausedCount = $watchers.filter(w => w && w.state === 'paused').length;
+  $: completedCount = $watchers.filter(w => w && w.state === 'completed').length;
   $: totalTriggers = $watchers.reduce((sum, w) => sum + (w.trigger_count || 0), 0);
   $: recentEvents = $watcherEvents.slice(0, 10);
   
@@ -208,7 +208,9 @@ https://svelte.dev/e/element_invalid_closing_tag -->
     }
     
     acc[key].watchers.push(watcher);
-    acc[key].stats[watcher.state]++;
+    if (watcher.state) {
+      acc[key].stats[watcher.state]++;
+    }
     acc[key].stats.totalTriggers += watcher.trigger_count || 0;
     
     return acc;

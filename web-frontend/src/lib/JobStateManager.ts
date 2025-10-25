@@ -946,11 +946,22 @@ class JobStateManager {
         const cacheKey = `${update.hostname}:${update.jobId}`;
         const existing = newCache.get(cacheKey);
 
+        // Validate job has required fields
+        if (!update.job || !update.job.state || !update.job.job_id) {
+          console.error(`[JobStateManager] Invalid job update for ${cacheKey} - missing required fields:`, {
+            hasJob: !!update.job,
+            hasState: update.job?.state != null,
+            hasJobId: update.job?.job_id != null,
+            update
+          });
+          return; // Skip this update
+        }
+
         // Enhanced update logic with source priority
         const shouldUpdate = !existing ||
                             (update.source === 'websocket' && existing.lastSource !== 'websocket') ||
                             (update.source === existing.lastSource && update.timestamp > existing.lastUpdated) ||
-                            (existing.job.state !== update.job.state); // Always update on state change
+                            (existing.job?.state !== update.job.state); // Always update on state change
 
         if (shouldUpdate) {
           // Check for new jobs appearing
