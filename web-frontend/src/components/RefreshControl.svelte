@@ -120,12 +120,12 @@
   <button
     onclick={handleManualRefresh}
     disabled={refreshing}
-    class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors flex items-center gap-2"
+    class="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-secondary rounded-lg transition-colors flex items-center gap-2"
     title="{autoRefreshEnabled ? `Auto-refresh in ${formatCountdown(secondsUntilRefresh)}` : 'Refresh'}"
   >
     <RefreshCw class="w-4 h-4 {refreshing ? 'animate-spin' : ''}" />
     {#if autoRefreshEnabled && !refreshing}
-      <span class="text-xs font-medium text-gray-500 min-w-[3rem] text-right">
+      <span class="text-xs font-medium text-gray-500 dark:text-gray-400 min-w-[3rem] text-right">
         {formatCountdown(secondsUntilRefresh)}
       </span>
     {/if}
@@ -134,7 +134,7 @@
   <!-- Settings dropdown button -->
   <button
     onclick={() => showMenu = !showMenu}
-    class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+    class="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-secondary rounded-lg transition-colors"
     title="Refresh settings"
   >
     <Settings2 class="w-4 h-4" />
@@ -143,20 +143,22 @@
   <!-- Dropdown menu -->
   {#if showMenu}
     <div
-      class="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+      class="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-card rounded-lg shadow-lg border border-gray-200 dark:border-border py-1 z-50"
       use:clickOutside={{ callback: () => showMenu = false }}
     >
-      <div class="px-3 py-2 border-b border-gray-100">
-        <div class="text-xs font-semibold text-gray-600 uppercase tracking-wider">
+      <div class="px-3 py-2 border-b border-gray-100 dark:border-border">
+        <div class="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
           Auto-refresh
         </div>
       </div>
 
       {#each intervals as interval}
         <button
-          class="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between text-sm"
+          class="w-full text-left px-3 py-2 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-secondary flex items-center justify-between text-sm"
           class:bg-blue-50={autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}
+          class:dark:bg-accent={autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}
           class:text-blue-700={autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}
+          class:dark:text-white={autoRefreshEnabled && autoRefreshInterval === interval.value && interval.value > 0}
           onclick={() => setRefreshInterval(interval.value)}
         >
           <span>{interval.label}</span>

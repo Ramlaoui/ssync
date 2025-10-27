@@ -530,8 +530,8 @@
 
 <style>
   .watcher-card {
-    background: var(--color-bg-primary, white);
-    border: 1px solid var(--color-border, #e5e7eb);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.625rem;
     margin-bottom: 0.5rem;
@@ -608,7 +608,7 @@
     margin: 0;
     font-size: 0.875rem;
     font-weight: 600;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -664,7 +664,7 @@
   .job-link {
     background: none;
     border: none;
-    color: var(--color-primary);
+    color: var(--accent);
     font-size: 0.75rem;
     cursor: pointer;
     padding: 0;
@@ -682,7 +682,7 @@
   }
   
   .job-id {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.75rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -702,7 +702,7 @@
   .detail-btn,
   .copy-btn {
     background: white;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0;
     width: 24px;
@@ -712,7 +712,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0;
   }
   
@@ -749,15 +749,15 @@
   }
   
   .control-btn:hover:not(:disabled) {
-    background: var(--color-error-bg);
-    border-color: var(--color-error);
-    color: var(--color-error);
+    background: var(--error-bg);
+    border-color: var(--error);
+    color: var(--error);
   }
   
   .control-btn.resume:hover:not(:disabled) {
-    background: var(--color-success-bg);
-    border-color: var(--color-success);
-    color: var(--color-success);
+    background: var(--success-bg);
+    border-color: var(--success);
+    color: var(--success);
   }
   
   .control-btn.triggering {
@@ -804,7 +804,7 @@
 
   .edit-btn {
     background: white;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0;
     width: 24px;
@@ -814,7 +814,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0;
   }
 
@@ -886,17 +886,17 @@
   .trigger-count {
     font-weight: 600;
     font-size: 0.875rem;
-    color: var(--color-primary);
+    color: var(--accent);
   }
   
   .info-label {
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .info-value {
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-weight: 500;
   }
 
@@ -906,14 +906,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-style: italic;
-    color: var(--color-primary) !important;
+    color: var(--accent) !important;
   }
   
   .pattern-compact {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.5rem 0.75rem;
     border-radius: 6px;
     margin-bottom: 0.5rem;
@@ -922,14 +922,14 @@
   .pattern-text {
     font-family: monospace;
     font-size: 0.75rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     flex: 1;
     word-break: break-all;
   }
   
   .actions-count {
     font-size: 0.625rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     white-space: nowrap;
     font-weight: 500;
   }
@@ -943,25 +943,25 @@
   .condition-section .section-label {
     display: block;
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     margin-bottom: 0.5rem;
   }
   
   .condition-code {
     display: block;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.75rem;
     border-radius: 8px;
     font-family: monospace;
     font-size: 0.875rem;
     word-break: break-all;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
   }
   
   .expanded-content {
     margin-top: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--border);
     animation: slideDown 0.3s ease;
   }
   
@@ -983,8 +983,8 @@
   }
   
   .capture-item {
-    background: var(--color-info-bg, #e0f2fe);
-    color: var(--color-info, #0369a1);
+    background: var(--info-bg);
+    color: var(--info);
     padding: 0.25rem 0.5rem;
     border-radius: 6px;
     font-size: 0.75rem;
@@ -999,7 +999,7 @@
   
   .detail-btn {
     flex: 1;
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
     border: none;
     border-radius: 8px;
@@ -1015,7 +1015,7 @@
   }
   
   .detail-btn:hover {
-    background: var(--color-primary-dark);
+    background: var(--accent);
     transform: translateY(-2px);
   }
   

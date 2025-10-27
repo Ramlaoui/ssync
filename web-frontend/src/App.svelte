@@ -15,6 +15,7 @@
   import { api, apiConfig, testConnection } from "./services/api";
   import type { HostInfo } from "./types/api";
   import { navigationActions } from "./stores/navigation";
+  import { theme } from "./stores/theme";
   // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - now using centralized JobStateManager
   // import { connectAllJobsWebSocket } from "./stores/jobWebSocket";
   import {
@@ -111,6 +112,9 @@
     checkMobile();
     window.addEventListener('resize', checkMobile);
 
+    // Initialize theme from store (already happens in theme.ts module load, but ensure it's applied)
+    theme.init();
+
     if (!$apiConfig.apiKey) {
     }
 
@@ -157,15 +161,15 @@
     window.location.reload();
   }}
 >
-  <div class="min-h-screen bg-white flex flex-col">
+  <div class="min-h-screen bg-background flex flex-col">
     <!-- Minimalist Header -->
-    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+    <header class="sticky top-0 z-50 navbar-header">
       <div class="px-3 sm:px-6 lg:px-8">
         <div class="flex h-16 md:h-16 items-center justify-between">
           <!-- Logo and Navigation -->
           <div class="flex items-center space-x-2 md:space-x-4">
             <button
-              class="text-base md:text-lg font-semibold text-black hover:opacity-70 transition-opacity duration-200"
+              class="navbar-title text-base md:text-lg font-semibold text-foreground hover:opacity-70 transition-opacity duration-200"
               onclick={() => push('/')}
             >
               ssync
@@ -254,7 +258,7 @@
               {#if $apiConfig.authenticated}
                 <div class="flex items-center space-x-1.5">
                   <div class="h-1.5 w-1.5 bg-green-500 rounded-full"></div>
-                  <span class="text-xs text-gray-500">Connected</span>
+                  <span class="text-xs text-muted-foreground">Connected</span>
                 </div>
               {/if}
             </div>
@@ -301,22 +305,28 @@
     --mobile-nav-height: 64px;
   }
 
+  /* Navbar Header */
+  .navbar-header {
+    background-color: var(--background);
+    border-bottom: 1px solid var(--border);
+  }
+
   /* Minimalist Navigation */
   .nav-link {
     padding: 0 0.75rem;
     font-size: 0.875rem;
     font-weight: 400;
-    color: #666;
+    color: var(--muted);
     transition: color 150ms ease;
     position: relative;
   }
 
   .nav-link:hover {
-    color: #000;
+    color: var(--foreground);
   }
 
   .nav-link-active {
-    color: #000;
+    color: var(--foreground);
     font-weight: 500;
   }
 
@@ -327,7 +337,7 @@
     left: 0;
     right: 0;
     height: 2px;
-    background: #000;
+    background: var(--foreground);
   }
 
   /* Mobile Navigation - Inline with logo */
@@ -335,7 +345,7 @@
     padding: 0.375rem 0.5rem;
     font-size: 0.75rem;
     font-weight: 400;
-    color: #9ca3af;
+    color: var(--muted-foreground);
     transition: color 150ms ease;
     position: relative;
     display: flex;
@@ -344,11 +354,11 @@
   }
 
   .mobile-nav-link-inline:hover {
-    color: #6b7280;
+    color: var(--muted);
   }
 
   .mobile-nav-link-inline-active {
-    color: #000;
+    color: var(--foreground);
     font-weight: 500;
   }
   
@@ -364,12 +374,12 @@
   }
 
   :global(::-webkit-scrollbar-thumb) {
-    background-color: #d1d5db;
+    background-color: var(--border);
     border-radius: 3px;
   }
-  
+
   :global(::-webkit-scrollbar-thumb:hover) {
-    background-color: #9ca3af;
+    background-color: var(--muted);
   }
 
   /* Global animation classes */

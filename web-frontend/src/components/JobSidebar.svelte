@@ -411,7 +411,7 @@
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
             </svg>
-            Running ({filteredRunningJobs.length}{#if $preferences.groupArrayJobs && runningArrayGroups.length > 0} + {runningArrayGroups.length} arrays{/if}{#if searchQuery && $runningJobs.length !== filteredRunningJobs.length} <span class="search-count">of {$runningJobs.length}</span>{/if})
+            Running ({filteredRunningJobs.length}{#if $preferences.groupArrayJobs && runningArrayGroups.length > 0} + {runningArrayGroups.length} ARRAYS{/if}{#if searchQuery && $runningJobs.length !== filteredRunningJobs.length} <span class="search-count">of {$runningJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
             <!-- Running array groups first -->
@@ -464,7 +464,7 @@
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22C6.47,22 2,17.5 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z" />
             </svg>
-            Pending ({filteredPendingJobs.length}{#if $preferences.groupArrayJobs && pendingArrayGroups.length > 0} + {pendingArrayGroups.length} arrays{/if}{#if searchQuery && $pendingJobs.length !== filteredPendingJobs.length} <span class="search-count">of {$pendingJobs.length}</span>{/if})
+            Pending ({filteredPendingJobs.length}{#if $preferences.groupArrayJobs && pendingArrayGroups.length > 0} + {pendingArrayGroups.length} ARRAYS{/if}{#if searchQuery && $pendingJobs.length !== filteredPendingJobs.length} <span class="search-count">of {$pendingJobs.length}</span>{/if})
           </h4>
           <div class="job-list">
             <!-- Pending array groups first -->
@@ -586,8 +586,8 @@
     width: 280px;
     height: 100%;
     max-height: 100vh;
-    background: var(--bg-secondary);
-    border-right: 1px solid var(--border-color);
+    background: var(--secondary);
+    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     position: relative;
@@ -606,7 +606,7 @@
     width: 100%;
     height: 100%;
     border-right: none;
-    border-top: 1px solid var(--border-color);
+    border-top: 1px solid var(--border);
     /* On mobile, always show full width regardless of collapsed state */
     animation: slideInFromLeft 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
   }
@@ -654,8 +654,8 @@
     transform: translateY(-50%);
     width: 24px;
     height: 24px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -668,12 +668,12 @@
   .toggle-btn svg {
     width: 16px;
     height: 16px;
-    color: var(--text-secondary);
+    color: var(--muted-foreground);
     transition: transform 0.3s ease;
   }
-  
+
   .toggle-btn:hover {
-    background: var(--bg-tertiary);
+    background: var(--secondary);
   }
   
   .toggle-btn.collapsed svg {
@@ -682,7 +682,7 @@
   
   .sidebar-header {
     padding: 1rem;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -702,7 +702,7 @@
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--foreground);
   }
   
   .header-actions {
@@ -726,7 +726,7 @@
   }
   
   .refresh-btn:hover:not(:disabled) {
-    background: var(--bg-tertiary);
+    background: var(--secondary);
   }
   
   .refresh-btn:disabled {
@@ -749,13 +749,13 @@
   }
 
   .close-btn:hover {
-    background: var(--bg-tertiary);
+    background: var(--secondary);
   }
 
   .close-btn svg {
     width: 18px;
     height: 18px;
-    color: var(--text-secondary);
+    color: var(--muted-foreground);
   }
 
   /* Hamburger to X animation - synchronized with sidebar slide */
@@ -828,7 +828,7 @@
     align-items: center;
     justify-content: center;
     padding: 2rem;
-    color: var(--text-secondary);
+    color: var(--muted-foreground);
   }
   
   
@@ -857,7 +857,7 @@
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
-    color: #9ca3af;
+    color: var(--muted-foreground);
     letter-spacing: 0.05em;
   }
   
@@ -877,7 +877,7 @@
   .array-job-wrapper {
     margin-left: -4px;
     padding-left: 4px;
-    border-left: 2px solid #e5e7eb;
+    border-left: 2px solid var(--border);
   }
 
   .job-item {
@@ -886,8 +886,8 @@
     gap: 0.75rem;
     width: 100%;
     padding: 1rem;
-    background: linear-gradient(135deg, #ffffff 0%, #fafbfc 100%);
-    border: 1px solid #e5e7eb;
+    background: rgb(243 244 246); /* gray-100 for light mode */
+    border: 1px solid var(--border);
     border-radius: 0.875rem;
     cursor: pointer;
     text-align: left;
@@ -901,6 +901,11 @@
     will-change: transform, box-shadow;
   }
 
+  /* Dark mode override with high specificity to beat global.css */
+  :global(.dark) .job-item {
+    background: #262626 !important; /* gray-100 dark - lighter than sidebar #1a1a1a */
+  }
+
   /* Mobile job items - much more compact */
   .job-sidebar.mobile .job-item {
     padding: 0.5rem; /* Much smaller padding */
@@ -908,17 +913,22 @@
     border-radius: 0.5rem; /* Less rounded */
     font-size: 0.875rem; /* Smaller text */
   }
-  
+
   .job-item:hover {
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-    border-color: #cbd5e1;
+    background: rgb(229 231 235); /* gray-200 for light mode */
+    border-color: var(--muted);
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     transform: translateY(-1px);
   }
-  
+
+  :global(.dark) .job-item:hover {
+    background: #333333 !important; /* gray-200 dark - lighter on hover */
+  }
+
   .job-item.selected {
-    background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
-    border-color: #3b82f6;
+    background: var(--accent);
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--accent);
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 6px -1px rgba(59, 130, 246, 0.1);
   }
   
@@ -942,7 +952,7 @@
   .job-name {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     line-height: 1.2;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -950,7 +960,7 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-  
+
   .job-meta {
     display: flex;
     align-items: center;
@@ -958,7 +968,7 @@
     flex-wrap: wrap;
     margin-top: 0.25rem;
   }
-  
+
   .job-header {
     display: flex;
     justify-content: space-between;
@@ -972,39 +982,40 @@
     align-items: center;
     margin-bottom: 0.25rem;
   }
-  
+
   .job-id {
     font-size: 1rem;
     font-weight: 700;
-    color: #111827;
+    color: var(--foreground);
   }
 
   .job-runtime {
     font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .job-reason {
     font-size: 0.75rem;
-    color: #9ca3af;
+    color: var(--muted-foreground);
   }
 
   .job-state-label {
     font-size: 0.75rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     text-transform: uppercase;
   }
 
   .job-host {
     font-size: 0.65rem;
-    color: #9ca3af;
+    color: var(--foreground);
     font-weight: 600;
     letter-spacing: 0.05em;
-    background: rgba(156, 163, 175, 0.1);
+    background: var(--secondary);
     padding: 0.125rem 0.375rem;
     border-radius: 0.25rem;
+    border: 1px solid var(--border);
   }
 
   /* Mobile job elements - smaller and more compact */
@@ -1041,8 +1052,8 @@
     letter-spacing: 0.05em;
     padding: 0.125rem 0.375rem;
     border-radius: 0.375rem;
-    background: rgba(107, 114, 128, 0.1);
-    color: #6b7280;
+    background: var(--secondary);
+    color: var(--muted-foreground);
   }
 
   .state-icon {
@@ -1051,33 +1062,39 @@
   }
 
   .state-running {
-    background: rgba(16, 185, 129, 0.1);
-    color: #059669;
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
   }
 
   .state-pending {
-    background: rgba(245, 158, 11, 0.1);
-    color: #d97706;
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
   }
 
   .state-cd {
-    background: rgba(139, 92, 246, 0.1);
-    color: #8b5cf6;
+    background: rgba(139, 92, 246, 0.2);
+    color: #a78bfa;
+    border: 1px solid rgba(139, 92, 246, 0.3);
   }
 
   .state-f {
-    background: rgba(239, 68, 68, 0.1);
-    color: #dc2626;
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
   }
 
   .state-ca {
-    background: rgba(107, 114, 128, 0.1);
-    color: #6b7280;
+    background: var(--secondary);
+    color: var(--foreground);
+    border: 1px solid var(--border);
   }
 
   .state-to {
-    background: rgba(249, 115, 22, 0.1);
-    color: #ea580c;
+    background: rgba(249, 115, 22, 0.2);
+    color: #fb923c;
+    border: 1px solid rgba(249, 115, 22, 0.3);
   }
 
   /* Runtime and reason badges */
@@ -1086,18 +1103,18 @@
     align-items: center;
     font-size: 0.65rem;
     font-weight: 600;
-    color: #374151;
-    background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+    color: var(--foreground);
+    background: var(--secondary);
     padding: 0.125rem 0.5rem;
     border-radius: 0.375rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   }
 
   .runtime-active {
-    background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
-    color: #065f46;
-    border-color: #86efac;
+    background: rgba(16, 185, 129, 0.25);
+    color: #10b981;
+    border-color: rgba(16, 185, 129, 0.5);
     animation: pulse-runtime 2s ease-in-out infinite;
   }
 
@@ -1116,12 +1133,12 @@
     display: inline-flex;
     align-items: center;
     font-size: 0.65rem;
-    font-weight: 500;
-    color: #92400e;
-    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    font-weight: 600;
+    color: var(--foreground);
+    background: var(--secondary);
     padding: 0.125rem 0.375rem;
     border-radius: 0.375rem;
-    border: 1px solid #f59e0b;
+    border: 1px solid var(--border);
     max-width: 80px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1141,12 +1158,12 @@
     justify-content: center;
     border-radius: 0.25rem;
     transition: all 0.2s;
-    color: var(--text-secondary);
+    color: var(--muted-foreground);
   }
 
   .icon-btn:hover:not(:disabled) {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .icon-btn:disabled {
@@ -1183,8 +1200,8 @@
     position: relative;
     display: flex;
     align-items: center;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     transition: all 0.2s;
   }
@@ -1199,7 +1216,7 @@
     left: 0.75rem;
     width: 16px;
     height: 16px;
-    color: var(--text-secondary);
+    color: var(--muted-foreground);
     pointer-events: none;
   }
 
@@ -1210,11 +1227,11 @@
     border: none;
     outline: none;
     font-size: 0.875rem;
-    color: var(--text-primary);
+    color: var(--foreground);
   }
 
   .sidebar-search-input::placeholder {
-    color: var(--text-tertiary);
+    color: var(--muted-foreground);
   }
 
   .clear-btn {
@@ -1230,13 +1247,13 @@
     align-items: center;
     justify-content: center;
     border-radius: 0.25rem;
-    color: var(--text-secondary);
+    color: var(--muted-foreground);
     transition: all 0.2s;
   }
 
   .clear-btn:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .clear-btn svg {
@@ -1257,31 +1274,31 @@
   .no-results-icon {
     width: 48px;
     height: 48px;
-    color: var(--text-tertiary);
+    color: var(--muted-foreground);
     opacity: 0.5;
     margin-bottom: 1rem;
   }
 
   .clear-search-btn {
     padding: 0.375rem 0.75rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     font-size: 0.75rem;
-    color: var(--text-primary);
+    color: var(--foreground);
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .clear-search-btn:hover {
-    background: var(--bg-tertiary);
+    background: var(--secondary);
     border-color: #3b82f6;
   }
 
   /* Search count in section headers */
   .search-count {
     font-size: 0.75rem;
-    color: var(--text-tertiary);
+    color: var(--muted-foreground);
     font-weight: 400;
   }
 

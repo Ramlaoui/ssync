@@ -1,5 +1,6 @@
 <script lang="ts">
   import { run } from 'svelte/legacy';
+  import { untrack } from 'svelte';
 
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
@@ -102,16 +103,20 @@
 
   async function updateRenderedContent() {
     lines = renderedContent.split('\n');
-    updateFilteredLines();
 
-    if (searchQuery) {
-      highlightSearchResults();
-    } else if (!disableHighlighting) {
-      highlightedContent = escapeHtml(renderedContent);
-    } else {
-      // Skip highlighting for large files
-      highlightedContent = escapeHtml(renderedContent);
-    }
+    // Use untrack to prevent tracking searchQuery when this is called from content effect
+    untrack(() => {
+      updateFilteredLines();
+
+      if (searchQuery) {
+        highlightSearchResults();
+      } else if (!disableHighlighting) {
+        highlightedContent = escapeHtml(renderedContent);
+      } else {
+        // Skip highlighting for large files
+        highlightedContent = escapeHtml(renderedContent);
+      }
+    });
   }
 
 
@@ -169,8 +174,13 @@
 
   function highlightSearchResults() {
     // Dismiss warning on search (shows user is actively working)
-    if (searchQuery && showSizeWarning) {
-      dismissWarning();
+    // Use untrack to prevent infinite loop from reading/writing showSizeWarning
+    if (searchQuery) {
+      untrack(() => {
+        if (showSizeWarning) {
+          dismissWarning();
+        }
+      });
     }
 
     if (!searchQuery) {
@@ -452,26 +462,39 @@
   }
   // Initialize content when it changes
   run(() => {
-    if (content) {
-      initializeContent();
+    const currentContent = content; // Track content changes
+    if (currentContent) {
+      // Use untrack to prevent tracking nested state reads in initializeContent
+      // This prevents circular dependencies with searchQuery, showSizeWarning, etc.
+      untrack(() => initializeContent());
     }
   });
 
   // React to search query changes
   run(() => {
-    if (searchQuery) {
-      highlightSearchResults();
+    const query = searchQuery; // Track only searchQuery
+    if (query) {
+      // Use untrack to prevent tracking any state reads inside highlightSearchResults
+      // This prevents the effect from tracking renderedContent, showSizeWarning, etc.
+      untrack(() => highlightSearchResults());
     }
   });
 
   // Auto-scroll to bottom when new content arrives (if enabled and user is at bottom)
   run(() => {
-    if (autoScroll && isAtBottom && outputElement && renderedContent) {
-      setTimeout(() => {
-        if (outputElement && isAtBottom) {
-          outputElement.scrollTop = outputElement.scrollHeight;
-        }
-      }, 10);
+    // Track these specific states
+    const shouldScroll = autoScroll && isAtBottom && renderedContent;
+    const element = outputElement;
+
+    if (shouldScroll && element) {
+      // Use untrack to prevent tracking state reads inside setTimeout
+      untrack(() => {
+        setTimeout(() => {
+          if (element && element.parentElement) {
+            element.scrollTop = element.scrollHeight;
+          }
+        }, 10);
+      });
     }
   });
   // Font size classes
@@ -564,44 +587,44 @@
         </button>
 
         {#if showSettingsMenu}
-          <div class="settings-menu absolute right-0 top-full mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50">
+          <div class="settings-menu absolute right-0 top-full mt-2 w-48 bg-popover rounded-md shadow-lg border border-border z-50">
             <div class="py-1">
               <!-- Text Size -->
-              <div class="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">Text Size</div>
+              <div class="px-4 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Text Size</div>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'small' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {fontSize === 'small' ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={() => setFontSize('small')}
               >
                 <Type class="w-3 h-3" />
                 Small
               </button>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'medium' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {fontSize === 'medium' ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={() => setFontSize('medium')}
               >
                 <Type class="w-4 h-4" />
                 Medium
               </button>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'large' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {fontSize === 'large' ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={() => setFontSize('large')}
               >
                 <Type class="w-5 h-5" />
                 Large
               </button>
 
-              <div class="border-t border-gray-100 my-1"></div>
+              <div class="border-t border-border my-1"></div>
 
               <!-- Display Options -->
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {showLineNumbers ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {showLineNumbers ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={toggleLineNumbers}
               >
                 <Hash class="w-4 h-4" />
                 {showLineNumbers ? 'Hide' : 'Show'} Line Numbers
               </button>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {wordWrap ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {wordWrap ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={toggleWordWrap}
               >
                 <WrapText class="w-4 h-4" />
@@ -737,8 +760,8 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 12px;
     overflow: hidden;
   }
@@ -748,8 +771,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1rem;
-    background: #f9fafb;
-    border-bottom: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border-bottom: 1px solid var(--border);
     gap: 1rem;
   }
 
@@ -780,16 +803,17 @@
   .search-input {
     width: 100%;
     padding: 0.5rem 0.75rem 0.5rem 2.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 0.875rem;
-    background: white;
+    background: var(--input);
+    color: var(--foreground);
     transition: border-color 0.2s;
   }
 
   .search-input:focus {
     outline: none;
-    border-color: #3b82f6;
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
@@ -797,11 +821,11 @@
     position: absolute;
     right: 0.75rem;
     font-size: 0.75rem;
-    color: #6b7280;
-    background: white;
+    color: var(--muted-foreground);
+    background: var(--card);
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
   }
 
   .search-navigation {
@@ -812,19 +836,19 @@
   .search-nav-btn {
     width: 32px;
     height: 32px;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
-    background: white;
+    background: var(--card);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #6b7280;
+    color: var(--muted-foreground);
     transition: all 0.2s;
   }
 
   .search-nav-btn:hover:not(:disabled) {
-    background: #f3f4f6;
-    border-color: #9ca3af;
+    background: var(--secondary);
+    border-color: var(--muted);
   }
 
   .search-nav-btn:disabled {
@@ -875,23 +899,23 @@
     align-items: center;
     gap: 0.25rem;
     padding: 0.375rem 0.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
-    background: white;
+    background: var(--card);
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     transition: all 0.2s;
   }
 
   .control-btn:hover {
-    background: #f3f4f6;
-    border-color: #9ca3af;
+    background: var(--secondary);
+    border-color: var(--muted);
   }
 
   .control-btn.active {
-    background: #3b82f6;
-    border-color: #3b82f6;
-    color: white;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-foreground);
   }
 
   .control-btn svg {
@@ -915,7 +939,7 @@
     flex: 1;
     display: flex;
     overflow: hidden;
-    background: white;
+    background: var(--card);
   }
 
   .output-wrapper.error-type {
@@ -923,24 +947,24 @@
   }
 
   .output-wrapper.with-line-numbers {
-    background: linear-gradient(to right, #f9fafb 60px, white 60px);
+    background: linear-gradient(to right, var(--secondary) 60px, var(--card) 60px);
   }
 
   .output-wrapper.with-line-numbers.error-type {
-    background: linear-gradient(to right, #f9fafb 60px, #fef2f2 60px);
+    background: linear-gradient(to right, var(--secondary) 60px, #fef2f2 60px);
   }
 
   .line-numbers {
     width: 60px;
-    background: #f9fafb;
-    border-right: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border-right: 1px solid var(--border);
     padding: 1rem 0.75rem;
     overflow-y: hidden;
     overflow-x: hidden;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.75rem;
     line-height: 1.5;
-    color: #9ca3af;
+    color: var(--muted-foreground);
     text-align: right;
     user-select: none;
     flex-shrink: 0;
@@ -963,7 +987,7 @@
     white-space: pre;
     overflow: auto;
     background: transparent;
-    color: #1f2937;
+    color: var(--foreground);
     border: none;
     outline: none;
   }
@@ -1029,10 +1053,10 @@
     justify-content: center;
     gap: 0.5rem;
     padding: 1rem;
-    background: #f9fafb;
-    border-top: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border-top: 1px solid var(--border);
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .load-more-indicator {
@@ -1062,7 +1086,7 @@
     top: 1rem;
     right: 1rem;
     z-index: 100;
-    background: white;
+    background: var(--card);
     border-radius: 12px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 6px 10px rgba(0, 0, 0, 0.08);
     overflow: hidden;
@@ -1245,10 +1269,10 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.5rem 1rem;
-    background: #f9fafb;
-    border-top: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border-top: 1px solid var(--border);
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .status-info {

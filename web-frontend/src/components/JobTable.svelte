@@ -199,10 +199,10 @@
   let hasActiveFilters = $derived(hostFilter || statusFilter || userFilter);
 </script>
 
-<div class="relative overflow-hidden bg-white rounded-lg border border-gray-200">
+<div class="relative overflow-hidden bg-card rounded-lg border border-border">
   {#if hasActiveFilters}
-    <div class="flex flex-wrap items-center gap-2 p-4 bg-gray-50 border-b border-gray-200">
-      <span class="text-sm font-medium text-gray-600">Active filters:</span>
+    <div class="flex flex-wrap items-center gap-2 p-4 bg-secondary border-b border-border">
+      <span class="text-sm font-medium text-muted-foreground">Active filters:</span>
       {#if hostFilter}
         <span class="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
           Host: {hostFilter}
@@ -228,13 +228,13 @@
   <table class="w-full border-collapse">
     <thead class="bg-gray-50">
       <tr>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick={stopPropagation(() => handleSort('job_id'))}>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-secondary" onclick={stopPropagation(() => handleSort('job_id'))}>
           <span>Job ID</span>
           {#if sortBy === 'job_id'}
             <span class="ml-1 text-gray-400">{sortDesc ? '↓' : '↑'}</span>
           {/if}
         </th>
-        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick={stopPropagation(() => handleSort('name'))}>
+        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-secondary" onclick={stopPropagation(() => handleSort('name'))}>
           <span>Name</span>
           {#if sortBy === 'name'}
             <span class="ml-1 text-gray-400">{sortDesc ? '↓' : '↑'}</span>
@@ -518,7 +518,7 @@
   }
   
   th.sortable:hover {
-    background: rgba(0, 0, 0, 0.03);
+    background: var(--secondary);
   }
   
   .sort-icon {
@@ -549,7 +549,7 @@
   }
   
   .filter-header:hover {
-    background: #f3f4f6;
+    background: var(--secondary);
   }
   
   .filter-icon {
@@ -565,12 +565,12 @@
     min-width: 160px;
     max-height: 320px;
     overflow-y: auto;
-    background: white;
-    border: 1px solid rgba(148, 163, 184, 0.15);
+    background: var(--popover);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
-    box-shadow: 
+    box-shadow:
       0 0 0 1px rgba(0, 0, 0, 0.03),
-      0 10px 40px -10px rgba(0, 0, 0, 0.15), 
+      0 10px 40px -10px rgba(0, 0, 0, 0.15),
       0 4px 6px -2px rgba(0, 0, 0, 0.05);
     z-index: 50;
     animation: dropdownSlide 0.15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -597,17 +597,17 @@
     border: none;
     text-align: left;
     font-size: 0.813rem;
-    color: #374151;
+    color: var(--foreground);
     cursor: pointer;
     transition: background 0.15s;
   }
-  
+
   .dropdown-item:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
-  
+
   .dropdown-item.selected {
-    background: #f3f4f6;
+    background: var(--muted);
     font-weight: 600;
   }
   
@@ -622,7 +622,7 @@
     position: relative;
     transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
     height: 44px;
-    background: white;
+    background: var(--card);
   }
   
   tbody tr::after {
@@ -654,7 +654,7 @@
   }
   
   tbody tr:nth-child(odd) {
-    background: rgba(248, 250, 252, 0.5);
+    background: var(--secondary);
   }
   
   tbody tr:nth-child(odd):hover {
@@ -664,7 +664,7 @@
   
   td {
     padding: 0.75rem 1rem;
-    color: #0f172a;
+    color: var(--foreground);
     height: 44px;
     max-height: 44px;
     overflow: hidden;
@@ -679,7 +679,7 @@
     font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.025em;
-    color: #475569;
+    color: var(--muted-foreground);
   }
   
   .job-name {
@@ -695,33 +695,33 @@
   
   .job-name-text {
     font-weight: 600;
-    color: #0f172a;
+    color: var(--foreground);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  
+
   tbody tr:hover .job-name-text {
-    color: #3b82f6;
+    color: var(--accent);
   }
-  
+
   .job-user {
-    color: #475569;
+    color: var(--muted-foreground);
     font-weight: 500;
   }
-  
+
   .job-host {
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Consolas', monospace;
     font-size: 0.65rem;
     font-weight: 700;
-    color: #475569;
-    background: linear-gradient(135deg, #e0e7ff, #dbeafe);
+    color: var(--foreground);
+    background: var(--secondary);
     padding: 0.125rem 0.5rem;
     border-radius: 0.25rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #c7d2fe;
+    border: 1px solid var(--border);
     text-align: center;
     min-width: fit-content;
     letter-spacing: 0.05em;
@@ -804,7 +804,7 @@
   }
   
   .job-time, .job-duration {
-    color: #475569;
+    color: var(--muted-foreground);
     font-size: 0.75rem;
     font-weight: 500;
     text-align: right;

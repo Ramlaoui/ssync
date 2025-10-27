@@ -49,18 +49,18 @@
 
 <div class="settings-page">
   <!-- Navigation Header -->
-  <header class="bg-white border-b border-gray-200 sticky top-0 z-40">
+  <header class="bg-white dark:bg-card border-b border-gray-200 dark:border-border sticky top-0 z-40">
     <div class="px-4 sm:px-6 lg:px-8">
       <div class="flex h-16 items-center">
         <button
-          class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
+          class="flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-secondary rounded-lg font-medium transition-colors"
           onclick={() => push('/')}
         >
           <ArrowLeft class="w-4 h-4" />
           Home
         </button>
-        <div class="w-px h-6 bg-gray-300 mx-4"></div>
-        <h1 class="text-lg font-semibold text-gray-900">Settings</h1>
+        <div class="w-px h-6 bg-gray-300 dark:bg-border mx-4"></div>
+        <h1 class="text-lg font-semibold text-gray-900 dark:text-foreground">Settings</h1>
       </div>
     </div>
   </header>
@@ -165,8 +165,8 @@
 
 <style>
   .api-key-config {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1.5rem;
     margin-bottom: 2rem;
@@ -188,61 +188,61 @@
     font-size: 0.9rem;
     padding: 0.25rem 0.75rem;
     border-radius: 12px;
-    background: var(--color-surface-2);
+    background: var(--secondary);
   }
   
   .status.success {
-    background: var(--color-success-bg);
-    color: var(--color-success);
+    background: var(--success-bg);
+    color: var(--success);
   }
-  
+
   .status.warning {
-    background: var(--color-warning-bg);
-    color: var(--color-warning);
+    background: var(--warning-bg);
+    color: var(--warning);
   }
-  
+
   .info {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     margin-bottom: 1rem;
   }
-  
+
   .command {
-    background: var(--color-surface-2);
+    background: var(--secondary);
     padding: 0.75rem;
     border-radius: 4px;
     font-family: var(--font-mono);
     margin-bottom: 1.5rem;
   }
-  
+
   .input-group {
     display: flex;
     gap: 0.5rem;
   }
-  
+
   .input-group input {
     flex: 1;
     padding: 0.5rem;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    background: var(--color-surface);
-    color: var(--color-text);
+    background: var(--input);
+    color: var(--foreground);
     font-family: var(--font-mono);
   }
-  
+
   .toggle-visibility {
     padding: 0.5rem;
-    background: var(--color-surface-2);
-    border: 1px solid var(--color-border);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
   }
-  
+
   .toggle-visibility:hover {
-    background: var(--color-surface-3);
+    background: var(--muted);
   }
-  
+
   button.primary {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
     border: none;
     padding: 0.5rem 1rem;
@@ -250,9 +250,10 @@
     cursor: pointer;
     font-weight: 500;
   }
-  
+
   button.primary:hover:not(:disabled) {
-    background: var(--color-primary-dark);
+    background: var(--accent);
+    opacity: 0.9;
   }
   
   button.primary:disabled {
@@ -271,66 +272,66 @@
     align-items: center;
     gap: 1rem;
     padding: 0.75rem;
-    background: var(--color-surface-2);
+    background: var(--secondary);
     border-radius: 4px;
   }
-  
+
   .key-display label {
     font-weight: 500;
   }
-  
+
   .key-display code {
     font-family: var(--font-mono);
-    color: var(--color-primary);
+    color: var(--accent);
   }
-  
+
   .actions {
     display: flex;
     gap: 0.5rem;
   }
-  
+
   .actions button {
     padding: 0.5rem 1rem;
     border-radius: 4px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
+    border: 1px solid var(--border);
+    background: var(--card);
     cursor: pointer;
     transition: background 0.2s;
   }
-  
+
   .actions button:hover:not(:disabled) {
-    background: var(--color-surface-2);
+    background: var(--secondary);
   }
-  
+
   .actions button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
-  
+
   .actions button.danger {
-    border-color: var(--color-error);
-    color: var(--color-error);
+    border-color: var(--error);
+    color: var(--error);
   }
-  
+
   .actions button.danger:hover {
-    background: var(--color-error-bg);
+    background: var(--error-bg);
   }
-  
+
   .message {
     padding: 0.75rem;
     border-radius: 4px;
     font-size: 0.9rem;
   }
-  
+
   .message.success {
-    background: var(--color-success-bg);
-    color: var(--color-success);
-    border: 1px solid var(--color-success);
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success);
   }
-  
+
   .message.error {
-    background: var(--color-error-bg);
-    color: var(--color-error);
-    border: 1px solid var(--color-error);
+    background: var(--error-bg);
+    color: var(--error);
+    border: 1px solid var(--error);
   }
 </style>

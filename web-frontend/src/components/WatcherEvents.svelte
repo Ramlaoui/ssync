@@ -276,14 +276,14 @@
     align-items: center;
     justify-content: center;
     padding: 4rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .spinner {
     width: 40px;
     height: 40px;
-    border: 3px solid var(--color-border);
-    border-top-color: var(--color-primary);
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 1rem;
@@ -296,7 +296,7 @@
   .empty-state {
     text-align: center;
     padding: 4rem 2rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .empty-icon {
@@ -308,7 +308,7 @@
   .empty-state h3 {
     margin: 0 0 0.5rem 0;
     font-size: 1.25rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .empty-state p {
@@ -327,8 +327,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem;
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border);
+    background: var(--secondary);
+    border-bottom: 1px solid var(--border);
   }
   
   .header-title {
@@ -340,11 +340,11 @@
   .header-title h3 {
     margin: 0;
     font-size: 1.125rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .event-count {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
     padding: 0.25rem 0.5rem;
     border-radius: 12px;
@@ -357,21 +357,21 @@
     border-radius: 6px;
     font-size: 0.875rem;
     width: 250px;
-    background: var(--color-bg-primary);
+    background: var(--background);
   }
   
   .search-input:focus {
     outline: none;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   .watcher-tabs {
     display: flex;
     gap: 0.5rem;
     padding: 0.5rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px 8px 0 0;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--border);
     overflow-x: auto;
   }
   
@@ -383,7 +383,7 @@
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
@@ -392,25 +392,25 @@
   }
   
   .watcher-tab:hover {
-    background: var(--color-bg-primary);
-    border-color: var(--color-border);
+    background: var(--background);
+    border-color: var(--border);
   }
   
   .watcher-tab.active {
-    background: var(--color-bg-primary);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
+    background: var(--background);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   
   .tab-count {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.125rem 0.375rem;
     border-radius: 10px;
     font-size: 0.75rem;
   }
   
   .watcher-tab.active .tab-count {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
   }
   
@@ -418,7 +418,7 @@
     flex: 1;
     padding: 1.5rem;
     overflow-y: auto;
-    background: var(--color-bg-primary);
+    background: var(--background);
   }
   
   .timeline-item {
@@ -453,7 +453,7 @@
   
   .event-card {
     width: 100%;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border: 1px solid #e2e8f0;
     border-radius: 8px;
     padding: 0.75rem 1rem;
@@ -463,12 +463,12 @@
   }
   
   .event-card:hover {
-    border-color: var(--color-primary);
+    border-color: var(--accent);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   }
   
   .event-card.expanded {
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   .event-header {
@@ -491,22 +491,22 @@
   }
   
   .job-badge {
-    background: var(--color-bg-primary);
+    background: var(--background);
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .time-badge {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.75rem;
   }
   
   .expand-icon {
     width: 20px;
     height: 20px;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     transition: transform 0.2s;
   }
   
@@ -517,13 +517,13 @@
   .event-preview {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--border);
   }
   
   .event-preview code {
     font-family: monospace;
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     word-break: break-all;
   }
   
@@ -572,7 +572,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.375rem 0.625rem;
     border-radius: 4px;
     font-size: 0.8125rem;
@@ -580,25 +580,25 @@
   
   .var-key {
     font-weight: 600;
-    color: var(--color-primary);
+    color: var(--accent);
   }
   
   .var-value {
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-family: monospace;
   }
   
   .result-text {
     margin: 0;
     padding: 0.75rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 4px;
     font-family: monospace;
     font-size: 0.8125rem;
     white-space: pre-wrap;
     word-break: break-all;
     border: 1px solid #e2e8f0;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .detail-footer {
@@ -606,9 +606,9 @@
     justify-content: space-between;
     align-items: center;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--border);
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .load-more-container {
@@ -619,7 +619,7 @@
   
   .load-more-btn {
     padding: 0.75rem 1.5rem;
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
     border: none;
     border-radius: 6px;
@@ -630,13 +630,13 @@
   }
   
   .load-more-btn:hover {
-    background: var(--color-primary-dark);
+    background: var(--accent);
   }
   
   .no-results {
     text-align: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .no-results p {

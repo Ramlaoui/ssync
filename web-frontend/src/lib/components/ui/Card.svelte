@@ -21,11 +21,11 @@
   }: Props = $props();
   
   const variants = {
-    default: "bg-white border border-gray-200",
-    glass: "bg-white/80 backdrop-blur-sm border border-gray-200",
-    gradient: "bg-gradient-to-br from-white to-gray-50 border border-gray-200",
-    bordered: "bg-transparent border border-gray-300",
-    elevated: "bg-white shadow-sm hover:shadow-md"
+    default: "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700",
+    glass: "bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border border-gray-200 dark:border-gray-700",
+    gradient: "bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 border border-gray-200 dark:border-gray-700",
+    bordered: "bg-transparent border border-gray-300 dark:border-gray-600",
+    elevated: "bg-white dark:bg-gray-800 shadow-sm hover:shadow-md"
   };
 </script>
 

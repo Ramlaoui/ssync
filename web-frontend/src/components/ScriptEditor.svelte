@@ -96,22 +96,22 @@ ${mainScriptContent}`;
             outline: "none"
           },
           "&.cm-editor": {
-            border: "1px solid var(--color-border)",
+            border: "1px solid var(--border)",
             borderRadius: "8px"
           },
           "&.cm-editor.cm-focused": {
-            borderColor: "var(--color-primary)",
+            borderColor: "var(--accent)",
             boxShadow: "0 0 0 3px rgba(59, 130, 246, 0.1)"
           },
           ".cm-placeholder": {
-            color: "var(--color-text-secondary)",
+            color: "var(--muted-foreground)",
             fontStyle: "italic"
           },
           ".cm-selectionBackground": {
             backgroundColor: "rgba(59, 130, 246, 0.2)"
           },
           ".cm-cursor": {
-            borderLeftColor: "var(--color-primary)"
+            borderLeftColor: "var(--accent)"
           },
           ".cm-line": {
             padding: "0 4px"
@@ -321,7 +321,7 @@ ${mainScriptContent}`;
     position: relative;
     display: flex;
     flex-direction: column;
-    background: var(--color-bg-primary);
+    background: var(--background);
     border-radius: 8px;
     overflow: hidden;
   }
@@ -364,8 +364,8 @@ ${mainScriptContent}`;
     display: flex;
     gap: 0.5rem;
     padding: 0.5rem;
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border);
+    background: var(--secondary);
+    border-bottom: 1px solid var(--border);
   }
   
   .tab {
@@ -373,20 +373,20 @@ ${mainScriptContent}`;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     cursor: pointer;
     transition: all 0.2s;
   }
   
   .tab:hover {
-    background: var(--color-bg-primary);
+    background: var(--background);
   }
   
   .tab.active {
-    background: var(--color-bg-primary);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
+    background: var(--background);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   
   .editor-container {
@@ -399,8 +399,8 @@ ${mainScriptContent}`;
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem;
-    background: var(--color-bg-secondary);
-    border-top: 1px solid var(--color-border);
+    background: var(--secondary);
+    border-top: 1px solid var(--border);
     font-size: 0.75rem;
   }
   
@@ -418,17 +418,17 @@ ${mainScriptContent}`;
     width: 28px;
     height: 28px;
     background: transparent;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.2s;
   }
   
   .toolbar-btn:hover {
-    background: var(--color-bg-primary);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
+    background: var(--background);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   
   .toolbar-btn svg {
@@ -439,27 +439,27 @@ ${mainScriptContent}`;
   .separator {
     width: 1px;
     height: 20px;
-    background: var(--color-border);
+    background: var(--border);
   }
   
   .char-count,
   .line-count {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .language-select {
     padding: 0.25rem 0.5rem;
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 0.75rem;
     cursor: pointer;
   }
   
   .language-select:focus {
     outline: none;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   @media (max-width: 768px) {

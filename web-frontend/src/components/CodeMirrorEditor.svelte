@@ -386,25 +386,6 @@
       updateEditorContent(value);
     }
   });
-  run(() => {
-    if (editorView && (disabled !== previousDisabled || vimMode !== previousVimMode)) {
-      const effects = [];
-      
-      if (disabled !== previousDisabled) {
-        effects.push(readOnlyCompartment.reconfigure(disabled ? EditorState.readOnly.of(true) : []));
-        previousDisabled = disabled;
-      }
-      
-      if (vimMode !== previousVimMode) {
-        effects.push(vimCompartment.reconfigure(vimMode ? [vim(), getVimKeymaps()] : []));
-        previousVimMode = vimMode;
-      }
-      
-      if (effects.length > 0) {
-        editorView.dispatch({ effects });
-      }
-    }
-  });
   // Reactive updates for editor options
   run(() => {
     if (editorView) {

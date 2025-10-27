@@ -21,16 +21,16 @@
     lg: 'w-12 h-12'
   }[size]);
 
-  // Use consistent gray spinner like the job page
+  // Use consistent gray spinner with better dark mode support
   let colorClass = $derived(variant === 'white'
     ? 'border-white border-b-white/30'
     : variant === 'primary'
-    ? 'border-blue-600 border-b-transparent'
+    ? 'border-blue-500 dark:border-blue-400 border-b-transparent'
     : variant === 'small'
-    ? 'border-gray-300 border-t-blue-600'
-    : 'border-gray-900 border-b-transparent');
+    ? 'border-gray-300 dark:border-gray-600 border-t-blue-500 dark:border-t-blue-400'
+    : 'border-gray-300 dark:border-gray-500 border-b-transparent');
 
-  let textClass = $derived(variant === 'white' ? 'text-white' : 'text-gray-500');
+  let textClass = $derived(variant === 'white' ? 'text-white' : 'text-gray-600 dark:text-gray-400');
 
   let spacingClass = $derived({
     sm: 'mb-2',

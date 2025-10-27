@@ -307,8 +307,8 @@
 
 <style>
   .timeline-container {
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 2rem;
@@ -324,7 +324,7 @@
   .timeline-header h3 {
     margin: 0;
     font-size: 1.25rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .timeline-controls {
@@ -336,7 +336,7 @@
   .time-range-selector {
     display: flex;
     gap: 0.25rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.25rem;
     border-radius: 8px;
   }
@@ -349,7 +349,7 @@
     font-size: 0.875rem;
     cursor: pointer;
     transition: all 0.2s;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .range-btn:hover {
@@ -357,7 +357,7 @@
   }
   
   .range-btn.active {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
   }
   
@@ -366,7 +366,7 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.875rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .timeline-wrapper {
@@ -379,7 +379,7 @@
     height: 100px;
     overflow-x: auto;
     overflow-y: hidden;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1rem 1rem 2rem 1rem;
   }
@@ -393,13 +393,13 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--border);
     padding-top: 0.25rem;
   }
   
   .time-marker {
     font-size: 0.7rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     white-space: nowrap;
   }
   
@@ -413,7 +413,7 @@
   
   .time-marker.end {
     text-align: right;
-    color: var(--color-primary);
+    color: var(--accent);
     font-weight: 600;
   }
   
@@ -453,7 +453,7 @@
   .event-tooltip {
     position: fixed;
     background: white;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 0.75rem;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -479,12 +479,12 @@
     justify-content: space-between;
     margin-bottom: 0.5rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--border);
   }
   
   .tooltip-time {
     font-size: 0.75rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .tooltip-row {
@@ -495,12 +495,12 @@
   }
   
   .tooltip-row .label {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     min-width: 60px;
   }
   
   .tooltip-row code {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.125rem 0.25rem;
     border-radius: 4px;
     font-size: 0.75rem;
@@ -509,14 +509,14 @@
   .tooltip-status {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--border);
     text-align: center;
     font-weight: 500;
-    color: var(--color-error);
+    color: var(--error);
   }
   
   .tooltip-status.success {
-    color: var(--color-success);
+    color: var(--success);
   }
   
   .live-indicator {
@@ -552,7 +552,7 @@
     grid-template-columns: repeat(4, 1fr);
     gap: 1rem;
     padding: 1rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
   }
   
@@ -564,21 +564,21 @@
     display: block;
     font-size: 1.5rem;
     font-weight: 600;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .stat-value.success {
-    color: var(--color-success);
+    color: var(--success);
   }
   
   .stat-value.failed {
-    color: var(--color-error);
+    color: var(--error);
   }
   
   .stat-label {
     display: block;
     font-size: 0.875rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     margin-top: 0.25rem;
   }
   

@@ -4,6 +4,8 @@
   import NavigationHeader from '../components/NavigationHeader.svelte';
   import SyncSettings from '../components/SyncSettings.svelte';
   import { apiConfig, setApiKey, clearApiKey, testConnection } from '../services/api';
+  import { preferences as globalPreferences, preferencesActions } from '../stores/preferences';
+  import { theme } from '../stores/theme';
   import {
     Key,
     Eye,
@@ -22,7 +24,8 @@
     Download,
     Upload,
     ChevronRight,
-    Settings as SettingsIcon
+    Settings as SettingsIcon,
+    Wifi
   } from 'lucide-svelte';
 
   // Mobile detection
@@ -34,9 +37,8 @@
   let testing = $state(false);
   let testResult: 'success' | 'error' | null = $state(null);
 
-  // UI Preferences (stored in localStorage)
+  // UI Preferences (stored in localStorage) - theme now managed by theme store
   let preferences = $state({
-    theme: 'light',
     autoRefresh: false,
     refreshInterval: 30,
     compactMode: false,
@@ -68,6 +70,9 @@
     sync: !(isMobile && activeSection === 'sync') // Expand on mobile when viewing sync section
   });
 
+  // WebSocket settings from global preferences
+  let websocketConfig = $derived($globalPreferences.websocket);
+
   let isConfigured = $derived($apiConfig.apiKey !== '');
 
   function checkMobile() {
@@ -80,13 +85,6 @@
 
     // Load preferences from localStorage
     loadPreferences();
-
-    // Apply theme on mount
-    if (preferences.theme === 'dark') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'light');
-    }
 
     // Apply compact mode if enabled
     if (preferences.compactMode) {
@@ -126,9 +124,7 @@
     savePreferences();
 
     // Apply changes immediately
-    if (key === 'theme') {
-      document.documentElement.setAttribute('data-theme', value);
-    } else if (key === 'compactMode') {
+    if (key === 'compactMode') {
       document.documentElement.classList.toggle('compact-mode', value);
     } else if (key === 'autoRefresh' || key === 'refreshInterval') {
       // Broadcast preference change to other components
@@ -255,6 +251,11 @@
     }
   }
 
+  // WebSocket settings update functions
+  function updateWebSocketSetting(key: string, value: number | boolean) {
+    preferencesActions.setWebSocketConfig({ [key]: value });
+  }
+
   function exportSettings() {
     const data = {
       preferences,
@@ -300,13 +301,14 @@
       'sync': 'Sync Settings',
       'notifications': 'Notifications',
       'cache': 'Cache Management',
+      'websocket': 'WebSocket Connection',
       'data': 'Data & Privacy'
     };
     return titles[section] || 'Settings';
   }
 </script>
 
-<div class="h-full flex flex-col bg-white">
+<div class="h-full flex flex-col bg-background">
   {#if !isMobile || activeSection !== null}
     <NavigationHeader
       title={isMobile && activeSection ? getSectionTitle(activeSection) : "Settings"}
@@ -322,95 +324,109 @@
       <!-- Mobile: Settings list -->
       <div>
         <button
-          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
           onclick={() => activeSection = 'api'}
         >
-          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
-            <Key class="w-5 h-5" />
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <Key class="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 mb-1">API Authentication</div>
-            <div class="text-sm text-gray-500">
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">API Authentication</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">
               {#if $apiConfig.authenticated}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Connected</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Connected</span>
               {:else if isConfigured}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Not authenticated</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">Not authenticated</span>
               {:else}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Not configured</span>
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">Not configured</span>
               {/if}
             </div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400" />
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
 
         <button
-          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
           onclick={() => activeSection = 'display'}
         >
-          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
-            <Monitor class="w-5 h-5" />
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <Monitor class="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 mb-1">Display Preferences</div>
-            <div class="text-sm text-gray-500">Theme, layout, and appearance</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Display Preferences</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">Theme, layout, and appearance</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400" />
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
 
         <button
-          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
           onclick={() => activeSection = 'sync'}
         >
-          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
-            <RefreshCw class="w-5 h-5" />
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <RefreshCw class="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 mb-1">Sync Settings</div>
-            <div class="text-sm text-gray-500">File patterns and filters</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Sync Settings</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">File patterns and filters</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400" />
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
 
         <button
-          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
           onclick={() => activeSection = 'notifications'}
         >
-          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
-            <Bell class="w-5 h-5" />
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <Bell class="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 mb-1">Notifications</div>
-            <div class="text-sm text-gray-500">Alerts and sounds</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Notifications</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">Alerts and sounds</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400" />
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
 
         <button
-          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
           onclick={() => activeSection = 'cache'}
         >
-          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
-            <Database class="w-5 h-5" />
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <Database class="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 mb-1">Cache Management</div>
-            <div class="text-sm text-gray-500">{cacheStats.size} used</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Cache Management</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">{cacheStats.size} used</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400" />
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
 
         <button
-          class="flex items-center w-full p-4 bg-white border-0 border-b border-gray-200 cursor-pointer transition-colors hover:bg-gray-50 text-left"
-          onclick={() => activeSection = 'data'}
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
+          onclick={() => activeSection = 'websocket'}
         >
-          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-[10px] mr-4">
-            <Shield class="w-5 h-5" />
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <Wifi class="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 mb-1">Data & Privacy</div>
-            <div class="text-sm text-gray-500">Export and import settings</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">WebSocket Connection</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">Real-time updates settings</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400" />
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+        </button>
+
+        <button
+          class="flex items-center w-full p-4 bg-white dark:bg-card border-0 border-b border-gray-200 dark:border-border cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-secondary text-left"
+          onclick={() => activeSection = 'data'}
+        >
+          <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
+            <Shield class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+          </div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Data & Privacy</div>
+            <div class="text-sm text-gray-500 dark:text-gray-400">Export and import settings</div>
+          </div>
+          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
       </div>
     {:else}
@@ -543,18 +559,25 @@
                 </div>
                 <div class="button-toggle">
                   <button
-                    class="toggle-option {preferences.theme === 'light' ? 'active' : ''}"
-                    onclick={() => handlePreferenceChange('theme', 'light')}
+                    class="toggle-option {$theme === 'light' ? 'active' : ''}"
+                    onclick={() => theme.set('light')}
                   >
                     <Sun class="w-4 h-4" />
                     Light
                   </button>
                   <button
-                    class="toggle-option {preferences.theme === 'dark' ? 'active' : ''}"
-                    onclick={() => handlePreferenceChange('theme', 'dark')}
+                    class="toggle-option {$theme === 'dark' ? 'active' : ''}"
+                    onclick={() => theme.set('dark')}
                   >
                     <Moon class="w-4 h-4" />
                     Dark
+                  </button>
+                  <button
+                    class="toggle-option {$theme === 'system' ? 'active' : ''}"
+                    onclick={() => theme.set('system')}
+                  >
+                    <Monitor class="w-4 h-4" />
+                    System
                   </button>
                 </div>
               </div>
@@ -761,6 +784,124 @@
           </div>
         {/if}
 
+        {#if !isMobile || activeSection === 'websocket'}
+          <!-- WebSocket Connection Settings -->
+          <div class="settings-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Wifi class="w-5 h-5" />
+                <h2>WebSocket Connection</h2>
+              </div>
+            </div>
+
+            <div class="section-content">
+              <div class="form-group">
+                <label class="toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={websocketConfig.autoReconnect}
+                    onchange={(e) => updateWebSocketSetting('autoReconnect', e.target.checked)}
+                  />
+                  <span>Auto-reconnect</span>
+                </label>
+                <div class="help-text">
+                  Automatically reconnect to the server when connection is lost
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>
+                  <span class="block font-medium text-gray-700 mb-2">Initial Retry Delay</span>
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="100"
+                      max="10000"
+                      step="100"
+                      value={websocketConfig.initialRetryDelay}
+                      oninput={(e) => updateWebSocketSetting('initialRetryDelay', parseInt(e.target.value) || 1000)}
+                      class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span class="text-sm text-gray-500 font-medium min-w-[30px]">ms</span>
+                  </div>
+                </label>
+                <div class="help-text">
+                  Initial delay before first reconnection attempt (default: 1000ms)
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>
+                  <span class="block font-medium text-gray-700 mb-2">Maximum Retry Delay</span>
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="1000"
+                      max="120000"
+                      step="1000"
+                      value={websocketConfig.maxRetryDelay}
+                      oninput={(e) => updateWebSocketSetting('maxRetryDelay', parseInt(e.target.value) || 30000)}
+                      class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span class="text-sm text-gray-500 font-medium min-w-[30px]">ms</span>
+                  </div>
+                </label>
+                <div class="help-text">
+                  Maximum delay between reconnection attempts (default: 30000ms)
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>
+                  <span class="block font-medium text-gray-700 mb-2">Backoff Multiplier</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="3"
+                    step="0.1"
+                    value={websocketConfig.retryBackoffMultiplier}
+                    oninput={(e) => updateWebSocketSetting('retryBackoffMultiplier', parseFloat(e.target.value) || 1.5)}
+                    class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </label>
+                <div class="help-text">
+                  Exponential backoff factor for retry delays (default: 1.5)
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>
+                  <span class="block font-medium text-gray-700 mb-2">Connection Timeout</span>
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="5000"
+                      max="120000"
+                      step="5000"
+                      value={websocketConfig.timeout}
+                      oninput={(e) => updateWebSocketSetting('timeout', parseInt(e.target.value) || 45000)}
+                      class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <span class="text-sm text-gray-500 font-medium min-w-[30px]">ms</span>
+                  </div>
+                </label>
+                <div class="help-text">
+                  Time without activity before connection is considered unhealthy (default: 45000ms)
+                </div>
+              </div>
+
+              <div class="flex gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900">
+                <Monitor class="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <div>
+                  <strong class="text-blue-950">About WebSocket Connection:</strong><br/>
+                  Real-time updates use WebSocket for instant job status changes. If auto-reconnect is enabled,
+                  the system will automatically try to restore connection with exponential backoff.
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
         {#if !isMobile || activeSection === 'data'}
           <!-- Data & Privacy Section -->
           <div class="settings-section">
@@ -801,8 +942,8 @@
 
 <style>
   .settings-section {
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 12px;
     padding: 1.5rem;
   }
@@ -819,7 +960,7 @@
     align-items: center;
     margin-bottom: 1.5rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid var(--border);
   }
 
   .section-header.collapsible {
@@ -829,7 +970,7 @@
   }
 
   .section-header.collapsible:hover {
-    background: #fafbfc;
+    background: var(--secondary);
     border-radius: 8px;
     padding: 0.75rem 1rem;
     margin: -0.75rem -1rem 0 -1rem;
@@ -849,7 +990,7 @@
   .section-title h2 {
     font-size: 1.125rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin: 0;
   }
 
@@ -869,12 +1010,12 @@
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .collapse-btn:hover {
-    background: #f3f4f6;
-    color: #374151;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .preference-item {
@@ -891,24 +1032,24 @@
   .preference-label {
     display: block;
     font-weight: 500;
-    color: #111827;
+    color: var(--foreground);
     margin-bottom: 0.25rem;
   }
 
   .preference-description {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .help-text {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     line-height: 1.5;
   }
 
   .command {
-    background: #1f2937;
-    color: #f3f4f6;
+    background: var(--secondary);
+    color: var(--secondary-foreground);
     padding: 0.75rem 1rem;
     border-radius: 8px;
     font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
@@ -924,16 +1065,18 @@
   .input-field {
     flex: 1;
     padding: 0.625rem 1rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 0.875rem;
+    background: var(--input);
+    color: var(--foreground);
     transition: all 0.15s;
   }
 
   .input-field:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px var(--ring);
   }
 
   .button-group {
@@ -959,12 +1102,12 @@
   }
 
   .btn-primary {
-    background: #3b82f6;
-    color: white;
+    background: var(--primary);
+    color: var(--primary-foreground);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: #2563eb;
+    opacity: 0.9;
   }
 
   .btn-primary:disabled,
@@ -974,33 +1117,34 @@
   }
 
   .btn-secondary {
-    background: white;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+    border: 1px solid var(--border);
   }
 
   .btn-secondary:hover {
-    background: #f9fafb;
+    opacity: 0.9;
   }
 
   .btn-danger {
-    background: white;
-    color: #dc2626;
-    border: 1px solid #fecaca;
+    background: var(--destructive);
+    color: var(--destructive-foreground);
+    border: 1px solid var(--destructive);
   }
 
   .btn-danger:hover {
-    background: #fef2f2;
+    opacity: 0.9;
   }
 
   .btn-icon {
     padding: 0.625rem;
-    background: white;
-    border: 1px solid #d1d5db;
+    background: var(--secondary);
+    border: 1px solid var(--border);
+    color: var(--foreground);
   }
 
   .btn-icon:hover {
-    background: #f9fafb;
+    opacity: 0.9;
   }
 
   .full-width {
@@ -1012,19 +1156,19 @@
     align-items: center;
     gap: 1rem;
     padding: 1rem;
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 8px;
   }
 
   .key-display .label {
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .key-value {
     font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
     font-size: 0.875rem;
-    color: #3b82f6;
+    color: var(--accent);
   }
 
   .alert {
@@ -1037,15 +1181,15 @@
   }
 
   .alert-success {
-    background: #d1fae5;
-    color: #065f46;
-    border: 1px solid #6ee7b7;
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success);
   }
 
   .alert-error {
-    background: #fee2e2;
-    color: #991b1b;
-    border: 1px solid #fca5a5;
+    background: var(--error-bg);
+    color: var(--error);
+    border: 1px solid var(--error);
   }
 
   /* Toggle Switch */
@@ -1069,7 +1213,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #cbd5e1;
+    background-color: var(--muted);
     transition: 0.3s;
     border-radius: 24px;
   }
@@ -1081,13 +1225,13 @@
     width: 18px;
     left: 3px;
     bottom: 3px;
-    background-color: white;
+    background-color: var(--background);
     transition: 0.3s;
     border-radius: 50%;
   }
 
   input:checked + .slider {
-    background-color: #3b82f6;
+    background-color: var(--accent);
   }
 
   input:checked + .slider:before {
@@ -1097,7 +1241,7 @@
   /* Button Toggle */
   .button-toggle {
     display: flex;
-    background: #f3f4f6;
+    background: var(--secondary);
     border-radius: 8px;
     padding: 2px;
   }
@@ -1114,37 +1258,38 @@
     border-radius: 6px;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .toggle-option.active {
-    background: white;
-    color: #111827;
+    background: var(--background);
+    color: var(--foreground);
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   }
 
   .select-field {
     padding: 0.625rem 1rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 0.875rem;
-    background: white;
+    background: var(--input);
+    color: var(--foreground);
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .select-field:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px var(--ring);
   }
 
   .select-field:disabled {
     opacity: 0.6;
     cursor: not-allowed;
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   /* Cache Stats */
@@ -1153,7 +1298,7 @@
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 1rem;
     padding: 1rem;
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 8px;
   }
 
@@ -1164,14 +1309,14 @@
 
   .stat-label {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-bottom: 0.25rem;
   }
 
   .stat-value {
     font-size: 1.125rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
   }
 
   /* Disabled state styles */
@@ -1181,11 +1326,11 @@
   }
 
   .preference-item.disabled .preference-label {
-    color: #9ca3af;
+    color: var(--muted-foreground);
   }
 
   .preference-item.disabled .preference-description {
-    color: #d1d5db;
+    color: var(--muted-foreground);
   }
 
   .button-toggle.disabled {

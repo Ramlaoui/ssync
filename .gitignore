@@ -14,3 +14,29 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Test and coverage reports
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+pytest_output.txt
+*.log
+
+# Development artifacts
+notebooks/
+*_test.py
+*_debug.py
+cleanup_*.py
+diagnose_*.py
+fix_*.py
+monitor_*.py
+
+# Claude Code local settings
+.claude/settings.local.json

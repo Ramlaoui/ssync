@@ -208,9 +208,9 @@
   const quickPaths = [];
 </script>
 
-<div class="flex flex-col h-full bg-white rounded-lg border border-gray-200">
+<div class="flex flex-col h-full bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border">
   <!-- Simplified Header -->
-  <div class="flex-shrink-0 p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+  <div class="flex-shrink-0 p-4 border-b border-gray-200 dark:border-border bg-gray-50 dark:bg-secondary rounded-t-lg">
     <!-- Search and Navigation bar -->
     <div class="flex items-center gap-3 mb-3">
       <div class="flex-1 relative">
@@ -221,14 +221,14 @@
           <input
             bind:value={searchQuery}
             placeholder="Search in {currentLocalPath || '/'}"
-            class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+            class="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-border rounded-md leading-5 bg-white dark:bg-input placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-foreground focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 dark:focus:ring-accent focus:border-blue-500 dark:focus:border-accent text-sm disabled:bg-gray-100 dark:disabled:bg-secondary disabled:cursor-not-allowed"
             disabled={loading}
           />
         </div>
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="inline-flex items-center justify-center p-2 border border-gray-300 rounded-md shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+          class="inline-flex items-center justify-center p-2 border border-gray-300 dark:border-border rounded-md shadow-sm bg-white dark:bg-card text-gray-700 dark:text-foreground hover:bg-gray-50 dark:hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white dark:disabled:hover:bg-card"
           onclick={navigateUp}
           disabled={currentLocalPath === "/" || loading}
           title="Go up one level"
@@ -236,7 +236,7 @@
           <ArrowUp class="w-4 h-4" />
         </button>
         <button
-          class="inline-flex items-center justify-center p-2 border border-gray-300 rounded-md shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+          class="inline-flex items-center justify-center p-2 border border-gray-300 dark:border-border rounded-md shadow-sm bg-white dark:bg-card text-gray-700 dark:text-foreground hover:bg-gray-50 dark:hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white dark:disabled:hover:bg-card"
           onclick={goToHome}
           disabled={loading}
           title="Go to home"
@@ -244,7 +244,7 @@
           <Home class="w-4 h-4" />
         </button>
         <button
-          class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+          class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 dark:bg-accent hover:bg-blue-700 dark:hover:bg-accent/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600 dark:disabled:hover:bg-accent"
           onclick={selectCurrentLocalPath}
           disabled={!currentLocalPath || loading}
         >
@@ -256,30 +256,30 @@
     <!-- Options -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-4">
-        <label class="flex items-center gap-2 text-sm text-gray-600">
+        <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <input
             type="checkbox"
             bind:checked={showHiddenFiles}
             onchange={handleOptionsChange}
             disabled={loading}
-            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
+            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-border rounded disabled:opacity-50"
           />
           <span>Show hidden files</span>
         </label>
 
-        <label class="flex items-center gap-2 text-sm text-gray-600">
+        <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <input
             type="checkbox"
             bind:checked={showFilesInBrowser}
             onchange={handleOptionsChange}
             disabled={loading}
-            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
+            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-border rounded disabled:opacity-50"
           />
           <span>Show files</span>
         </label>
       </div>
 
-      <div class="text-sm text-gray-500 font-medium">
+      <div class="text-sm text-gray-500 dark:text-gray-400 font-medium">
         {#if searchQuery}
           {filteredEntries.length} matches
         {:else}

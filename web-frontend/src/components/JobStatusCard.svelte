@@ -47,7 +47,7 @@
   }
 </script>
 
-<div class="bg-gradient-to-br from-white to-slate-50 border border-slate-200/20 rounded-2xl p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.8),0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.9),0_4px_6px_rgba(0,0,0,0.05),0_10px_25px_rgba(0,0,0,0.08)]">
+<div class="bg-gradient-to-br from-white to-slate-50 dark:from-card dark:to-secondary border border-slate-200/20 dark:border-border rounded-2xl p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.8),0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.04)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.2),0_4px_12px_rgba(0,0,0,0.3)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.9),0_4px_6px_rgba(0,0,0,0.05),0_10px_25px_rgba(0,0,0,0.08)] dark:hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1),0_4px_6px_rgba(0,0,0,0.25),0_10px_25px_rgba(0,0,0,0.4)]">
   <div class="flex items-center gap-4 mb-4">
     <!-- Animated Status Indicator -->
     <div class="relative w-16 h-16 flex-shrink-0" style="color: {statusColor}">
@@ -85,7 +85,7 @@
       {/if}
       
       <!-- Status Icon -->
-      <div class="absolute inset-0 flex items-center justify-center bg-white rounded-full shadow-md">
+      <div class="absolute inset-0 flex items-center justify-center bg-white dark:bg-card rounded-full shadow-md dark:shadow-lg">
         {#if job.state === 'R'}
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
@@ -116,13 +116,13 @@
 
     <!-- Status Details -->
     <div class="flex-1 min-w-0">
-      <h3 class="text-xl font-bold text-slate-900 mb-1 tracking-tight">{statusLabel}</h3>
-      <p class="text-sm text-slate-600 mb-0 font-medium">{getStatusSubtitle(job)}</p>
-      
+      <h3 class="text-xl font-bold text-slate-900 dark:text-foreground mb-1 tracking-tight">{statusLabel}</h3>
+      <p class="text-sm text-slate-600 dark:text-slate-400 mb-0 font-medium">{getStatusSubtitle(job)}</p>
+
       {#if job.state === 'PD'}
-        <p class="text-xs text-slate-400 mt-1 font-medium">{getQueuePosition(job)}</p>
+        <p class="text-xs text-slate-400 dark:text-slate-500 mt-1 font-medium">{getQueuePosition(job)}</p>
       {:else if job.state === 'R' && timeRemaining !== 'N/A'}
-        <p class="text-xs text-slate-400 mt-1 font-medium">{timeRemaining} remaining</p>
+        <p class="text-xs text-slate-400 dark:text-slate-500 mt-1 font-medium">{timeRemaining} remaining</p>
       {/if}
     </div>
   </div>
@@ -130,34 +130,34 @@
   <!-- Progress Bar for Running Jobs -->
   {#if job.state === 'R' && progress > 0}
     <div class="flex items-center gap-3 mb-4">
-      <div class="flex-1 h-2 bg-black/5 rounded-full overflow-hidden">
+      <div class="flex-1 h-2 bg-black/5 dark:bg-white/5 rounded-full overflow-hidden">
         <div
           class="h-full rounded-full transition-[width] duration-300 bg-gradient-to-r from-current to-current/80"
           style="width: {progress * 100}%; background-color: {statusColor}"
         ></div>
       </div>
-      <span class="text-xs font-semibold text-slate-600 min-w-[3rem] text-right">{Math.round(progress * 100)}%</span>
+      <span class="text-xs font-semibold text-slate-600 dark:text-slate-400 min-w-[3rem] text-right">{Math.round(progress * 100)}%</span>
     </div>
   {/if}
 
   <!-- Quick Stats -->
-  <div class="flex gap-6 pt-4 border-t border-slate-200/30">
+  <div class="flex gap-6 pt-4 border-t border-slate-200/30 dark:border-border">
     {#if job.runtime}
       <div class="flex flex-col items-center text-center">
-        <span class="text-[0.6875rem] text-slate-400 font-medium uppercase tracking-wider mb-1">Runtime</span>
-        <span class="text-sm font-semibold text-slate-900">{jobUtils.formatDuration(job.runtime)}</span>
+        <span class="text-[0.6875rem] text-slate-400 dark:text-slate-500 font-medium uppercase tracking-wider mb-1">Runtime</span>
+        <span class="text-sm font-semibold text-slate-900 dark:text-foreground">{jobUtils.formatDuration(job.runtime)}</span>
       </div>
     {/if}
     {#if job.cpus}
       <div class="flex flex-col items-center text-center">
-        <span class="text-[0.6875rem] text-slate-400 font-medium uppercase tracking-wider mb-1">CPUs</span>
-        <span class="text-sm font-semibold text-slate-900">{job.cpus}</span>
+        <span class="text-[0.6875rem] text-slate-400 dark:text-slate-500 font-medium uppercase tracking-wider mb-1">CPUs</span>
+        <span class="text-sm font-semibold text-slate-900 dark:text-foreground">{job.cpus}</span>
       </div>
     {/if}
     {#if job.memory}
       <div class="flex flex-col items-center text-center">
-        <span class="text-[0.6875rem] text-slate-400 font-medium uppercase tracking-wider mb-1">Memory</span>
-        <span class="text-sm font-semibold text-slate-900">{job.memory}</span>
+        <span class="text-[0.6875rem] text-slate-400 dark:text-slate-500 font-medium uppercase tracking-wider mb-1">Memory</span>
+        <span class="text-sm font-semibold text-slate-900 dark:text-foreground">{job.memory}</span>
       </div>
     {/if}
   </div>

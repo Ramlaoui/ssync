@@ -115,121 +115,128 @@
     if (!text) return '';
 
     // Start with escaped text to prevent XSS
-    let highlighted = escapeHtml(text);
+    const escapedText = escapeHtml(text);
 
-    // Apply syntax highlighting patterns
-    // Note: Order matters - more specific patterns first
+    // Process line by line to avoid regex interference between lines
+    const lines = escapedText.split('\n');
+    const highlightedLines = lines.map(line => {
+      // For lines that should be highlighted as a whole, return early
 
-    // Shebang line first (most specific) - handle both escaped and unescaped slashes
-    highlighted = highlighted.replace(
-      /(^#!.*$)/gm,
-      '<span class="shebang">$1</span>'
-    );
+      // Shebang line
+      if (line.match(/^#!/)) {
+        return `<span class="shebang">${line}</span>`;
+      }
 
-    // SLURM directives (e.g., #SBATCH)
-    highlighted = highlighted.replace(
-      /(^#SBATCH.*$)/gm,
-      '<span class="slurm-directive">$1</span>'
-    );
+      // SLURM directives
+      if (line.match(/^#SBATCH/)) {
+        return `<span class="slurm-directive">${line}</span>`;
+      }
 
-    // Special login setup markers
-    highlighted = highlighted.replace(
-      /(^#LOGIN_SETUP_(?:BEGIN|END).*$)/gm,
-      '<span class="slurm-directive">$1</span>'
-    );
+      // Special login setup markers
+      if (line.match(/^#LOGIN_SETUP_(?:BEGIN|END)/)) {
+        return `<span class="slurm-directive">${line}</span>`;
+      }
 
-    // Comments (but not SLURM directives, shebang, or LOGIN markers)
-    highlighted = highlighted.replace(
-      /(^#(?!SBATCH|!|LOGIN_SETUP_).*$)/gm,
-      '<span class="comment">$1</span>'
-    );
-    
-    // Environment variables
-    highlighted = highlighted.replace(
-      /(\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*)/g,
-      '<span class="variable">$1</span>'
-    );
-    
-    // Strings in double quotes (with proper escaping)
-    highlighted = highlighted.replace(
-      /(&quot;([^&]|&(?!quot;))*&quot;)/g,
-      '<span class="string">$1</span>'
-    );
-    
-    // Strings in single quotes (with proper escaping)
-    highlighted = highlighted.replace(
-      /(&#x27;([^&]|&(?!#x27;))*&#x27;)/g,
-      '<span class="string">$1</span>'
-    );
-    
-    // Keywords - need to be careful not to match inside HTML tags
-    const keywords = [
-      'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done',
-      'case', 'esac', 'function', 'return', 'exit', 'break', 'continue',
-      'export', 'source', 'echo', 'printf', 'read', 'cd', 'pwd', 'ls',
-      'cp', 'mv', 'rm', 'mkdir', 'chmod', 'chown', 'grep', 'awk', 'sed',
-      'sort', 'uniq', 'head', 'tail', 'cat', 'less', 'more', 'find',
-      'python', 'python3', 'pip', 'conda', 'module', 'srun', 'sbatch',
-      'scancel', 'squeue', 'sinfo', 'scontrol', 'uv', 'ulimit', 'activate'
-    ];
-    
-    keywords.forEach(keyword => {
-      // Match whole words that aren't already inside a span tag
-      // Use a simpler approach without lookbehind
-      const regex = new RegExp(`\\b(${keyword})\\b`, 'g');
-      highlighted = highlighted.replace(regex, (match, p1, offset, string) => {
-        // Check if we're inside an HTML tag
-        const beforeMatch = string.substring(0, offset);
-        const afterMatch = string.substring(offset + match.length);
+      // Regular comments (but not the above special cases)
+      if (line.match(/^#/)) {
+        return `<span class="comment">${line}</span>`;
+      }
 
-        // Simple check: if there's an unclosed tag before and a closing > after, skip
-        const lastOpenTag = beforeMatch.lastIndexOf('<');
-        const lastCloseTag = beforeMatch.lastIndexOf('>');
-        const nextCloseTag = afterMatch.indexOf('>');
+      // For non-comment lines, apply token-level highlighting
+      let highlighted = line;
 
-        if (lastOpenTag > lastCloseTag && nextCloseTag !== -1) {
-          return match; // We're inside a tag, don't highlight
+      // Strings in double quotes (with proper escaping) - do this first
+      highlighted = highlighted.replace(
+        /(&quot;(?:[^&]|&(?!quot;))*&quot;)/g,
+        '<span class="string">$1</span>'
+      );
+
+      // Strings in single quotes (with proper escaping)
+      highlighted = highlighted.replace(
+        /(&#x27;(?:[^&]|&(?!#x27;))*&#x27;)/g,
+        '<span class="string">$1</span>'
+      );
+
+      // Environment variables - avoid matching inside strings
+      highlighted = highlighted.replace(
+        /(\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*)/g,
+        (match, p1, offset, string) => {
+          // Check if we're inside a string span
+          const before = string.substring(0, offset);
+          const openStringSpans = (before.match(/<span class="string">/g) || []).length;
+          const closeStringSpans = (before.match(/<\/span>/g) || []).length;
+
+          if (openStringSpans > closeStringSpans) {
+            return match; // Inside a string, don't highlight
+          }
+
+          return `<span class="variable">${p1}</span>`;
         }
+      );
 
-        return `<span class="keyword">${p1}</span>`;
+      // Keywords - avoid matching inside strings or existing spans
+      const keywords = [
+        'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done',
+        'case', 'esac', 'function', 'return', 'exit', 'break', 'continue',
+        'export', 'source', 'echo', 'printf', 'read', 'cd', 'pwd', 'ls',
+        'cp', 'mv', 'rm', 'mkdir', 'chmod', 'chown', 'grep', 'awk', 'sed',
+        'sort', 'uniq', 'head', 'tail', 'cat', 'less', 'more', 'find',
+        'python', 'python3', 'pip', 'conda', 'module', 'srun', 'sbatch',
+        'scancel', 'squeue', 'sinfo', 'scontrol', 'uv', 'ulimit', 'activate'
+      ];
+
+      keywords.forEach(keyword => {
+        const regex = new RegExp(`\\b(${keyword})\\b`, 'g');
+        highlighted = highlighted.replace(regex, (match, p1, offset, string) => {
+          // Check if we're inside an existing span
+          const before = string.substring(0, offset);
+          const openSpans = (before.match(/<span/g) || []).length;
+          const closeSpans = (before.match(/<\/span>/g) || []).length;
+
+          if (openSpans > closeSpans) {
+            return match; // Inside a span, don't highlight
+          }
+
+          return `<span class="keyword">${p1}</span>`;
+        });
       });
+
+      // Numbers - avoid matching inside strings or existing spans
+      highlighted = highlighted.replace(
+        /\b(\d+\.?\d*)\b/g,
+        (match, p1, offset, string) => {
+          const before = string.substring(0, offset);
+          const openSpans = (before.match(/<span/g) || []).length;
+          const closeSpans = (before.match(/<\/span>/g) || []).length;
+
+          if (openSpans > closeSpans) {
+            return match; // Inside a span
+          }
+
+          return `<span class="number">${p1}</span>`;
+        }
+      );
+
+      // Operators - avoid matching inside strings or existing spans
+      highlighted = highlighted.replace(
+        /(&lt;|&gt;|&amp;&amp;|&amp;|\||=|!|\+|-|\*|\/)/g,
+        (match, p1, offset, string) => {
+          const before = string.substring(0, offset);
+          const openSpans = (before.match(/<span/g) || []).length;
+          const closeSpans = (before.match(/<\/span>/g) || []).length;
+
+          if (openSpans > closeSpans) {
+            return match; // Inside a span
+          }
+
+          return `<span class="operator">${p1}</span>`;
+        }
+      );
+
+      return highlighted;
     });
 
-    // Numbers - simpler pattern
-    highlighted = highlighted.replace(
-      /\b(\d+\.?\d*)\b/g,
-      (match, p1, offset, string) => {
-        // Check if we're inside an HTML tag
-        const beforeMatch = string.substring(0, offset);
-        const lastOpenTag = beforeMatch.lastIndexOf('<');
-        const lastCloseTag = beforeMatch.lastIndexOf('>');
-
-        if (lastOpenTag > lastCloseTag) {
-          return match; // We're inside a tag
-        }
-
-        return `<span class="number">${p1}</span>`;
-      }
-    );
-    
-    // Operators - handle escaped HTML entities
-    highlighted = highlighted.replace(
-      /(&lt;|&gt;|&amp;&amp;|&amp;|\||=|!|\+|-|\*|\/)/g,
-      (match, p1, offset, string) => {
-        // Simple check to avoid highlighting inside existing spans
-        const beforeMatch = string.substring(0, offset);
-        const lastOpenSpan = beforeMatch.lastIndexOf('<span');
-        const lastCloseSpan = beforeMatch.lastIndexOf('</span>');
-
-        if (lastOpenSpan > lastCloseSpan) {
-          return match; // We're inside a span
-        }
-
-        return `<span class="operator">${p1}</span>`;
-      }
-    );
-    
-    return highlighted;
+    return highlightedLines.join('\n');
   }
   
   function highlightSearchResults() {

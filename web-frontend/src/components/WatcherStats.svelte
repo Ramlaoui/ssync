@@ -10,12 +10,12 @@
   
   function getStateColor(state: string): string {
     switch (state) {
-      case 'active': return 'var(--color-success)';
-      case 'paused': return 'var(--color-warning)';
-      case 'completed': return 'var(--color-info)';
-      case 'failed': return 'var(--color-error)';
-      case 'pending': return 'var(--color-text-secondary)';
-      default: return 'var(--color-text-secondary)';
+      case 'active': return 'var(--success)';
+      case 'paused': return 'var(--warning)';
+      case 'completed': return 'var(--info)';
+      case 'failed': return 'var(--error)';
+      case 'pending': return 'var(--muted-foreground)';
+      default: return 'var(--muted-foreground)';
     }
   }
   
@@ -152,14 +152,14 @@
     align-items: center;
     justify-content: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .spinner {
     width: 40px;
     height: 40px;
-    border: 3px solid var(--color-border);
-    border-top-color: var(--color-primary);
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 1rem;
@@ -172,7 +172,7 @@
   .empty-state {
     text-align: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .stats-container {
@@ -189,7 +189,7 @@
   }
   
   .stat-card {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1.5rem;
     text-align: center;
@@ -198,25 +198,25 @@
   .stat-value {
     font-size: 2rem;
     font-weight: 600;
-    color: var(--color-primary);
+    color: var(--accent);
     margin-bottom: 0.5rem;
   }
   
   .stat-label {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.9rem;
   }
   
   /* Stats Sections */
   .stats-section {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1.5rem;
   }
   
   .stats-section h3 {
     margin: 0 0 1rem 0;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 1.1rem;
   }
   
@@ -235,7 +235,7 @@
   
   .state-bar-container {
     height: 24px;
-    background: var(--color-bg-primary);
+    background: var(--background);
     border-radius: 4px;
     overflow: hidden;
   }
@@ -252,12 +252,12 @@
   }
   
   .state-name {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     text-transform: capitalize;
   }
   
   .state-count {
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-weight: 500;
   }
   
@@ -269,8 +269,8 @@
   }
   
   .action-card {
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
   }
@@ -284,11 +284,11 @@
   
   .action-type {
     font-weight: 500;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .action-total {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.85rem;
   }
   
@@ -305,7 +305,7 @@
   }
   
   .metric-label {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.75rem;
     margin-bottom: 0.25rem;
   }
@@ -316,23 +316,23 @@
   }
   
   .metric-value.success {
-    color: var(--color-success);
+    color: var(--success);
   }
   
   .metric-value.error {
-    color: var(--color-error);
+    color: var(--error);
   }
   
   .success-bar {
     height: 4px;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 2px;
     overflow: hidden;
   }
   
   .success-fill {
     height: 100%;
-    background: var(--color-success);
+    background: var(--success);
     transition: width 0.3s ease;
   }
   
@@ -348,15 +348,15 @@
     align-items: center;
     gap: 1rem;
     padding: 0.75rem;
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 8px;
   }
   
   .rank {
     font-size: 1.2rem;
     font-weight: 600;
-    color: var(--color-primary);
+    color: var(--accent);
     width: 40px;
     text-align: center;
   }
@@ -367,11 +367,11 @@
   
   .watcher-name {
     font-weight: 500;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .watcher-job {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.85rem;
   }
   
@@ -383,11 +383,11 @@
     display: block;
     font-size: 1.5rem;
     font-weight: 600;
-    color: var(--color-primary);
+    color: var(--accent);
   }
   
   .event-count .label {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.75rem;
   }
   

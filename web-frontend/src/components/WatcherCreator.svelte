@@ -123,6 +123,16 @@
   let jobOutput = $state('');
   let loadingOutput = $state(false);
 
+  // Regex testing state
+  interface PatternMatch {
+    matched_text: string;
+    captures: string[];
+    position: number;
+  }
+  let patternMatches: PatternMatch[] = $state([]);
+  let patternError: string | null = $state(null);
+  let showPatternTest = $state(false);
+
   // Quick templates for common patterns
   const quickTemplates = [
     {
@@ -182,6 +192,61 @@
       loadingOutput = false;
     }
   }
+
+  function testPattern() {
+    patternMatches = [];
+    patternError = null;
+
+    if (!pattern.trim()) {
+      patternError = 'Please enter a pattern to test';
+      return;
+    }
+
+    if (!jobOutput || jobOutput === 'No output available' || jobOutput === 'Failed to load job output') {
+      patternError = 'Please load job output first';
+      return;
+    }
+
+    try {
+      // Create regex with multiline flag (same as backend)
+      const regex = new RegExp(pattern, 'gm');
+      const matches: PatternMatch[] = [];
+
+      let match;
+      while ((match = regex.exec(jobOutput)) !== null) {
+        matches.push({
+          matched_text: match[0],
+          captures: match.slice(1), // All captured groups
+          position: match.index
+        });
+
+        // Prevent infinite loop for zero-width matches
+        if (match.index === regex.lastIndex) {
+          regex.lastIndex++;
+        }
+      }
+
+      patternMatches = matches;
+      showPatternTest = true;
+    } catch (err: any) {
+      patternError = `Invalid regex pattern: ${err.message}`;
+      patternMatches = [];
+    }
+  }
+
+  // Auto-test pattern when it changes (debounced)
+  let testPatternTimeout: number | null = null;
+  run(() => {
+    // Only auto-test if output is loaded and pattern is not empty
+    if (pattern && jobOutput && jobOutput !== 'No output available' && jobOutput !== 'Failed to load job output') {
+      if (testPatternTimeout) {
+        clearTimeout(testPatternTimeout);
+      }
+      testPatternTimeout = window.setTimeout(() => {
+        testPattern();
+      }, 500);
+    }
+  });
 
   function addSimpleAction() {
     actions = [...actions, {
@@ -537,7 +602,59 @@
               >
                 {loadingOutput ? 'Loading...' : 'Refresh'}
               </button>
+              <button
+                class="test-pattern-btn"
+                onclick={testPattern}
+                disabled={!pattern.trim() || !jobOutput || jobOutput === 'No output available'}
+              >
+                Test Pattern
+              </button>
             </div>
+
+            {#if patternError}
+              <div class="pattern-error" transition:slide={{ duration: 200 }}>
+                {patternError}
+              </div>
+            {/if}
+
+            {#if showPatternTest && !patternError}
+              <div class="pattern-test-results" transition:slide={{ duration: 200 }}>
+                <div class="results-header">
+                  <strong>{patternMatches.length}</strong> match{patternMatches.length !== 1 ? 'es' : ''} found
+                </div>
+                {#if patternMatches.length > 0}
+                  <div class="matches-list">
+                    {#each patternMatches.slice(0, 5) as match, i}
+                      <div class="match-item">
+                        <div class="match-header">Match {i + 1}</div>
+                        <div class="match-text">
+                          <code>{match.matched_text}</code>
+                        </div>
+                        {#if match.captures.length > 0 && match.captures.some(c => c !== undefined)}
+                          <div class="captures-list">
+                            <span class="captures-label">Captured groups:</span>
+                            {#each match.captures as capture, capIdx}
+                              {#if capture !== undefined}
+                                <div class="capture-item">
+                                  <span class="capture-index">${capIdx + 1}:</span>
+                                  <code>{capture}</code>
+                                </div>
+                              {/if}
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                    {#if patternMatches.length > 5}
+                      <div class="more-matches">
+                        ... and {patternMatches.length - 5} more match{patternMatches.length - 5 !== 1 ? 'es' : ''}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
             <pre class="output-content">{jobOutput}</pre>
           </div>
         {/if}
@@ -1028,7 +1145,8 @@
     border-bottom: 1px solid #e5e7eb;
   }
 
-  .refresh-btn {
+  .refresh-btn,
+  .test-pattern-btn {
     background: #3b82f6;
     color: white;
     border: none;
@@ -1037,14 +1155,134 @@
     font-size: 0.75rem;
     cursor: pointer;
     transition: background 0.2s;
+    margin-right: 0.5rem;
   }
 
-  .refresh-btn:hover:not(:disabled) {
+  .refresh-btn:hover:not(:disabled),
+  .test-pattern-btn:hover:not(:disabled) {
     background: #2563eb;
   }
 
-  .refresh-btn:disabled {
+  .refresh-btn:disabled,
+  .test-pattern-btn:disabled {
     opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .test-pattern-btn {
+    background: #10b981;
+  }
+
+  .test-pattern-btn:hover:not(:disabled) {
+    background: #059669;
+  }
+
+  .pattern-error {
+    background: #fef2f2;
+    color: #dc2626;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.75rem;
+    border-bottom: 1px solid #fecaca;
+  }
+
+  .pattern-test-results {
+    background: #f0fdf4;
+    border-bottom: 1px solid #bbf7d0;
+    padding: 0.75rem;
+  }
+
+  .results-header {
+    font-size: 0.875rem;
+    color: #166534;
+    margin-bottom: 0.75rem;
+  }
+
+  .results-header strong {
+    font-size: 1rem;
+    color: #15803d;
+  }
+
+  .matches-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .match-item {
+    background: white;
+    border: 1px solid #bbf7d0;
+    border-radius: 6px;
+    padding: 0.625rem;
+  }
+
+  .match-header {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #166534;
+    margin-bottom: 0.375rem;
+  }
+
+  .match-text {
+    margin-bottom: 0.5rem;
+  }
+
+  .match-text code {
+    display: inline-block;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: #1f2937;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .captures-list {
+    padding-top: 0.5rem;
+    border-top: 1px solid #f3f4f6;
+  }
+
+  .captures-label {
+    display: block;
+    font-size: 0.6875rem;
+    color: #6b7280;
+    margin-bottom: 0.375rem;
+    font-weight: 500;
+  }
+
+  .capture-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.75rem;
+  }
+
+  .capture-index {
+    color: #6366f1;
+    font-weight: 600;
+    font-family: monospace;
+    min-width: 2rem;
+  }
+
+  .capture-item code {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 0.6875rem;
+    color: #1f2937;
+  }
+
+  .more-matches {
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-style: italic;
+    text-align: center;
+    padding: 0.5rem;
   }
 
   .output-content {

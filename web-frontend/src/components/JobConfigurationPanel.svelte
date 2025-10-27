@@ -403,7 +403,7 @@
 
 <style>
   .config-panel {
-    background: var(--color-bg-primary);
+    background: var(--background);
     border-radius: 8px;
     padding: 1.5rem;
     height: 100%;
@@ -420,7 +420,7 @@
   .panel-header h3 {
     margin: 0;
     font-size: 1.125rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .preview-toggle {
@@ -428,19 +428,19 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 0.875rem;
     cursor: pointer;
     transition: all 0.2s;
   }
   
   .preview-toggle:hover {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   .preview-toggle svg {
@@ -457,7 +457,7 @@
     margin-bottom: 0.75rem;
     font-size: 0.875rem;
     font-weight: 600;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .section-label.clickable {
@@ -466,7 +466,7 @@
   }
   
   .section-label.clickable:hover {
-    color: var(--color-primary);
+    color: var(--accent);
   }
   
   .presets-grid {
@@ -477,10 +477,10 @@
   
   .preset-btn {
     padding: 0.5rem;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 0.75rem;
     font-weight: 500;
     cursor: pointer;
@@ -488,9 +488,9 @@
   }
   
   .preset-btn:hover {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   .form-group {
@@ -501,7 +501,7 @@
     display: block;
     margin-bottom: 0.375rem;
     font-size: 0.8125rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .form-row {
@@ -515,26 +515,26 @@
   select {
     width: 100%;
     padding: 0.5rem;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 0.875rem;
   }
   
   input:focus,
   select:focus {
     outline: none;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
   
   input.has-error {
-    border-color: var(--color-error);
+    border-color: var(--error);
   }
   
   input.has-warning {
-    border-color: var(--color-warning);
+    border-color: var(--warning);
   }
   
   .input-with-slider {
@@ -550,7 +550,7 @@
   .slider {
     flex: 1;
     height: 4px;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 2px;
     outline: none;
     -webkit-appearance: none;
@@ -561,7 +561,7 @@
     appearance: none;
     width: 16px;
     height: 16px;
-    background: var(--color-primary);
+    background: var(--accent);
     border-radius: 50%;
     cursor: pointer;
   }
@@ -569,7 +569,7 @@
   .slider::-moz-range-thumb {
     width: 16px;
     height: 16px;
-    background: var(--color-primary);
+    background: var(--accent);
     border-radius: 50%;
     cursor: pointer;
     border: none;
@@ -587,11 +587,11 @@
   
   .time-display {
     padding: 0.5rem 0.75rem;
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 6px;
     font-family: monospace;
     font-size: 0.875rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .error,
@@ -601,21 +601,21 @@
   }
   
   .error {
-    color: var(--color-error);
+    color: var(--error);
   }
   
   .warning {
-    color: var(--color-warning);
+    color: var(--warning);
   }
   
   details {
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 1rem;
   }
   
   details[open] {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
   }
   
   details summary {
@@ -626,11 +626,11 @@
   
   details[open] summary {
     margin-bottom: 1rem;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--border);
   }
   
   .preview-section {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 6px;
     overflow: hidden;
   }
@@ -640,19 +640,19 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1rem;
-    background: var(--color-bg-primary);
-    border-bottom: 1px solid var(--color-border);
+    background: var(--background);
+    border-bottom: 1px solid var(--border);
   }
   
   .preview-header label {
     font-size: 0.8125rem;
     font-weight: 600;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .copy-btn {
     padding: 0.25rem 0.75rem;
-    background: var(--color-primary);
+    background: var(--accent);
     border: none;
     border-radius: 4px;
     color: white;
@@ -662,7 +662,7 @@
   }
   
   .copy-btn:hover {
-    background: var(--color-primary-dark);
+    background: var(--accent);
   }
   
   .sbatch-preview {
@@ -671,7 +671,7 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.75rem;
     line-height: 1.5;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     overflow-x: auto;
   }
   

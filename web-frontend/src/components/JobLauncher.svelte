@@ -47,6 +47,7 @@
     FileText,
     History,
     MoreHorizontal,
+    MoreVertical,
     Palette,
     Type,
     ToggleLeft,
@@ -111,17 +112,33 @@ echo "Starting job..."
   let showSaveTemplateDialog = $state(false);
 
   // Simple shared state for parameters - this is the single source of truth
-  let parameters = $state({
-    cpus: 1,
-    memory: 4,
-    timeLimit: 60,
-    nodes: 1,
+  // Using empty string for optional number fields to avoid Svelte binding issues
+  let parameters = $state<{
+    cpus: number | string;
+    memory: number | string;
+    timeLimit: number | string;
+    nodes: number | string;
+    partition: string;
+    account: string;
+    jobName: string;
+    constraint: string;
+    ntasksPerNode: number | string;
+    gpusPerNode: number | string;
+    gres: string;
+    outputFile: string;
+    errorFile: string;
+    sourceDir: string;
+  }>({
+    cpus: '',
+    memory: '',
+    timeLimit: '',
+    nodes: '',
     partition: '',
     account: '',
     jobName: '',
     constraint: '',
-    ntasksPerNode: 1,
-    gpusPerNode: 0,
+    ntasksPerNode: '',
+    gpusPerNode: '',
     gres: '',
     outputFile: '',
     errorFile: '',
@@ -143,6 +160,7 @@ echo "Starting job..."
   let showMobileConfig = $state(false);
   let mobileConfigView = $state('main'); // 'main', 'directory', 'sync'
   let showValidationInfo = $state(false);
+  let showMobileMoreMenu = $state(false);
   let showPresetManager = $state(false);
   let showPresetSidebar = $state(false); // New unified preset sidebar for desktop/mobile
   let editingPreset: Preset | null = $state(null);
@@ -1137,49 +1155,15 @@ echo "Starting job..."
           <div class="status-dot-small" class:valid={validationDetails.isValid} class:invalid={!validationDetails.isValid}></div>
         </button>
 
-        <!-- Editor Options -->
-        <button
-          class="mobile-icon-btn"
-          onclick={(e) => {
-            e.stopPropagation();
-            showEditorOptions = !showEditorOptions;
-          }}
-          title="Editor"
-        >
-          <MoreHorizontal class="w-3.5 h-3.5" />
-        </button>
-
         <div class="mobile-divider-vertical"></div>
 
+        <!-- Primary Actions (Always Visible) -->
         <button
           class="mobile-icon-btn"
           onclick={handleHistoryClick}
           title="History"
         >
           <History class="w-3.5 h-3.5" />
-        </button>
-        <button
-          class="mobile-icon-btn"
-          onclick={() => {
-            showTemplates = !showTemplates;
-            if (showTemplates) {
-              showPresets = false;
-              showHistory = false;
-            }
-          }}
-          title="Templates"
-        >
-          <FileText class="w-3.5 h-3.5" />
-        </button>
-        <button
-          class="mobile-icon-btn"
-          onclick={() => {
-            showSaveTemplateDialog = true;
-          }}
-          title="Save Template"
-          disabled={!script || script.trim() === ''}
-        >
-          <Save class="w-3.5 h-3.5" />
         </button>
         <button
           bind:this={presetDropdownTrigger}
@@ -1203,6 +1187,18 @@ echo "Starting job..."
         >
           <Sliders class="w-3.5 h-3.5" />
         </button>
+
+        <!-- More Actions Menu -->
+        <button
+          class="mobile-icon-btn"
+          onclick={(e) => {
+            e.stopPropagation();
+            showMobileMoreMenu = !showMobileMoreMenu;
+          }}
+          title="More actions"
+        >
+          <MoreVertical class="w-3.5 h-3.5" />
+        </button>
       </div>
     </header>
 
@@ -1220,6 +1216,56 @@ echo "Starting job..."
             <span>{validationDetails.missingText || 'Script needs configuration'}</span>
           </div>
         {/if}
+      </div>
+    {/if}
+
+    <!-- Mobile More Menu Dropdown -->
+    {#if showMobileMoreMenu}
+      <div
+        class="mobile-more-menu-backdrop"
+        role="button"
+        tabindex="0"
+        onclick={() => showMobileMoreMenu = false}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showMobileMoreMenu = false; }}}
+        aria-label="Close more menu"
+      ></div>
+      <div class="mobile-more-menu" transition:slide={{ duration: 200 }}>
+        <button
+          class="mobile-more-menu-item"
+          onclick={(e) => {
+            e.stopPropagation();
+            showEditorOptions = !showEditorOptions;
+            showMobileMoreMenu = false;
+          }}
+        >
+          <MoreHorizontal class="w-4 h-4" />
+          <span>Editor Options</span>
+        </button>
+        <button
+          class="mobile-more-menu-item"
+          onclick={() => {
+            showTemplates = !showTemplates;
+            if (showTemplates) {
+              showPresets = false;
+              showHistory = false;
+            }
+            showMobileMoreMenu = false;
+          }}
+        >
+          <FileText class="w-4 h-4" />
+          <span>Templates</span>
+        </button>
+        <button
+          class="mobile-more-menu-item"
+          onclick={() => {
+            showSaveTemplateDialog = true;
+            showMobileMoreMenu = false;
+          }}
+          disabled={!script || script.trim() === ''}
+        >
+          <Save class="w-4 h-4" />
+          <span>Save Template</span>
+        </button>
       </div>
     {/if}
 
@@ -1736,7 +1782,7 @@ echo "Starting job..."
             <div  class="flex items-center space-x-3">
         <!-- Presets - Now opens sidebar on desktop too -->
         <button
-          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
           onclick={() => showPresetSidebar = !showPresetSidebar}
           title="Presets"
         >
@@ -1747,7 +1793,7 @@ echo "Starting job..."
 
         <!-- Script Templates -->
         <button
-          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
           onclick={() => showTemplates = !showTemplates}
           title="Script Templates"
         >
@@ -1757,7 +1803,7 @@ echo "Starting job..."
 
         <!-- Script History -->
         <button
-          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
           onclick={handleHistoryClick}
           title="Script History"
         >
@@ -1767,7 +1813,7 @@ echo "Starting job..."
 
         <!-- Save as Template -->
         <button
-          class="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
           onclick={() => showSaveTemplateDialog = true}
           title="Save current script as template"
           disabled={!script || script.trim() === ''}
@@ -4179,6 +4225,52 @@ echo "Starting job..."
     max-width: calc(100vw - 1.5rem);
   }
 
+  .mobile-more-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 49;
+  }
+
+  .mobile-more-menu {
+    position: absolute;
+    top: 44px;
+    right: 0.75rem;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    z-index: 50;
+    min-width: 200px;
+    max-width: calc(100vw - 1.5rem);
+  }
+
+  .mobile-more-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.75rem;
+    border: none;
+    background: transparent;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    text-align: left;
+    font-size: 0.875rem;
+    color: #1f2937;
+  }
+
+  .mobile-more-menu-item:hover:not(:disabled) {
+    background: #f3f4f6;
+  }
+
+  .mobile-more-menu-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .validation-info-content {
     display: flex;
     align-items: center;
@@ -5604,5 +5696,151 @@ echo "Starting job..."
       transform: translateY(0);
       opacity: 1;
     }
+  }
+
+  /* Dark Mode Overrides */
+  :global(.dark) .modern-launcher {
+    background: #111827;
+  }
+
+  :global(.dark) .mobile-header {
+    background: linear-gradient(to bottom, rgb(31, 41, 55), rgb(31, 41, 55));
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+
+  :global(.dark) .mobile-host-select {
+    background: rgb(55, 65, 81);
+    border-color: rgb(75, 85, 99);
+    color: rgb(229, 231, 235);
+  }
+
+  :global(.dark) .mobile-divider,
+  :global(.dark) .mobile-divider-vertical {
+    background: rgb(75, 85, 99);
+  }
+
+  :global(.dark) .mobile-icon-btn {
+    color: rgb(156, 163, 175);
+  }
+
+  :global(.dark) .mobile-icon-btn:hover {
+    background: rgb(55, 65, 81);
+    color: rgb(229, 231, 235);
+  }
+
+  :global(.dark) .editor-container {
+    background: rgb(17, 24, 39);
+  }
+
+  :global(.dark) .editor-container.mobile {
+    background: rgb(17, 24, 39);
+  }
+
+  :global(.dark) .host-dropdown-trigger {
+    background: rgb(31, 41, 55);
+    border-color: rgb(75, 85, 99);
+    color: rgb(229, 231, 235);
+  }
+
+  :global(.dark) .host-dropdown-trigger:hover {
+    border-color: rgb(59, 130, 246);
+  }
+
+  :global(.dark) .host-dropdown-trigger .placeholder {
+    color: rgb(107, 114, 128);
+  }
+
+  :global(.dark) .preset-manager-sidebar {
+    background: rgb(31, 41, 55);
+  }
+
+  :global(.dark) .preset-manager-header {
+    background: rgb(31, 41, 55);
+    border-bottom-color: rgb(75, 85, 99);
+  }
+
+  :global(.dark) .preset-manager-header h3 {
+    color: rgb(243, 244, 246);
+  }
+
+  :global(.dark) .preset-manager-close {
+    color: rgb(156, 163, 175);
+  }
+
+  :global(.dark) .preset-manager-close:hover {
+    background: rgb(55, 65, 81);
+    color: rgb(229, 231, 235);
+  }
+
+  :global(.dark) .preset-section-header h4 {
+    color: rgb(243, 244, 246);
+  }
+
+  :global(.dark) .preset-manage-toggle-btn,
+  :global(.dark) .preset-back-btn {
+    color: rgb(156, 163, 175);
+    border-color: rgb(75, 85, 99);
+  }
+
+  :global(.dark) .preset-manage-toggle-btn:hover,
+  :global(.dark) .preset-back-btn:hover {
+    background: rgb(55, 65, 81);
+    color: rgb(229, 231, 235);
+    border-color: rgb(107, 114, 128);
+  }
+
+  :global(.dark) .preset-quick-item {
+    background: rgb(55, 65, 81);
+    border-color: rgb(75, 85, 99);
+  }
+
+  :global(.dark) .preset-quick-item:hover {
+    background: rgb(67, 77, 91);
+    border-color: rgb(107, 114, 128);
+  }
+
+  :global(.dark) .preset-name {
+    color: rgb(243, 244, 246);
+  }
+
+  :global(.dark) .preset-specs {
+    color: rgb(156, 163, 175);
+  }
+
+  :global(.dark) .config-card {
+    background: rgb(31, 41, 55);
+    border-color: rgb(75, 85, 99);
+  }
+
+  :global(.dark) .config-header {
+    border-bottom-color: rgb(75, 85, 99);
+  }
+
+  :global(.dark) .config-title {
+    color: rgb(243, 244, 246);
+  }
+
+  :global(.dark) .form-group label {
+    color: rgb(209, 213, 219);
+  }
+
+  :global(.dark) .form-control {
+    background: rgb(55, 65, 81);
+    border-color: rgb(75, 85, 99);
+    color: rgb(229, 231, 235);
+  }
+
+  :global(.dark) .form-control:focus {
+    border-color: rgb(59, 130, 246);
+    background: rgb(31, 41, 55);
+  }
+
+  :global(.dark) .btn-secondary {
+    background: rgb(55, 65, 81);
+    color: rgb(229, 231, 235);
+  }
+
+  :global(.dark) .btn-secondary:hover {
+    background: rgb(67, 77, 91);
   }
 </style>

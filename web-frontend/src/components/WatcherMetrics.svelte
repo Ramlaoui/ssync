@@ -291,8 +291,8 @@
 
 <style>
   .metrics-container {
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 2rem;
@@ -308,11 +308,11 @@
   .metrics-header h3 {
     margin: 0;
     font-size: 1.25rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .metric-count {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
     padding: 0.25rem 0.75rem;
     border-radius: 12px;
@@ -322,7 +322,7 @@
   .no-metrics {
     text-align: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .no-metrics p {
@@ -338,8 +338,8 @@
   }
   
   .metric-btn {
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 0.5rem 1rem;
     cursor: pointer;
@@ -351,13 +351,13 @@
   
   .metric-btn:hover {
     background: white;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   .metric-btn.active {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
-    border-color: var(--color-primary);
+    border-color: var(--accent);
   }
   
   .metric-badge {
@@ -375,7 +375,7 @@
   }
   
   .stat-card {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1rem;
     text-align: center;
@@ -384,12 +384,12 @@
   .stat-value {
     font-size: 1.5rem;
     font-weight: 600;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .stat-label {
     font-size: 0.875rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     margin-top: 0.25rem;
   }
   
@@ -398,23 +398,23 @@
     margin-top: 0.5rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    background: var(--color-bg-primary);
+    background: var(--background);
   }
   
   .stat-trend.up {
-    color: var(--color-success);
+    color: var(--success);
   }
   
   .stat-trend.down {
-    color: var(--color-error);
+    color: var(--error);
   }
   
   .stat-trend.stable {
-    color: var(--color-info);
+    color: var(--info);
   }
   
   .chart-container {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1rem;
     margin-bottom: 1.5rem;
@@ -427,7 +427,7 @@
   }
   
   .recent-values {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1rem;
   }
@@ -435,7 +435,7 @@
   .recent-values h4 {
     margin: 0 0 1rem 0;
     font-size: 1rem;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .values-table {
@@ -449,17 +449,17 @@
     grid-template-columns: 1fr 1fr 1fr;
     gap: 1rem;
     padding: 0.5rem;
-    background: var(--color-bg-primary);
+    background: var(--background);
     border-radius: 6px;
     font-size: 0.875rem;
   }
   
   .value-time {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .value-job {
-    color: var(--color-primary);
+    color: var(--accent);
   }
   
   .value-number {

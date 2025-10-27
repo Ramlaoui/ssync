@@ -75,35 +75,35 @@
   let backLabel = $derived(customBackLabel || getBackLabel($navigationState));
 </script>
 
-<header class="bg-white border-b border-gray-200 sticky top-0 z-40">
+<header class="bg-background border-b border-border sticky top-0 z-40">
   <div class="px-4 sm:px-6 lg:px-8">
     <div class="flex h-16 items-center justify-between">
       <!-- Left side -->
       <div class="flex items-center space-x-4">
         {#if showBackButton}
           <button
-            class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
+            class="flex items-center gap-2 px-3 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg font-medium transition-colors"
             onclick={handleBackClick}
           >
             <ArrowLeft class="w-4 h-4" />
             {backLabel}
           </button>
 
-          <div class="w-px h-6 bg-gray-300"></div>
+          <div class="w-px h-6 bg-border"></div>
         {/if}
 
         {#if title}
-          <h1 class="text-lg font-semibold text-gray-900">{title}</h1>
+          <h1 class="text-lg font-semibold text-foreground">{title}</h1>
         {/if}
 
         {#if subtitle}
-          <div class="text-sm text-gray-500">{subtitle}</div>
+          <div class="text-sm text-muted-foreground">{subtitle}</div>
         {/if}
 
         {#if count !== undefined}
           <div class="flex items-center space-x-2">
-            <span class="text-xl font-medium">{count}</span>
-            <span class="text-sm text-gray-500">{countLabel}</span>
+            <span class="text-xl font-medium text-foreground">{count}</span>
+            <span class="text-sm text-muted-foreground">{countLabel}</span>
           </div>
         {/if}
 

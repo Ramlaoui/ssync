@@ -1,7 +1,10 @@
 /* Global styles for SLURM Manager */
 
 :root {
-    /* Ultra-modern minimalist palette */
+    /* Base colors */
+    --white: #ffffff;
+
+    /* Ultra-modern minimalist palette - Light Theme */
     --background: #ffffff;
     --foreground: #000000;
     --muted: #666666;
@@ -18,31 +21,131 @@
     --destructive: #ff3333;
     --destructive-foreground: #ffffff;
     --success: #00cc88;
+    --success-bg: #d1fae5;
     --warning: #ffaa00;
+    --warning-bg: #fef3c7;
+    --error: #ef4444;
+    --error-bg: #fee2e2;
+    --info: #3b82f6;
+    --info-bg: #dbeafe;
     --card: #ffffff;
     --card-foreground: #000000;
     --popover: #ffffff;
     --popover-foreground: #000000;
     --radius: 0.375rem;
-    
-    
-    /* Status colors - maintained for legacy components */
-    --color-success: #10b981;
-    --color-error: #ef4444;
-    --color-warning: #f59e0b;
-    --color-info: #3b82f6;
-    --color-primary: #3b82f6;
 
-    /* Legacy component support - gradually remove as components migrate to Tailwind */
-    --color-bg-primary: #ffffff;
-    --color-bg-secondary: #f8f9fa;
-    --color-border: #e5e7eb;
-    --color-text-primary: #111827;
-    --color-text-secondary: #6b7280;
+    /* Gray scale for Tailwind classes - Light Theme */
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+
+    /* Slate scale for Tailwind classes - Light Theme */
+    --slate-50: #f8fafc;
+    --slate-100: #f1f5f9;
+    --slate-200: #e2e8f0;
+    --slate-300: #cbd5e1;
+    --slate-400: #94a3b8;
+    --slate-500: #64748b;
+    --slate-600: #475569;
+    --slate-700: #334155;
+    --slate-800: #1e293b;
+    --slate-900: #0f172a;
+}
+
+/* Dark Theme */
+.dark {
+    /* Base colors */
+    --white: #0a0a0a;
+
+    /* Ultra-modern minimalist palette - Dark Theme */
+    --background: #0a0a0a;
+    --foreground: #d4d4d4;
+    --muted: #a3a3a3;
+    --muted-foreground: #8a8a8a;
+    --border: #222222;
+    --input: #1a1a1a;
+    --ring: #d4d4d4;
+    --primary: #e5e5e5;
+    --primary-foreground: #0a0a0a;
+    --secondary: #1a1a1a;
+    --secondary-foreground: #d4d4d4;
+    --accent: #3b82f6;
+    --accent-foreground: #ffffff;
+    --destructive: #ef4444;
+    --destructive-foreground: #ffffff;
+    --success: #10b981;
+    --success-bg: rgba(16, 185, 129, 0.15);
+    --warning: #f59e0b;
+    --warning-bg: rgba(245, 158, 11, 0.15);
+    --error: #ef4444;
+    --error-bg: rgba(239, 68, 68, 0.15);
+    --info: #3b82f6;
+    --info-bg: rgba(59, 130, 246, 0.15);
+    --card: #0f0f0f;
+    --card-foreground: #d4d4d4;
+    --popover: #0f0f0f;
+    --popover-foreground: #d4d4d4;
+
+    /* Gray scale for Tailwind classes - Dark Theme (inverted for dark mode) */
+    --gray-50: #1a1a1a;
+    --gray-100: #262626;
+    --gray-200: #333333;
+    --gray-300: #404040;
+    --gray-400: #737373;
+    --gray-500: #a3a3a3;
+    --gray-600: #d4d4d4;
+    --gray-700: #e5e5e5;
+    --gray-800: #f5f5f5;
+    --gray-900: #fafafa;
+
+    /* Slate scale for Tailwind classes - Dark Theme (inverted for dark mode) */
+    --slate-50: #0f172a;
+    --slate-100: #1e293b;
+    --slate-200: #334155;
+    --slate-300: #475569;
+    --slate-400: #64748b;
+    --slate-500: #94a3b8;
+    --slate-600: #cbd5e1;
+    --slate-700: #e2e8f0;
+    --slate-800: #f1f5f9;
+    --slate-900: #f8fafc;
 }
 
 * {
     box-sizing: border-box;
+}
+
+/* Dark mode utilities and fallbacks */
+
+/* Scrollbars - Keep these as they provide visual polish */
+.dark ::-webkit-scrollbar-thumb {
+    background-color: var(--muted);
+}
+
+.dark ::-webkit-scrollbar-track {
+    background-color: var(--secondary);
+}
+
+/* CodeMirror editor - Keep these as CodeMirror has its own theming */
+.dark .cm-editor,
+.dark .cm-content,
+.dark .cm-gutters {
+    background: var(--input) !important;
+    color: var(--foreground) !important;
+}
+
+/* Select/datalist options - Keep these as they're hard to style otherwise */
+.dark select option,
+.dark datalist option {
+    background: var(--input) !important;
+    color: var(--foreground) !important;
 }
 
 html,
@@ -234,4 +337,30 @@ textarea:focus:not(:focus-visible),
     100% {
         opacity: 0.6;
     }
+}
+
+/* JobLauncher component dark mode fallbacks - TODO: Add proper dark: variants to JobLauncher.svelte */
+.dark .host-dropdown-trigger,
+.dark .host-dropdown,
+.dark .host-option,
+.dark .preset-manager-sidebar,
+.dark .preset-item,
+.dark .template-dialog,
+.dark .template-item,
+.dark .history-dialog,
+.dark .history-item,
+.dark .config-preset-item,
+.dark .directory-tree-node,
+.dark .editor-options-menu {
+    background: var(--card) !important;
+    color: var(--foreground) !important;
+    border-color: var(--border) !important;
+}
+
+.dark .host-option:hover,
+.dark .preset-item:hover,
+.dark .template-item:hover,
+.dark .history-item:hover,
+.dark .directory-tree-node:hover {
+    background: var(--secondary) !important;
 }

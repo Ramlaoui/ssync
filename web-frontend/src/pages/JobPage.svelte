@@ -275,12 +275,12 @@
 <div class="job-page">
   <!-- Desktop-only navigation header -->
   {#if !showSidebarOnly && !isMobile}
-    <header class="desktop-header bg-white border-b border-gray-200 sticky top-0 z-40">
+    <header class="desktop-header sticky top-0 z-40" style="background: var(--card); border-bottom: 1px solid var(--border);">
       <div class="px-6">
         <div class="flex h-16 items-center justify-between">
           <!-- Left side - Back button -->
           <button
-            class="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg font-medium transition-colors"
+            class="desktop-back-button flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors"
             onclick={handleBackNavigation}
           >
             <ArrowLeft class="w-4 h-4" />
@@ -290,9 +290,9 @@
           <!-- Right side - Job info (if available) -->
           {#if job}
             <div class="flex items-center gap-3">
-              <span class="text-sm text-gray-500">Job {job.job_id}</span>
+              <span class="text-sm desktop-job-info">Job {job.job_id}</span>
               {#if job.hostname}
-                <span class="text-sm text-gray-400">on {job.hostname}</span>
+                <span class="text-sm desktop-job-info-secondary">on {job.hostname}</span>
               {/if}
             </div>
           {/if}
@@ -321,13 +321,13 @@
         />
 
         <!-- Empty State Content -->
-        <div class="flex-1 flex items-center justify-center bg-gray-50">
+        <div class="flex-1 flex items-center justify-center" style="background: var(--secondary);">
           <div class="text-center">
-            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="mx-auto h-12 w-12" style="color: var(--muted-foreground);" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <h3 class="mt-2 text-sm font-medium text-gray-900">No job selected</h3>
-            <p class="mt-1 text-sm text-gray-500">Choose a job from the sidebar to view its details</p>
+            <h3 class="mt-2 text-sm font-medium" style="color: var(--foreground);">No job selected</h3>
+            <p class="mt-1 text-sm" style="color: var(--muted-foreground);">Choose a job from the sidebar to view its details</p>
           </div>
         </div>
       </div>
@@ -398,42 +398,42 @@
             <LoadingSpinner message="Loading job..." />
           {:else if job}
             <!-- Tab Navigation -->
-            <div class="flex border-b border-gray-200 bg-white px-6">
-              <nav class="flex space-x-8">
+            <div class="tab-navigation">
+              <nav class="tab-nav-container">
                 <button
                   class="tab-button {activeTab === 'details' ? 'tab-button-active' : ''}"
                   onclick={() => handleTabClick('details')}
                 >
                   <Info class="w-4 h-4" />
-                  Details
+                  <span class="tab-label">Details</span>
                 </button>
                 <button
                   class="tab-button {activeTab === 'output' ? 'tab-button-active' : ''}"
                   onclick={() => handleTabClick('output')}
                 >
                   <Terminal class="w-4 h-4" />
-                  Output
+                  <span class="tab-label">Output</span>
                 </button>
                 <button
                   class="tab-button {activeTab === 'errors' ? 'tab-button-active' : ''}"
                   onclick={() => handleTabClick('errors')}
                 >
                   <AlertTriangle class="w-4 h-4" />
-                  Errors
+                  <span class="tab-label">Errors</span>
                 </button>
                 <button
                   class="tab-button {activeTab === 'script' ? 'tab-button-active' : ''}"
                   onclick={() => handleTabClick('script')}
                 >
                   <Code class="w-4 h-4" />
-                  Script
+                  <span class="tab-label">Script</span>
                 </button>
                 <button
                   class="tab-button {activeTab === 'watchers' ? 'tab-button-active' : ''}"
                   onclick={() => handleTabClick('watchers')}
                 >
                   <Eye class="w-4 h-4" />
-                  Watchers
+                  <span class="tab-label">Watchers</span>
                 </button>
               </nav>
             </div>
@@ -496,7 +496,7 @@
     bottom: 0;
     display: flex;
     flex-direction: column;
-    background: #f8fafc;
+    background: var(--background);
     overflow: hidden;
   }
 
@@ -529,30 +529,115 @@
     /* Styles for collapsed sidebar state */
   }
 
+  /* Tab navigation container */
+  .tab-navigation {
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+    padding: 0 1.5rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+  }
+
+  .tab-navigation::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+  }
+
+  /* On mobile, reduce padding */
+  @media (max-width: 768px) {
+    .tab-navigation {
+      padding: 0 0.75rem;
+    }
+  }
+
+  .tab-nav-container {
+    display: flex;
+    gap: 0;
+    min-width: max-content; /* Prevent wrapping, allow horizontal scroll */
+  }
+
   .tab-button {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 1rem 0;
-    margin-right: 2rem;
+    padding: 1rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
+    color: rgb(107 114 128 / 1); /* text-gray-500 */
     border-bottom: 2px solid transparent;
     transition: all 0.2s;
     background: none;
-    border: none;
+    border-left: none;
+    border-right: none;
+    border-top: none;
     cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0; /* Prevent buttons from shrinking */
+  }
+
+  /* Dark mode colors */
+  :global(.dark) .tab-button {
+    color: var(--muted-foreground);
   }
 
   .tab-button:hover {
-    color: #374151;
+    color: rgb(55 65 81 / 1); /* text-gray-700 */
+  }
+
+  :global(.dark) .tab-button:hover {
+    color: var(--foreground);
   }
 
   .tab-button-active {
-    color: #1f2937;
+    color: rgb(31 41 55 / 1); /* text-gray-900 */
     border-bottom-color: #3b82f6;
   }
 
+  :global(.dark) .tab-button-active {
+    color: var(--foreground);
+    border-bottom-color: var(--accent);
+  }
+
+  /* On mobile, make tabs more compact */
+  @media (max-width: 768px) {
+    .tab-button {
+      padding: 0.75rem 0.75rem;
+      font-size: 0.8125rem; /* Slightly smaller text */
+      gap: 0.375rem; /* Tighter spacing */
+    }
+
+    /* Hide labels on very small screens, show only icons */
+    @media (max-width: 480px) {
+      .tab-label {
+        display: none;
+      }
+
+      .tab-button {
+        padding: 0.75rem 1rem;
+        justify-content: center;
+      }
+    }
+  }
+
+  /* Desktop header button styles */
+  .desktop-back-button {
+    color: var(--muted-foreground);
+    background: transparent;
+  }
+
+  .desktop-back-button:hover {
+    color: var(--foreground);
+    background: var(--secondary);
+  }
+
+  .desktop-job-info {
+    color: var(--muted-foreground);
+  }
+
+  .desktop-job-info-secondary {
+    color: var(--muted-foreground);
+    opacity: 0.7;
+  }
 
 </style>

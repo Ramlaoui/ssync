@@ -102,6 +102,18 @@ interface PerformanceMetrics {
 // Configuration
 // ============================================================================
 
+// Get WebSocket config from preferences store, with fallback to defaults
+function getWebSocketConfig() {
+  const prefs = get(preferences);
+  return prefs.websocket || {
+    initialRetryDelay: 1000,
+    maxRetryDelay: 30000,
+    retryBackoffMultiplier: 1.5,
+    timeout: 45000,
+    autoReconnect: true,
+  };
+}
+
 const CONFIG = {
   // Update strategies
   updateStrategy: {
@@ -110,28 +122,21 @@ const CONFIG = {
     batchDelayImmediate: 0, // For forced refreshes
     deduplicateWindow: 100, // Reduced from 500ms for faster deduplication
   },
-  
+
   // Cache lifetimes based on job state
   cacheLifetime: {
     completed: 300000,  // 5 min
-    running: 60000,     // 1 min  
+    running: 60000,     // 1 min
     pending: 30000,     // 30 sec
     error: 120000,      // 2 min
   },
-  
+
   // Sync intervals
   syncIntervals: {
     websocket: 0,       // Realtime via WebSocket
     active: 30000,      // 30 sec when active (reduced from 60s)
     background: 60000,  // 1 min in background (reduced from 5 min)
     paused: 0,          // No sync when paused
-  },
-  
-  // Connection health
-  health: {
-    wsTimeout: 45000,   // 45 sec without activity = unhealthy
-    maxRetries: 3,
-    retryDelay: 5000,
   },
 };
 
@@ -171,6 +176,8 @@ class JobStateManager {
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts: number = 0;
 
   // Injected dependencies
   private api: IApiClient;
@@ -221,10 +228,11 @@ class JobStateManager {
     this.healthCheckTimer = setInterval(() => {
       const state = get(this.state);
       const now = Date.now();
-      
+      const wsConfig = getWebSocketConfig();
+
       // Check WebSocket health
       if (state.wsConnected) {
-        const wsHealthy = now - state.lastActivity < CONFIG.health.wsTimeout;
+        const wsHealthy = now - state.lastActivity < wsConfig.timeout;
         if (wsHealthy !== state.wsHealthy) {
           this.updateState({ wsHealthy });
           if (!wsHealthy) this.startPolling();
@@ -276,6 +284,13 @@ class JobStateManager {
     console.log('[JobStateManager] 📡 WebSocket object created, waiting for connection...');
     
     this.ws.onopen = () => {
+      // Reset reconnect attempts on successful connection
+      this.reconnectAttempts = 0;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
       this.updateState({
         wsConnected: true,
         wsHealthy: true,
@@ -312,16 +327,52 @@ class JobStateManager {
       });
       this.startPolling();
 
-      // Reconnect after delay
-      console.log('[JobStateManager] 🔄 Will reconnect WebSocket in', CONFIG.health.retryDelay / 1000, 'seconds');
-      setTimeout(() => this.connectWebSocket(), CONFIG.health.retryDelay);
+      // Schedule reconnection with exponential backoff
+      this.scheduleReconnect();
     };
 
     this.ws.onerror = (error) => {
       console.error('[JobStateManager] ❌ WebSocket error:', error);
     };
   }
-  
+
+  /**
+   * Schedule WebSocket reconnection with exponential backoff
+   * Retries indefinitely with increasing delays up to maxRetryDelay
+   */
+  private scheduleReconnect(): void {
+    // Get current WebSocket config from preferences
+    const wsConfig = getWebSocketConfig();
+
+    // Check if auto-reconnect is disabled
+    if (!wsConfig.autoReconnect) {
+      console.log('[JobStateManager] ⏸️ Auto-reconnect is disabled, skipping reconnection');
+      return;
+    }
+
+    // Clear any existing reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // Calculate delay with exponential backoff
+    const delay = Math.min(
+      wsConfig.initialRetryDelay * Math.pow(wsConfig.retryBackoffMultiplier, this.reconnectAttempts),
+      wsConfig.maxRetryDelay
+    );
+
+    this.reconnectAttempts++;
+    console.log(
+      `[JobStateManager] 🔄 Scheduling WebSocket reconnect attempt #${this.reconnectAttempts} in ${(delay / 1000).toFixed(1)}s`
+    );
+
+    this.reconnectTimer = setTimeout(() => {
+      console.log(`[JobStateManager] 🔌 Reconnect attempt #${this.reconnectAttempts}...`);
+      this.connectWebSocket();
+    }, delay);
+  }
+
   private currentViewJobId: string | null = null;
   private currentViewHostname: string | null = null;
 
@@ -364,27 +415,48 @@ class JobStateManager {
         console.log('[JobStateManager] Initial WebSocket data is empty (0 jobs, 0 hosts) - will allow API sync to proceed');
       }
 
-      // Only clear cache for hosts that are included in this update
-      // This prevents losing jobs from hosts that timed out or weren't included
-      this.state.update(s => {
-        const newCache = new Map(s.jobCache);
+      // ⚡ PERFORMANCE FIX: Don't clear cache if we have recent API data
+      // Check if we have recent data from API sync (within last 5 seconds)
+      // This prevents WebSocket initial data from clearing the cache that was just populated by API
+      const state = get(this.state);
+      const now = Date.now();
+      let shouldClearCache = true;
 
-        // Remove jobs only for hosts included in the update
-        hostsInUpdate.forEach(hostname => {
-          // Remove all jobs for this host
-          const keysToDelete: string[] = [];
-          newCache.forEach((_, cacheKey) => {
-            if (cacheKey.startsWith(`${hostname}:`)) {
-              keysToDelete.push(cacheKey);
-            }
+      // Check if any host has very recent data from API
+      for (const hostname of hostsInUpdate) {
+        const hostState = state.hostStates.get(hostname);
+        if (hostState && (now - hostState.lastSync) < 5000) {
+          console.log(`[JobStateManager] Host ${hostname} has very recent API data (${now - hostState.lastSync}ms old) - will merge WebSocket data instead of clearing cache`);
+          shouldClearCache = false;
+          break;
+        }
+      }
+
+      // Only clear cache for hosts if we don't have recent API data
+      // This prevents race conditions where WebSocket initial data arrives after API sync
+      if (shouldClearCache) {
+        this.state.update(s => {
+          const newCache = new Map(s.jobCache);
+
+          // Remove jobs only for hosts included in the update
+          hostsInUpdate.forEach(hostname => {
+            // Remove all jobs for this host
+            const keysToDelete: string[] = [];
+            newCache.forEach((_, cacheKey) => {
+              if (cacheKey.startsWith(`${hostname}:`)) {
+                keysToDelete.push(cacheKey);
+              }
+            });
+            keysToDelete.forEach(key => newCache.delete(key));
+            console.log(`[JobStateManager] Cleared ${keysToDelete.length} cached jobs for host ${hostname} before initial load`);
           });
-          keysToDelete.forEach(key => newCache.delete(key));
-          console.log(`[JobStateManager] Cleared ${keysToDelete.length} cached jobs for host ${hostname} before initial load`);
-        });
 
-        s.jobCache = newCache;
-        return s;
-      });
+          s.jobCache = newCache;
+          return s;
+        });
+      } else {
+        console.log('[JobStateManager] Skipping cache clear - will merge WebSocket initial data with existing cache');
+      }
 
       // ⚡ PERFORMANCE: Process all jobs in a single batch for faster UI update
       const allUpdates: JobUpdate[] = [];
@@ -417,6 +489,45 @@ class JobStateManager {
         } else {
           console.warn(`[JobStateManager] ⚠️ Jobs for ${hostname} is not an array:`, typeof jobs);
         }
+      }
+
+      // ⚡ NEW: Process array groups from WebSocket initial data
+      if (data.array_groups) {
+        console.log('[JobStateManager] 📦 Processing array groups from WebSocket initial data:', Object.keys(data.array_groups));
+        this.state.update(s => {
+          const newHostStates = new Map(s.hostStates);
+
+          // Update each host's array groups
+          for (const [hostname, arrayGroups] of Object.entries(data.array_groups)) {
+            if (Array.isArray(arrayGroups)) {
+              console.log(`[JobStateManager] Setting ${arrayGroups.length} array groups for ${hostname}`);
+
+              // Get existing host state or create a new one
+              const existingHostState = newHostStates.get(hostname);
+              if (existingHostState) {
+                // Update existing host state
+                newHostStates.set(hostname, {
+                  ...existingHostState,
+                  arrayGroups: arrayGroups as any[],
+                });
+              } else {
+                // Create new host state with array groups
+                console.log(`[JobStateManager] Creating new host state for ${hostname} with array groups`);
+                newHostStates.set(hostname, {
+                  hostname: hostname,
+                  status: 'connected',
+                  lastSync: Date.now(),
+                  errorCount: 0,
+                  jobs: new Map(),
+                  arrayGroups: arrayGroups as any[],
+                });
+              }
+            }
+          }
+
+          s.hostStates = newHostStates;
+          return s;
+        });
       }
 
       // Queue all updates at once for immediate batch processing
@@ -579,16 +690,16 @@ class JobStateManager {
   // Data Synchronization
   // ========================================================================
   
-  public async syncAllHosts(forceSync = false): Promise<void> {
+  public async syncAllHosts(forceSync = false, userInitiated = false): Promise<void> {
     const state = get(this.state);
-    if (!forceSync && state.isPaused) return;
+    if (!forceSync && !userInitiated && state.isPaused) return;
 
     // ⚡ PERFORMANCE: Removed WebSocket wait check - always fetch for fastest UI update
     // WebSocket and API work in parallel, whoever is faster wins
     // This ensures blazing fast refresh when user clicks refresh button
 
     try {
-      console.log(`[JobStateManager] Starting sync for all hosts${forceSync ? ' (FORCE REFRESH - bypassing all caches)' : ''}`);
+      console.log(`[JobStateManager] Starting sync for all hosts${forceSync ? ' (FORCE REFRESH - bypassing all caches)' : ''}${userInitiated ? ' (user-initiated)' : ''}`);
       if (forceSync) {
         console.log('[JobStateManager] Force refresh will fetch directly from SLURM');
       }
@@ -605,7 +716,7 @@ class JobStateManager {
         }
         return;
       }
-      
+
       // Update host states in store
       this.state.update(s => {
         // Create new Map to trigger reactivity
@@ -625,10 +736,10 @@ class JobStateManager {
         s.hostStates = newHostStates;
         return s;
       });
-      
+
       // Sync each host in parallel
       const results = await Promise.allSettled(
-        hosts.map(host => this.syncHost(host.hostname, forceSync))
+        hosts.map(host => this.syncHost(host.hostname, forceSync, userInitiated))
       );
 
       console.log('[JobStateManager] ✅ All host syncs completed');
@@ -645,9 +756,9 @@ class JobStateManager {
     }
   }
   
-  public async syncHost(hostname: string, forceSync = false): Promise<void> {
+  public async syncHost(hostname: string, forceSync = false, userInitiated = false): Promise<void> {
     const syncStartTime = Date.now();
-    console.log(`[JobStateManager] 🔄 Starting sync for ${hostname}${forceSync ? ' (forced)' : ''}`);
+    console.log(`[JobStateManager] 🔄 Starting sync for ${hostname}${forceSync ? ' (forced)' : ''}${userInitiated ? ' (user-initiated)' : ''}`);
 
     const state = get(this.state);
     const hostState = state.hostStates.get(hostname);
@@ -657,8 +768,9 @@ class JobStateManager {
       return;
     }
 
-    // Check if sync needed based on cache (skip check if forceSync)
-    if (!forceSync) {
+    // Check if sync needed based on cache (skip check if forceSync or userInitiated)
+    // User-initiated refreshes should always fetch new data, not be blocked by cache
+    if (!forceSync && !userInitiated) {
       const now = Date.now();
       const cacheExpired = now - hostState.lastSync > CONFIG.syncIntervals.active;
       if (!cacheExpired && hostState.status === 'connected') {
@@ -1377,17 +1489,36 @@ class JobStateManager {
   /**
    * Fetch a single job, prioritizing updates for current view
    */
-  public async fetchSingleJob(jobId: string, hostname: string, forceRefresh = false): Promise<JobInfo | null> {
+  public async fetchSingleJob(jobId: string, hostname: string, forceRefresh = false, cacheFirst = true): Promise<JobInfo | null> {
     const cacheKey = `${hostname}:${jobId}`;
     const state = get(this.state);
     const cached = state.jobCache.get(cacheKey);
+
+    // If cacheFirst is enabled and we have cached data, return it immediately
+    // The API will trigger a background refresh and send updates via WebSocket
+    if (cacheFirst && !forceRefresh && cached) {
+      console.log(`[JobStateManager] Returning cached job ${jobId} immediately (cache_first mode)`);
+
+      // Trigger background refresh via API (it will send WebSocket updates)
+      this.updateMetric('apiCalls', 1);
+      this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}&cache_first=true`)
+        .then(response => {
+          // This will be followed by a WebSocket update with fresh data
+          console.log(`[JobStateManager] Background refresh initiated for job ${jobId}`);
+        })
+        .catch(error => {
+          console.warn(`[JobStateManager] Background refresh failed for job ${jobId}:`, error);
+        });
+
+      return cached.job;
+    }
 
     // Return from cache if valid and not forcing
     if (!forceRefresh && cached && this.isJobCacheValid(cacheKey)) {
       return cached.job;
     }
 
-    // Fetch from API
+    // Fetch from API (traditional blocking call)
     try {
       this.updateMetric('apiCalls', 1);
       const response = await this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}${forceRefresh ? '&force=true' : ''}`);

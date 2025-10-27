@@ -43,11 +43,11 @@
   
   function getStateColor(state: string): string {
     switch (state) {
-      case 'active': return 'var(--color-success)';
-      case 'paused': return 'var(--color-warning)';
-      case 'completed': return 'var(--color-info)';
-      case 'failed': return 'var(--color-error)';
-      default: return 'var(--color-text-secondary)';
+      case 'active': return 'var(--success)';
+      case 'paused': return 'var(--warning)';
+      case 'completed': return 'var(--info)';
+      case 'failed': return 'var(--error)';
+      default: return 'var(--muted-foreground)';
     }
   }
   
@@ -178,14 +178,14 @@
     align-items: center;
     justify-content: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .spinner {
     width: 40px;
     height: 40px;
-    border: 3px solid var(--color-border);
-    border-top-color: var(--color-primary);
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 1rem;
@@ -198,7 +198,7 @@
   .empty-state {
     text-align: center;
     padding: 3rem;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
   }
   
   .empty-state p {
@@ -217,7 +217,7 @@
   }
   
   .job-group {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     border-radius: 8px;
     padding: 1.5rem;
   }
@@ -228,17 +228,17 @@
     align-items: center;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--border);
   }
   
   .job-header h3 {
     margin: 0;
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 1.1rem;
   }
   
   .watcher-count {
-    background: var(--color-primary);
+    background: var(--accent);
     color: white;
     padding: 0.25rem 0.75rem;
     border-radius: 12px;
@@ -252,8 +252,8 @@
   }
   
   .watcher-card {
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
     position: relative;
@@ -286,7 +286,7 @@
     align-items: center;
     gap: 0.5rem;
     font-weight: 500;
-    color: var(--color-text-primary);
+    color: var(--foreground);
   }
   
   .state-icon {
@@ -300,7 +300,7 @@
   
   .action-btn {
     background: none;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0.25rem 0.5rem;
     cursor: pointer;
@@ -309,7 +309,7 @@
   }
   
   .action-btn:hover {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
   }
   
   .watcher-body {
@@ -328,12 +328,12 @@
   .stats label,
   .actions label,
   .last-check label {
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.85rem;
   }
   
   .pattern code {
-    background: var(--color-bg-secondary);
+    background: var(--secondary);
     padding: 0.5rem;
     border-radius: 4px;
     font-family: monospace;
@@ -354,7 +354,7 @@
   }
   
   .stat span {
-    color: var(--color-text-primary);
+    color: var(--foreground);
     font-size: 0.9rem;
   }
   
@@ -371,7 +371,7 @@
   }
   
   .action-badge {
-    background: var(--color-info);
+    background: var(--info);
     color: white;
     padding: 0.15rem 0.5rem;
     border-radius: 4px;
@@ -382,7 +382,7 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
-    color: var(--color-text-secondary);
+    color: var(--muted-foreground);
     font-size: 0.85rem;
   }
   

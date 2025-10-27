@@ -146,7 +146,7 @@
     align-items: center;
     padding: 1rem;
     background: white;
-    border-bottom: 1px solid var(--color-border, #dee2e6);
+    border-bottom: 1px solid var(--border);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   }
   
@@ -154,7 +154,7 @@
     margin: 0;
     font-size: 1.125rem;
     font-weight: 600;
-    color: var(--color-text-primary, #212529);
+    color: var(--foreground);
   }
   
   .header-buttons {
@@ -169,9 +169,9 @@
     gap: 0.375rem;
     padding: 0.5rem 0.875rem;
     background: white;
-    border: 1px solid var(--color-border, #dee2e6);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--color-text-primary, #212529);
+    color: var(--foreground);
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
@@ -179,14 +179,14 @@
   }
   
   .vim-toggle.active {
-    background: var(--color-primary, #3498db);
-    border-color: var(--color-primary, #3498db);
+    background: var(--accent);
+    border-color: var(--accent);
     color: white;
   }
   
   .history-button:active,
   .vim-toggle:active:not(.active) {
-    background: var(--color-bg-secondary, #f8f9fa);
+    background: var(--secondary);
     transform: scale(0.98);
   }
   
@@ -199,10 +199,10 @@
   .validation-message {
     margin: 0.75rem;
     padding: 0.75rem;
-    background: var(--color-error-bg, #f8d7da);
-    border-left: 3px solid var(--color-error, #dc3545);
+    background: var(--error-bg);
+    border-left: 3px solid var(--error);
     border-radius: 4px;
-    color: var(--color-error, #dc3545);
+    color: var(--error);
     font-size: 0.875rem;
   }
   
@@ -223,12 +223,12 @@
   }
   
   .script-container :global(.CodeMirror-gutters) {
-    background: var(--color-bg-secondary, #f8f9fa) !important;
-    border-right: 1px solid var(--color-border, #dee2e6) !important;
+    background: var(--secondary) !important;
+    border-right: 1px solid var(--border) !important;
   }
   
   .script-container :global(.CodeMirror-linenumber) {
-    color: var(--color-text-secondary, #6c757d) !important;
+    color: var(--muted-foreground) !important;
     padding: 0 8px !important;
   }
   
@@ -246,13 +246,13 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.5rem 0.75rem;
-    background: var(--color-bg-secondary, #f8f9fa);
-    border-top: 1px solid var(--color-border, #dee2e6);
+    background: var(--secondary);
+    border-top: 1px solid var(--border);
   }
   
   .esc-button {
     padding: 0.5rem 1rem;
-    background: var(--color-primary, #3498db);
+    background: var(--accent);
     border: none;
     border-radius: 4px;
     color: white;
@@ -269,7 +269,7 @@
   }
   
   .vim-hint {
-    color: var(--color-text-secondary, #6c757d);
+    color: var(--muted-foreground);
     font-size: 0.75rem;
   }
   
@@ -278,8 +278,8 @@
     display: flex;
     gap: 0.75rem;
     padding: 0.875rem;
-    background: var(--color-bg-secondary, #f8f9fa);
-    border-top: 1px solid var(--color-border, #dee2e6);
+    background: var(--secondary);
+    border-top: 1px solid var(--border);
   }
   
   .launch-button {
@@ -289,7 +289,7 @@
     justify-content: center;
     gap: 0.5rem;
     padding: 0.875rem;
-    background: linear-gradient(135deg, var(--color-primary, #3498db) 0%, var(--color-primary-dark, #2980b9) 100%);
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent) 100%);
     border: none;
     border-radius: 6px;
     color: white;
@@ -306,8 +306,8 @@
   }
   
   .launch-button:disabled {
-    background: var(--color-border, #dee2e6);
-    color: var(--color-text-secondary, #6c757d);
+    background: var(--border);
+    color: var(--muted-foreground);
     cursor: not-allowed;
   }
   

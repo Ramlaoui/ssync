@@ -18,7 +18,6 @@
   import Separator from "../lib/components/ui/Separator.svelte";
   import NavigationHeader from "../components/NavigationHeader.svelte";
   import CollapsibleSection from "../lib/components/ui/CollapsibleSection.svelte";
-  import WebSocketStatus from "../components/WebSocketStatus.svelte";
 
   let hosts: HostInfo[] = $state([]);
   let loading = $state(false);
@@ -334,8 +333,9 @@
     if (currentJobs.length === 0) {
       await jobStateManager.forceRefresh();
     } else {
-      // We have data, just do a gentle sync without clearing cache
-      await jobStateManager.syncAllHosts();
+      // We have data, do a user-initiated sync to ensure we get fresh data
+      // This bypasses the cache timeout check that might skip the fetch
+      await jobStateManager.syncAllHosts(false, true);
     }
     checkMobile();
     window.addEventListener("resize", checkMobile);
@@ -366,7 +366,7 @@
   });
 </script>
 
-<div class="h-full flex flex-col bg-gradient-to-br from-gray-50 to-slate-50">
+<div class="h-full flex flex-col bg-gradient-to-br from-gray-50 to-slate-50 dark:from-gray-900 dark:to-slate-900">
   {#if !isMobile}
     <NavigationHeader
       showRefresh={true}
@@ -380,41 +380,36 @@
             <div  class="flex items-center gap-4">
           <div class="flex gap-4 flex-shrink-0 items-center">
             <div class="flex items-center gap-1 whitespace-nowrap">
-              <span class="text-base font-semibold text-slate-900">{hosts.length}</span>
-              <span class="text-xs text-slate-500">hosts</span>
+              <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{hosts.length}</span>
+              <span class="text-xs text-slate-500 dark:text-slate-400">hosts</span>
             </div>
             <div class="flex items-center gap-1 whitespace-nowrap">
-              <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
-              <span class="text-xs text-slate-500">jobs</span>
+              <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{totalJobs}</span>
+              <span class="text-xs text-slate-500 dark:text-slate-400">jobs</span>
             </div>
             {#if dataFromCache}
-              <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-gray-200 ml-4">
+              <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-border ml-4">
                 <Clock class="h-4 w-4 text-muted-foreground" />
                 <Badge variant="secondary">Cached</Badge>
               </div>
             {/if}
           </div>
 
-          <!-- WebSocket Status -->
-          <div class="ml-4">
-            <WebSocketStatus compact={true} />
-          </div>
-
           <!-- Search Bar -->
           <div class="flex-1 max-w-md">
             <div class="relative w-full">
-              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none flex items-center justify-center">
+              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center">
                 <Search size={16} />
               </div>
               <input
                 type="text"
-                class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
+                class="w-full pl-10 pr-10 py-2 border border-border rounded-lg text-sm transition-all bg-input focus:outline-none focus:border-accent focus:bg-background focus:shadow-sm focus:ring-2 focus:ring-accent/20 placeholder-muted-foreground"
                 placeholder="Search jobs..."
                 bind:value={search}
                 oninput={handleFilterChange}
               />
               {#if search}
-                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
+                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
                   <X size={14} />
                 </button>
               {/if}
@@ -425,17 +420,17 @@
     </NavigationHeader>
   {:else}
     <!-- Mobile header -->
-    <div class="flex justify-between items-center p-3 bg-gradient-to-b from-white to-slate-50/95 border-b border-black/8 relative z-50 shadow-sm">
+    <div class="flex justify-between items-center p-3 bg-gradient-to-b from-white to-slate-50/95 dark:from-gray-800 dark:to-gray-800/95 border-b border-black/8 dark:border-white/8 relative z-50 shadow-sm">
       <div class="flex items-center min-h-[40px] whitespace-nowrap">
         <!-- Stats on the left -->
         <div class="flex gap-4 flex-shrink-0 items-center">
           <div class="flex items-center gap-1 whitespace-nowrap">
-            <span class="text-base font-semibold text-slate-900">{hosts.length}</span>
-            <span class="text-xs text-slate-500">hosts</span>
+            <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{hosts.length}</span>
+            <span class="text-xs text-slate-500 dark:text-slate-400">hosts</span>
           </div>
           <div class="flex items-center gap-1 whitespace-nowrap">
-            <span class="text-base font-semibold text-slate-900">{totalJobs}</span>
-            <span class="text-xs text-slate-500">jobs</span>
+            <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{totalJobs}</span>
+            <span class="text-xs text-slate-500 dark:text-slate-400">jobs</span>
           </div>
         </div>
 
@@ -446,12 +441,12 @@
         <div class="flex items-center justify-center transition-all duration-300 ease-out overflow-hidden flex-shrink-0 {searchExpanded ? 'w-[180px] max-w-[180px]' : 'w-8'}">
           {#if searchExpanded}
             <div class="relative w-full animate-in slide-in-from-right-2 duration-300">
-              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none flex items-center justify-center">
+              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center">
                 <Search size={16} />
               </div>
               <input
                 type="text"
-                class="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm transition-all bg-gray-50 focus:outline-none focus:border-blue-500 focus:bg-white focus:shadow-sm focus:ring-2 focus:ring-blue-100 placeholder-gray-400"
+                class="w-full pl-10 pr-10 py-2 border border-border rounded-lg text-sm transition-all bg-input focus:outline-none focus:border-accent focus:bg-background focus:shadow-sm focus:ring-2 focus:ring-accent/20 placeholder-muted-foreground"
                 placeholder="Search jobs..."
                 bind:value={search}
                 oninput={handleFilterChange}
@@ -459,13 +454,13 @@
                 bind:this={searchInput}
               />
               {#if search}
-                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-gray-500 cursor-pointer rounded hover:bg-gray-100 hover:text-red-500 flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
+                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
                   <X size={14} />
                 </button>
               {/if}
             </div>
           {:else}
-            <button class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-gray-500 cursor-pointer transition-all hover:bg-gray-100 hover:text-gray-700" onclick={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
+            <button class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-all hover:bg-secondary hover:text-foreground" onclick={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
               <Search size={16} />
             </button>
           {/if}
@@ -475,7 +470,7 @@
         <button
           onclick={handleManualRefresh}
           disabled={loading}
-          class="flex items-center justify-center w-8 h-8 bg-white border border-black/8 rounded-lg text-sm font-medium text-slate-600 cursor-pointer transition-all flex-shrink-0 hover:bg-slate-50 hover:border-black/12 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="flex items-center justify-center w-8 h-8 bg-background border border-border rounded-lg text-sm font-medium text-muted cursor-pointer transition-all flex-shrink-0 hover:bg-secondary hover:border-border disabled:opacity-50 disabled:cursor-not-allowed"
           title="{loading || progressiveLoading ? 'Loading from hosts...' : 'Refresh'}"
         >
           <RefreshCw class="w-4 h-4 {loading || progressiveLoading ? 'animate-spin' : ''}" />
@@ -492,12 +487,12 @@
 
   <!-- Host connection warnings -->
   {#if hostsWithTimeouts.length > 0}
-    <div class="bg-yellow-50 border-b border-yellow-200 p-3">
+    <div class="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 p-3">
       <div class="flex items-center gap-2">
-        <svg class="h-5 w-5 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg class="h-5 w-5 text-yellow-600 dark:text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
         </svg>
-        <p class="text-sm font-medium text-yellow-800">
+        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200">
           Connection timeout: {hostsWithTimeouts.map(h => h.hostname).join(', ')}
           {#if hostsWithTimeouts.length === 1}
             - Some jobs may not be visible
@@ -508,12 +503,12 @@
       </div>
     </div>
   {:else if hostsWithErrors.length > 0}
-    <div class="bg-red-50 border-b border-red-200 p-3">
+    <div class="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 p-3">
       <div class="flex items-center gap-2">
-        <svg class="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg class="h-5 w-5 text-red-600 dark:text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <p class="text-sm font-medium text-red-800">
+        <p class="text-sm font-medium text-red-800 dark:text-red-200">
           Connection error: {hostsWithErrors.map(h => h.hostname).join(', ')}
         </p>
       </div>
@@ -525,7 +520,7 @@
   <div class="flex-1 overflow-auto px-4 py-4">
     {#if progressiveLoading && filteredJobs.length === 0 && filteredArrayGroups.length === 0}
       <div class="flex items-center justify-center h-full">
-        <div class="text-center text-gray-500">Loading jobs...</div>
+        <div class="text-center text-muted-foreground">Loading jobs...</div>
       </div>
     {:else}
       <!-- Array job groups - Collapsible Section -->
@@ -556,7 +551,7 @@
         />
       {:else if filteredArrayGroups.length === 0}
         <div class="flex items-center justify-center h-full">
-          <div class="text-center text-gray-500">No jobs found</div>
+          <div class="text-center text-muted-foreground">No jobs found</div>
         </div>
       {/if}
     {/if}
