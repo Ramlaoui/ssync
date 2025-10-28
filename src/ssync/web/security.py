@@ -308,8 +308,9 @@ class InputSanitizer:
         # - Simple numeric: 12345
         # - Array task: 12345_67
         # - Array parent with range: 12345_[0-99]
+        # - Array parent with step: 12345_[0-99%4]
         # - Array parent with list: 12345_[1,3,5]
-        if not re.match(r"^[0-9]+(_(\[[\d\-,]+\]|\d+))?$", job_id):
+        if not re.match(r"^[0-9]+(_(\[[\d\-,%]+\]|\d+))?$", job_id):
             raise HTTPException(status_code=400, detail="Invalid job ID format")
 
         return job_id

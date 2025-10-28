@@ -818,6 +818,7 @@ class JobDataCache:
         hostname: Optional[str] = None,
         active_only: bool = False,
         limit: Optional[int] = None,
+        since: Optional[datetime] = None,
     ) -> List[CachedJobData]:
         """
         Get list of cached jobs with optional filtering.
@@ -826,6 +827,7 @@ class JobDataCache:
             hostname: Optional hostname filter
             active_only: If True, only return active jobs
             limit: Optional limit on number of results
+            since: Optional datetime to filter jobs submitted after this time (assumed UTC)
 
         Returns:
             List of CachedJobData objects
@@ -840,6 +842,13 @@ class JobDataCache:
 
             if active_only:
                 query += " AND is_active = 1"
+
+            if since:
+                # Filter by submit time if available in the JSON
+                # Strip timezone for comparison with stored times (which have no timezone)
+                since_for_comparison = since.replace(tzinfo=None) if since.tzinfo else since
+                query += " AND datetime(json_extract(job_info_json, '$.submit_time')) > datetime(?)"
+                params.append(since_for_comparison.isoformat())
 
             query += " ORDER BY last_updated DESC"
 
@@ -1525,6 +1534,87 @@ class JobDataCache:
             logger.info(
                 f"Cleared all cache entries: {deleted_count} total entries deleted"
             )
+
+        return deleted_count
+
+    def cleanup_other_users_jobs(
+        self, hostname: Optional[str] = None, keep_user: Optional[str] = None
+    ) -> int:
+        """
+        Remove jobs from other users to clean up cache pollution.
+
+        This is useful when the cache accidentally gets filled with other users' jobs
+        due to skip_user_detection=True being used incorrectly.
+
+        Args:
+            hostname: Optional hostname filter (if None, cleans all hosts)
+            keep_user: Optional user to keep (if None, auto-detects current user per host)
+
+        Returns:
+            Number of jobs deleted
+        """
+        deleted_count = 0
+
+        with self._get_connection() as conn:
+            if hostname:
+                hostnames = [hostname]
+            else:
+                # Get all unique hostnames
+                cursor = conn.execute("SELECT DISTINCT hostname FROM cached_jobs")
+                hostnames = [row["hostname"] for row in cursor.fetchall()]
+
+            for host in hostnames:
+                user_to_keep = keep_user
+
+                # If no user specified, try to detect the current user for this host
+                if not user_to_keep:
+                    try:
+                        from .web.app import get_slurm_manager
+
+                        manager = get_slurm_manager()
+                        if manager:
+                            slurm_host = manager.get_host_by_name(host)
+                            conn_ssh = manager._get_connection(slurm_host.host)
+                            user_to_keep = manager.slurm_client.get_username(conn_ssh)
+                            logger.info(
+                                f"Auto-detected current user for {host}: {user_to_keep}"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not auto-detect user for {host}: {e}. "
+                            f"Skipping cleanup for this host."
+                        )
+                        continue
+
+                if user_to_keep:
+                    # Delete all jobs on this host that don't belong to the user
+                    cursor = conn.execute(
+                        """
+                        DELETE FROM cached_jobs
+                        WHERE hostname = ?
+                          AND (json_extract(job_info_json, '$.user') != ?
+                               OR json_extract(job_info_json, '$.user') IS NULL)
+                    """,
+                        (host, user_to_keep),
+                    )
+
+                    host_deleted = cursor.rowcount
+                    deleted_count += host_deleted
+
+                    if host_deleted > 0:
+                        logger.info(
+                            f"Deleted {host_deleted} jobs from other users on {host} "
+                            f"(keeping only user: {user_to_keep})"
+                        )
+
+            conn.commit()
+
+        if deleted_count > 0:
+            logger.info(
+                f"Cache cleanup complete: removed {deleted_count} jobs from other users"
+            )
+        else:
+            logger.info("No jobs from other users found in cache")
 
         return deleted_count
 

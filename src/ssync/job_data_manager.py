@@ -221,11 +221,11 @@ class JobDataManager:
             try:
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
-                    timeout=5.0,  # Reduced to 5s for faster failure on unreachable hosts
+                    timeout=15.0,  # 15s timeout for initial connection
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Connection to {hostname} timed out after 5s, attempting connection refresh..."
+                    f"Connection to {hostname} timed out after 15s, attempting connection refresh..."
                 )
                 # Try a gentle refresh first (not force) - this preserves more state
                 try:
@@ -235,7 +235,7 @@ class JobDataManager:
                             slurm_host.host,
                             False,  # Don't force
                         ),
-                        timeout=5.0,  # Give 5s for retry (faster failure)
+                        timeout=15.0,  # Give 15s for retry
                     )
                 except asyncio.TimeoutError:
                     logger.error(
@@ -278,13 +278,41 @@ class JobDataManager:
                     )
                     return []  # Fail safe: don't fetch anything if we can't determine user
             elif skip_user_detection and not effective_user:
-                # Explicitly requested to skip user detection and query all users
-                logger.info(
-                    f"Fetching jobs for ALL users on {hostname} (skip_user_detection=True)"
+                # SAFEGUARD: Prevent accidental fetching of all users' jobs
+                # This is a very expensive operation and should only be done explicitly
+                logger.warning(
+                    f"SAFEGUARD: Preventing fetch of ALL users on {hostname}. "
+                    f"skip_user_detection=True without explicit user parameter is disabled by default."
                 )
-                effective_user = (
-                    None  # None means all users in get_active_jobs/get_completed_jobs
+                logger.warning(
+                    "If you really need to fetch all users' jobs, you must explicitly set an environment variable:"
                 )
+                logger.warning(
+                    "  export SSYNC_ALLOW_FETCH_ALL_USERS=1"
+                )
+
+                # Check if explicitly allowed via environment variable
+                import os
+                if os.environ.get("SSYNC_ALLOW_FETCH_ALL_USERS") == "1":
+                    logger.warning(
+                        f"SSYNC_ALLOW_FETCH_ALL_USERS=1 detected - proceeding to fetch ALL users on {hostname}"
+                    )
+                    effective_user = None  # None means all users
+                else:
+                    # Fallback to auto-detecting current user for safety
+                    logger.info(
+                        f"Falling back to current user detection for safety on {hostname}"
+                    )
+                    try:
+                        effective_user = await self._run_in_executor(
+                            manager.slurm_client.get_username, conn
+                        )
+                        logger.info(f"Using detected user: {effective_user}")
+                    except Exception as e:
+                        logger.error(
+                            f"Could not detect current user on {hostname}: {e}"
+                        )
+                        return []
 
             # 1. GET ACTIVE JOBS (unless completed_only) - OPTIMIZED with thread pool
             if not completed_only:

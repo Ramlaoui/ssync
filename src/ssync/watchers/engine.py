@@ -386,11 +386,20 @@ class WatcherEngine:
 
                 # Extract captured groups
                 captured_vars = {}
+                groups = match.groups()
+
+                # Store named captures if defined
                 if watcher.definition.captures:
-                    groups = match.groups()
                     for i, capture_name in enumerate(watcher.definition.captures):
                         if i < len(groups):
                             captured_vars[capture_name] = groups[i]
+
+                # Always store positional captures as "1", "2", etc. so $1, $2 work
+                # This allows users to reference captures by position even without naming them
+                for i, group_value in enumerate(groups, start=1):
+                    if group_value is not None:
+                        # Use string keys "1", "2" for positional references
+                        captured_vars[str(i)] = group_value
 
                 # Update watcher variables
                 watcher.variables.update(captured_vars)

@@ -67,31 +67,41 @@ class CacheMiddleware:
                 current_jobs.append(job_web)
 
             if hostname and filters and since and response_hostname == hostname:
-                # Determine TTL based on job states
-                # Check if all jobs in this response are completed
-                all_completed = all(
-                    job_web.state in ["CD", "F", "CA", "TO"]  # Completed states
-                    for job_web in current_jobs
-                )
+                # Only cache non-empty results
+                # Empty results shouldn't be cached because:
+                # 1. They might be transient (jobs haven't been submitted yet)
+                # 2. all([]) returns True in Python, causing long TTL for empty results
+                # 3. Better to re-query than serve stale empty results
+                if current_jobs:
+                    # Determine TTL based on job states
+                    # Check if all jobs in this response are completed
+                    all_completed = all(
+                        job_web.state in ["CD", "F", "CA", "TO"]  # Completed states
+                        for job_web in current_jobs
+                    )
 
-                if all_completed:
-                    # All jobs are completed - cache for a long time
-                    ttl_seconds = 86400  # 24 hours
+                    if all_completed:
+                        # All jobs are completed - cache for a long time
+                        ttl_seconds = 86400  # 24 hours
+                    else:
+                        # Has active/pending jobs - short cache
+                        ttl_seconds = 60  # 1 minute
+
+                    self.cache.cache_date_range_query(
+                        hostname=hostname,
+                        filters=filters,
+                        since=since,
+                        job_ids=job_ids_for_range,
+                        ttl_seconds=ttl_seconds,
+                    )
+                    logger.info(
+                        f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs, "
+                        f"TTL={ttl_seconds}s (all_completed={all_completed})"
+                    )
                 else:
-                    # Has active/pending jobs - short cache
-                    ttl_seconds = 60  # 1 minute
-
-                self.cache.cache_date_range_query(
-                    hostname=hostname,
-                    filters=filters,
-                    since=since,
-                    job_ids=job_ids_for_range,
-                    ttl_seconds=ttl_seconds,
-                )
-                logger.info(
-                    f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs, "
-                    f"TTL={ttl_seconds}s (all_completed={all_completed})"
-                )
+                    logger.debug(
+                        f"Skipping cache for {hostname}: empty result (will re-query next time)"
+                    )
 
             enhanced_responses.append(
                 JobStatusResponse(
@@ -346,22 +356,30 @@ class CacheMiddleware:
             # 2. Preserve scripts if possible
             # 3. Mark as inactive (won't be queried again)
 
-            await self._fetch_final_states_and_preserve(to_mark_completed)
+            successfully_updated = await self._fetch_final_states_and_preserve(to_mark_completed)
 
-            # Now mark them as completed (inactive)
-            for job_id, hostname in to_mark_completed:
+            # CRITICAL: Only mark jobs as completed if we successfully fetched their final state
+            # Jobs that couldn't be updated should remain active so we can retry later
+            for job_id, hostname in successfully_updated:
                 self.cache.mark_job_completed(job_id, hostname)
 
-            logger.info(
-                f"Marked {len(to_mark_completed)} jobs as completed with final states"
-            )
+            if successfully_updated:
+                logger.info(
+                    f"Marked {len(successfully_updated)} jobs as completed with final states"
+                )
+
+            if len(successfully_updated) < len(to_mark_completed):
+                skipped = len(to_mark_completed) - len(successfully_updated)
+                logger.info(
+                    f"Skipped {skipped} jobs - will retry fetching their final state next time"
+                )
 
         except Exception as e:
             logger.error(f"Error verifying cache: {e}")
 
     async def _fetch_final_states_and_preserve(
         self, completing_jobs: list[tuple[str, str]]
-    ):
+    ) -> list[tuple[str, str]]:
         """
         Fetch final states from sacct and preserve scripts for completing jobs.
 
@@ -370,13 +388,18 @@ class CacheMiddleware:
 
         Args:
             completing_jobs: List of (job_id, hostname) tuples for jobs being marked as completed
+
+        Returns:
+            List of (job_id, hostname) tuples that were successfully updated with final state
         """
         if not completing_jobs:
-            return
+            return []
 
         logger.info(
             f"Fetching final states from sacct for {len(completing_jobs)} completing jobs"
         )
+
+        successfully_updated = []
 
         try:
             from .app import get_slurm_manager
@@ -384,7 +407,7 @@ class CacheMiddleware:
             manager = get_slurm_manager()
             if not manager:
                 logger.warning("No manager available for fetching final states")
-                return
+                return []
 
             # Group jobs by hostname for efficient processing
             jobs_by_host = {}
@@ -412,6 +435,7 @@ class CacheMiddleware:
                                 )
                                 # Clean up the tracking entry
                                 self._unknown_retry_attempts.pop(job_key, None)
+                                # DON'T add to successfully_updated - job remains active for manual cleanup
                                 continue
 
                             # CRITICAL: Fetch final state from sacct (ONE LAST TIME)
@@ -428,6 +452,7 @@ class CacheMiddleware:
                                     logger.warning(
                                         f"Job {job_id} has UNKNOWN state (attempt {unknown_attempts + 1}/3) - will retry"
                                     )
+                                    # DON'T add to successfully_updated yet - we'll retry next time
                                 else:
                                     # Clear retry counter for jobs with known states
                                     self._unknown_retry_attempts.pop(job_key, None)
@@ -464,9 +489,12 @@ class CacheMiddleware:
                                 self.cache.cache_job(
                                     final_state, script_content=script_content
                                 )
+
+                                # Mark as successfully updated
+                                successfully_updated.append((job_id, hostname))
                             else:
                                 logger.warning(
-                                    f"Could not fetch final state for job {job_id} from sacct"
+                                    f"Could not fetch final state for job {job_id} from sacct - will retry next time"
                                 )
 
                         except Exception as e:
@@ -479,6 +507,8 @@ class CacheMiddleware:
 
         except Exception as e:
             logger.error(f"Error in _fetch_final_states_and_preserve: {e}")
+
+        return successfully_updated
 
     async def _preserve_scripts_for_completing_jobs(
         self, completing_jobs: list[tuple[str, str]]

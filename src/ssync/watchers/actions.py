@@ -91,21 +91,28 @@ class ActionExecutor:
                     value = value.replace("$0", str(variables.get("_matched_text", "")))
 
                 # Look for $1, $2, etc. patterns
-                # Sort capture names for consistent ordering
-                capture_names = sorted(
-                    [k for k in variables.keys() if not k.startswith("_")]
-                )
-
                 for match in re.finditer(r"\$(\d+)", value):
                     group_num = int(match.group(1))
-                    if group_num > 0 and group_num <= len(capture_names):
-                        # $1 corresponds to first capture, $2 to second, etc.
-                        capture_name = capture_names[group_num - 1]
-                        replacement = str(variables.get(capture_name, ""))
-                        logger.debug(
-                            f"Replacing ${group_num} with {capture_name}={replacement}"
-                        )
-                        value = value.replace(f"${group_num}", replacement)
+                    if group_num > 0:
+                        # First, try to get the value using the numeric key directly
+                        # (New behavior: captures stored as "1", "2", etc.)
+                        replacement = variables.get(str(group_num))
+
+                        if replacement is None:
+                            # Fallback: old behavior using sorted capture names
+                            # (For backward compatibility with named-only captures)
+                            capture_names = sorted(
+                                [k for k in variables.keys() if not k.startswith("_") and not k.isdigit()]
+                            )
+                            if group_num <= len(capture_names):
+                                capture_name = capture_names[group_num - 1]
+                                replacement = variables.get(capture_name, "")
+
+                        if replacement is not None:
+                            logger.debug(
+                                f"Replacing ${group_num} with value={replacement}"
+                            )
+                            value = value.replace(f"${group_num}", str(replacement))
 
                 # Also handle named variables directly - $output_dir, $error_rate, etc.
                 for var_name, var_value in variables.items():

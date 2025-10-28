@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, Zap, Clock, CheckCircle, AlertCircle, XCircle } from 'lucide-svelte';
+  import { ChevronDown, ChevronRight, Zap, Clock, CheckCircle, AlertCircle, XCircle, Square } from 'lucide-svelte';
   import { push } from 'svelte-spa-router';
   import type { ArrayJobGroup } from '../types/api';
   import { jobUtils } from '../lib/jobUtils';
+  import { api } from '../services/api';
 
   interface Props {
     group: ArrayJobGroup;
@@ -21,6 +22,22 @@
     push(`/jobs/${encodedTaskId}/${group.hostname}`);
   }
 
+  async function handleCancelArray(event: MouseEvent) {
+    event.stopPropagation(); // Prevent card toggle
+
+    if (!confirm(`Cancel all ${group.total_tasks} tasks in array job ${group.array_job_id}?`)) {
+      return;
+    }
+
+    try {
+      await api.post(`/api/jobs/${group.array_job_id}/cancel?host=${group.hostname}`);
+      // The job list should refresh automatically via WebSocket updates
+    } catch (error) {
+      console.error('Failed to cancel array job:', error);
+      alert('Failed to cancel array job. Please try again.');
+    }
+  }
+
   function getGroupState(): string {
     // Determine overall group state
     if (group.running_count > 0) return 'R';
@@ -32,11 +49,41 @@
   }
 
   let groupState = $derived(getGroupState());
-</script>
+
+  // Context menu state
+  let showContextMenu = $state(false);
+  let contextMenuX = $state(0);
+  let contextMenuY = $state(0);
+
+  function handleContextMenu(event: MouseEvent) {
+    event.preventDefault();
+    contextMenuX = event.clientX;
+    contextMenuY = event.clientY;
+    showContextMenu = true;
+  }
+
+  function closeContextMenu() {
+    showContextMenu = false;
+  }
+
+  // Close context menu when clicking outside
+  function handleDocumentClick(event: MouseEvent) {
+    if (showContextMenu) {
+      closeContextMenu();
+    }
+  }
+
+  $effect(() => {
+    if (showContextMenu) {
+      document.addEventListener('click', handleDocumentClick);
+      return () => document.removeEventListener('click', handleDocumentClick);
+    }
+  });</script>
 
 <button
   class="array-job-card"
   onclick={toggleExpanded}
+  oncontextmenu={handleContextMenu}
 >
   <div class="job-status" style="background-color: {jobUtils.getStateColor(groupState)}"></div>
 
@@ -87,6 +134,38 @@
     </div>
   </div>
 </button>
+
+{#if showContextMenu}
+  <div
+    class="context-menu"
+    style="left: {contextMenuX}px; top: {contextMenuY}px;"
+    onclick={(e) => e.stopPropagation()}
+  >
+    {#if group.running_count > 0 || group.pending_count > 0}
+      <button
+        class="context-menu-item danger"
+        onclick={async (e) => {
+          e.stopPropagation();
+          closeContextMenu();
+          await handleCancelArray(e);
+        }}
+      >
+        <Square size={14} />
+        Cancel All Tasks ({group.total_tasks})
+      </button>
+    {/if}
+    <button
+      class="context-menu-item"
+      onclick={() => {
+        closeContextMenu();
+        const encodedJobId = encodeURIComponent(group.array_job_id);
+        push(`/jobs/${encodedJobId}/${group.hostname}`);
+      }}
+    >
+      View Details
+    </button>
+  </div>
+{/if}
 
 {#if expanded}
   <div class="task-list">
@@ -263,6 +342,58 @@
   .count-failed {
     background: rgba(239, 68, 68, 0.15);
     color: #ef4444;
+  }
+
+  /* Context menu */
+  .context-menu {
+    position: fixed;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    padding: 0.25rem;
+    min-width: 12rem;
+    z-index: 1000;
+    animation: contextMenuFadeIn 0.1s ease-out;
+  }
+
+  @keyframes contextMenuFadeIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: transparent;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    text-align: left;
+    font-size: 0.875rem;
+    color: var(--foreground);
+    transition: background 0.15s ease;
+  }
+
+  .context-menu-item:hover {
+    background: var(--muted);
+  }
+
+  .context-menu-item.danger {
+    color: #ef4444;
+  }
+
+  .context-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.1);
   }
 
   /* Expanded task list */

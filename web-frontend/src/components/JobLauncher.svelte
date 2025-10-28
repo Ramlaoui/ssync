@@ -23,6 +23,7 @@
   import TemplateSidebar from './TemplateSidebar.svelte';
   import TemplateDetailPopup from './TemplateDetailPopup.svelte';
   import SaveTemplateDialog from './SaveTemplateDialog.svelte';
+  import LaunchStatusToast from './LaunchStatusToast.svelte';
   import type { HostInfo } from '../types/api';
   import { resubmitStore } from '../stores/resubmit';
   import { validateParameters } from '../lib/sbatchUtils';
@@ -94,6 +95,12 @@ echo "Starting job..."
   let hosts: HostInfo[] = $state([]);
   let selectedHost = $state('');
   let loading = $state(false);
+
+  // Launch status toast state
+  let showLaunchToast = $state(false);
+  let launchToastStatus: 'launching' | 'success' | 'error' = $state('launching');
+  let launchToastMessage = $state('');
+  let pendingJobNavigation: { jobId: string; host: string } | null = $state(null);
 
   // Script Templates
   interface ScriptTemplate {
@@ -750,11 +757,21 @@ echo "Starting job..."
   async function handleLaunch() {
     if (!canLaunch) return;
 
+    // Show launching toast immediately
+    showLaunchToast = true;
+    launchToastStatus = 'launching';
+    launchToastMessage = 'Syncing files and submitting job...';
     launching = true;
-    let launchError = '';
 
     // Keep the original script for the actual launch
     const originalScript = script;
+
+    // Launch in background - don't block UI
+    launchJobInBackground(originalScript);
+  }
+
+  async function launchJobInBackground(originalScript: string) {
+    let launchError = '';
 
     try {
       // Save script to localStorage for history
@@ -789,11 +806,20 @@ echo "Starting job..."
       });
 
       if (response.data && response.data.job_id) {
-        // Success - navigate to job detail page
+        // Success - update toast
         const jobId = response.data.job_id;
         const host = response.data.hostname || selectedHost;
-        const encodedJobId = encodeURIComponent(jobId);
-        push(`/jobs/${encodedJobId}/${host}`);
+
+        launchToastStatus = 'success';
+        launchToastMessage = `Job ${jobId} launched successfully`;
+        pendingJobNavigation = { jobId, host };
+
+        // Auto-dismiss success toast after 5 seconds
+        setTimeout(() => {
+          if (showLaunchToast && launchToastStatus === 'success') {
+            showLaunchToast = false;
+          }
+        }, 5000);
       } else {
         throw new Error('Invalid response from server');
       }
@@ -823,10 +849,25 @@ echo "Starting job..."
         launchError = 'Failed to launch job. Please try again.';
       }
 
-      // Show error to user
-      alert(`Launch failed: ${launchError}`);
+      // Update toast with error
+      launchToastStatus = 'error';
+      launchToastMessage = launchError;
     } finally {
       launching = false;
+    }
+  }
+
+  function handleDismissToast() {
+    showLaunchToast = false;
+    pendingJobNavigation = null;
+  }
+
+  function handleNavigateToJob() {
+    if (pendingJobNavigation) {
+      const encodedJobId = encodeURIComponent(pendingJobNavigation.jobId);
+      push(`/jobs/${encodedJobId}/${pendingJobNavigation.host}`);
+      showLaunchToast = false;
+      pendingJobNavigation = null;
     }
   }
 
@@ -1126,6 +1167,16 @@ echo "Starting job..."
     ? (validationDetails.missingText || 'Complete required fields')
     : '');
 </script>
+
+<!-- Launch Status Toast -->
+{#if showLaunchToast}
+  <LaunchStatusToast
+    status={launchToastStatus}
+    message={launchToastMessage}
+    onDismiss={handleDismissToast}
+    onNavigate={launchToastStatus === 'success' ? handleNavigateToJob : undefined}
+  />
+{/if}
 
 <div class="modern-launcher">
   <!-- Mobile Header -->

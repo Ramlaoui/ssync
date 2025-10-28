@@ -296,13 +296,14 @@
         {#if showDropdown}
           <div class="dropdown-menu">
             <div class="py-1">
-              {#if job.state === 'R' || job.state === 'PD'}
+              {#if job.state === 'R' || job.state === 'PD' || (job.array_job_id && job.array_task_id && job.array_task_id.includes('['))}
                 <button
                   class="dropdown-item dropdown-item-danger"
                   onclick={handleCancelFromMenu}
+                  title={job.array_job_id && job.array_task_id && job.array_task_id.includes('[') ? 'Cancel all tasks in this array job' : 'Cancel this job'}
                 >
                   <Square class="w-4 h-4" />
-                  Cancel Job
+                  Cancel Job{job.array_job_id && job.array_task_id && job.array_task_id.includes('[') ? ' (All Tasks)' : ''}
                 </button>
               {/if}
 

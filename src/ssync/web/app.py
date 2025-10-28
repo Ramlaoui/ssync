@@ -950,8 +950,14 @@ async def get_job_status(
         # Check for special "all users" values
         skip_user_detection = False
         if user and user.lower() in ["*", "all"]:
-            logger.info(
-                f"Special user value '{user}' detected - fetching all users' jobs"
+            logger.warning(
+                f"⚠️ SECURITY ALERT: Special user value '{user}' detected - attempting to fetch ALL users' jobs"
+            )
+            logger.warning(
+                f"This will fetch jobs from ALL users on the cluster, which may be slow and cause cache pollution"
+            )
+            logger.warning(
+                f"Request from: {request.client.host if request and hasattr(request, 'client') else 'unknown'}"
             )
             user = None  # Don't filter by user
             skip_user_detection = True  # Skip auto-detection of current user
@@ -959,7 +965,7 @@ async def get_job_status(
             logger.info(f"Filtering for specific user: {user}")
             user = InputSanitizer.sanitize_username(user)
         else:
-            logger.info("No user specified - will use current user")
+            logger.info("No user specified - will auto-detect current user for security")
 
         if search:
             search = InputSanitizer.sanitize_text(search)
@@ -1224,10 +1230,71 @@ async def get_job_status(
         raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 
+async def _refresh_job_in_background(job_id: str, host: Optional[str]):
+    """
+    Background task to refresh job data from SLURM and broadcast updates via WebSocket.
+
+    This allows cache-first requests to return immediately while still getting fresh data.
+    """
+    try:
+        logger.debug(f"Background refresh started for job {job_id} on host {host}")
+
+        manager = get_slurm_manager()
+
+        # Filter hosts
+        slurm_hosts = manager.slurm_hosts
+        if host:
+            slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
+
+        # Search for job across hosts
+        for slurm_host in slurm_hosts:
+            try:
+                job_info = manager.get_job_info(slurm_host, job_id)
+                if job_info:
+                    job_web = JobInfoWeb.from_job_info(job_info)
+
+                    # Cache the refreshed job data
+                    await _cache_middleware.cache_job_status_response(
+                        [
+                            JobStatusResponse(
+                                hostname=slurm_host.host.hostname,
+                                jobs=[job_web],
+                                total_jobs=1,
+                                query_time=datetime.now(),
+                            )
+                        ]
+                    )
+
+                    # Broadcast update via WebSocket to all connected clients
+                    await job_manager.broadcast_job_update(
+                        job_id,
+                        slurm_host.host.hostname,
+                        {
+                            "type": "job_update",
+                            "job": job_web.model_dump(mode='json'),
+                            "source": "background_refresh",
+                        },
+                    )
+
+                    logger.debug(f"Background refresh completed for job {job_id}, broadcasted update")
+                    return
+            except Exception as e:
+                logger.debug(f"Failed to refresh job {job_id} from host {slurm_host.host.hostname}: {e}")
+                continue
+
+        logger.debug(f"Background refresh: job {job_id} not found in SLURM")
+
+    except Exception as e:
+        logger.error(f"Background refresh failed for job {job_id}: {e}")
+
+
 @app.get("/api/jobs/{job_id}", response_model=JobInfoWeb)
 async def get_job_details(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host to search"),
+    cache_first: bool = Query(
+        False, description="Return cached data immediately if available, then refresh in background"
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get detailed information for a specific job."""
@@ -1235,6 +1302,15 @@ async def get_job_details(
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
+
+        # If cache_first is requested, return cached data immediately and trigger background refresh
+        if cache_first:
+            cached_job = await _cache_middleware.get_job_with_cache_fallback(job_id, host)
+            if cached_job:
+                logger.info(f"Returning cached job {job_id} immediately (cache_first=true)")
+                # Trigger async refresh in background (don't await)
+                asyncio.create_task(_refresh_job_in_background(job_id, host))
+                return cached_job
 
         manager = get_slurm_manager()
 
@@ -1262,6 +1338,18 @@ async def get_job_details(
                             )
                         ]
                     )
+
+                    # Broadcast update via WebSocket
+                    await job_manager.broadcast_job_update(
+                        job_id,
+                        slurm_host.host.hostname,
+                        {
+                            "type": "job_update",
+                            "job": job_web.model_dump(mode='json'),
+                            "source": "slurm",
+                        },
+                    )
+
                     return job_web
             except Exception:
                 continue
@@ -2215,32 +2303,28 @@ async def cancel_job(
 
         manager = get_slurm_manager()
 
-        # Find the job first
+        # Get target hosts
         slurm_hosts = manager.slurm_hosts
         if host:
             slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
 
+        # Try to cancel on each host - scancel will fail gracefully if job doesn't exist
         for slurm_host in slurm_hosts:
             try:
-                jobs = await manager.get_all_jobs(slurm_host=slurm_host, job_ids=[job_id])
-                if jobs:
-                    success = manager.cancel_job(slurm_host, job_id)
-                    if success:
-                        # Immediately stop any watchers for this job
-                        from ..watchers import get_watcher_engine
-                        engine = get_watcher_engine()
-                        await engine.stop_watchers_for_job(job_id, slurm_host.host.hostname)
-                        logger.info(f"Stopped watchers for cancelled job {job_id}")
+                success = manager.cancel_job(slurm_host, job_id)
+                if success:
+                    # Immediately stop any watchers for this job
+                    from ..watchers import get_watcher_engine
+                    engine = get_watcher_engine()
+                    await engine.stop_watchers_for_job(job_id, slurm_host.host.hostname)
+                    logger.info(f"Cancelled job {job_id} and stopped watchers")
 
-                        return {"message": "Job cancelled successfully"}
-                    else:
-                        raise HTTPException(
-                            status_code=500, detail="Failed to cancel job"
-                        )
-            except Exception:
+                    return {"message": "Job cancelled successfully"}
+            except Exception as e:
+                logger.debug(f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: {e}")
                 continue
 
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=500, detail="Failed to cancel job on any host")
 
     except HTTPException:
         raise
@@ -3656,7 +3740,7 @@ async def monitor_job_updates(
                             "hostname": hostname,
                             "old_state": last_state.value if last_state else None,
                             "new_state": job_info.state.value,
-                            "job": JobInfoWeb.from_job_info(job_info).model_dump(),
+                            "job": JobInfoWeb.from_job_info(job_info).model_dump(mode='json'),
                         }
                     )
                     last_state = job_info.state
@@ -3685,7 +3769,7 @@ async def monitor_job_updates(
                             "type": "state_change",
                             "old_state": last_state.value if last_state else None,
                             "new_state": job_info.state.value,
-                            "job": JobInfoWeb.from_job_info(job_info).model_dump(),
+                            "job": JobInfoWeb.from_job_info(job_info).model_dump(mode='json'),
                         },
                     )
 
@@ -3810,7 +3894,7 @@ async def websocket_job(websocket: WebSocket, job_id: str):
                 await websocket.send_json(
                     {
                         "type": "initial",
-                        "job": JobInfoWeb.from_job_info(job_info).model_dump(),
+                        "job": JobInfoWeb.from_job_info(job_info).model_dump(mode='json'),
                         "hostname": hostname,
                     }
                 )
@@ -3929,7 +4013,7 @@ async def monitor_all_jobs_singleton():
                             "hostname": job.hostname,
                             "old_state": old_state.value if old_state else None,
                             "new_state": job.state.value,
-                            "job": JobInfoWeb.from_job_info(job).model_dump(),
+                            "job": JobInfoWeb.from_job_info(job).model_dump(mode='json'),
                         })
 
                 # Detect jobs that disappeared from the list (completed/removed)
@@ -3946,7 +4030,7 @@ async def monitor_all_jobs_singleton():
                                 "type": "job_completed",
                                 "job_id": job_id,
                                 "hostname": hostname,
-                                "job": JobInfoWeb.from_job_info(completed_job_data[0]).model_dump(),
+                                "job": JobInfoWeb.from_job_info(completed_job_data[0]).model_dump(mode='json'),
                             })
                         else:
                             updates.append({
@@ -4011,31 +4095,68 @@ async def websocket_all_jobs(websocket: WebSocket):
         # Send initial job list
         try:
             from ..job_data_manager import get_job_data_manager
+            from ..cache import get_cache
 
             manager = get_slurm_manager()
             job_data_manager = get_job_data_manager()
+            cache = get_cache()
 
-            # ⚡ PERFORMANCE: Fetch more jobs initially for comprehensive view
-            all_jobs = await job_data_manager.fetch_all_jobs(
-                hostname=None,
-                limit=500,  # Increased from 100 to 500 for more complete initial data
-                active_only=False,  # Include completed jobs to show accurate states
-            )
+            # ⚡ FIX: First try to get jobs from cache to avoid blocking on concurrent fetches
+            # If cache is empty or stale, fetch from SLURM
+            all_jobs = []
+
+            # Try to get recent jobs from cache first (only from last day)
+            from datetime import datetime, timedelta
+            since_dt = datetime.now() - timedelta(days=1)
+            cached_job_data = cache.get_cached_jobs(hostname=None, limit=500, since=since_dt)
+
+            if cached_job_data and len(cached_job_data) > 0:
+                # Convert CachedJobData to JobInfo
+                logger.info(f"Using {len(cached_job_data)} cached jobs (since {since_dt}) for WebSocket initial data")
+                all_jobs = [cached_data.job_info for cached_data in cached_job_data if cached_data.job_info]
+            else:
+                # No cache available, fetch from SLURM (may return empty if hosts are locked)
+                logger.info("No cache available, fetching jobs for WebSocket initial data")
+                all_jobs = await job_data_manager.fetch_all_jobs(
+                    hostname=None,
+                    limit=500,  # Increased from 100 to 500 for more complete initial data
+                    active_only=False,  # Include completed jobs to show accurate states
+                    since="1d",  # Only fetch jobs from last day to avoid overwhelming the UI
+                )
 
             # Convert to web format and group by host
+            # Keep both object and dict versions - objects for grouping, dicts for JSON
             jobs_by_host = {}
+            jobs_by_host_objects = {}  # Keep JobInfoWeb objects for grouping
             for job in all_jobs:
                 if job.hostname not in jobs_by_host:
                     jobs_by_host[job.hostname] = []
-                jobs_by_host[job.hostname].append(
-                    JobInfoWeb.from_job_info(job).model_dump()
-                )
+                    jobs_by_host_objects[job.hostname] = []
+
+                web_job = JobInfoWeb.from_job_info(job)
+                jobs_by_host[job.hostname].append(web_job.model_dump(mode='json'))
+                jobs_by_host_objects[job.hostname].append(web_job)
+
+            # ⚡ NEW: Compute array job groups for each host for instant display
+            array_groups_by_host = {}
+            for hostname, host_jobs in jobs_by_host_objects.items():
+                if host_jobs:
+                    _, array_groups = group_array_job_tasks(host_jobs)
+                    if array_groups:
+                        # Convert to dict format for JSON serialization
+                        # Use model_dump() which handles all fields correctly
+                        array_groups_by_host[hostname] = [g.model_dump(mode='json') for g in array_groups]
 
             # ⚡ PERFORMANCE: Log initial data size for monitoring
-            logger.info(f"Sending initial WebSocket data: {len(all_jobs)} jobs from {len(jobs_by_host)} hosts")
+            logger.info(f"Sending initial WebSocket data: {len(all_jobs)} jobs from {len(jobs_by_host)} hosts with {len(array_groups_by_host)} hosts having array groups")
 
             await websocket.send_json(
-                {"type": "initial", "jobs": jobs_by_host, "total": len(all_jobs)}
+                {
+                    "type": "initial",
+                    "jobs": jobs_by_host,
+                    "total": len(all_jobs),
+                    "array_groups": array_groups_by_host,
+                }
             )
 
             # Add this WebSocket to the set of connected clients
