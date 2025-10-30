@@ -1280,18 +1280,15 @@ class JobStateManager {
       wsInitialDataTimestamp: 0,
     }));
 
-    console.log('[JobStateManager] ⚡ Starting initial API sync first...');
-    // ⚡ PERFORMANCE FIX: Do API sync FIRST to avoid race condition with WebSocket
-    // The backend prevents concurrent fetches per host, so if we start both in parallel,
-    // the WebSocket gets 0 jobs because all hosts are locked by the API fetch.
-    await this.forceInitialSync();
-
-    console.log('[JobStateManager] ⚡ Now connecting WebSocket for real-time updates...');
-    // Connect WebSocket AFTER initial data is loaded
-    // This way the WebSocket receives the full initial state and then only updates
+    console.log('[JobStateManager] ⚡ Connecting WebSocket for initial data...');
+    // ⚡ PERFORMANCE FIX: Connect WebSocket FIRST without API sync
+    // The backend has a per-host concurrency lock (_fetching_hosts) that prevents
+    // concurrent fetches. If we do API sync first, the WebSocket initial fetch gets
+    // blocked and returns 0 jobs. Instead, let WebSocket connect first and deliver
+    // the initial data. API polling will kick in as a fallback if WebSocket fails.
     this.connectWebSocket();
 
-    console.log('[JobStateManager] ✅ Initialization complete');
+    console.log('[JobStateManager] ✅ Initialization complete - waiting for WebSocket initial data');
   }
   
   public destroy(): void {

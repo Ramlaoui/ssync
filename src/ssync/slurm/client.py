@@ -25,6 +25,7 @@ class SlurmClient:
     def __init__(self):
         self.parser = SlurmParser()
         self._available_fields_cache = {}
+        self._username_cache = {}  # Cache usernames per hostname to avoid repeated queries
 
     def get_available_sacct_fields(
         self, conn: SSHConnection, hostname: str
@@ -163,7 +164,7 @@ class SlurmClient:
                 query_user = user
                 logger.debug(f"Using provided user filter: {user}")
             elif not skip_user_detection:
-                query_user = self.get_username(conn)
+                query_user = self.get_username(conn, hostname=hostname)
                 logger.debug(f"Auto-detected current user: {query_user}")
             else:
                 query_user = None
@@ -496,7 +497,7 @@ class SlurmClient:
                 query_user = user
                 logger.debug(f"Using provided user filter: {user}")
             elif not skip_user_detection:
-                query_user = self.get_username(conn)
+                query_user = self.get_username(conn, hostname=hostname)
                 logger.debug(f"Auto-detected current user: {query_user}")
             else:
                 query_user = None
@@ -757,40 +758,57 @@ class SlurmClient:
         return all_jobs[:limit] if limit else all_jobs
 
     def get_username(
-        self, conn: SSHConnection, user: str | None = None
+        self, conn: SSHConnection, user: str | None = None, hostname: str = "unknown"
     ) -> Optional[str]:
-        """Get the username to use for SLURM queries."""
+        """Get the username to use for SLURM queries.
+
+        Uses caching to avoid repeated queries to the same host.
+        """
         if user:
             return user
 
+        # Check cache first
+        if hostname in self._username_cache:
+            cached_username = self._username_cache[hostname]
+            logger.debug(f"Using cached username for {hostname}: {cached_username}")
+            return cached_username
+
+        # Try to detect username
+        detected_username = None
+
         try:
             # Increase timeout to handle slow SSH connections
-            result = conn.run("whoami", hide=True, timeout=5, warn=True, pty=True)
+            result = conn.run("whoami", hide=True, timeout=10, warn=True, pty=True)
             if result.ok and result.stdout.strip():
-                username = result.stdout.strip()
-                logger.debug(f"Detected username from whoami: {username}")
-                return username
+                detected_username = result.stdout.strip()
+                logger.debug(f"Detected username from whoami: {detected_username}")
         except Exception as e:
             logger.warning(f"Failed to get current user via whoami: {e}")
 
         # FALLBACK: Try to get username from SSH connection object
-        try:
-            if hasattr(conn, 'user'):
-                username = conn.user
-                logger.info(f"Using SSH connection username as fallback: {username}")
-                return username
-        except Exception as e:
-            logger.debug(f"Could not get username from SSH connection: {e}")
+        if not detected_username:
+            try:
+                if hasattr(conn, 'user'):
+                    detected_username = conn.user
+                    logger.info(f"Using SSH connection username as fallback: {detected_username}")
+            except Exception as e:
+                logger.debug(f"Could not get username from SSH connection: {e}")
 
         # Last resort - try environment variable from connection
-        try:
-            result = conn.run("echo $USER", hide=True, timeout=5, warn=True, pty=True)
-            if result.ok and result.stdout.strip():
-                username = result.stdout.strip()
-                logger.info(f"Got username from $USER environment variable: {username}")
-                return username
-        except Exception as e:
-            logger.debug(f"Could not get username from $USER: {e}")
+        if not detected_username:
+            try:
+                result = conn.run("echo $USER", hide=True, timeout=10, warn=True, pty=True)
+                if result.ok and result.stdout.strip():
+                    detected_username = result.stdout.strip()
+                    logger.info(f"Got username from $USER environment variable: {detected_username}")
+            except Exception as e:
+                logger.debug(f"Could not get username from $USER: {e}")
+
+        # Cache the result if we successfully detected a username
+        if detected_username:
+            self._username_cache[hostname] = detected_username
+            logger.info(f"Cached username for {hostname}: {detected_username}")
+            return detected_username
 
         logger.error("⚠️  Could not determine username - SLURM query will fetch ALL users' jobs!")
         return None
@@ -802,13 +820,13 @@ class SlurmClient:
         try:
             job_info = None
 
-            user = user or self.get_username(conn)
+            user = user or self.get_username(conn, hostname=hostname)
 
             format_str = "|".join(SQUEUE_FIELDS)
             result = conn.run(
                 f"squeue --user {user} -j {job_id} --format='{format_str}' --noheader",
                 hide=True,
-                timeout=10,
+                timeout=30,  # Increased from 10s to handle slow SLURM responses
                 warn=True,  # Don't throw exception on "Invalid job id"
             )
 
@@ -823,7 +841,7 @@ class SlurmClient:
                 result = conn.run(
                     f"sacct -X -j {job_id} --format={format_str} --parsable2 --noheader --user {user}",
                     hide=True,
-                    timeout=10,
+                    timeout=30,  # Increased from 10s to handle slow SLURM responses
                     warn=True,  # Don't throw exception if job not found in sacct either
                 )
 
@@ -937,7 +955,7 @@ class SlurmClient:
         try:
             logger.debug(f"Getting job details for job {job_id} on {hostname}")
 
-            user = user or self.get_username(conn)
+            user = user or self.get_username(conn, hostname=hostname)
 
             result = conn.run(
                 f"scontrol show job {job_id}",

@@ -231,20 +231,16 @@
   onMount(async () => {
     await loadHosts();
 
-    // Only refresh jobs if we don't have any data
-    const currentJobs = get(allJobs);
-    if (currentJobs.length === 0) {
-      await jobStateManager.forceRefresh();
-    } else {
-      // We have data, just do a gentle sync without clearing cache
-      await jobStateManager.syncAllHosts();
-    }
-    
+    // ⚡ PERFORMANCE FIX: Don't force sync on mount - let WebSocket deliver initial data
+    // The JobStateManager connects WebSocket on initialization and will receive initial
+    // data automatically. Forcing a sync here causes a race condition with the WebSocket
+    // initial fetch, resulting in 0 jobs being returned due to backend concurrency locks.
+
     // Only load watchers if store is empty
     if ($watchersStore.length === 0) {
       await loadWatchersData();
     }
-    
+
     // Mark initial loading as complete
     initialLoading = false;
     

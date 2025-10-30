@@ -8,7 +8,7 @@ from ..utils.config import ConfigError, config
 from .attach_watchers import attach_watchers
 from .auth import auth
 from .cleanup_watchers import cleanup_watchers
-from .commands import LaunchCommand, StatusCommand, SyncCommand
+from .commands import CancelCommand, LaunchCommand, StatusCommand, SyncCommand
 from .watchers import watchers
 
 
@@ -86,6 +86,30 @@ def status_command(
         active_only=active_only,
         completed_only=completed_only,
         cat_output=cat_output,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="cancel")
+@click.argument("job_id")
+@click.option("--host", help="Target host (auto-detected if not specified)")
+@click.pass_context
+def cancel_command(ctx, job_id, host):
+    """Cancel a SLURM job.
+
+    JOB_ID: SLURM job ID to cancel
+    """
+    command = CancelCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        job_id=job_id,
+        host=host,
     )
 
     if not success:

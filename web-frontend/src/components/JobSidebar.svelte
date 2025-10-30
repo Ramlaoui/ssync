@@ -285,24 +285,6 @@
 </script>
 
 <div class="job-sidebar" class:collapsed={actuallyCollapsed} class:mobile={isMobile} class:closing={isClosing}>
-  <!-- Toggle button with animation (desktop only) -->
-  {#if !isMobile}
-  <button
-    class="toggle-btn"
-    class:collapsed={actuallyCollapsed}
-    onclick={() => collapsed = !collapsed}
-    aria-label="{actuallyCollapsed ? 'Show' : 'Hide'} job sidebar"
-  >
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      {#if actuallyCollapsed}
-        <path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z" />
-      {:else}
-        <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z" />
-      {/if}
-    </svg>
-  </button>
-  {/if}
-  
   <div class="sidebar-header">
     {#if !actuallyCollapsed}
     <h3>Jobs</h3>
@@ -646,40 +628,7 @@
   .job-sidebar.mobile.collapsed {
     width: 100%;
   }
-  
-  .toggle-btn {
-    position: absolute;
-    left: -12px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 24px;
-    height: 24px;
-    background: var(--secondary);
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 10;
-    transition: all 0.3s ease;
-  }
-  
-  .toggle-btn svg {
-    width: 16px;
-    height: 16px;
-    color: var(--muted-foreground);
-    transition: transform 0.3s ease;
-  }
 
-  .toggle-btn:hover {
-    background: var(--secondary);
-  }
-  
-  .toggle-btn.collapsed svg {
-    transform: rotate(180deg);
-  }
-  
   .sidebar-header {
     padding: 1rem;
     border-bottom: 1px solid var(--border);

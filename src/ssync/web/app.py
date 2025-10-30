@@ -3958,6 +3958,7 @@ _all_jobs_monitor_lock = asyncio.Lock()
 async def monitor_all_jobs_singleton():
     """Single background task that broadcasts to all connected WebSocket clients."""
     global _all_jobs_websockets
+    import copy  # For deep copying job dicts to avoid object reuse
 
     try:
         from ..job_data_manager import get_job_data_manager
@@ -3995,6 +3996,11 @@ async def monitor_all_jobs_singleton():
                     job_key = f"{job.hostname}:{job.job_id}"
                     current_job_ids.add(job_key)
 
+                    # Validate job object consistency
+                    if not job.job_id:
+                        logger.error(f"Job object missing job_id: {job}")
+                        continue
+
                     # ⚡ PERFORMANCE FIX: Send updates when:
                     # 1. Job is new (not in job_states)
                     # 2. Job state changed
@@ -4007,13 +4013,38 @@ async def monitor_all_jobs_singleton():
                         old_state = job_states.get(job_key)
                         job_states[job_key] = job.state
 
+                        # Capture job_id BEFORE any processing to detect mutations
+                        original_job_id = job.job_id
+                        original_hostname = job.hostname
+
+                        # Create job dict and validate consistency
+                        # IMPORTANT: Create a fresh JobInfoWeb object for each update
+                        web_job = JobInfoWeb.from_job_info(job)
+                        job_dict = web_job.model_dump(mode='json')
+
+                        # Make a deep copy to ensure no dict reuse across updates
+                        # This prevents the same dict object from being shared across multiple updates
+                        job_dict_copy = copy.deepcopy(job_dict)
+
+                        # Verify job_id didn't change during processing
+                        if job.job_id != original_job_id:
+                            logger.error(f"Job object MUTATED during processing: was {original_job_id}, now {job.job_id}")
+                            continue
+
+                        # Verify job_id consistency before adding to updates
+                        if job_dict_copy['job_id'] != original_job_id:
+                            logger.error(f"Job ID mismatch in batch_update: original_job_id={original_job_id} vs job_dict['job_id']={job_dict_copy['job_id']}, hostname={original_hostname}")
+                            logger.error(f"Full job object: {job}")
+                            logger.error(f"Full job_dict: {job_dict_copy}")
+                            continue  # Skip this update to prevent cache corruption
+
                         updates.append({
                             "type": "job_update",
-                            "job_id": job.job_id,
-                            "hostname": job.hostname,
+                            "job_id": original_job_id,  # Use captured value
+                            "hostname": original_hostname,  # Use captured value
                             "old_state": old_state.value if old_state else None,
                             "new_state": job.state.value,
-                            "job": JobInfoWeb.from_job_info(job).model_dump(mode='json'),
+                            "job": job_dict_copy,
                         })
 
                 # Detect jobs that disappeared from the list (completed/removed)
@@ -4033,18 +4064,13 @@ async def monitor_all_jobs_singleton():
                                 "job": JobInfoWeb.from_job_info(completed_job_data[0]).model_dump(mode='json'),
                             })
                         else:
-                            updates.append({
-                                "type": "job_completed",
-                                "job_id": job_id,
-                                "hostname": hostname,
-                            })
+                            # Skip sending update if we can't get job data
+                            # Frontend will handle job removal via periodic sync
+                            logger.debug(f"Skipping job_completed update for {job_id} - no job data available")
                     except Exception as e:
-                        logger.debug(f"Could not fetch completed job {job_id}: {e}")
-                        updates.append({
-                            "type": "job_completed",
-                            "job_id": job_id,
-                            "hostname": hostname,
-                        })
+                        # Skip sending update if fetch fails
+                        # Frontend will handle job removal via periodic sync
+                        logger.debug(f"Skipping job_completed update for {job_id} - fetch failed: {e}")
 
                     del job_states[job_key]
 
@@ -4126,10 +4152,21 @@ async def websocket_all_jobs(websocket: WebSocket):
 
             # Convert to web format and group by host
             # Keep both object and dict versions - objects for grouping, dicts for JSON
+            # ⚡ FIX: Initialize with ALL configured hosts, not just hosts with jobs
             jobs_by_host = {}
             jobs_by_host_objects = {}  # Keep JobInfoWeb objects for grouping
+
+            # Initialize all configured hosts with empty arrays
+            for slurm_host in manager.slurm_hosts:
+                hostname = slurm_host.host.hostname
+                jobs_by_host[hostname] = []
+                jobs_by_host_objects[hostname] = []
+
+            # Now add jobs to their respective hosts
             for job in all_jobs:
                 if job.hostname not in jobs_by_host:
+                    # This shouldn't happen since we initialized all hosts above,
+                    # but handle it just in case
                     jobs_by_host[job.hostname] = []
                     jobs_by_host_objects[job.hostname] = []
 

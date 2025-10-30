@@ -82,12 +82,11 @@ class StatusCommand(BaseCommand):
             # Group jobs by hostname for display
             jobs_by_host = JobDisplay.group_jobs_by_host(jobs)
 
-            # If no specific host requested, ensure all hosts are shown
-            if not host:
-                for slurm_host in self.slurm_hosts:
-                    hostname = slurm_host.host.hostname
-                    if hostname not in jobs_by_host:
-                        jobs_by_host[hostname] = []
+            # Ensure all configured hosts are shown (or just the requested one)
+            hosts_to_show = [host] if host else [h.host.hostname for h in self.slurm_hosts]
+            for hostname in hosts_to_show:
+                if hostname not in jobs_by_host:
+                    jobs_by_host[hostname] = []
 
             # Display results
             if cat_output and job_ids:
@@ -290,4 +289,71 @@ class LaunchCommand(BaseCommand):
 
         except Exception as e:
             click.echo(f"Error launching job: {e}", err=True)
+            return False
+
+
+class CancelCommand(BaseCommand):
+    """Handles the cancel command logic."""
+
+    def execute(
+        self,
+        job_id: str,
+        host: Optional[str] = None,
+    ):
+        """Execute cancel command."""
+        try:
+            # Initialize API client
+            api_client = ApiClient(verbose=self.verbose)
+
+            # Start API server if not running
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
+                return False
+
+            # If host not provided, try to find the job on any configured host
+            if not host:
+                if self.verbose:
+                    click.echo(f"No host specified, searching for job {job_id}...")
+
+                # Get all jobs to find which host has this job
+                jobs = api_client.get_jobs(job_ids=[job_id])
+
+                if not jobs:
+                    click.echo(f"Job {job_id} not found on any configured host", err=True)
+                    return False
+
+                # Use the host from the found job (JobInfo object has hostname attribute)
+                host = jobs[0].hostname
+                if self.verbose:
+                    click.echo(f"Found job {job_id} on host {host}")
+
+            # Verify host exists in configuration
+            host_exists = any(h.host.hostname == host for h in self.slurm_hosts)
+            if not host_exists:
+                click.echo(f"Host '{host}' not found in configuration", err=True)
+                return False
+
+            # Cancel job via API
+            success, message = api_client.cancel_job(job_id=job_id, host=host)
+
+            if success:
+                click.echo(f"Successfully cancelled job {job_id} on {host}")
+                return True
+            else:
+                click.echo(f"Failed to cancel job: {message}", err=True)
+                return False
+
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
+        except Exception as e:
+            click.echo(f"Error cancelling job: {e}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
             return False

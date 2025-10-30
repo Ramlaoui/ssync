@@ -4,6 +4,7 @@
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import { Settings, Type, Hash, WrapText } from 'lucide-svelte';
+  import { debounce } from '../lib/debounce';
   
   interface Props {
     content?: string;
@@ -475,16 +476,22 @@
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+  // Create debounced search handler (300ms delay)
+  const debouncedHighlightSearch = debounce(() => {
+    highlightSearchResults();
+  }, 300);
+
   // Initialize content when it changes
   run(() => {
     if (content) {
       initializeContent();
     }
   });
+
   run(() => {
     lines = renderedContent.split('\n');
     if (searchQuery) {
-      highlightSearchResults();
+      debouncedHighlightSearch();
     } else if (!disableHighlighting) {
       highlightedContent = applySyntaxHighlighting(renderedContent);
     } else {

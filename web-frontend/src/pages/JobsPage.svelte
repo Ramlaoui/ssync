@@ -328,15 +328,12 @@
     // Load hosts first
     await loadHosts();
 
-    // Only refresh jobs if we don't have any data
-    const currentJobs = get(allJobs);
-    if (currentJobs.length === 0) {
-      await jobStateManager.forceRefresh();
-    } else {
-      // We have data, do a user-initiated sync to ensure we get fresh data
-      // This bypasses the cache timeout check that might skip the fetch
-      await jobStateManager.syncAllHosts(false, true);
-    }
+    // ⚡ PERFORMANCE FIX: Don't force sync on mount - let WebSocket deliver initial data
+    // The JobStateManager connects WebSocket on initialization and will receive initial
+    // data automatically. Forcing a sync here causes a race condition with the WebSocket
+    // initial fetch, resulting in 0 jobs being returned due to backend concurrency locks.
+    // The user can always click the refresh button if they want to force a refresh.
+
     checkMobile();
     window.addEventListener("resize", checkMobile);
 

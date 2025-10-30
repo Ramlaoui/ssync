@@ -66,14 +66,18 @@ class SSHConnection:
         if isinstance(host_config, str):
             # SSH alias
             self.host = host_config
+            self.user = None
         elif isinstance(host_config, dict):
             # Dictionary config
             self.host = host_config.get(
                 "hostname", host_id.split("@")[-1].split(":")[0]
             )
+            # Extract username if provided in config
+            self.user = host_config.get("user")
         else:
             # Fallback to parsing host_id
             self.host = host_id.split("@")[-1].split(":")[0]
+            self.user = None
 
     def run(
         self,

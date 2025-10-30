@@ -12,8 +12,10 @@ class SlurmParser:
         """Map SLURM state string to JobState enum."""
         if from_sacct:
             state_clean = state_str.split()[0]
+            # Terminal success states
             if state_clean in ["COMPLETED"]:
                 return JobState.COMPLETED
+            # Terminal failure states
             elif state_clean in [
                 "FAILED",
                 "BOOT_FAIL",
@@ -27,6 +29,16 @@ class SlurmParser:
                 return JobState.CANCELLED
             elif state_clean in ["TIMEOUT"]:
                 return JobState.TIMEOUT
+            # Active running states (COMPLETING, CONFIGURING, STAGE_OUT are variants of running)
+            elif state_clean in ["RUNNING", "COMPLETING", "CONFIGURING", "STAGE_OUT", "SIGNALING"]:
+                return JobState.RUNNING
+            # Pending/queued states
+            elif state_clean in ["PENDING", "REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD", "RESV_DEL_HOLD"]:
+                return JobState.PENDING
+            # Suspended states (temporarily stopped but not terminated)
+            elif state_clean in ["SUSPENDED", "STOPPED", "RESIZING", "REVOKED"]:
+                # Map suspended states to PENDING since they're queued to resume
+                return JobState.PENDING
             else:
                 return JobState.UNKNOWN
         else:

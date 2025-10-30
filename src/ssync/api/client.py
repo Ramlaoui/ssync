@@ -124,11 +124,14 @@ class ApiClient:
                 except ValueError:
                     state = JobState.UNKNOWN
 
+                # Use hostname from job_data if available, otherwise from host_response
+                job_hostname = job_data.get("hostname", hostname)
+
                 job = JobInfo(
                     job_id=job_data["job_id"],
                     name=job_data["name"],
                     state=state,
-                    hostname=hostname,
+                    hostname=job_hostname,
                     user=job_data.get("user"),
                     partition=job_data.get("partition"),
                     nodes=job_data.get("nodes"),
@@ -280,3 +283,41 @@ class ApiClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"API request failed: {str(e)}")
             return False, None, f"API request failed: {str(e)}"
+
+    def cancel_job(self, job_id: str, host: str) -> tuple[bool, str]:
+        """Cancel a job via the API.
+
+        Returns:
+            tuple of (success, message)
+        """
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/jobs/{job_id}/cancel",
+                params={"host": host},
+                headers=self._get_headers(),
+                timeout=30,
+                verify=False,
+            )
+
+            if not response.ok:
+                # Try to get error details from response
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("detail", str(response.text))
+                except Exception:
+                    error_msg = f"HTTP {response.status_code}: {response.reason}"
+                    if response.text:
+                        error_msg += f" - {response.text[:200]}"
+                logger.debug(f"API request failed: {error_msg}")
+                return False, error_msg
+
+            data = response.json()
+            return data.get("success", True), data.get("message", "Job cancelled")
+
+        except requests.exceptions.Timeout:
+            return False, "API request timed out"
+        except requests.exceptions.ConnectionError:
+            return False, f"Could not connect to API server at {self.base_url}"
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed: {str(e)}")
+            return False, f"API request failed: {str(e)}"

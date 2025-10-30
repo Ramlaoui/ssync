@@ -5,6 +5,7 @@
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import { Settings, Type, Hash, WrapText, RefreshCw } from 'lucide-svelte';
+  import { debounce } from '../lib/debounce';
   
   interface Props {
     content?: string;
@@ -470,13 +471,25 @@
     }
   });
 
-  // React to search query changes
+  // Create debounced search handler (300ms delay)
+  const debouncedHighlightSearch = debounce(() => {
+    highlightSearchResults();
+  }, 300);
+
+  // React to search query changes with debouncing
   run(() => {
     const query = searchQuery; // Track only searchQuery
     if (query) {
-      // Use untrack to prevent tracking any state reads inside highlightSearchResults
+      // Use untrack to prevent tracking any state reads inside the debounced function
       // This prevents the effect from tracking renderedContent, showSizeWarning, etc.
-      untrack(() => highlightSearchResults());
+      untrack(() => debouncedHighlightSearch());
+    } else {
+      // Clear search immediately when query is empty
+      untrack(() => {
+        highlightedContent = escapeHtml(renderedContent);
+        searchResults = [];
+        currentSearchIndex = -1;
+      });
     }
   });
 

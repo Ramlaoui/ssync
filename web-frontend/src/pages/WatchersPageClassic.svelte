@@ -272,13 +272,13 @@ https://svelte.dev/e/element_invalid_closing_tag -->
     // Check if mobile
     checkMobile();
     window.addEventListener('resize', checkMobile);
-    
+
     await refreshData();
-    // Fetch jobs for cross-referencing with watchers
-    await jobStateManager.forceRefresh();
+    // ⚡ PERFORMANCE FIX: Don't force refresh on mount - let WebSocket deliver job data
+    // The JobStateManager connects WebSocket on initialization automatically
     connectWatcherWebSocket();
     startRefreshInterval();
-    
+
     // Add keyboard shortcuts
     window.addEventListener('keydown', handleKeydown);
   });

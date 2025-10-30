@@ -132,14 +132,30 @@ class JobDataManager:
             )
 
             # Filter out hosts that are already being fetched to avoid conflicts
+            # For hosts already being fetched, return cached data instead of empty results
             available_hosts = []
+            cached_jobs_from_busy_hosts = []
+
             for slurm_host in hosts_to_query:
                 host_name = slurm_host.host.hostname
                 if host_name not in self._fetching_hosts:
                     available_hosts.append(slurm_host)
+                else:
+                    # Host is already being fetched - return cached data for this host
+                    logger.info(f"Host {host_name} is already being fetched, returning cached data")
+                    cached_job_data = self.cache.get_cached_jobs(hostname=host_name, limit=limit or 1000)
+                    if cached_job_data:
+                        # Extract JobInfo objects from CachedJobData
+                        cached_jobs = [cjd.job_info for cjd in cached_job_data if cjd.job_info]
+                        logger.info(f"Returning {len(cached_jobs)} cached jobs for busy host {host_name}")
+                        cached_jobs_from_busy_hosts.extend(cached_jobs)
+                    else:
+                        logger.debug(f"No cached jobs available for busy host {host_name}")
+
+            # If all hosts are busy, return cached data only
             if not available_hosts:
-                logger.debug("No available hosts to fetch from")
-                return []
+                logger.info(f"All hosts are busy, returning {len(cached_jobs_from_busy_hosts)} cached jobs")
+                return cached_jobs_from_busy_hosts
 
             # Mark all hosts as being fetched
             for slurm_host in available_hosts:
@@ -172,6 +188,9 @@ class JobDataManager:
 
                 # Collect successful results
                 all_jobs = []
+                # Include cached jobs from busy hosts first
+                all_jobs.extend(cached_jobs_from_busy_hosts)
+
                 for i, result in enumerate(host_results):
                     if isinstance(result, Exception):
                         logger.error(
@@ -214,7 +233,7 @@ class JobDataManager:
         """Fetch jobs from a single host with comprehensive data capture."""
         hostname = slurm_host.host.hostname
         jobs = []
-        logger.info(f"_fetch_host_jobs called for {hostname} with limit={limit}")
+        logger.info(f"_fetch_host_jobs called for {hostname} with limit={limit}, job_ids={job_ids}")
 
         try:
             # Get connection with timeout - if it takes too long, try force refresh
@@ -266,7 +285,7 @@ class JobDataManager:
                 # Auto-detect current user only if not skipping detection
                 try:
                     effective_user = await self._run_in_executor(
-                        manager.slurm_client.get_username, conn
+                        manager.slurm_client.get_username, conn, None, hostname
                     )
                     logger.debug(f"Auto-detected user on {hostname}: {effective_user}")
                 except Exception as e:
@@ -305,7 +324,7 @@ class JobDataManager:
                     )
                     try:
                         effective_user = await self._run_in_executor(
-                            manager.slurm_client.get_username, conn
+                            manager.slurm_client.get_username, conn, None, hostname
                         )
                         logger.info(f"Using detected user: {effective_user}")
                     except Exception as e:
