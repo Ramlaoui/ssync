@@ -224,20 +224,7 @@
     {/if}
 
     {#if !showSidebarOnly}
-      {#if isMobile}
-        <!-- Mobile hamburger menu button -->
-        <button
-          class="header-menu-button"
-          onclick={onToggleSidebar}
-          aria-label="Show job list"
-        >
-          <Menu class="w-4 h-4" />
-        </button>
-      {/if}
-
-      {#if !isMobile}
-        <div class="header-divider"></div>
-      {/if}
+      <div class="header-divider"></div>
 
       {#if job}
         <div class="flex items-center gap-2 md:gap-3 min-w-0 flex-1">

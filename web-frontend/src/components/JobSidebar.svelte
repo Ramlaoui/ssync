@@ -653,13 +653,12 @@
   }
   
   .job-sidebar.mobile {
-    width: 100%;
-    max-width: 100vw; /* Prevent expansion beyond viewport */
+    width: 85vw; /* 85% of viewport width */
+    max-width: 400px; /* Maximum width on larger mobile devices */
     height: 100%;
     border-right: none;
-    border-top: 1px solid var(--border);
-    /* On mobile, always show full width regardless of collapsed state */
-    animation: slideInFromLeft 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    /* On mobile overlay, add shadow for depth */
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
     box-sizing: border-box; /* Include padding/border in width calculation */
   }
 

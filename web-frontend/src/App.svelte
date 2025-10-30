@@ -288,10 +288,20 @@
     {/if}
 
     <!-- Main Content -->
-    <main class="flex-1 w-full min-h-0 overflow-hidden flex">
+    <main class="flex-1 w-full min-h-0 overflow-hidden flex relative">
+      <!-- Mobile Backdrop (only on mobile when sidebar is open) -->
+      {#if isMobile && $sidebarOpen}
+        <div
+          class="mobile-sidebar-backdrop"
+          onclick={() => sidebarOpen.set(false)}
+        ></div>
+      {/if}
+
       <!-- Global Job Sidebar -->
       {#if $sidebarOpen}
-        <JobSidebar />
+        <div class="sidebar-container" class:mobile={isMobile}>
+          <JobSidebar />
+        </div>
       {/if}
 
       <!-- Page Content -->
@@ -410,6 +420,43 @@
   }
 
   @keyframes slide-in {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  /* Mobile Sidebar Overlay */
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 60;
+    animation: fade-in 0.2s ease-out;
+  }
+
+  .sidebar-container {
+    position: relative;
+    z-index: 1;
+  }
+
+  .sidebar-container.mobile {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 70;
+    animation: slide-in-left 0.3s ease-out;
+  }
+
+  @keyframes slide-in-left {
     from {
       transform: translateX(-100%);
     }
