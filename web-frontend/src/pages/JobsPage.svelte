@@ -417,7 +417,7 @@
   });
 </script>
 
-<div class="h-full flex flex-col bg-[var(--background)]">
+<div class="h-full flex flex-col bg-background">
   {#if !isMobile}
     <NavigationHeader
       showRefresh={true}
@@ -492,7 +492,7 @@
   {:else}
     <!-- Mobile header -->
     <div
-      class="flex justify-between items-center p-3 bg-[var(--secondary)] border-b border-[var(--border)] relative z-50 shadow-sm"
+      class="flex justify-between items-center p-3 bg-secondary border-b border-border relative z-50 shadow-sm"
     >
       <div class="flex items-center min-h-[40px] whitespace-nowrap">
         <!-- Stats on the left -->
