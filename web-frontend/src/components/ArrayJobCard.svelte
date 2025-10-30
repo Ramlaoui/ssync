@@ -139,7 +139,14 @@
   <div
     class="context-menu"
     style="left: {contextMenuX}px; top: {contextMenuY}px;"
+    role="menu"
+    tabindex="-1"
     onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') {
+        closeContextMenu();
+      }
+    }}
   >
     {#if group.running_count > 0 || group.pending_count > 0}
       <button

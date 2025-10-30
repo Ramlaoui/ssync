@@ -306,7 +306,15 @@
       {#if isMobile && $sidebarOpen}
         <div
           class="mobile-sidebar-backdrop"
+          role="button"
+          tabindex="0"
           onclick={() => sidebarOpen.set(false)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              sidebarOpen.set(false);
+            }
+          }}
         ></div>
       {/if}
 
@@ -339,6 +347,8 @@
   .navbar-header {
     background-color: var(--background);
     border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 50;
   }
 
   /* Minimalist Navigation */
@@ -444,14 +454,14 @@
   /* Mobile Sidebar Overlay */
   .mobile-sidebar-backdrop {
     position: fixed;
-    top: 65px; /* Below navbar (64px) + border (1px) */
+    top: 0;
     left: 0;
     right: 0;
     bottom: 0;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
-    z-index: 60;
+    z-index: 30;
     animation: fade-in 0.2s ease-out;
   }
 

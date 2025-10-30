@@ -76,12 +76,12 @@
   }
   
   function getActionColor(actionType: string): string {
-    if (actionType.includes('metric')) return '#3b82f6';
-    if (actionType.includes('checkpoint')) return '#10b981';
-    if (actionType.includes('command')) return '#f59e0b';
-    if (actionType.includes('cancel')) return '#ef4444';
-    if (actionType.includes('resubmit')) return '#8b5cf6';
-    return '#6b7280';
+    if (actionType.includes('metric')) return 'var(--accent)';
+    if (actionType.includes('checkpoint')) return 'var(--success)';
+    if (actionType.includes('command')) return 'var(--warning)';
+    if (actionType.includes('cancel')) return 'var(--destructive)';
+    if (actionType.includes('resubmit')) return 'var(--accent)';
+    return 'var(--muted-foreground)';
   }
   
   function formatTimestamp(timestamp: string): string {
@@ -353,7 +353,7 @@
   
   .search-input {
     padding: 0.5rem 1rem;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
     width: 250px;
@@ -454,7 +454,7 @@
   .event-card {
     width: 100%;
     background: var(--secondary);
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 0.75rem 1rem;
     text-align: left;
@@ -530,8 +530,8 @@
   .event-details {
     margin-top: 1rem;
     padding: 1rem;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
   }
   
@@ -548,18 +548,18 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
   
   .code-block {
     display: block;
-    background: #f1f5f9;
+    background: var(--secondary);
     padding: 0.75rem;
     border-radius: 4px;
     font-family: monospace;
     font-size: 0.8125rem;
     word-break: break-all;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
   }
   
   .var-grid {
@@ -597,7 +597,7 @@
     font-size: 0.8125rem;
     white-space: pre-wrap;
     word-break: break-all;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     color: var(--foreground);
   }
   

@@ -298,7 +298,7 @@
     height: 100%;
     overflow-y: auto;
     padding: 1rem;
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .error-container {
@@ -334,7 +334,7 @@
     background: white;
     border-radius: 0.5rem;
     margin-bottom: 0.75rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     transition: box-shadow 0.2s;
   }
 
@@ -355,7 +355,7 @@
   }
 
   .watcher-header:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .header-left {
@@ -366,7 +366,7 @@
   }
 
   .expand-icon {
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .watcher-info {
@@ -375,7 +375,7 @@
 
   .watcher-name {
     font-weight: 600;
-    color: #1f2937;
+    color: var(--foreground);
     display: block;
     margin-bottom: 0.25rem;
   }
@@ -398,7 +398,7 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .timer-mode {
@@ -410,7 +410,7 @@
 
   .watcher-details {
     padding: 0 1rem 1rem 3rem;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
   }
 
   .detail-section {
@@ -420,7 +420,7 @@
   .detail-section h4 {
     font-weight: 600;
     font-size: 0.875rem;
-    color: #4b5563;
+    color: var(--muted-foreground);
     margin-bottom: 0.5rem;
     display: flex;
     align-items: center;
@@ -431,11 +431,11 @@
   .condition-code {
     display: block;
     padding: 0.5rem;
-    background: #f3f4f6;
+    background: var(--secondary);
     border-radius: 0.25rem;
     font-family: monospace;
     font-size: 0.875rem;
-    color: #1f2937;
+    color: var(--foreground);
     word-break: break-all;
   }
 
@@ -488,7 +488,7 @@
   }
 
   .no-variables {
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     font-style: italic;
   }
@@ -501,17 +501,17 @@
 
   .action-item {
     padding: 0.5rem;
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 0.25rem;
     margin-bottom: 0.5rem;
     font-size: 0.875rem;
-    color: #1f2937;
+    color: var(--foreground);
   }
 
   .action-condition {
     display: block;
     margin-top: 0.25rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-size: 0.75rem;
     font-style: italic;
   }
@@ -528,12 +528,12 @@
   }
 
   .timing-label {
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .btn {
     padding: 0.375rem 0.75rem;
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border: none;
     border-radius: 0.375rem;
@@ -543,7 +543,7 @@
   }
 
   .btn:hover {
-    background: #2563eb;
+    background: var(--accent);
   }
 
   .btn-sm {

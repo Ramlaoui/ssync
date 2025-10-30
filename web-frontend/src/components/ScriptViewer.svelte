@@ -307,12 +307,11 @@
         
         // Add visual emphasis to current result
         marks.forEach((m, i) => {
+          const element = m as HTMLElement;
           if (i === index) {
-            (m as HTMLElement).style.backgroundColor = '#fbbf24';
-            (m as HTMLElement).style.color = '#7c2d12';
+            element.className = 'bg-amber-400 text-amber-900';
           } else {
-            (m as HTMLElement).style.backgroundColor = '#fef08a';
-            (m as HTMLElement).style.color = '#92400e';
+            element.className = 'bg-yellow-200 text-amber-800';
           }
         });
       }
@@ -511,26 +510,26 @@
   <div class="viewer-header">
     <div class="search-controls">
       <div class="search-input-group">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="currentColor">
+        <svg class="search-icon text-gray-500" viewBox="0 0 24 24" fill="currentColor">
           <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
         </svg>
         <input
           type="text"
           placeholder="Search in script..."
           bind:value={searchQuery}
-          class="search-input"
+          class="search-input bg-white border-gray-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
         />
         {#if searchQuery && searchResults.length > 0}
-          <div class="search-results-info">
+          <div class="search-results-info bg-white text-gray-500 border-gray-200">
             {currentSearchIndex + 1} of {searchResults.length}
           </div>
         {/if}
       </div>
-      
+
       {#if searchQuery}
         <div class="search-navigation">
-          <button 
-            class="search-nav-btn" 
+          <button
+            class="search-nav-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400 disabled:opacity-50"
             onclick={prevSearchResult}
             disabled={searchResults.length === 0}
             title="Previous result"
@@ -539,8 +538,8 @@
               <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/>
             </svg>
           </button>
-          <button 
-            class="search-nav-btn" 
+          <button
+            class="search-nav-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400 disabled:opacity-50"
             onclick={nextSearchResult}
             disabled={searchResults.length === 0}
             title="Next result"
@@ -559,29 +558,29 @@
       
       
       <!-- Copy to Clipboard -->
-      <button class="control-btn" onclick={copyToClipboard} title="Copy script">
+      <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={copyToClipboard} title="Copy script">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/>
         </svg>
       </button>
-      
+
       <!-- Download Script -->
       {#if onDownload}
-        <button class="control-btn" onclick={onDownload} title="Download script">
+        <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={onDownload} title="Download script">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
           </svg>
         </button>
       {/if}
-      
+
       <!-- Scroll Controls -->
-      <button class="control-btn" onclick={handleScrollToTop} title="Scroll to top">
+      <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={handleScrollToTop} title="Scroll to top">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"/>
         </svg>
       </button>
 
-      <button class="control-btn" onclick={handleScrollToBottom} title="Scroll to bottom">
+      <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={handleScrollToBottom} title="Scroll to bottom">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"/>
         </svg>
@@ -589,7 +588,7 @@
 
       <!-- Settings Menu -->
       <div class="settings-dropdown relative">
-        <button class="control-btn" onclick={() => showSettingsMenu = !showSettingsMenu} title="View settings">
+        <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={() => showSettingsMenu = !showSettingsMenu} title="View settings">
           <Settings class="w-3.5 h-3.5" />
         </button>
 
@@ -751,7 +750,7 @@
       {#if renderedContent}
         <span class="line-count">{lines.length} lines</span>
         {#if totalContentSize > 0}
-          <span class="size-info">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
+          <span class="size-info bg-sky-100 text-sky-700">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
         {:else}
           <span class="char-count">{renderedContent.length} characters</span>
         {/if}
@@ -762,7 +761,7 @@
     </div>
     
     <div class="file-info">
-      <span class="file-type">Shell Script</span>
+      <span class="file-type bg-sky-100 text-sky-700">Shell Script</span>
     </div>
   </div>
 </div>
@@ -809,35 +808,29 @@
     left: 0.75rem;
     width: 16px;
     height: 16px;
-    color: #6b7280;
     z-index: 1;
   }
 
   .search-input {
     width: 100%;
     padding: 0.5rem 0.75rem 0.5rem 2.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid;
     border-radius: 8px;
     font-size: 0.875rem;
-    background: white;
     transition: border-color 0.2s;
   }
 
   .search-input:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
   .search-results-info {
     position: absolute;
     right: 0.75rem;
     font-size: 0.75rem;
-    color: #6b7280;
-    background: white;
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid;
   }
 
   .search-navigation {
@@ -848,23 +841,15 @@
   .search-nav-btn {
     width: 32px;
     height: 32px;
-    border: 1px solid #d1d5db;
+    border: 1px solid;
     border-radius: 6px;
-    background: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #6b7280;
     transition: all 0.2s;
   }
 
-  .search-nav-btn:hover:not(:disabled) {
-    background: #f3f4f6;
-    border-color: #9ca3af;
-  }
-
   .search-nav-btn:disabled {
-    opacity: 0.5;
     cursor: not-allowed;
   }
 
@@ -895,22 +880,13 @@
     justify-content: center;
     gap: 0.25rem;
     padding: 0.375rem 0.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid;
     border-radius: 6px;
-    background: white;
     font-size: 0.75rem;
-    color: #6b7280;
     transition: all 0.2s;
   }
 
-  .control-btn:hover {
-    background: #f3f4f6;
-    border-color: #9ca3af;
-  }
-
   .control-btn.active {
-    background: #3b82f6;
-    border-color: #3b82f6;
     color: white;
   }
 
@@ -1156,8 +1132,6 @@
   }
 
   .size-info {
-    background: #e0f2fe;
-    color: #0369a1;
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-weight: 500;
@@ -1266,8 +1240,6 @@
   }
 
   .file-type {
-    background: #e0f2fe;
-    color: #0369a1;
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-weight: 500;
@@ -1313,8 +1285,6 @@
   }
 
   :global(.search-highlight) {
-    background: #fef08a;
-    color: #92400e;
     padding: 0.125rem 0.25rem;
     border-radius: 3px;
     font-weight: 600;

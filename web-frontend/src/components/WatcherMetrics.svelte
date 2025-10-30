@@ -81,8 +81,8 @@
     ctx.clearRect(0, 0, width, height);
     
     // Set up styles
-    ctx.strokeStyle = '#3b82f6';
-    ctx.fillStyle = '#3b82f6';
+    ctx.strokeStyle = 'var(--accent)';
+    ctx.fillStyle = 'var(--accent)';
     ctx.lineWidth = 2;
     
     const data = selectedMetricData.slice(-50); // Show last 50 points
@@ -92,7 +92,7 @@
     const valueRange = maxValue - minValue || 1;
     
     // Draw grid
-    ctx.strokeStyle = '#e5e7eb';
+    ctx.strokeStyle = 'var(--border)';
     ctx.lineWidth = 0.5;
     
     // Horizontal grid lines
@@ -105,14 +105,14 @@
       
       // Y-axis labels
       const value = maxValue - (valueRange * i / 5);
-      ctx.fillStyle = '#6b7280';
+      ctx.fillStyle = 'var(--muted-foreground)';
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText(value.toFixed(2), padding - 10, y + 4);
     }
     
     // Draw line chart
-    ctx.strokeStyle = '#3b82f6';
+    ctx.strokeStyle = 'var(--accent)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     
@@ -154,7 +154,7 @@
     ctx.fill();
     
     // Draw data points
-    ctx.fillStyle = '#3b82f6';
+    ctx.fillStyle = 'var(--accent)';
     data.forEach((point, i) => {
       const x = padding + ((width - 2 * padding) * i / (data.length - 1 || 1));
       const y = padding + ((maxValue - point.value) / valueRange) * (height - 2 * padding);

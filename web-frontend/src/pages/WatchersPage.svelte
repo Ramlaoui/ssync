@@ -436,7 +436,7 @@
   })());
 </script>
 
-<div class="h-full flex flex-col bg-white">
+<div class="h-full flex flex-col bg-[var(--background)]">
   {#if !isMobile}
     <NavigationHeader
       showRefresh={true}
@@ -446,7 +446,7 @@
       {#snippet left()}
             <div  class="flex items-center space-x-4">
           <!-- Tab Navigation -->
-          <div class="flex items-center bg-gray-100 rounded-lg p-1">
+          <div class="flex items-center bg-[var(--secondary)] rounded-lg p-1">
               <button
                 class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
                 onclick={() => handleTabClick('watchers')}
@@ -501,7 +501,7 @@
 
       <!-- Filters in additional slot -->
       {#snippet additional()}
-            <div  class="bg-gray-50 border-t border-gray-200 py-3" class:hidden={activeTab !== 'watchers'}>
+            <div  class="bg-[var(--secondary)] border-t border-[var(--border)] py-3" class:hidden={activeTab !== 'watchers'}>
           <div class="flex justify-between items-center">
             <!-- Filter Tabs -->
             <div class="flex gap-2">
@@ -509,7 +509,7 @@
                 class="filter-tab-modern {filterState === 'all' ? 'filter-tab-active' : ''}"
                 onclick={() => filterState = 'all'}
               >
-                <div class="w-2 h-2 bg-gray-400 rounded-full"></div>
+                <div class="w-2 h-2 bg-[var(--muted)] rounded-full"></div>
                 All
                 <span class="filter-count">{totalCount}</span>
               </button>
@@ -517,7 +517,7 @@
                 class="filter-tab-modern {filterState === 'active' ? 'filter-tab-active' : ''}"
                 onclick={() => filterState = 'active'}
               >
-                <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                <div class="w-2 h-2 bg-[var(--success)] rounded-full"></div>
                 Active
                 <span class="filter-count">{activeCount}</span>
               </button>
@@ -525,7 +525,7 @@
                 class="filter-tab-modern {filterState === 'paused' ? 'filter-tab-active' : ''}"
                 onclick={() => filterState = 'paused'}
               >
-                <div class="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                <div class="w-2 h-2 bg-[var(--warning)] rounded-full"></div>
                 Paused
                 <span class="filter-count">{pausedCount}</span>
               </button>
@@ -533,14 +533,14 @@
                 class="filter-tab-modern {filterState === 'completed' ? 'filter-tab-active' : ''}"
                 onclick={() => filterState = 'completed'}
               >
-                <div class="w-2 h-2 bg-blue-500 rounded-full"></div>
+                <div class="w-2 h-2 bg-[var(--accent)] rounded-full"></div>
                 Completed
                 <span class="filter-count">{completedCount}</span>
               </button>
             </div>
 
             <!-- View Toggle -->
-            <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <div class="flex gap-1 bg-[var(--secondary)] rounded-lg p-1">
               <button
                 class="view-toggle {viewMode === 'grid' ? 'view-toggle-active' : ''}"
                 onclick={() => viewMode = 'grid'}
@@ -567,7 +567,7 @@
     <div class="header mobile-header">
       <div class="flex items-center justify-between">
         <!-- Tab Navigation -->
-        <div class="flex items-center bg-gray-100 rounded-lg p-1">
+        <div class="flex items-center bg-[var(--secondary)] rounded-lg p-1">
           <button
             class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
             onclick={() => handleTabClick('watchers')}
@@ -611,18 +611,18 @@
     {#if activeTab === 'watchers'}
       <!-- Error Banner -->
       {#if error}
-        <div class="bg-red-50 border-b border-red-200 flex-shrink-0">
+        <div class="bg-[var(--error-bg)] border-b border-[var(--destructive)] flex-shrink-0">
           <div class="px-4 sm:px-6 lg:px-8 py-3">
             <div class="flex items-center justify-between">
               <div class="flex items-center space-x-3">
-                <svg class="h-5 w-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                <svg class="h-5 w-5 text-[var(--destructive)]" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
                 </svg>
-                <p class="text-sm font-medium text-red-800">{error}</p>
+                <p class="text-sm font-medium text-[var(--destructive)]">{error}</p>
               </div>
               <button
                 onclick={() => error = null}
-                class="inline-flex items-center text-sm font-medium text-red-600 hover:text-red-500"
+                class="inline-flex items-center text-sm font-medium text-[var(--destructive)] hover:opacity-80"
                 aria-label="Dismiss error"
               >
                 <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
@@ -641,15 +641,15 @@
         {#if $watchersLoading}
           <div class="flex items-center justify-center py-16">
             <div class="text-center">
-              <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-              <p class="text-gray-500">Loading watchers...</p>
+              <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--foreground)] mx-auto mb-4"></div>
+              <p class="text-[var(--muted-foreground)]">Loading watchers...</p>
             </div>
           </div>
         {:else if sortedWatchers.length === 0}
           <div class="flex items-center justify-center py-16" in:fade>
             <div class="text-center">
-              <Eye class="mx-auto h-12 w-12 text-gray-400 mb-4" />
-              <h3 class="text-lg font-medium text-gray-900 mb-2">
+              <Eye class="mx-auto h-12 w-12 text-[var(--muted-foreground)] mb-4" />
+              <h3 class="text-lg font-medium text-[var(--foreground)] mb-2">
                 {#if searchQuery}
                   No watchers found
                 {:else if filterState !== 'all'}
@@ -658,7 +658,7 @@
                   No watchers yet
                 {/if}
               </h3>
-              <p class="text-gray-500 mb-6">
+              <p class="text-[var(--muted-foreground)] mb-6">
                 {#if searchQuery}
                   Try adjusting your search criteria
                 {:else if filterState !== 'all'}
@@ -670,7 +670,7 @@
               {#if !searchQuery && filterState === 'all'}
                 <button
                   onclick={openAttachDialog}
-                  class="inline-flex items-center gap-2 px-4 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
+                  class="inline-flex items-center gap-2 px-4 py-2 bg-[var(--foreground)] text-[var(--background)] text-sm rounded-lg hover:opacity-90 transition-colors"
                 >
                   <Plus class="w-4 h-4" />
                   Create Watcher
@@ -700,43 +700,43 @@
           <div class="space-y-6">
             {#each Object.entries(watchersByJob) as [jobKey, jobGroup], i}
               <div
-                class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200"
+                class="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200"
                 in:fly={{ y: 20, duration: 300, delay: i * 100 }}
               >
                 <!-- Job Header -->
                 <button
-                  class="w-full p-4 bg-gray-50 hover:bg-gray-100 transition-colors text-left flex justify-between items-center border-b border-gray-200"
+                  class="w-full p-4 bg-[var(--secondary)] hover:bg-[var(--muted)] transition-colors text-left flex justify-between items-center border-b border-[var(--border)]"
                   onclick={() => toggleJobGroup(jobKey)}
                 >
                   <div class="space-y-1">
-                    <h3 class="text-lg font-semibold flex items-center gap-2 text-gray-900">
+                    <h3 class="text-lg font-semibold flex items-center gap-2 text-[var(--foreground)]">
                       Job #{jobGroup.job_id}
                       {#if jobGroup.job_name && jobGroup.job_name !== 'N/A'}
-                        <span class="text-gray-500 font-normal">• {jobGroup.job_name}</span>
+                        <span class="text-[var(--muted-foreground)] font-normal">• {jobGroup.job_name}</span>
                       {/if}
                     </h3>
-                    <p class="text-sm text-gray-500">{jobGroup.hostname}</p>
+                    <p class="text-sm text-[var(--muted-foreground)]">{jobGroup.hostname}</p>
                   </div>
 
                   <div class="flex items-center gap-6">
                     <div class="text-center">
-                      <div class="text-lg font-semibold text-gray-900">{jobGroup.watchers.length}</div>
-                      <div class="text-xs text-gray-500">watchers</div>
+                      <div class="text-lg font-semibold text-[var(--foreground)]">{jobGroup.watchers.length}</div>
+                      <div class="text-xs text-[var(--muted-foreground)]">watchers</div>
                     </div>
                     {#if jobGroup.stats.active > 0}
                       <div class="text-center">
-                        <div class="text-lg font-semibold text-green-600">{jobGroup.stats.active}</div>
-                        <div class="text-xs text-green-600">active</div>
+                        <div class="text-lg font-semibold text-[var(--success)]">{jobGroup.stats.active}</div>
+                        <div class="text-xs text-[var(--success)]">active</div>
                       </div>
                     {/if}
                     {#if jobGroup.stats.paused > 0}
                       <div class="text-center">
-                        <div class="text-lg font-semibold text-yellow-600">{jobGroup.stats.paused}</div>
-                        <div class="text-xs text-yellow-600">paused</div>
+                        <div class="text-lg font-semibold text-[var(--warning)]">{jobGroup.stats.paused}</div>
+                        <div class="text-xs text-[var(--warning)]">paused</div>
                       </div>
                     {/if}
                     <ChevronDown
-                      class="h-5 w-5 text-gray-400 transition-transform duration-300 {!collapsedJobs.has(jobKey) ? 'rotate-180' : ''}"
+                      class="h-5 w-5 text-[var(--muted-foreground)] transition-transform duration-300 {!collapsedJobs.has(jobKey) ? 'rotate-180' : ''}"
                     />
                   </div>
                 </button>
@@ -843,7 +843,7 @@
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     border-radius: 0.375rem;
     transition: all 0.15s;
     border: none;
@@ -852,14 +852,14 @@
   }
 
   .header-tab:hover {
-    color: #374151;
-    background: rgba(255, 255, 255, 0.5);
+    color: var(--foreground);
+    background: color-mix(in srgb, var(--background) 50%, transparent);
   }
 
   .header-tab-active {
-    background: white;
-    color: #1f2937;
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.1);
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--foreground) 10%, transparent);
   }
 
   /* Search bar styles */
@@ -873,7 +873,7 @@
     left: 0.75rem;
     top: 50%;
     transform: translateY(-50%);
-    color: #9ca3af;
+    color: var(--muted-foreground);
     pointer-events: none;
     display: flex;
     align-items: center;
@@ -883,22 +883,22 @@
   .search-input {
     width: 100%;
     padding: 0.5rem 2.5rem 0.5rem 2.5rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     font-size: 0.875rem;
     transition: all 0.15s;
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .search-input:focus {
     outline: none;
-    border-color: #3b82f6;
-    background: white;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    background: var(--background);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .search-input::placeholder {
-    color: #9ca3af;
+    color: var(--muted-foreground);
   }
 
   .clear-btn {
@@ -909,7 +909,7 @@
     padding: 0.25rem;
     background: none;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     border-radius: 0.25rem;
     display: flex;
@@ -919,8 +919,8 @@
   }
 
   .clear-btn:hover {
-    background: #f3f4f6;
-    color: #ef4444;
+    background: var(--secondary);
+    color: var(--destructive);
   }
 
   /* Modern filter tab styles */
@@ -931,7 +931,7 @@
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     background: transparent;
     border: none;
     border-radius: 0.5rem;
@@ -940,17 +940,17 @@
   }
 
   .filter-tab-modern:hover {
-    background: #f3f4f6;
-    color: #374151;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .filter-tab-modern.filter-tab-active {
-    background: #1f2937;
+    background: var(--foreground);
     color: white;
   }
 
   .filter-tab-modern.filter-tab-active:hover {
-    background: #111827;
+    background: var(--foreground);
   }
 
   .filter-count {
@@ -975,7 +975,7 @@
     gap: 0.375rem;
     padding: 0.5rem 0.75rem;
     border-radius: 0.375rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     transition: all 0.2s;
     font-size: 0.875rem;
     font-weight: 500;
@@ -985,18 +985,18 @@
   }
 
   .view-toggle:hover {
-    color: #374151;
-    background: rgba(255, 255, 255, 0.5);
+    color: var(--foreground);
+    background: color-mix(in srgb, var(--background) 50%, transparent);
   }
 
   .view-toggle-active {
-    background: white;
-    color: #1f2937;
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--foreground) 5%, transparent);
   }
 
   .view-toggle-active:hover {
-    color: #1f2937;
+    color: var(--foreground);
   }
 
   .view-toggle-label {
@@ -1019,7 +1019,7 @@
     left: 0.75rem;
     top: 50%;
     transform: translateY(-50%);
-    color: #9ca3af;
+    color: var(--muted-foreground);
     pointer-events: none;
     display: flex;
     align-items: center;
@@ -1029,22 +1029,22 @@
   .search-input {
     width: 100%;
     padding: 0.5rem 2.5rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     font-size: 0.875rem;
     transition: all 0.15s;
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .search-input:focus {
     outline: none;
-    border-color: #3b82f6;
-    background: white;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    background: var(--background);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .search-input::placeholder {
-    color: #9ca3af;
+    color: var(--muted-foreground);
   }
 
   .clear-btn {
@@ -1055,7 +1055,7 @@
     padding: 0.25rem;
     background: none;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     border-radius: 0.25rem;
     display: flex;
@@ -1065,8 +1065,8 @@
   }
 
   .clear-btn:hover {
-    background: #f3f4f6;
-    color: #ef4444;
+    background: var(--secondary);
+    color: var(--destructive);
   }
 
   .header.mobile-header {

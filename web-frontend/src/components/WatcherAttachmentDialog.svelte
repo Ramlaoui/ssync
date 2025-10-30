@@ -342,8 +342,8 @@
   contentClass="watcher-attachment-content"
 >
       {#if error}
-        <div class="error-banner">
-          <svg class="error-icon" viewBox="0 0 20 20" fill="currentColor">
+        <div class="error-banner bg-red-50 text-red-600 border-red-200">
+          <svg class="error-icon text-red-600" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
           </svg>
           <span>{error}</span>
@@ -427,7 +427,7 @@
             <div class="mode-buttons">
               <button
                 type="button"
-                class="mode-btn"
+                class="mode-btn bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
                 class:active={watchMode === 'pattern'}
                 onclick={() => watchMode = 'pattern'}
                 disabled={isSubmitting}
@@ -440,7 +440,7 @@
               </button>
               <button
                 type="button"
-                class="mode-btn"
+                class="mode-btn bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
                 class:active={watchMode === 'timer'}
                 onclick={() => watchMode = 'timer'}
                 disabled={isSubmitting}
@@ -860,15 +860,13 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    color: #dc2626;
+    border: 1px solid;
     padding: 0.75rem 1rem;
     border-radius: 8px;
     margin-bottom: 1rem;
     font-size: 0.875rem;
   }
-  
+
   .error-icon {
     width: 20px;
     height: 20px;
@@ -1047,27 +1045,20 @@
     justify-content: center;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
-    background: white;
-    border: 2px solid #e5e7eb;
+    border: 2px solid;
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.2s;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #6b7280;
   }
-  
-  .mode-btn:hover:not(:disabled) {
-    border-color: #d1d5db;
-    background: #f9fafb;
-  }
-  
+
   .mode-btn.active {
     background: #eff6ff;
     border-color: #3b82f6;
     color: #3b82f6;
   }
-  
+
   .mode-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;

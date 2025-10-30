@@ -286,7 +286,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.15rem;
-    color: #6366f1;
+    color: var(--muted-foreground);
     opacity: 0.7;
     transition: opacity 0.2s ease;
   }

@@ -67,11 +67,11 @@
   }
   
   function getEventColor(event: WatcherEvent): string {
-    if (!event.success) return '#ef4444';
-    if (event.action_type.includes('metric')) return '#3b82f6';
-    if (event.action_type.includes('warning')) return '#f59e0b';
-    if (event.action_type.includes('checkpoint')) return '#10b981';
-    return '#6b7280';
+    if (!event.success) return 'var(--destructive)';
+    if (event.action_type.includes('metric')) return 'var(--accent)';
+    if (event.action_type.includes('warning')) return 'var(--warning)';
+    if (event.action_type.includes('checkpoint')) return 'var(--success)';
+    return 'var(--muted-foreground)';
   }
   
   function getEventIcon(event: WatcherEvent): string {
@@ -443,7 +443,7 @@
   }
   
   .event-bubble.failed {
-    border: 2px solid #ef4444;
+    border: 2px solid var(--destructive);
   }
   
   .event-icon {
@@ -530,7 +530,7 @@
     display: inline-block;
     width: 12px;
     height: 12px;
-    background: #10b981;
+    background: var(--success);
     border-radius: 50%;
     animation: pulse 2s infinite;
   }

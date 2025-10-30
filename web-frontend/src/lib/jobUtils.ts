@@ -171,6 +171,57 @@ export const jobUtils = {
   },
 
   /**
+   * Get Tailwind classes for job state badges
+   * Returns complete class string for background, text, and border colors
+   */
+  getStateBadgeClasses(state: string): string {
+    const stateUpper = state?.toUpperCase();
+    switch (stateUpper) {
+      case 'R':
+      case 'RUNNING':
+        return 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30';
+      case 'CG':
+      case 'COMPLETING':
+        return 'bg-cyan-500/20 text-cyan-500 border-cyan-500/30';
+      case 'PD':
+      case 'PENDING':
+        return 'bg-amber-500/20 text-amber-500 border-amber-500/30';
+      case 'S':
+      case 'SUSPENDED':
+        return 'bg-violet-500/20 text-violet-500 border-violet-500/30';
+      case 'PR':
+      case 'PREEMPTED':
+        return 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+      case 'CD':
+      case 'COMPLETED':
+        return 'bg-blue-500/20 text-blue-500 border-blue-500/30';
+      case 'F':
+      case 'FAILED':
+        return 'bg-red-500/20 text-red-500 border-red-500/30';
+      case 'CA':
+      case 'CANCELLED':
+        return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+      case 'TO':
+      case 'TIMEOUT':
+        return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
+      case 'NF':
+      case 'NODE_FAIL':
+        return 'bg-red-600/20 text-red-600 border-red-600/30';
+      case 'BF':
+      case 'BOOT_FAIL':
+        return 'bg-red-700/20 text-red-700 border-red-700/30';
+      case 'DL':
+      case 'DEADLINE':
+        return 'bg-orange-600/20 text-orange-600 border-orange-600/30';
+      case 'OOM':
+      case 'OUT_OF_MEMORY':
+        return 'bg-rose-700/20 text-rose-700 border-rose-700/30';
+      default:
+        return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+    }
+  },
+
+  /**
    * Get all available job states
    */
   getAllStates(): Array<{state: string, label: string, color: string, category: string}> {

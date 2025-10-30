@@ -591,12 +591,12 @@
 
   .tab-button-active {
     color: rgb(31 41 55 / 1); /* text-gray-900 */
-    border-bottom-color: #3b82f6;
+    border-bottom-color: var(--foreground);
   }
 
   :global(.dark) .tab-button-active {
     color: var(--foreground);
-    border-bottom-color: var(--accent);
+    border-bottom-color: var(--foreground);
   }
 
   /* On mobile, make tabs more compact */

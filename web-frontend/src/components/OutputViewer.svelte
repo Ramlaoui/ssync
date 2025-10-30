@@ -232,12 +232,11 @@
         
         // Add visual emphasis to current result
         marks.forEach((m, i) => {
+          const element = m as HTMLElement;
           if (i === index) {
-            (m as HTMLElement).style.backgroundColor = '#fbbf24';
-            (m as HTMLElement).style.color = '#7c2d12';
+            element.className = 'bg-amber-400 text-amber-900';
           } else {
-            (m as HTMLElement).style.backgroundColor = '#fef08a';
-            (m as HTMLElement).style.color = '#92400e';
+            element.className = 'bg-yellow-200 text-amber-800';
           }
         });
       }
@@ -654,25 +653,25 @@
   <!-- Floating Size Warning -->
   {#if showSizeWarning && !isLoading}
     <div class="size-warning-floating" class:fade-out={userInteractionCount > 1}>
-      <div class="warning-inner">
-        <svg class="warning-icon" viewBox="0 0 24 24" fill="currentColor">
+      <div class="warning-inner bg-gradient-to-br from-amber-50 to-amber-100">
+        <svg class="warning-icon text-amber-600" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
         </svg>
         <div class="warning-content">
-          <span class="warning-text">
+          <span class="warning-text text-amber-800">
             Large file: {formatBytes(totalContentSize)}
             {#if disableHighlighting}
               • Highlighting disabled
             {/if}
           </span>
           {#if windowEnd < totalContentSize}
-            <span class="warning-subtext">
+            <span class="warning-subtext text-amber-900">
               Loading progressively as you scroll
             </span>
           {/if}
         </div>
         <button
-          class="dismiss-btn"
+          class="dismiss-btn text-amber-800 hover:bg-amber-600/10"
           onclick={dismissWarning}
           title="Dismiss"
         >
@@ -681,7 +680,7 @@
           </svg>
         </button>
       </div>
-      <div class="warning-progress" style="width: {Math.min(100, (windowEnd / totalContentSize) * 100)}%"></div>
+      <div class="warning-progress bg-gradient-to-r from-amber-500 to-amber-600" style="width: {Math.min(100, (windowEnd / totalContentSize) * 100)}%"></div>
     </div>
   {/if}
 
@@ -753,7 +752,7 @@
       {#if renderedContent}
         <span class="line-count">{lines.length} lines</span>
         {#if totalContentSize > 0}
-          <span class="size-info">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
+          <span class="size-info bg-sky-100 text-sky-700">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
         {/if}
         {#if searchQuery && searchResults.length > 0}
           <span class="search-status">{searchResults.length} matches found</span>
@@ -1129,13 +1128,11 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.875rem 1rem;
-    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
   }
 
   .warning-icon {
     width: 20px;
     height: 20px;
-    color: #d97706;
     flex-shrink: 0;
   }
 
@@ -1147,14 +1144,12 @@
   }
 
   .warning-text {
-    color: #92400e;
     font-weight: 600;
     font-size: 0.8125rem;
     line-height: 1.2;
   }
 
   .warning-subtext {
-    color: #78350f;
     font-size: 0.6875rem;
     opacity: 0.9;
   }
@@ -1164,7 +1159,6 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    color: #92400e;
     transition: all 0.2s;
     border-radius: 4px;
     opacity: 0.6;
@@ -1172,7 +1166,6 @@
 
   .dismiss-btn:hover {
     opacity: 1;
-    background: rgba(217, 119, 6, 0.1);
   }
 
   .dismiss-btn svg {
@@ -1185,13 +1178,10 @@
     bottom: 0;
     left: 0;
     height: 2px;
-    background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
     transition: width 0.3s ease;
   }
 
   .size-info {
-    background: #e0f2fe;
-    color: #0369a1;
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-weight: 500;

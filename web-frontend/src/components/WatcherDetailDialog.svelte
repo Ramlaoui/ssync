@@ -884,12 +884,12 @@
   .header-content h2 {
     margin: 0;
     font-size: 1.5rem;
-    color: #111827;
+    color: var(--foreground);
   }
   
   .watcher-subtitle {
     margin: 0.25rem 0 0 0;
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
   }
   
@@ -898,7 +898,7 @@
     display: flex;
     gap: 0.5rem;
     padding: 0 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     margin-top: -0.5rem;
   }
   
@@ -911,7 +911,7 @@
     border: none;
     border-bottom: 2px solid transparent;
     cursor: pointer;
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     font-weight: 500;
     transition: all 0.2s;
@@ -923,18 +923,18 @@
   }
   
   .tab:hover {
-    color: #374151;
+    color: var(--foreground);
   }
   
   .tab.active {
-    color: #3b82f6;
-    border-bottom-color: #3b82f6;
+    color: var(--accent);
+    border-bottom-color: var(--accent);
   }
 
   .error-message {
-    background: #fee2e2;
-    border: 1px solid #fecaca;
-    color: #dc2626;
+    background: var(--error-bg);
+    border: 1px solid var(--error-bg);
+    color: var(--destructive);
     padding: 0.75rem;
     border-radius: 6px;
     margin: 1.5rem 1.5rem 1rem;
@@ -953,7 +953,7 @@
   .detail-section h3 {
     margin: 0 0 1rem 0;
     font-size: 1.1rem;
-    color: #111827;
+    color: var(--foreground);
   }
   
   .detail-grid {
@@ -971,13 +971,13 @@
   .detail-item .detail-label {
     font-size: 0.75rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     text-transform: uppercase;
   }
 
   .detail-item span {
     font-size: 0.875rem;
-    color: #111827;
+    color: var(--foreground);
   }
   
   .status-badge {
@@ -990,7 +990,7 @@
   }
   
   .status-active {
-    background: #d1fae5;
+    background: var(--success-bg);
     color: #065f46;
   }
   
@@ -1000,17 +1000,17 @@
   }
   
   .status-completed {
-    background: #dbeafe;
+    background: var(--info-bg);
     color: #1e40af;
   }
   
   .status-failed {
-    background: #fee2e2;
+    background: var(--error-bg);
     color: #991b1b;
   }
   
   .pattern-display {
-    background: #f9fafb;
+    background: var(--secondary);
     padding: 1rem;
     border-radius: 6px;
     margin-bottom: 1rem;
@@ -1019,7 +1019,7 @@
   .pattern-display code {
     font-family: 'Monaco', 'Courier New', monospace;
     font-size: 0.875rem;
-    color: #111827;
+    color: var(--foreground);
     word-break: break-all;
   }
   
@@ -1033,7 +1033,7 @@
     display: block;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
     margin-bottom: 0.5rem;
   }
   
@@ -1046,7 +1046,7 @@
   .capture-tag {
     display: inline-block;
     padding: 0.25rem 0.75rem;
-    background: #eff6ff;
+    background: var(--info-bg);
     border: 1px solid #bfdbfe;
     border-radius: 6px;
     font-family: monospace;
@@ -1057,8 +1057,8 @@
   .condition-display code {
     display: block;
     padding: 0.5rem;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 4px;
     font-family: monospace;
     font-size: 0.875rem;
@@ -1075,8 +1075,8 @@
     align-items: flex-start;
     gap: 1rem;
     padding: 0.75rem;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
   }
   
@@ -1086,7 +1086,7 @@
     justify-content: center;
     width: 24px;
     height: 24px;
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border-radius: 50%;
     font-size: 0.75rem;
@@ -1101,13 +1101,13 @@
   .action-type {
     font-size: 0.875rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin-bottom: 0.25rem;
   }
   
   .action-desc {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .action-condition-view {
@@ -1117,17 +1117,17 @@
 
   .action-condition-view .condition-label {
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
     margin-right: 0.25rem;
   }
 
   .action-condition-view code {
-    background: #f3f4f6;
+    background: var(--secondary);
     padding: 0.125rem 0.375rem;
     border-radius: 3px;
     font-family: monospace;
     font-size: 0.75rem;
-    color: #1f2937;
+    color: var(--foreground);
   }
   
   /* Edit Mode */
@@ -1147,13 +1147,13 @@
   .form-group label {
     font-size: 0.875rem;
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .form-group .section-label {
     font-size: 0.875rem;
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
     display: block;
     margin-bottom: 0.5rem;
   }
@@ -1161,7 +1161,7 @@
   .form-group input[type="text"],
   .form-group input[type="number"] {
     padding: 0.5rem 0.75rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
   }
@@ -1182,7 +1182,7 @@
   
   .capture-edit button {
     padding: 0.5rem 1rem;
-    background: #ef4444;
+    background: var(--destructive);
     color: white;
     border: none;
     border-radius: 4px;
@@ -1192,7 +1192,7 @@
   
   .add-btn {
     padding: 0.5rem 1rem;
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border: none;
     border-radius: 6px;
@@ -1202,7 +1202,7 @@
   }
 
   .add-btn:hover {
-    background: #2563eb;
+    background: var(--accent);
   }
 
   /* Action Edit List */
@@ -1214,8 +1214,8 @@
   }
 
   .action-edit-card {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
   }
@@ -1233,7 +1233,7 @@
     justify-content: center;
     width: 24px;
     height: 24px;
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border-radius: 50%;
     font-size: 0.75rem;
@@ -1244,14 +1244,14 @@
   .action-header select {
     flex: 1;
     padding: 0.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
     background: white;
   }
 
   .remove-action-btn {
-    background: #ef4444;
+    background: var(--destructive);
     color: white;
     border: none;
     border-radius: 4px;
@@ -1263,7 +1263,7 @@
   }
 
   .remove-action-btn:hover {
-    background: #dc2626;
+    background: var(--destructive);
   }
 
   .remove-action-btn svg {
@@ -1278,7 +1278,7 @@
   .action-condition input {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
     font-family: monospace;
@@ -1299,12 +1299,12 @@
   .config-field .config-label {
     font-size: 0.75rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .config-field input {
     padding: 0.5rem 0.75rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
   }
@@ -1316,7 +1316,7 @@
 
   .field-hint {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-style: italic;
     display: block;
     margin-top: 0.25rem;
@@ -1324,17 +1324,17 @@
 
   .field-error {
     font-size: 0.75rem;
-    color: #dc2626;
+    color: var(--destructive);
     display: block;
     margin-top: 0.25rem;
   }
 
   .config-field input.invalid {
-    border-color: #ef4444;
+    border-color: var(--destructive);
   }
 
   .config-field input:invalid {
-    border-color: #ef4444;
+    border-color: var(--destructive);
   }
 
   .edit-actions {
@@ -1360,7 +1360,7 @@
   .code-header h3 {
     margin: 0;
     font-size: 1.1rem;
-    color: #111827;
+    color: var(--foreground);
   }
   
   .format-selector {
@@ -1370,7 +1370,7 @@
 
   .code-instructions {
     padding: 0.75rem;
-    background: #eff6ff;
+    background: var(--info-bg);
     border: 1px solid #bfdbfe;
     border-radius: 6px;
   }
@@ -1383,7 +1383,7 @@
   
   .code-container {
     position: relative;
-    background: #1f2937;
+    background: var(--foreground);
     border-radius: 8px;
     overflow: hidden;
   }
@@ -1397,7 +1397,7 @@
   .code-container code {
     font-family: 'Monaco', 'Courier New', monospace;
     font-size: 0.875rem;
-    color: #e5e7eb;
+    color: var(--border);
     line-height: 1.5;
   }
   
@@ -1409,7 +1409,7 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border: none;
     border-radius: 6px;
@@ -1419,11 +1419,11 @@
   }
   
   .copy-code-btn:hover {
-    background: #2563eb;
+    background: var(--accent);
   }
   
   .copy-code-btn.success {
-    background: #10b981;
+    background: var(--success);
   }
   
   .copy-code-btn svg {
@@ -1432,7 +1432,7 @@
   }
   
   .code-notes {
-    background: #f9fafb;
+    background: var(--secondary);
     padding: 1rem;
     border-radius: 6px;
   }
@@ -1441,7 +1441,7 @@
     margin: 0 0 0.5rem 0;
     font-size: 0.875rem;
     font-weight: 600;
-    color: #374151;
+    color: var(--foreground);
   }
   
   .code-notes ul {
@@ -1451,7 +1451,7 @@
   
   .code-notes li {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-bottom: 0.25rem;
   }
   
@@ -1476,32 +1476,32 @@
   }
   
   .btn-primary {
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
   }
   
   .btn-primary:hover:not(:disabled) {
-    background: #2563eb;
+    background: var(--accent);
   }
   
   .btn-secondary {
     background: white;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    color: var(--foreground);
+    border: 1px solid var(--border);
     margin-left: auto;
   }
   
   .btn-secondary:hover {
-    background: #f3f4f6;
+    background: var(--secondary);
   }
   
   .btn-danger {
-    background: #ef4444;
+    background: var(--destructive);
     color: white;
   }
   
   .btn-danger:hover {
-    background: #dc2626;
+    background: var(--destructive);
   }
   
   .btn-primary:disabled {

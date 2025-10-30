@@ -193,12 +193,12 @@ echo "Starting job..."
   }
 
   // String representations for input bindings
-  let cpusStr = $state(numberToString(parameters.cpus));
-  let memoryStr = $state(numberToString(parameters.memory));
-  let timeLimitStr = $state(numberToString(parameters.timeLimit));
-  let nodesStr = $state(numberToString(parameters.nodes));
-  let ntasksPerNodeStr = $state(numberToString(parameters.ntasksPerNode));
-  let gpusPerNodeStr = $state(numberToString(parameters.gpusPerNode));
+  let cpusStr = $state("");
+  let memoryStr = $state("");
+  let timeLimitStr = $state("");
+  let nodesStr = $state("");
+  let ntasksPerNodeStr = $state("");
+  let gpusPerNodeStr = $state("");
 
   // Sync string inputs back to parameters (when user types)
   $effect(() => {
@@ -3122,7 +3122,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     bottom: 0;
-    background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+    background: linear-gradient(135deg, var(--accent), var(--accent));
     opacity: 0;
     transition: opacity 0.2s;
     pointer-events: none;
@@ -3203,7 +3203,7 @@ echo "Starting job..."
     top: 0;
     bottom: 0;
     width: 3px;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    background: linear-gradient(135deg, var(--accent), var(--accent));
     transform: scaleX(0);
     transform-origin: left;
     transition: transform 0.2s;
@@ -3296,7 +3296,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     bottom: 0;
-    background: #10b981;
+    background: var(--success);
     border-radius: 50%;
     animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
@@ -3337,7 +3337,7 @@ echo "Starting job..."
     top: calc(100% + 0.5rem);
     right: 0;
     background: white;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
     padding: 0.5rem;
@@ -3360,7 +3360,7 @@ echo "Starting job..."
   }
 
   .preset-item:hover {
-    background: #f8fafc;
+    background: var(--secondary);
   }
 
   .preset-icon {
@@ -3381,13 +3381,13 @@ echo "Starting job..."
 
   .preset-name {
     font-weight: 500;
-    color: #1e293b;
+    color: var(--foreground);
     font-size: 0.875rem;
   }
 
   .preset-specs {
     font-size: 0.75rem;
-    color: #64748b;
+    color: var(--muted-foreground);
   }
 
   /* Main Content - Master Container with Fixed Height */
@@ -3428,7 +3428,7 @@ echo "Starting job..."
   .editor-label {
     font-size: 1.125rem;
     font-weight: 600;
-    color: #1e293b;
+    color: var(--foreground);
   }
 
   .editor-status {
@@ -3450,14 +3450,14 @@ echo "Starting job..."
     background: transparent;
     border: none;
     border-radius: 8px;
-    color: #64748b;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.2s ease;
   }
 
   .editor-options-trigger:hover {
-    background: #f1f5f9;
-    color: #1e293b;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .editor-options-menu {
@@ -3465,7 +3465,7 @@ echo "Starting job..."
     top: calc(100% + 0.5rem);
     right: 0;
     background: white;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
     padding: 0.75rem;
@@ -3480,7 +3480,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
+    background: color-mix(in srgb, var(--foreground) 30%, transparent);
     z-index: 49;
   }
 
@@ -3522,7 +3522,7 @@ echo "Starting job..."
   }
 
   .option-item:hover {
-    background: #f8fafc;
+    background: var(--secondary);
   }
 
   .option-info {
@@ -3534,12 +3534,12 @@ echo "Starting job..."
   .option-label {
     font-size: 0.875rem;
     font-weight: 500;
-    color: #1e293b;
+    color: var(--foreground);
   }
 
   .option-description {
     font-size: 0.75rem;
-    color: #64748b;
+    color: var(--muted-foreground);
   }
 
   .option-toggle {
@@ -3549,25 +3549,25 @@ echo "Starting job..."
     background: transparent;
     border: none;
     cursor: pointer;
-    color: #94a3b8;
+    color: var(--muted-foreground);
     transition: all 0.2s ease;
   }
 
   .option-toggle:hover {
-    color: #64748b;
+    color: var(--muted-foreground);
   }
 
   .option-toggle.active {
-    color: #3b82f6;
+    color: var(--accent);
   }
 
   .option-select {
     padding: 0.375rem 0.5rem;
     font-size: 0.875rem;
     background: white;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: #1e293b;
+    color: var(--foreground);
     min-width: 100px;
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
@@ -3580,12 +3580,12 @@ echo "Starting job..."
 
   .option-select:focus {
     outline: none;
-    border-color: #3b82f6;
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
   .option-select:hover {
-    border-color: #cbd5e1;
+    border-color: var(--border);
   }
 
   .validation-status {
@@ -3597,19 +3597,19 @@ echo "Starting job..."
   }
 
   .validation-status.valid {
-    color: #16a34a;
+    color: var(--success);
   }
 
   .validation-status.invalid {
-    color: #dc2626;
+    color: var(--destructive);
   }
 
   .status-dot.valid {
-    background: #16a34a;
+    background: var(--success);
   }
 
   .status-dot.invalid {
-    background: #dc2626;
+    background: var(--destructive);
   }
 
   /* Conflict Resolution UI */
@@ -3630,9 +3630,9 @@ echo "Starting job..."
 
   .conflict-button {
     padding: 0.375rem 0.75rem;
-    background: #fef3c7;
-    color: #92400e;
-    border: 1px solid #f59e0b;
+    background: var(--warning-bg);
+    color: var(--warning);
+    border: 1px solid var(--warning);
     border-radius: 6px;
     font-size: 0.875rem;
     font-weight: 500;
@@ -3641,8 +3641,8 @@ echo "Starting job..."
   }
 
   .conflict-button:hover {
-    background: #fde68a;
-    border-color: #d97706;
+    background: var(--warning-bg);
+    border-color: var(--warning);
   }
 
   .conflict-menu {
@@ -3650,7 +3650,7 @@ echo "Starting job..."
     top: calc(100% + 0.5rem);
     right: 0;
     background: white;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 8px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
     padding: 0.5rem;
@@ -3662,8 +3662,8 @@ echo "Starting job..."
     padding: 0.5rem;
     font-size: 0.875rem;
     font-weight: 600;
-    color: #374151;
-    border-bottom: 1px solid #e5e7eb;
+    color: var(--foreground);
+    border-bottom: 1px solid var(--border);
     margin-bottom: 0.5rem;
   }
 
@@ -3676,21 +3676,21 @@ echo "Starting job..."
     border-radius: 6px;
     text-align: left;
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--foreground);
     cursor: pointer;
     transition: all 0.2s ease;
   }
 
   .conflict-option:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .editor-container {
     flex: 1;
     border-radius: 8px;
     overflow: hidden;
-    background: #fafbfc;
+    background: var(--secondary);
     border: 1px solid rgba(229, 231, 235, 0.3);
     min-height: 0; /* Critical for nested flex */
     box-sizing: border-box;
@@ -3731,17 +3731,17 @@ echo "Starting job..."
   }
 
   .config-section::-webkit-scrollbar-track {
-    background: #f1f5f9;
+    background: var(--secondary);
     border-radius: 3px;
   }
 
   .config-section::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
+    background: var(--muted);
     border-radius: 3px;
   }
 
   .config-section::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+    background: var(--muted-foreground);
   }
 
   .config-card {
@@ -3755,7 +3755,7 @@ echo "Starting job..."
   .config-title {
     font-size: 1.125rem;
     font-weight: 600;
-    color: #1e293b;
+    color: var(--foreground);
     margin: 0;
   }
 
@@ -3786,7 +3786,7 @@ echo "Starting job..."
     flex-direction: column;
     gap: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--border);
   }
 
   .directory-card {
@@ -3808,7 +3808,7 @@ echo "Starting job..."
   .directory-label {
     font-size: 0.75rem;
     font-weight: 500;
-    color: #64748b;
+    color: var(--muted-foreground);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -3816,11 +3816,11 @@ echo "Starting job..."
   .directory-path {
     font-family: "Monaco", "Menlo", monospace;
     font-size: 0.875rem;
-    color: #1e293b;
+    color: var(--foreground);
   }
 
   :global(.launch-header-button) {
-    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+    background: linear-gradient(135deg, var(--accent), var(--accent)) !important;
     color: white !important;
     font-weight: 500 !important;
     padding: 0.5rem 1rem !important;
@@ -3861,13 +3861,13 @@ echo "Starting job..."
   .section-title {
     font-size: 1rem;
     font-weight: 600;
-    color: #1e293b;
+    color: var(--foreground);
     margin: 0 0 0.25rem 0;
   }
 
   .section-description {
     font-size: 0.875rem;
-    color: #64748b;
+    color: var(--muted-foreground);
     margin: 0;
   }
 
@@ -3897,7 +3897,7 @@ echo "Starting job..."
     width: 100%;
     height: 40px;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     font-family: "SF Mono", "Monaco", "Courier New", monospace;
     font-size: 0.875rem;
@@ -3907,12 +3907,12 @@ echo "Starting job..."
 
   .directory-input-full:focus {
     outline: none;
-    border-color: #3b82f6;
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
   .directory-input-full:disabled {
-    background: #f9fafb;
+    background: var(--secondary);
     cursor: not-allowed;
     opacity: 0.5;
   }
@@ -3923,9 +3923,9 @@ echo "Starting job..."
     gap: 0.375rem;
     padding: 0.5rem 0.875rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
-    color: #4b5563;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
@@ -3934,15 +3934,15 @@ echo "Starting job..."
   }
 
   .directory-browse-btn-inline:hover {
-    background: #f9fafb;
-    border-color: #3b82f6;
-    color: #3b82f6;
+    background: var(--secondary);
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .directory-browser-seamless {
     margin-top: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
   }
 
   /* Chevron rotation animation */
@@ -3978,7 +3978,7 @@ echo "Starting job..."
   .section-toggle-icon {
     width: 20px;
     height: 20px;
-    color: #6b7280;
+    color: var(--muted-foreground);
     transition: transform 0.2s;
   }
 
@@ -3988,13 +3988,13 @@ echo "Starting job..."
 
   .sync-settings-content {
     padding-top: 1rem;
-    border-top: 1px solid #f1f5f9;
+    border-top: 1px solid var(--secondary);
     margin-top: 1rem;
   }
 
   .captured-variables-content {
     padding-top: 1rem;
-    border-top: 1px solid #f1f5f9;
+    border-top: 1px solid var(--secondary);
     margin-top: 1rem;
   }
 
@@ -4006,8 +4006,8 @@ echo "Starting job..."
   }
 
   .variable-item {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
     font-family: "Monaco", "Courier New", monospace;
@@ -4022,14 +4022,14 @@ echo "Starting job..."
 
   .variable-name {
     font-weight: 600;
-    color: #059669;
+    color: var(--success);
     font-size: 0.875rem;
   }
 
   .copy-btn {
     background: transparent;
     border: none;
-    color: #64748b;
+    color: var(--muted-foreground);
     cursor: pointer;
     padding: 0.25rem;
     border-radius: 0.25rem;
@@ -4040,12 +4040,12 @@ echo "Starting job..."
   }
 
   .copy-btn:hover {
-    background: #e2e8f0;
-    color: #334155;
+    background: var(--border);
+    color: var(--foreground);
   }
 
   .variable-value {
-    color: #475569;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     word-break: break-all;
     line-height: 1.4;
@@ -4056,15 +4056,15 @@ echo "Starting job..."
     align-items: flex-start;
     gap: 0.5rem;
     padding: 0.75rem;
-    background: #f0f9ff;
-    border: 1px solid #bfdbfe;
+    background: var(--info-bg);
+    border: 1px solid color-mix(in srgb, var(--info) 20%, transparent);
     border-radius: 0.5rem;
   }
 
   /* Watchers Styles */
   .watchers-content {
     padding-top: 1rem;
-    border-top: 1px solid #f1f5f9;
+    border-top: 1px solid var(--secondary);
     margin-top: 1rem;
   }
 
@@ -4076,8 +4076,8 @@ echo "Starting job..."
   }
 
   .watcher-item {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 1rem;
   }
@@ -4097,13 +4097,13 @@ echo "Starting job..."
 
   .watcher-name {
     font-weight: 600;
-    color: #1e293b;
+    color: var(--foreground);
     font-size: 0.875rem;
   }
 
   .watcher-type {
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--info-bg);
+    color: var(--accent);
     padding: 0.125rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.75rem;
@@ -4111,8 +4111,8 @@ echo "Starting job..."
   }
 
   .watcher-job {
-    background: #f3e8ff;
-    color: #6b21a8;
+    background: var(--info-bg);
+    color: var(--accent);
     padding: 0.125rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.75rem;
@@ -4125,22 +4125,22 @@ echo "Starting job..."
     gap: 0.25rem;
     padding: 0.375rem 0.75rem;
     background: white;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
-    color: #64748b;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .copy-watcher-btn:hover {
-    background: #f8fafc;
-    border-color: #cbd5e1;
-    color: #334155;
+    background: var(--secondary);
+    border-color: var(--border);
+    color: var(--foreground);
   }
 
   .watcher-code {
-    background: #1e293b;
+    background: var(--foreground);
     border-radius: 0.375rem;
     padding: 0.75rem;
     margin-bottom: 0.75rem;
@@ -4149,7 +4149,7 @@ echo "Starting job..."
 
   .watcher-code pre {
     margin: 0;
-    color: #10b981;
+    color: var(--success);
     font-family: "Monaco", "Courier New", monospace;
     font-size: 0.8rem;
     line-height: 1.5;
@@ -4158,8 +4158,8 @@ echo "Starting job..."
   }
 
   .watcher-variables {
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
+    background: var(--success-bg);
+    border: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
     border-radius: 0.375rem;
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.5rem;
@@ -4171,7 +4171,7 @@ echo "Starting job..."
     gap: 0.25rem;
     font-size: 0.75rem;
     font-weight: 600;
-    color: #059669;
+    color: var(--success);
     margin-bottom: 0.375rem;
   }
 
@@ -4187,7 +4187,7 @@ echo "Starting job..."
     border-radius: 0.25rem;
     font-size: 0.75rem;
     font-family: monospace;
-    border: 1px solid #d1fae5;
+    border: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
   }
 
   .watcher-status {
@@ -4205,18 +4205,18 @@ echo "Starting job..."
 
   .status-badge.status-active,
   .status-badge.status-running {
-    background: #dcfce7;
-    color: #166534;
+    background: var(--success-bg);
+    color: var(--success);
   }
 
   .status-badge.status-completed {
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--info-bg);
+    color: var(--accent);
   }
 
   .status-badge.status-failed {
-    background: #fee2e2;
-    color: #991b1b;
+    background: var(--error-bg);
+    color: var(--destructive);
   }
 
   .watchers-info {
@@ -4224,8 +4224,8 @@ echo "Starting job..."
     align-items: flex-start;
     gap: 0.5rem;
     padding: 0.75rem;
-    background: #f0f9ff;
-    border: 1px solid #bfdbfe;
+    background: var(--info-bg);
+    border: 1px solid color-mix(in srgb, var(--info) 20%, transparent);
     border-radius: 0.5rem;
   }
 
@@ -4240,7 +4240,7 @@ echo "Starting job..."
     height: 52px;
     padding: 0 0.75rem;
     background: white;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     gap: 0.5rem;
   }
 
@@ -4248,7 +4248,7 @@ echo "Starting job..."
     padding: 0;
     border: none;
     background: none;
-    color: #111827;
+    color: var(--foreground);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -4264,7 +4264,7 @@ echo "Starting job..."
   .mobile-divider {
     width: 1px;
     height: 20px;
-    background: #e5e7eb;
+    background: var(--border);
     margin: 0 0.25rem;
   }
 
@@ -4273,10 +4273,10 @@ echo "Starting job..."
     max-width: 120px;
     padding: 0.25rem 0.5rem;
     font-size: 0.6875rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     background: white;
-    color: #111827;
+    color: var(--foreground);
   }
 
   .mobile-icon-group {
@@ -4290,7 +4290,7 @@ echo "Starting job..."
     padding: 0.375rem;
     border: none;
     background: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -4299,8 +4299,8 @@ echo "Starting job..."
   }
 
   .mobile-icon-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   /* Mobile Validation Dot */
@@ -4316,12 +4316,12 @@ echo "Starting job..."
   }
 
   .status-dot-small.valid {
-    background: #10b981;
+    background: var(--success);
     box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
   }
 
   .status-dot-small.invalid {
-    background: #ef4444;
+    background: var(--destructive);
     box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
   }
 
@@ -4339,7 +4339,7 @@ echo "Starting job..."
     right: 0.75rem;
     z-index: 50;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -4360,7 +4360,7 @@ echo "Starting job..."
     top: 44px;
     right: 0.75rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -4372,7 +4372,7 @@ echo "Starting job..."
   .mobile-more-menu-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.3);
+    background: color-mix(in srgb, var(--foreground) 30%, transparent);
     z-index: 49;
   }
 
@@ -4381,7 +4381,7 @@ echo "Starting job..."
     top: 44px;
     right: 0.75rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.5rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -4403,11 +4403,11 @@ echo "Starting job..."
     transition: background 0.2s ease;
     text-align: left;
     font-size: 0.875rem;
-    color: #1f2937;
+    color: var(--foreground);
   }
 
   .mobile-more-menu-item:hover:not(:disabled) {
-    background: #f3f4f6;
+    background: var(--secondary);
   }
 
   .mobile-more-menu-item:disabled {
@@ -4423,11 +4423,11 @@ echo "Starting job..."
   }
 
   .validation-info-content.valid {
-    color: #10b981;
+    color: var(--success);
   }
 
   .validation-info-content.invalid {
-    color: #ef4444;
+    color: var(--destructive);
   }
 
   .mobile-preset-dropdown {
@@ -4435,7 +4435,7 @@ echo "Starting job..."
     top: 44px;
     right: 0.75rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     z-index: 50;
@@ -4449,28 +4449,28 @@ echo "Starting job..."
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
   }
 
   .preset-dropdown-title {
     font-size: 0.875rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
   }
 
   .preset-manage-btn {
     padding: 0.25rem;
     background: transparent;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     border-radius: 0.25rem;
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .preset-manage-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .mobile-preset-option {
@@ -4483,12 +4483,12 @@ echo "Starting job..."
     background: none;
     text-align: left;
     font-size: 0.75rem;
-    color: #374151;
+    color: var(--foreground);
     transition: background 0.15s;
   }
 
   .mobile-preset-option:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .mobile-preset-add {
@@ -4501,14 +4501,14 @@ echo "Starting job..."
     background: none;
     text-align: left;
     font-size: 0.75rem;
-    color: #6366f1;
+    color: var(--accent);
     font-weight: 500;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
     transition: background 0.15s;
   }
 
   .mobile-preset-add:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .mobile-preset-name {
@@ -4518,7 +4518,7 @@ echo "Starting job..."
 
   .mobile-preset-details {
     font-size: 0.625rem;
-    color: #9ca3af;
+    color: var(--muted-foreground);
   }
 
   /* Preset Manager Sidebar */
@@ -4528,7 +4528,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
+    background: color-mix(in srgb, var(--foreground) 30%, transparent);
     z-index: 100;
     display: flex;
     justify-content: flex-end;
@@ -4546,7 +4546,7 @@ echo "Starting job..."
 
   .preset-manager-header {
     padding: 1.25rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -4555,7 +4555,7 @@ echo "Starting job..."
   .preset-manager-header h3 {
     font-size: 1.125rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin: 0;
   }
 
@@ -4563,15 +4563,15 @@ echo "Starting job..."
     padding: 0.375rem;
     background: transparent;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     border-radius: 0.375rem;
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .preset-manager-close:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .preset-manager-content {
@@ -4582,7 +4582,7 @@ echo "Starting job..."
 
   /* Preset Form */
   .preset-form {
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 0.5rem;
     padding: 1rem;
     margin-bottom: 1.5rem;
@@ -4591,7 +4591,7 @@ echo "Starting job..."
   .preset-form h4 {
     font-size: 0.875rem;
     font-weight: 600;
-    color: #374151;
+    color: var(--foreground);
     margin: 0 0 1rem 0;
   }
 
@@ -4603,7 +4603,7 @@ echo "Starting job..."
     display: block;
     font-size: 0.75rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-bottom: 0.375rem;
   }
 
@@ -4611,10 +4611,10 @@ echo "Starting job..."
   .preset-select {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--muted);
     border-radius: 0.375rem;
     font-size: 0.875rem;
-    color: #111827;
+    color: var(--foreground);
     background: white;
     transition: all 0.15s;
   }
@@ -4622,7 +4622,7 @@ echo "Starting job..."
   .preset-input:focus,
   .preset-select:focus {
     outline: none;
-    border-color: #6366f1;
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
   }
 
@@ -4638,7 +4638,7 @@ echo "Starting job..."
     width: 100%;
     padding: 0.5rem 0.75rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     cursor: pointer;
     transition: all 0.2s;
@@ -4646,8 +4646,8 @@ echo "Starting job..."
   }
 
   .dropdown-trigger:hover {
-    border-color: #6366f1;
-    background: #f9fafb;
+    border-color: var(--accent);
+    background: var(--secondary);
   }
 
   .dropdown-menu {
@@ -4656,7 +4656,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
     max-height: 250px;
@@ -4679,12 +4679,12 @@ echo "Starting job..."
   }
 
   .dropdown-item:hover {
-    background: #f3f4f6;
+    background: var(--secondary);
   }
 
   .dropdown-item.selected {
-    background: #eef2ff;
-    color: #6366f1;
+    background: var(--info-bg);
+    color: var(--accent);
   }
 
   .color-preview {
@@ -4707,7 +4707,7 @@ echo "Starting job..."
     gap: 0.75rem;
     padding: 0.75rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     margin-bottom: 1rem;
   }
@@ -4731,12 +4731,12 @@ echo "Starting job..."
   }
 
   .preset-btn.save {
-    background: #6366f1;
+    background: var(--accent);
     color: white;
   }
 
   .preset-btn.save:hover:not(:disabled) {
-    background: #4f46e5;
+    background: var(--accent);
   }
 
   .preset-btn.save:disabled {
@@ -4745,19 +4745,19 @@ echo "Starting job..."
   }
 
   .preset-btn.cancel {
-    background: #f3f4f6;
-    color: #374151;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .preset-btn.cancel:hover {
-    background: #e5e7eb;
+    background: var(--border);
   }
 
   /* Preset List */
   .preset-list h4 {
     font-size: 0.875rem;
     font-weight: 600;
-    color: #374151;
+    color: var(--foreground);
     margin: 0 0 0.75rem 0;
   }
 
@@ -4767,14 +4767,14 @@ echo "Starting job..."
     justify-content: space-between;
     padding: 0.75rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     margin-bottom: 0.5rem;
     transition: all 0.15s;
   }
 
   .preset-item:hover {
-    border-color: #d1d5db;
+    border-color: var(--muted);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   }
 
@@ -4788,12 +4788,12 @@ echo "Starting job..."
   .preset-item-name {
     font-size: 0.875rem;
     font-weight: 500;
-    color: #111827;
+    color: var(--foreground);
   }
 
   .preset-item-details {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-top: 0.125rem;
   }
 
@@ -4806,32 +4806,32 @@ echo "Starting job..."
     padding: 0.375rem;
     background: transparent;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     border-radius: 0.25rem;
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .preset-action-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .preset-action-btn.delete:hover {
-    background: #fee2e2;
-    color: #dc2626;
+    background: var(--error-bg);
+    color: var(--destructive);
   }
 
   .preset-empty {
     text-align: center;
     padding: 2rem 1rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .preset-empty-hint {
     margin-top: 0.5rem !important;
     font-size: 0.75rem !important;
-    color: #9ca3af !important;
+    color: var(--muted-foreground) !important;
   }
 
   /* Mobile Responsive */
@@ -4866,7 +4866,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
+    background: color-mix(in srgb, var(--foreground) 30%, transparent);
     z-index: 100;
     animation: fadeIn 0.3s ease-out;
   }
@@ -4926,14 +4926,14 @@ echo "Starting job..."
     align-items: center;
     justify-content: space-between;
     padding: 1rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
   }
 
   .mobile-config-back {
     padding: 0;
     border: none;
     background: none;
-    color: #111827;
+    color: var(--foreground);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -4946,14 +4946,14 @@ echo "Starting job..."
     padding: 0.25rem;
     border: none;
     background: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     border-radius: 0.375rem;
     transition: all 0.15s;
   }
 
   .mobile-config-close:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .mobile-config-content {
@@ -4973,10 +4973,10 @@ echo "Starting job..."
     justify-content: flex-start;
     gap: 0.75rem;
     padding: 1rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.625rem;
-    background: linear-gradient(to bottom, #ffffff, #fafafa);
-    color: #374151;
+    background: linear-gradient(to bottom, var(--card), var(--secondary));
+    color: var(--foreground);
     font-size: 0.9rem;
     font-weight: 500;
     text-align: left;
@@ -4989,8 +4989,8 @@ echo "Starting job..."
   }
 
   .mobile-dir-selector:hover {
-    border-color: #6366f1;
-    background: linear-gradient(to bottom, #fafafa, #f5f5f5);
+    border-color: var(--accent);
+    background: linear-gradient(to bottom, var(--secondary), var(--border));
     box-shadow:
       0 4px 6px -1px rgba(0, 0, 0, 0.1),
       0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -5026,7 +5026,7 @@ echo "Starting job..."
 
   .mobile-config-label {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .mobile-config-input {
@@ -5047,10 +5047,10 @@ echo "Starting job..."
     justify-content: flex-start;
     gap: 0.75rem;
     padding: 1rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.625rem;
-    background: linear-gradient(to bottom, #ffffff, #fafafa);
-    color: #374151;
+    background: linear-gradient(to bottom, var(--card), var(--secondary));
+    color: var(--foreground);
     font-size: 0.9rem;
     font-weight: 500;
     text-align: left;
@@ -5063,8 +5063,8 @@ echo "Starting job..."
   }
 
   .mobile-sync-settings-btn:hover {
-    border-color: #6366f1;
-    background: linear-gradient(to bottom, #fafafa, #f5f5f5);
+    border-color: var(--accent);
+    background: linear-gradient(to bottom, var(--secondary), var(--border));
     box-shadow:
       0 4px 6px -1px rgba(0, 0, 0, 0.1),
       0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -5083,10 +5083,10 @@ echo "Starting job..."
     justify-content: flex-start;
     gap: 0.75rem;
     padding: 0.875rem 1rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.625rem;
-    background: linear-gradient(to bottom, #f9fafb, #f3f4f6);
-    color: #374151;
+    background: linear-gradient(to bottom, var(--secondary), var(--secondary));
+    color: var(--foreground);
     font-size: 0.875rem;
     font-weight: 500;
     text-align: left;
@@ -5096,8 +5096,8 @@ echo "Starting job..."
   }
 
   .mobile-advanced-toggle:hover {
-    border-color: #6366f1;
-    background: linear-gradient(to bottom, #f3f4f6, #e5e7eb);
+    border-color: var(--accent);
+    background: linear-gradient(to bottom, var(--secondary), var(--border));
     transform: translateY(-1px);
     box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08);
   }
@@ -5120,8 +5120,8 @@ echo "Starting job..."
   }
 
   .mobile-variable-item {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
   }
@@ -5136,27 +5136,27 @@ echo "Starting job..."
   .mobile-variable-name {
     font-weight: 600;
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .mobile-copy-btn {
     padding: 0.25rem;
     border: none;
-    background: #e5e7eb;
+    background: var(--border);
     border-radius: 0.25rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.15s;
   }
 
   .mobile-copy-btn:hover {
-    background: #d1d5db;
-    color: #374151;
+    background: var(--muted);
+    color: var(--foreground);
   }
 
   .mobile-variable-value {
     font-size: 0.8125rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     word-break: break-all;
     font-family: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace;
     background: white;
@@ -5169,15 +5169,15 @@ echo "Starting job..."
     align-items: flex-start;
     gap: 0.5rem;
     padding: 0.75rem;
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
+    background: var(--info-bg);
+    border: 1px solid color-mix(in srgb, var(--info) 20%, transparent);
     border-radius: 0.5rem;
   }
 
   .mobile-variables-info span {
     flex: 1;
     font-size: 0.8125rem;
-    color: #1e40af;
+    color: var(--accent);
     line-height: 1.4;
   }
 
@@ -5189,8 +5189,8 @@ echo "Starting job..."
   }
 
   .mobile-watcher-item {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.875rem;
   }
@@ -5212,7 +5212,7 @@ echo "Starting job..."
   .mobile-watcher-name {
     font-weight: 600;
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .mobile-watcher-meta {
@@ -5226,8 +5226,8 @@ echo "Starting job..."
   .mobile-watcher-type {
     font-size: 0.75rem;
     padding: 0.125rem 0.5rem;
-    background: #e0e7ff;
-    color: #4338ca;
+    background: var(--info-bg);
+    color: var(--accent);
     border-radius: 0.25rem;
     font-weight: 500;
   }
@@ -5235,8 +5235,8 @@ echo "Starting job..."
   .mobile-watcher-job {
     font-size: 0.75rem;
     padding: 0.125rem 0.5rem;
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--info-bg);
+    color: var(--accent);
     border-radius: 0.25rem;
     font-weight: 500;
   }
@@ -5244,7 +5244,7 @@ echo "Starting job..."
   .mobile-watcher-variables {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
   }
 
   .mobile-variables-label {
@@ -5253,7 +5253,7 @@ echo "Starting job..."
     gap: 0.375rem;
     font-size: 0.75rem;
     font-weight: 600;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-bottom: 0.375rem;
   }
 
@@ -5267,13 +5267,13 @@ echo "Starting job..."
     font-size: 0.75rem;
     padding: 0.25rem 0.5rem;
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 0.25rem;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .mobile-var-tag strong {
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .mobile-status-badge {
@@ -5286,18 +5286,18 @@ echo "Starting job..."
   }
 
   .mobile-status-badge.status-active {
-    background: #dcfce7;
-    color: #166534;
+    background: var(--success-bg);
+    color: var(--success);
   }
 
   .mobile-status-badge.status-completed {
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--info-bg);
+    color: var(--accent);
   }
 
   .mobile-status-badge.status-failed {
-    background: #fee2e2;
-    color: #991b1b;
+    background: var(--error-bg);
+    color: var(--destructive);
   }
 
   .mobile-nested-view {
@@ -5320,7 +5320,7 @@ echo "Starting job..."
     width: 52px;
     height: 52px;
     border-radius: 50%;
-    background: #111827;
+    background: var(--foreground);
     color: white;
     display: flex;
     align-items: center;
@@ -5342,7 +5342,7 @@ echo "Starting job..."
 
   .mobile-launch-fab:disabled {
     opacity: 0.5;
-    background: #6b7280;
+    background: var(--muted-foreground);
   }
 
   @media (max-width: 768px) {
@@ -5382,12 +5382,12 @@ echo "Starting job..."
       height: 100%;
       border-radius: 0;
       border: none;
-      background: #fafbfc;
+      background: var(--secondary);
     }
 
     .editor-container.mobile {
       padding: 0.75rem;
-      background: #f9fafb;
+      background: var(--secondary);
     }
 
     .editor-container.mobile :global(.cm-editor) {
@@ -5432,7 +5432,7 @@ echo "Starting job..."
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
+    background: color-mix(in srgb, var(--foreground) 30%, transparent);
     backdrop-filter: blur(2px);
     z-index: 999;
     display: flex;
@@ -5465,7 +5465,7 @@ echo "Starting job..."
     align-items: center;
     justify-content: space-between;
     padding: 1.25rem 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     background: white;
   }
 
@@ -5473,13 +5473,13 @@ echo "Starting job..."
     margin: 0;
     font-size: 1.125rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
   }
 
   .preset-manager-close {
     background: none;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     padding: 0.5rem;
     display: flex;
@@ -5490,8 +5490,8 @@ echo "Starting job..."
   }
 
   .preset-manager-close:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .preset-manager-content {
@@ -5518,13 +5518,13 @@ echo "Starting job..."
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
   }
 
   .preset-manage-toggle-btn {
     background: none;
-    border: 1px solid #e5e7eb;
-    color: #6b7280;
+    border: 1px solid var(--border);
+    color: var(--muted-foreground);
     cursor: pointer;
     padding: 0.5rem;
     display: flex;
@@ -5535,15 +5535,15 @@ echo "Starting job..."
   }
 
   .preset-manage-toggle-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
-    border-color: #d1d5db;
+    background: var(--secondary);
+    color: var(--foreground);
+    border-color: var(--muted);
   }
 
   .preset-back-btn {
     background: none;
     border: none;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     padding: 0.5rem 0;
     display: flex;
@@ -5555,7 +5555,7 @@ echo "Starting job..."
   }
 
   .preset-back-btn:hover {
-    color: #111827;
+    color: var(--foreground);
   }
 
   .preset-quick-grid {
@@ -5571,8 +5571,8 @@ echo "Starting job..."
     align-items: center;
     gap: 0.75rem;
     padding: 1rem;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 0.75rem;
     cursor: pointer;
     transition: all 0.2s;
@@ -5580,8 +5580,8 @@ echo "Starting job..."
   }
 
   .preset-quick-item:hover {
-    background: #f3f4f6;
-    border-color: #d1d5db;
+    background: var(--secondary);
+    border-color: var(--muted);
     transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
   }
@@ -5595,13 +5595,13 @@ echo "Starting job..."
 
   .preset-quick-info .preset-name {
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     font-size: 0.875rem;
   }
 
   .preset-quick-info .preset-specs {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .preset-create-from-current {
@@ -5610,7 +5610,7 @@ echo "Starting job..."
     justify-content: center;
     gap: 0.5rem;
     padding: 0.75rem;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    background: linear-gradient(135deg, var(--accent), var(--accent));
     color: white;
     border: none;
     border-radius: 0.75rem;
@@ -5641,7 +5641,7 @@ echo "Starting job..."
       0 10px 20px -5px rgba(99, 102, 241, 0.35),
       0 6px 12px -3px rgba(139, 92, 246, 0.2),
       0 3px 6px -2px rgba(99, 102, 241, 0.15);
-    background: linear-gradient(135deg, #7c7fff, #9f7aea);
+    background: linear-gradient(135deg, var(--accent), var(--accent));
   }
 
   .preset-create-from-current:hover::before {
@@ -5686,7 +5686,7 @@ echo "Starting job..."
 
   .dialog-header {
     padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -5697,14 +5697,14 @@ echo "Starting job..."
     border: none;
     padding: 0.5rem;
     border-radius: 6px;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .close-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .dialog-content {
@@ -5720,24 +5720,24 @@ echo "Starting job..."
 
   .template-action-btn {
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.375rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .template-action-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
-    border-color: #d1d5db;
+    background: var(--secondary);
+    color: var(--foreground);
+    border-color: var(--muted);
   }
 
   .template-action-btn.delete:hover {
-    background: #fef2f2;
-    color: #dc2626;
-    border-color: #fecaca;
+    background: var(--error-bg);
+    color: var(--destructive);
+    border-color: var(--error-bg);
   }
 
   /* Save Template Dialog Specific Styles */
@@ -5749,7 +5749,7 @@ echo "Starting job..."
   .form-textarea {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--muted);
     border-radius: 6px;
     font-size: 0.875rem;
     transition: all 0.2s;
@@ -5758,7 +5758,7 @@ echo "Starting job..."
   .form-input:focus,
   .form-textarea:focus {
     outline: none;
-    border-color: #3b82f6;
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
@@ -5768,8 +5768,8 @@ echo "Starting job..."
   }
 
   .script-preview {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 1rem;
     max-height: 200px;
@@ -5777,7 +5777,7 @@ echo "Starting job..."
   }
 
   .saved-params {
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 6px;
     padding: 1rem;
   }
@@ -5795,16 +5795,16 @@ echo "Starting job..."
 
   .param-label {
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .param-value {
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .dialog-footer {
     padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;
@@ -5821,13 +5821,13 @@ echo "Starting job..."
   }
 
   .btn-primary {
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border: none;
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: #2563eb;
+    background: var(--accent);
   }
 
   .btn-primary:disabled {
@@ -5837,12 +5837,12 @@ echo "Starting job..."
 
   .btn-secondary {
     background: white;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    color: var(--foreground);
+    border: 1px solid var(--muted);
   }
 
   .btn-secondary:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   @keyframes fadeIn {

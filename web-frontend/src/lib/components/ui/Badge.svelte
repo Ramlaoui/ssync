@@ -16,8 +16,8 @@
     secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
     destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/80",
     outline: "text-foreground border border-input",
-    success: "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400",
-    warning: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400"
+    success: "badge-success",
+    warning: "badge-warning"
   };
 </script>
 
@@ -31,3 +31,15 @@
 >
   {@render children?.()}
 </div>
+
+<style>
+  :global(.badge-success) {
+    background: var(--success-bg);
+    color: var(--success);
+  }
+
+  :global(.badge-warning) {
+    background: var(--warning-bg);
+    color: var(--warning);
+  }
+</style>

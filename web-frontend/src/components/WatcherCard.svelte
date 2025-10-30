@@ -75,12 +75,23 @@
 
   function getStateColor(state: string): string {
     switch (state) {
-      case 'active': return '#10b981';
-      case 'paused': return '#f59e0b';
-      case 'static': return '#8b5cf6';  // Purple for static watchers
-      case 'completed': return '#3b82f6';
-      case 'failed': return '#ef4444';
-      default: return '#6b7280';
+      case 'active': return 'var(--success)';
+      case 'paused': return 'var(--warning)';
+      case 'static': return 'var(--accent)';  // Purple for static watchers
+      case 'completed': return 'var(--accent)';
+      case 'failed': return 'var(--destructive)';
+      default: return 'var(--muted-foreground)';
+    }
+  }
+
+  function getStateColorClass(state: string): string {
+    switch (state) {
+      case 'active': return 'text-emerald-500';
+      case 'paused': return 'text-amber-500';
+      case 'static': return 'text-blue-500';
+      case 'completed': return 'text-blue-500';
+      case 'failed': return 'text-red-500';
+      default: return 'text-gray-400';
     }
   }
   
@@ -267,7 +278,7 @@
   }
 </script>
 
-<div class="bg-white border border-gray-200 rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
+<div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 
@@ -281,12 +292,12 @@
   <!-- Header with state indicator -->
   <div class="flex justify-between items-start mb-1.5 gap-2">
     <div class="flex items-start gap-2 flex-1 min-w-0">
-      <span class="text-xl leading-none mt-0.5 flex-shrink-0" style="color: {getStateColor(watcher.state)}">
+      <span class="text-xl leading-none mt-0.5 flex-shrink-0 {getStateColorClass(watcher.state)}">
         {getStateIcon(watcher.state)}
       </span>
       <div class="flex flex-col gap-0.5 min-w-0 flex-1">
         <div class="flex items-center gap-2 min-w-0 w-full">
-          <h3 class="m-0 text-sm font-semibold text-gray-900 overflow-hidden text-ellipsis whitespace-nowrap flex-1 min-w-0">{watcher.name}</h3>
+          <h3 class="m-0 text-sm font-semibold text-[var(--foreground)] overflow-hidden text-ellipsis whitespace-nowrap flex-1 min-w-0">{watcher.name}</h3>
         </div>
 {#if showJobLink && jobInfo}
           <button class="job-link" onclick={navigateToJob}>
@@ -555,7 +566,7 @@
     height: 2px;
     background: linear-gradient(90deg, 
       transparent, 
-      #10b981, 
+      var(--success), 
       transparent
     );
     animation: pulse-slide 2s infinite;
@@ -620,8 +631,8 @@
     gap: 4px;
     padding: 2px 8px;
     border-radius: 12px;
-    background: #f3e8ff;
-    color: #8b5cf6;
+    background: var(--info-bg);
+    color: var(--accent);
     font-weight: 500;
     font-size: 0.75rem;
     flex-shrink: 0;
@@ -639,15 +650,15 @@
     width: 24px;
     height: 24px;
     border-radius: 50%;
-    background: #f3f4f6;
-    color: #6b7280;
+    background: var(--secondary);
+    color: var(--muted-foreground);
     transition: all 0.2s;
     flex-shrink: 0;
   }
 
   .timer-indicator.active {
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: var(--info-bg);
+    color: var(--accent);
     animation: timer-pulse 2s infinite;
   }
 
@@ -701,7 +712,7 @@
   .edit-btn,
   .detail-btn,
   .copy-btn {
-    background: white;
+    background: var(--background);
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0;
@@ -726,9 +737,9 @@
   }
   
   .detail-btn:hover {
-    background: #eff6ff;
-    border-color: #3b82f6;
-    color: #3b82f6;
+    background: var(--info-bg);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   
   .copy-btn span {
@@ -769,25 +780,25 @@
     top: 5rem;
     left: 50%;
     transform: translateX(-50%);
-    background: white;
+    background: var(--background);
     padding: 0.5rem 1rem;
     border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--foreground) 10%, transparent);
     font-size: 0.875rem;
     z-index: 1000;
     animation: slideInMessage 0.3s ease-out;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
   
   .trigger-message.success {
-    color: #059669;
-    background: #d1fae5;
+    color: var(--success);
+    background: var(--success-bg);
   }
 
   .trigger-message.error {
-    color: #dc2626;
-    background: #fef2f2;
-    border: 1px solid #fecaca;
+    color: var(--destructive);
+    background: var(--error-bg);
+    border: 1px solid var(--error-bg);
   }
   
   @keyframes slideInMessage {
@@ -803,7 +814,7 @@
   
 
   .edit-btn {
-    background: white;
+    background: var(--background);
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0;
@@ -825,9 +836,9 @@
   }
 
   .edit-btn:hover {
-    background: #eff6ff;
-    border-color: #3b82f6;
-    color: #3b82f6;
+    background: var(--info-bg);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   
   .control-btn:disabled {
@@ -837,10 +848,10 @@
   
   .copy-btn {
     padding: 0.25rem 0.5rem;
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-size: 0.75rem;
     cursor: pointer;
     display: flex;
@@ -850,9 +861,9 @@
   }
   
   .copy-btn:hover {
-    background: #f3f4f6;
-    color: #1f2937;
-    border-color: #9ca3af;
+    background: var(--secondary);
+    color: var(--foreground);
+    border-color: var(--muted-foreground);
   }
   
   .copy-btn svg {
@@ -1245,14 +1256,14 @@
   .actions-section {
     margin: 1rem 0;
     padding-top: 1rem;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--border);
   }
 
   .actions-section .section-label {
     display: block;
     font-size: 0.875rem;
     font-weight: 600;
-    color: #374151;
+    color: var(--foreground);
     margin-bottom: 0.5rem;
   }
 
@@ -1267,9 +1278,9 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.5rem 0.75rem;
-    background: #f1f5f9;
+    background: var(--secondary);
     border-radius: 6px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
   }
 
   .action-icon {
@@ -1278,7 +1289,7 @@
     justify-content: center;
     width: 1.5rem;
     height: 1.5rem;
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     border-radius: 4px;
     font-size: 0.75rem;
@@ -1295,12 +1306,12 @@
   .action-type {
     font-size: 0.875rem;
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .action-desc {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
   }
 
@@ -1308,20 +1319,20 @@
   .last-trigger-section {
     margin: 1rem 0;
     padding-top: 1rem;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--border);
   }
 
   .last-trigger-section .section-label {
     display: block;
     font-size: 0.875rem;
     font-weight: 600;
-    color: #374151;
+    color: var(--foreground);
     margin-bottom: 0.5rem;
   }
 
   .trigger-result {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.75rem;
   }
@@ -1335,7 +1346,7 @@
 
   .trigger-time {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .trigger-status {
@@ -1346,13 +1357,13 @@
   }
 
   .trigger-status.success {
-    color: #059669;
-    background: #ecfdf5;
+    color: var(--success);
+    background: var(--success-bg);
   }
 
   .trigger-status.failed {
-    color: #dc2626;
-    background: #fef2f2;
+    color: var(--destructive);
+    background: var(--error-bg);
   }
 
   .matched-text, .action-result, .captured-vars {
@@ -1366,16 +1377,16 @@
   .label {
     font-size: 0.75rem;
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
     margin-right: 0.5rem;
   }
 
   .matched-text code, .action-result code {
     font-size: 0.75rem;
-    background: #f1f5f9;
+    background: var(--secondary);
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--border);
     word-break: break-all;
     display: inline-block;
     max-width: 100%;
@@ -1390,8 +1401,8 @@
 
   .var-item {
     font-size: 0.75rem;
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--info-bg);
+    color: var(--accent);
     padding: 0.125rem 0.375rem;
     border-radius: 4px;
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;

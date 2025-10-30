@@ -37,8 +37,8 @@
   // ✅ Use JobStateManager's stores
   const arrayJobGroups = jobStateManager.getArrayJobGroups();
   const allJobs = jobStateManager.getAllJobs();
-  const runningJobs = jobStateManager.getJobsByState('RUNNING');
-  const pendingJobs = jobStateManager.getJobsByState('PENDING');
+  const runningJobs = jobStateManager.getJobsByState('R');
+  const pendingJobs = jobStateManager.getJobsByState('PD');
   const managerState = jobStateManager.getState();
 
   // Derive hasArrayJobGrouping from arrayJobGroups store
@@ -526,7 +526,7 @@
                     </div>
                     <div class="job-content">
                       <span class="job-name">{formatJobName(job.name)}</span>
-                      <span class="job-state-label state-running">
+                      <span class="job-state-label border {jobUtils.getStateBadgeClasses('R')}">
                         <svg
                           viewBox="0 0 24 24"
                           fill="currentColor"
@@ -607,7 +607,7 @@
                     </div>
                     <div class="job-content">
                       <span class="job-name">{formatJobName(job.name)}</span>
-                      <span class="job-state-label state-pending">
+                      <span class="job-state-label border {jobUtils.getStateBadgeClasses('PD')}">
                         <svg
                           viewBox="0 0 24 24"
                           fill="currentColor"
@@ -708,9 +708,7 @@
                     <div class="job-content">
                       <span class="job-name">{formatJobName(job.name)}</span>
                       <span
-                        class="job-state-label state-{job.state
-                          ? job.state.toLowerCase()
-                          : 'unknown'}"
+                        class="job-state-label border {jobUtils.getStateBadgeClasses(job.state || 'unknown')}"
                         >{job.state
                           ? jobUtils.getStateLabel(job.state)
                           : "Unknown"}</span
@@ -812,17 +810,6 @@
     display: flex;
     padding: 0 0.75rem; /* Horizontal padding only on mobile */
     height: 64px; /* Keep same height, border-top adds to overall sidebar height */
-  }
-
-  .job-sidebar.mobile .sidebar-header h3 {
-    font-size: 0.9rem; /* Smaller title on mobile */
-  }
-
-  .sidebar-header h3 {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--foreground);
   }
 
   .header-actions {
@@ -989,7 +976,7 @@
 
   /* Dark mode override with high specificity to beat global.css */
   :global(.dark) .job-item {
-    background: #262626 !important; /* gray-100 dark - lighter than sidebar #1a1a1a */
+    background: var(--gray-100) !important; /* gray-100 dark - lighter than sidebar */
   }
 
   /* Mobile job items - much more compact */
@@ -1010,7 +997,7 @@
   }
 
   :global(.dark) .job-item:hover {
-    background: #333333 !important; /* gray-200 dark - lighter on hover */
+    background: var(--gray-200) !important; /* gray-200 dark - lighter on hover */
   }
 
   .job-item.selected {
@@ -1082,7 +1069,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.15rem;
-    color: #6366f1;
+    color: var(--accent);
     opacity: 0.7;
     transition: opacity 0.2s ease;
     margin-left: 0.25rem;
@@ -1129,13 +1116,6 @@
     color: var(--muted-foreground);
   }
 
-  .job-state-label {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    text-transform: uppercase;
-  }
-
   .job-host {
     font-size: 0.65rem;
     color: var(--foreground);
@@ -1170,7 +1150,7 @@
     padding: 0.0625rem 0.25rem; /* Tighter padding */
   }
 
-  /* Enhanced job state labels */
+  /* Enhanced job state labels - colors from Tailwind via getStateBadgeClasses() */
   .job-state-label {
     display: flex;
     align-items: center;
@@ -1181,49 +1161,11 @@
     letter-spacing: 0.05em;
     padding: 0.125rem 0.375rem;
     border-radius: 0.375rem;
-    background: var(--secondary);
-    color: var(--muted-foreground);
   }
 
   .state-icon {
     width: 10px;
     height: 10px;
-  }
-
-  .state-running {
-    background: rgba(16, 185, 129, 0.2);
-    color: #10b981;
-    border: 1px solid rgba(16, 185, 129, 0.3);
-  }
-
-  .state-pending {
-    background: rgba(245, 158, 11, 0.2);
-    color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.3);
-  }
-
-  .state-cd {
-    background: rgba(139, 92, 246, 0.2);
-    color: #a78bfa;
-    border: 1px solid rgba(139, 92, 246, 0.3);
-  }
-
-  .state-f {
-    background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
-    border: 1px solid rgba(239, 68, 68, 0.3);
-  }
-
-  .state-ca {
-    background: var(--secondary);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-  }
-
-  .state-to {
-    background: rgba(249, 115, 22, 0.2);
-    color: #fb923c;
-    border: 1px solid rgba(249, 115, 22, 0.3);
   }
 
   /* Runtime and reason badges */
@@ -1241,9 +1183,9 @@
   }
 
   .runtime-active {
-    background: rgba(16, 185, 129, 0.25);
-    color: #10b981;
-    border-color: rgba(16, 185, 129, 0.5);
+    background: var(--success-bg);
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 50%, transparent);
     animation: pulse-runtime 2s ease-in-out infinite;
   }
 
@@ -1311,12 +1253,12 @@
   }
 
   .search-toggle.active {
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
   }
 
   .search-toggle.active:hover {
-    background: #2563eb;
+    background: color-mix(in srgb, var(--accent) 90%, black);
   }
 
   /* Animated search container */
@@ -1337,8 +1279,8 @@
   }
 
   .search-container.focused .search-wrapper {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .search-icon {
@@ -1422,7 +1364,7 @@
 
   .clear-search-btn:hover {
     background: var(--secondary);
-    border-color: #3b82f6;
+    border-color: var(--accent);
   }
 
   /* Search count in section headers */

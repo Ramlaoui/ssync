@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { push } from 'svelte-spa-router';
+  import Badge from '../lib/components/ui/Badge.svelte';
   import NavigationHeader from '../components/NavigationHeader.svelte';
   import SyncSettings from '../components/SyncSettings.svelte';
   import { apiConfig, setApiKey, clearApiKey, testConnection } from '../services/api';
@@ -334,11 +335,11 @@
             <div class="font-medium text-gray-900 dark:text-foreground mb-1">API Authentication</div>
             <div class="text-sm text-gray-500 dark:text-gray-400">
               {#if $apiConfig.authenticated}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Connected</span>
+                <Badge variant="success">Connected</Badge>
               {:else if isConfigured}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">Not authenticated</span>
+                <Badge variant="warning">Not authenticated</Badge>
               {:else}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">Not configured</span>
+                <Badge variant="secondary">Not configured</Badge>
               {/if}
             </div>
           </div>
@@ -434,18 +435,18 @@
       <div class="p-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3 {isMobile ? 'grid-cols-1' : ''}">
         {#if !isMobile || activeSection === 'api'}
           <!-- API Authentication Section -->
-          <div class="bg-white border border-gray-200 rounded-xl p-6 {activeSection === 'sync' ? 'lg:col-span-2 xl:col-span-3' : ''}">
-            <div class="flex justify-between items-center mb-6 pb-4 border-b border-gray-100">
-              <div class="flex items-center gap-3">
+          <div class="settings-section {activeSection === 'sync' ? 'lg:col-span-2 xl:col-span-3' : ''}">
+            <div class="section-header">
+              <div class="section-title">
                 <Key class="w-5 h-5" />
-                <h2 class="text-lg font-semibold text-gray-900 m-0">API Authentication</h2>
+                <h2>API Authentication</h2>
               </div>
               {#if $apiConfig.authenticated}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Connected</span>
+                <Badge variant="success">Connected</Badge>
               {:else if isConfigured}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Not authenticated</span>
+                <Badge variant="warning">Not authenticated</Badge>
               {:else}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Not configured</span>
+                <Badge variant="secondary">Not configured</Badge>
               {/if}
             </div>
 

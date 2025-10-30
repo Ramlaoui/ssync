@@ -1,30 +1,26 @@
 <script lang="ts">
-  import { run } from 'svelte/legacy';
+  import { run } from "svelte/legacy";
 
-  import { onMount, onDestroy } from "svelte";
-  import { get } from "svelte/store";
-  import { push, location } from "svelte-spa-router";
-  import { navigationActions } from "../stores/navigation";
   import type { AxiosError } from "axios";
-  import JobTable from "../components/JobTable.svelte";
+  import { Clock, RefreshCw, Search, X } from "lucide-svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { location, push } from "svelte-spa-router";
   import ArrayJobCard from "../components/ArrayJobCard.svelte";
-  import SyncStatus from "../components/SyncStatus.svelte";
-  import { api } from "../services/api";
-  import { jobStateManager } from "../lib/JobStateManager";
-  import type { HostInfo, JobFilters, JobInfo, ArrayJobGroup } from "../types/api";
-  import { RefreshCw, Clock, Search, X } from 'lucide-svelte';
-  import Button from "../lib/components/ui/Button.svelte";
-  import Badge from "../lib/components/ui/Badge.svelte";
-  import Separator from "../lib/components/ui/Separator.svelte";
+  import JobTable from "../components/JobTable.svelte";
   import NavigationHeader from "../components/NavigationHeader.svelte";
+  import Badge from "../lib/components/ui/Badge.svelte";
   import CollapsibleSection from "../lib/components/ui/CollapsibleSection.svelte";
+  import { jobStateManager } from "../lib/JobStateManager";
+  import { api } from "../services/api";
+  import { navigationActions } from "../stores/navigation";
   import { fetchAllWatchers } from "../stores/watchers";
+  import type { HostInfo, JobFilters, JobInfo } from "../types/api";
 
   let hosts: HostInfo[] = $state([]);
   let loading = $state(false);
   let hostsLoading = false;
   let error: string | null = $state(null);
-  let search = $state('');
+  let search = $state("");
   let filters: JobFilters = $state({
     host: "",
     user: "",
@@ -34,9 +30,11 @@
     activeOnly: false,
     completedOnly: false,
   });
-  
+
   // Mobile UI state
-  let isMobile = $state(typeof window !== 'undefined' && window.innerWidth < 768);
+  let isMobile = $state(
+    typeof window !== "undefined" && window.innerWidth < 768,
+  );
   let searchFocused = false;
   let searchExpanded = $state(false);
   let searchInput: HTMLInputElement = $state();
@@ -45,7 +43,7 @@
   let autoRefreshEnabled = $state(false);
   let autoRefreshInterval = $state(30); // seconds
   let autoRefreshTimer: number | null = null;
-  
+
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
   const connectionStatus = jobStateManager.getConnectionStatus();
@@ -56,166 +54,213 @@
   // Debug reactive jobs - check for duplicates
   run(() => {
     if ($allJobs.length > 0) {
-      const uniqueKeys = new Set($allJobs.map(j => `${j.hostname}:${j.job_id}`));
+      const uniqueKeys = new Set(
+        $allJobs.map((j) => `${j.hostname}:${j.job_id}`),
+      );
       const hasDuplicates = uniqueKeys.size !== $allJobs.length;
-      console.log(`[JobsPage] Received ${$allJobs.length} jobs from store (${uniqueKeys.size} unique) ${hasDuplicates ? '⚠️ DUPLICATES DETECTED' : '✓'}`);
+      console.log(
+        `[JobsPage] Received ${$allJobs.length} jobs from store (${uniqueKeys.size} unique) ${hasDuplicates ? "⚠️ DUPLICATES DETECTED" : "✓"}`,
+      );
       if (hasDuplicates) {
         // Find and log duplicates
-        const jobKeys = $allJobs.map(j => `${j.hostname}:${j.job_id}`);
-        const duplicates = jobKeys.filter((key, index) => jobKeys.indexOf(key) !== index);
+        const jobKeys = $allJobs.map((j) => `${j.hostname}:${j.job_id}`);
+        const duplicates = jobKeys.filter(
+          (key, index) => jobKeys.indexOf(key) !== index,
+        );
         console.log(`[JobsPage] Duplicate keys:`, [...new Set(duplicates)]);
       }
     }
   });
   run(() => {
     if ($arrayJobGroups.length > 0) {
-      console.log(`[JobsPage] Received ${$arrayJobGroups.length} array job groups`);
+      console.log(
+        `[JobsPage] Received ${$arrayJobGroups.length} array job groups`,
+      );
     }
   });
-  
+
   // Search scoring function - returns relevance score (lower is better)
   function getSearchScore(job: any, searchTerm: string): number {
     if (!searchTerm) return 0;
     const term = searchTerm.toLowerCase();
-    
+
     // Exact match scores
     if (job.job_id.toLowerCase() === term) return 0;
     if (job.name?.toLowerCase() === term) return 1;
     if (job.user?.toLowerCase() === term) return 2;
-    
+
     // Starts with scores
     if (job.job_id.toLowerCase().startsWith(term)) return 10;
     if (job.name?.toLowerCase().startsWith(term)) return 11;
     if (job.user?.toLowerCase().startsWith(term)) return 12;
-    
+
     // Contains scores
     if (job.job_id.toLowerCase().includes(term)) return 20;
     if (job.name?.toLowerCase().includes(term)) return 21;
     if (job.user?.toLowerCase().includes(term)) return 22;
     if (job.hostname?.toLowerCase().includes(term)) return 23;
-    
+
     // No match
     return 999;
   }
-  
+
   // Filter jobs and exclude those that are part of array groups
-  let filteredJobs = $derived((() => {
-    try {
-      let jobs = [...$allJobs];
+  let filteredJobs = $derived(
+    (() => {
+      try {
+        let jobs = [...$allJobs];
 
-      // Defensive deduplication: Ensure no duplicate job_id + hostname combinations
-      const uniqueJobs = new Map();
-      jobs.forEach(job => {
-        const key = `${job.hostname}:${job.job_id}`;
-        uniqueJobs.set(key, job);
-      });
-      jobs = Array.from(uniqueJobs.values());
+        // Defensive deduplication: Ensure no duplicate job_id + hostname combinations
+        const uniqueJobs = new Map();
+        jobs.forEach((job) => {
+          const key = `${job.hostname}:${job.job_id}`;
+          uniqueJobs.set(key, job);
+        });
+        jobs = Array.from(uniqueJobs.values());
 
-      // Exclude jobs that are part of array groups
-      if ($arrayJobGroups.length > 0) {
-        const arrayJobIds = new Set(
-          $arrayJobGroups.flatMap(group =>
-            group.tasks.map(task => `${task.hostname}:${task.job_id}`)
-          )
-        );
-        jobs = jobs.filter(j => !arrayJobIds.has(`${j.hostname}:${j.job_id}`));
+        // Exclude jobs that are part of array groups
+        if ($arrayJobGroups.length > 0) {
+          const arrayJobIds = new Set(
+            $arrayJobGroups.flatMap((group) =>
+              group.tasks.map((task) => `${task.hostname}:${task.job_id}`),
+            ),
+          );
+          jobs = jobs.filter(
+            (j) => !arrayJobIds.has(`${j.hostname}:${j.job_id}`),
+          );
+        }
+
+        // Apply filters
+        if (filters.host) {
+          jobs = jobs.filter((j) => j.hostname === filters.host);
+        }
+        if (filters.user) {
+          jobs = jobs.filter((j) =>
+            j.user?.toLowerCase().includes(filters.user.toLowerCase()),
+          );
+        }
+        if (filters.state) {
+          jobs = jobs.filter((j) => j && j.state === filters.state);
+        }
+        if (filters.activeOnly) {
+          jobs = jobs.filter(
+            (j) => j && j.state && (j.state === "R" || j.state === "PD"),
+          );
+        }
+        if (filters.completedOnly) {
+          jobs = jobs.filter(
+            (j) =>
+              j &&
+              j.state &&
+              (j.state === "CD" ||
+                j.state === "F" ||
+                j.state === "CA" ||
+                j.state === "TO"),
+          );
+        }
+
+        // Apply search with ranking
+        if (search) {
+          // Filter and score jobs
+          const scoredJobs = jobs
+            .map((job) => ({ job, score: getSearchScore(job, search) }))
+            .filter((item) => item.score < 999)
+            .sort((a, b) => a.score - b.score)
+            .map((item) => item.job);
+
+          jobs = scoredJobs;
+        }
+
+        // Apply limit
+        if (filters.limit > 0) {
+          jobs = jobs.slice(0, filters.limit);
+        }
+
+        return jobs;
+      } catch (error) {
+        console.error("[JobsPage] Error in filteredJobs computation:", error);
+        return [];
       }
+    })(),
+  );
+
+  // Filter array groups based on search and filters
+  let filteredArrayGroups = $derived(
+    (() => {
+      let groups = [...$arrayJobGroups];
 
       // Apply filters
       if (filters.host) {
-        jobs = jobs.filter(j => j.hostname === filters.host);
+        groups = groups.filter((g) => g.hostname === filters.host);
       }
       if (filters.user) {
-        jobs = jobs.filter(j => j.user?.toLowerCase().includes(filters.user.toLowerCase()));
+        groups = groups.filter((g) =>
+          g.user?.toLowerCase().includes(filters.user.toLowerCase()),
+        );
       }
       if (filters.state) {
-        jobs = jobs.filter(j => j && j.state === filters.state);
+        // Filter groups that have tasks in the specified state
+        groups = groups.filter((g) =>
+          g.tasks.some((t) => t.state === filters.state),
+        );
       }
       if (filters.activeOnly) {
-        jobs = jobs.filter(j => j && j.state && (j.state === 'R' || j.state === 'PD'));
+        groups = groups.filter(
+          (g) => g.running_count > 0 || g.pending_count > 0,
+        );
       }
       if (filters.completedOnly) {
-        jobs = jobs.filter(j => j && j.state && (j.state === 'CD' || j.state === 'F' || j.state === 'CA' || j.state === 'TO'));
+        groups = groups.filter(
+          (g) =>
+            g.completed_count > 0 ||
+            g.failed_count > 0 ||
+            g.cancelled_count > 0,
+        );
       }
 
-      // Apply search with ranking
+      // Apply search
       if (search) {
-        // Filter and score jobs
-        const scoredJobs = jobs
-          .map(job => ({ job, score: getSearchScore(job, search) }))
-          .filter(item => item.score < 999)
-          .sort((a, b) => a.score - b.score)
-          .map(item => item.job);
-
-        jobs = scoredJobs;
+        const term = search.toLowerCase();
+        groups = groups.filter(
+          (g) =>
+            g.array_job_id.toLowerCase().includes(term) ||
+            g.job_name.toLowerCase().includes(term) ||
+            g.user?.toLowerCase().includes(term),
+        );
       }
 
-      // Apply limit
-      if (filters.limit > 0) {
-        jobs = jobs.slice(0, filters.limit);
-      }
-
-      return jobs;
-    } catch (error) {
-      console.error('[JobsPage] Error in filteredJobs computation:', error);
-      return [];
-    }
-  })());
-
-  // Filter array groups based on search and filters
-  let filteredArrayGroups = $derived((() => {
-    let groups = [...$arrayJobGroups];
-
-    // Apply filters
-    if (filters.host) {
-      groups = groups.filter(g => g.hostname === filters.host);
-    }
-    if (filters.user) {
-      groups = groups.filter(g => g.user?.toLowerCase().includes(filters.user.toLowerCase()));
-    }
-    if (filters.state) {
-      // Filter groups that have tasks in the specified state
-      groups = groups.filter(g => g.tasks.some(t => t.state === filters.state));
-    }
-    if (filters.activeOnly) {
-      groups = groups.filter(g => g.running_count > 0 || g.pending_count > 0);
-    }
-    if (filters.completedOnly) {
-      groups = groups.filter(g => g.completed_count > 0 || g.failed_count > 0 || g.cancelled_count > 0);
-    }
-
-    // Apply search
-    if (search) {
-      const term = search.toLowerCase();
-      groups = groups.filter(g =>
-        g.array_job_id.toLowerCase().includes(term) ||
-        g.job_name.toLowerCase().includes(term) ||
-        g.user?.toLowerCase().includes(term)
-      );
-    }
-
-    return groups;
-  })());
+      return groups;
+    })(),
+  );
 
   // Track active arrays for smart collapsible defaults
-  let activeArrayCount = $derived(filteredArrayGroups.filter(g =>
-    g.running_count > 0 || g.pending_count > 0
-  ).length);
+  let activeArrayCount = $derived(
+    filteredArrayGroups.filter(
+      (g) => g.running_count > 0 || g.pending_count > 0,
+    ).length,
+  );
 
   let hasActiveArrays = $derived(activeArrayCount > 0);
 
   // Smart default: collapse if all completed OR > 10 arrays
-  let arraysSectionExpanded = $derived(hasActiveArrays && filteredArrayGroups.length <= 10);
-  
-  
+  let arraysSectionExpanded = $derived(
+    hasActiveArrays && filteredArrayGroups.length <= 10,
+  );
+
   // Compute loading states from manager
-  let progressiveLoading = $derived(Array.from($managerState.hostStates.values()).some(h => h.status === 'loading'));
-  let dataFromCache = $derived($managerState.dataSource === 'cache');
+  let progressiveLoading = $derived(
+    Array.from($managerState.hostStates.values()).some(
+      (h) => h.status === "loading",
+    ),
+  );
+  let dataFromCache = $derived($managerState.dataSource === "cache");
 
   // Track hosts with errors
-  let hostsWithErrors = $derived(Array.from($hostStates.values()).filter(h => h.status === 'error'));
-  let hostsWithTimeouts = $derived(hostsWithErrors.filter(h => h.isTimeout));
-  
+  let hostsWithErrors = $derived(
+    Array.from($hostStates.values()).filter((h) => h.status === "error"),
+  );
+  let hostsWithTimeouts = $derived(hostsWithErrors.filter((h) => h.isTimeout));
+
   function checkMobile() {
     isMobile = window.innerWidth < 768;
   }
@@ -298,16 +343,17 @@
   }
 
   function handleRefreshSettingsChanged(event: CustomEvent): void {
-    const { autoRefreshEnabled: enabled, autoRefreshInterval: interval } = event.detail;
+    const { autoRefreshEnabled: enabled, autoRefreshInterval: interval } =
+      event.detail;
     autoRefreshEnabled = enabled;
     autoRefreshInterval = interval;
     setupAutoRefresh();
 
     // Save to localStorage
-    const prefs = JSON.parse(localStorage.getItem('ssync_preferences') || '{}');
+    const prefs = JSON.parse(localStorage.getItem("ssync_preferences") || "{}");
     prefs.autoRefresh = enabled;
     prefs.refreshInterval = interval;
-    localStorage.setItem('ssync_preferences', JSON.stringify(prefs));
+    localStorage.setItem("ssync_preferences", JSON.stringify(prefs));
   }
 
   function handleJobsPerPageChanged(event: CustomEvent): void {
@@ -317,20 +363,24 @@
 
   // React to auto-refresh settings changes
   run(() => {
-    if (typeof autoRefreshEnabled !== 'undefined') {
+    if (typeof autoRefreshEnabled !== "undefined") {
       setupAutoRefresh();
     }
   });
 
-  let totalJobs = $derived(filteredJobs.length + filteredArrayGroups.reduce((sum, g) => sum + g.total_tasks, 0));
-  
+  let totalJobs = $derived(
+    filteredJobs.length +
+      filteredArrayGroups.reduce((sum, g) => sum + g.total_tasks, 0),
+  );
 
   onMount(async () => {
     // Load hosts first
     await loadHosts();
 
     // Load watchers for eye icon display (non-blocking)
-    fetchAllWatchers().catch(err => console.warn('Failed to load watchers:', err));
+    fetchAllWatchers().catch((err) =>
+      console.warn("Failed to load watchers:", err),
+    );
 
     // ⚡ PERFORMANCE FIX: Don't force sync on mount - let WebSocket deliver initial data
     // The JobStateManager connects WebSocket on initialization and will receive initial
@@ -342,7 +392,7 @@
     window.addEventListener("resize", checkMobile);
 
     // Load preferences from localStorage
-    const savedPrefs = localStorage.getItem('ssync_preferences');
+    const savedPrefs = localStorage.getItem("ssync_preferences");
     if (savedPrefs) {
       try {
         const prefs = JSON.parse(savedPrefs);
@@ -351,23 +401,23 @@
         filters.limit = prefs.jobsPerPage || 50;
         setupAutoRefresh();
       } catch (e) {
-        console.error('Failed to load preferences:', e);
+        console.error("Failed to load preferences:", e);
       }
     }
 
     // Listen for settings changes
-    window.addEventListener('jobsPerPageChanged', handleJobsPerPageChanged);
+    window.addEventListener("jobsPerPageChanged", handleJobsPerPageChanged);
   });
 
   onDestroy(() => {
     if (filterChangeTimeout) clearTimeout(filterChangeTimeout);
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
     window.removeEventListener("resize", checkMobile);
-    window.removeEventListener('jobsPerPageChanged', handleJobsPerPageChanged);
+    window.removeEventListener("jobsPerPageChanged", handleJobsPerPageChanged);
   });
 </script>
 
-<div class="h-full flex flex-col bg-gradient-to-br from-gray-50 to-slate-50 dark:from-gray-900 dark:to-slate-900">
+<div class="h-full flex flex-col bg-[var(--background)]">
   {#if !isMobile}
     <NavigationHeader
       showRefresh={true}
@@ -378,18 +428,30 @@
       on:refreshSettingsChanged={handleRefreshSettingsChanged}
     >
       {#snippet left()}
-            <div  class="flex items-center gap-4">
+        <div class="flex items-center gap-4">
           <div class="flex gap-4 flex-shrink-0 items-center">
             <div class="flex items-center gap-1 whitespace-nowrap">
-              <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{hosts.length}</span>
-              <span class="text-xs text-slate-500 dark:text-slate-400">hosts</span>
+              <span
+                class="text-base font-semibold text-slate-900 dark:text-slate-100"
+                >{hosts.length}</span
+              >
+              <span class="text-xs text-slate-500 dark:text-slate-400"
+                >hosts</span
+              >
             </div>
             <div class="flex items-center gap-1 whitespace-nowrap">
-              <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{totalJobs}</span>
-              <span class="text-xs text-slate-500 dark:text-slate-400">jobs</span>
+              <span
+                class="text-base font-semibold text-slate-900 dark:text-slate-100"
+                >{totalJobs}</span
+              >
+              <span class="text-xs text-slate-500 dark:text-slate-400"
+                >jobs</span
+              >
             </div>
             {#if dataFromCache}
-              <div class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-border ml-4">
+              <div
+                class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-border ml-4"
+              >
                 <Clock class="h-4 w-4 text-muted-foreground" />
                 <Badge variant="secondary">Cached</Badge>
               </div>
@@ -399,7 +461,9 @@
           <!-- Search Bar -->
           <div class="flex-1 max-w-md">
             <div class="relative w-full">
-              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center">
+              <div
+                class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center"
+              >
                 <Search size={16} />
               </div>
               <input
@@ -410,27 +474,42 @@
                 oninput={handleFilterChange}
               />
               {#if search}
-                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
+                <button
+                  class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all"
+                  onclick={() => {
+                    search = "";
+                    handleFilterChange();
+                  }}
+                >
                   <X size={14} />
                 </button>
               {/if}
             </div>
           </div>
         </div>
-          {/snippet}
+      {/snippet}
     </NavigationHeader>
   {:else}
     <!-- Mobile header -->
-    <div class="flex justify-between items-center p-3 bg-gradient-to-b from-white to-slate-50/95 dark:from-gray-800 dark:to-gray-800/95 border-b border-black/8 dark:border-white/8 relative z-50 shadow-sm">
+    <div
+      class="flex justify-between items-center p-3 bg-[var(--secondary)] border-b border-[var(--border)] relative z-50 shadow-sm"
+    >
       <div class="flex items-center min-h-[40px] whitespace-nowrap">
         <!-- Stats on the left -->
         <div class="flex gap-4 flex-shrink-0 items-center">
           <div class="flex items-center gap-1 whitespace-nowrap">
-            <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{hosts.length}</span>
-            <span class="text-xs text-slate-500 dark:text-slate-400">hosts</span>
+            <span
+              class="text-base font-semibold text-slate-900 dark:text-slate-100"
+              >{hosts.length}</span
+            >
+            <span class="text-xs text-slate-500 dark:text-slate-400">hosts</span
+            >
           </div>
           <div class="flex items-center gap-1 whitespace-nowrap">
-            <span class="text-base font-semibold text-slate-900 dark:text-slate-100">{totalJobs}</span>
+            <span
+              class="text-base font-semibold text-slate-900 dark:text-slate-100"
+              >{totalJobs}</span
+            >
             <span class="text-xs text-slate-500 dark:text-slate-400">jobs</span>
           </div>
         </div>
@@ -439,10 +518,18 @@
         <div class="flex-1 min-w-8"></div>
 
         <!-- Expandable search -->
-        <div class="flex items-center justify-center transition-all duration-300 ease-out overflow-hidden flex-shrink-0 {searchExpanded ? 'w-[180px] max-w-[180px]' : 'w-8'}">
+        <div
+          class="flex items-center justify-center transition-all duration-300 ease-out overflow-hidden flex-shrink-0 {searchExpanded
+            ? 'w-[180px] max-w-[180px]'
+            : 'w-8'}"
+        >
           {#if searchExpanded}
-            <div class="relative w-full animate-in slide-in-from-right-2 duration-300">
-              <div class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center">
+            <div
+              class="relative w-full animate-in slide-in-from-right-2 duration-300"
+            >
+              <div
+                class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center"
+              >
                 <Search size={16} />
               </div>
               <input
@@ -451,17 +538,31 @@
                 placeholder="Search jobs..."
                 bind:value={search}
                 oninput={handleFilterChange}
-                onblur={() => { if (!search) searchExpanded = false; }}
+                onblur={() => {
+                  if (!search) searchExpanded = false;
+                }}
                 bind:this={searchInput}
               />
               {#if search}
-                <button class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all" onclick={() => { search = ''; handleFilterChange(); }}>
+                <button
+                  class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all"
+                  onclick={() => {
+                    search = "";
+                    handleFilterChange();
+                  }}
+                >
                   <X size={14} />
                 </button>
               {/if}
             </div>
           {:else}
-            <button class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-all hover:bg-secondary hover:text-foreground" onclick={() => { searchExpanded = true; setTimeout(() => searchInput?.focus(), 100); }}>
+            <button
+              class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-all hover:bg-secondary hover:text-foreground"
+              onclick={() => {
+                searchExpanded = true;
+                setTimeout(() => searchInput?.focus(), 100);
+              }}
+            >
               <Search size={16} />
             </button>
           {/if}
@@ -472,9 +573,15 @@
           onclick={handleManualRefresh}
           disabled={loading}
           class="flex items-center justify-center w-8 h-8 bg-background border border-border rounded-lg text-sm font-medium text-muted cursor-pointer transition-all flex-shrink-0 hover:bg-secondary hover:border-border disabled:opacity-50 disabled:cursor-not-allowed"
-          title="{loading || progressiveLoading ? 'Loading from hosts...' : 'Refresh'}"
+          title={loading || progressiveLoading
+            ? "Loading from hosts..."
+            : "Refresh"}
         >
-          <RefreshCw class="w-4 h-4 {loading || progressiveLoading ? 'animate-spin' : ''}" />
+          <RefreshCw
+            class="w-4 h-4 {loading || progressiveLoading
+              ? 'animate-spin'
+              : ''}"
+          />
         </button>
       </div>
     </div>
@@ -488,13 +595,27 @@
 
   <!-- Host connection warnings -->
   {#if hostsWithTimeouts.length > 0}
-    <div class="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 p-3">
+    <div
+      class="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 p-3"
+    >
       <div class="flex items-center gap-2">
-        <svg class="h-5 w-5 text-yellow-600 dark:text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        <svg
+          class="h-5 w-5 text-yellow-600 dark:text-yellow-500"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+          />
         </svg>
         <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200">
-          Connection timeout: {hostsWithTimeouts.map(h => h.hostname).join(', ')}
+          Connection timeout: {hostsWithTimeouts
+            .map((h) => h.hostname)
+            .join(", ")}
           {#if hostsWithTimeouts.length === 1}
             - Some jobs may not be visible
           {:else}
@@ -504,13 +625,25 @@
       </div>
     </div>
   {:else if hostsWithErrors.length > 0}
-    <div class="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 p-3">
+    <div
+      class="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 p-3"
+    >
       <div class="flex items-center gap-2">
-        <svg class="h-5 w-5 text-red-600 dark:text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        <svg
+          class="h-5 w-5 text-red-600 dark:text-red-500"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <p class="text-sm font-medium text-red-800 dark:text-red-200">
-          Connection error: {hostsWithErrors.map(h => h.hostname).join(', ')}
+          Connection error: {hostsWithErrors.map((h) => h.hostname).join(", ")}
         </p>
       </div>
     </div>
@@ -561,8 +694,11 @@
 
 <style>
   @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
-
