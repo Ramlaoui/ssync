@@ -32,14 +32,14 @@
   
   
   const variants = {
-    default: "bg-black text-white hover:bg-gray-800",
-    destructive: "bg-red-500 text-white hover:bg-red-600",
-    outline: "border border-gray-300 bg-white text-black hover:bg-gray-50",
-    secondary: "bg-gray-100 text-black hover:bg-gray-200",
-    ghost: "hover:bg-gray-100 text-gray-600 hover:text-black",
-    link: "text-black underline-offset-4 hover:underline",
-    gradient: "bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700",
-    glass: "bg-white/10 backdrop-blur-md border border-gray-200 text-black hover:bg-white/20",
+    default: "bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90",
+    destructive: "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:bg-[var(--destructive)]/90",
+    outline: "border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] hover:bg-[var(--secondary)]",
+    secondary: "bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--secondary)]/80",
+    ghost: "hover:bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+    link: "text-[var(--foreground)] underline-offset-4 hover:underline",
+    gradient: "bg-gradient-to-r from-[var(--accent)] to-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90",
+    glass: "bg-[var(--card)]/10 backdrop-blur-md border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--card)]/20",
   };
   
   const sizes = {
@@ -53,7 +53,7 @@
 <button
   {...rest}
   class={cn(
-    "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-black disabled:pointer-events-none disabled:opacity-40",
+    "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-40",
     variant ? variants[variant] : '',
     size ? sizes[size] : '',
     loading && "cursor-wait opacity-70",

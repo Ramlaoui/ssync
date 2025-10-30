@@ -67,7 +67,7 @@
     width: 100%;
     padding: 0.625rem 1rem;
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--popover-foreground);
     text-align: left;
     text-decoration: none;
     background: transparent;
@@ -78,31 +78,31 @@
   }
 
   .dropdown-item:hover:not(.disabled) {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .dropdown-item:focus {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .dropdown-item.active {
-    background: #eff6ff;
-    color: #1d4ed8;
+    background: var(--info-bg);
+    color: var(--accent);
   }
 
   .dropdown-item.danger {
-    color: #dc2626;
+    color: var(--destructive);
   }
 
   .dropdown-item.danger:hover:not(.disabled) {
-    background: #fef2f2;
-    color: #991b1b;
+    background: var(--error-bg);
+    color: var(--destructive);
   }
 
   .dropdown-item.disabled {
-    color: #9ca3af;
+    color: var(--muted-foreground);
     cursor: not-allowed;
     opacity: 0.5;
   }
@@ -116,7 +116,7 @@
 
   /* Keyboard indicator */
   .dropdown-item:focus-visible {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
 </style>

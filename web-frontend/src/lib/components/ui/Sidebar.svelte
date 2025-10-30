@@ -112,9 +112,9 @@
 <style>
   .sidebar-container {
     position: fixed;
-    background: white;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
-                0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    background: var(--card);
+    box-shadow: 0 10px 15px -3px color-mix(in srgb, var(--foreground) 10%, transparent),
+                0 4px 6px -2px color-mix(in srgb, var(--foreground) 5%, transparent);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -125,28 +125,28 @@
     top: 0;
     left: 0;
     bottom: 0;
-    border-right: 1px solid #e5e7eb;
+    border-right: 1px solid var(--border);
   }
 
   .sidebar-right {
     top: 0;
     right: 0;
     bottom: 0;
-    border-left: 1px solid #e5e7eb;
+    border-left: 1px solid var(--border);
   }
 
   .sidebar-top {
     top: 0;
     left: 0;
     right: 0;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
   }
 
   .sidebar-bottom {
     bottom: 0;
     left: 0;
     right: 0;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
   }
 
   .sidebar-header {
@@ -154,7 +154,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 1.25rem 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     gap: 1rem;
     flex-shrink: 0;
   }
@@ -162,7 +162,7 @@
   .sidebar-title {
     font-size: 1.125rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--card-foreground);
     margin: 0;
   }
 
@@ -174,19 +174,19 @@
     border: none;
     background: transparent;
     border-radius: 0.375rem;
-    color: #6b7280;
+    color: var(--muted);
     cursor: pointer;
     transition: all 0.15s;
     flex-shrink: 0;
   }
 
   .sidebar-close-button:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .sidebar-close-button:focus {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 

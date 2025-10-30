@@ -155,7 +155,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: color-mix(in srgb, var(--foreground) 50%, transparent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -163,9 +163,9 @@
   }
 
   .template-detail-popup {
-    background: white;
+    background: var(--card);
     border-radius: 12px;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 20px 25px -5px color-mix(in srgb, var(--foreground) 10%, transparent), 0 10px 10px -5px color-mix(in srgb, var(--foreground) 4%, transparent);
     max-width: 700px;
     width: 90%;
     max-height: 85vh;
@@ -175,7 +175,7 @@
 
   .detail-popup-header {
     padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -184,7 +184,7 @@
   .detail-popup-header h3 {
     font-size: 1.25rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin: 0;
   }
 
@@ -193,14 +193,14 @@
     border: none;
     padding: 0.5rem;
     border-radius: 6px;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .close-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .detail-popup-content {
@@ -220,19 +220,19 @@
   .detail-section h4 {
     font-size: 1rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin: 0 0 0.75rem 0;
   }
 
   .template-detail-description {
-    color: #6b7280;
+    color: var(--muted-foreground);
     line-height: 1.5;
     margin: 0;
   }
 
   .script-content-preview {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     overflow: hidden;
   }
@@ -244,7 +244,7 @@
     font-family: 'Monaco', 'Courier New', monospace;
     font-size: 0.8rem;
     line-height: 1.4;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .parameter-grid,
@@ -256,7 +256,7 @@
 
   .param-item,
   .stat-item {
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 6px;
     padding: 0.75rem;
   }
@@ -266,20 +266,20 @@
     display: block;
     font-size: 0.8rem;
     font-weight: 500;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-bottom: 0.25rem;
   }
 
   .param-value,
   .stat-value {
     font-size: 0.9rem;
-    color: #111827;
+    color: var(--foreground);
     font-weight: 500;
   }
 
   .detail-popup-footer {
     padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;
@@ -300,32 +300,32 @@
   }
 
   .btn-primary {
-    background: #3b82f6;
-    color: white;
+    background: var(--accent);
+    color: var(--card);
     border: none;
   }
 
   .btn-primary:hover {
-    background: #2563eb;
+    background: color-mix(in srgb, var(--accent) 85%, var(--foreground));
   }
 
   .btn-secondary {
-    background: white;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    background: var(--card);
+    color: var(--foreground);
+    border: 1px solid var(--border);
   }
 
   .btn-secondary:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .btn-danger {
-    background: #dc2626;
-    color: white;
+    background: var(--destructive);
+    color: var(--card);
     border: none;
   }
 
   .btn-danger:hover {
-    background: #b91c1c;
+    background: color-mix(in srgb, var(--destructive) 85%, var(--foreground));
   }
 </style>

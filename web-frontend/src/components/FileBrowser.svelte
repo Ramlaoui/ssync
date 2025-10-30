@@ -401,9 +401,9 @@
     align-items: center;
     gap: 1rem;
     padding: 1rem;
-    background: #fef2f2;
-    border-bottom: 1px solid #fecaca;
-    color: #dc2626;
+    background: var(--error-bg);
+    border-bottom: 1px solid color-mix(in srgb, var(--destructive) 20%, transparent);
+    color: var(--destructive);
   }
 
   .error-content {
@@ -459,7 +459,7 @@
   }
 
   .entry-item.directory:hover:not(:disabled) {
-    background: #f8fafc;
+    background: var(--secondary);
   }
 
   .entry-icon {
@@ -487,8 +487,8 @@
   }
 
   .entry-name .highlight {
-    background: #fbbf24;
-    color: #92400e;
+    background: var(--warning-bg);
+    color: var(--warning);
     padding: 0.125rem 0.25rem;
     border-radius: 3px;
     font-weight: 600;

@@ -175,7 +175,7 @@
     display: block;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
     margin-bottom: 0.5rem;
   }
 
@@ -183,7 +183,7 @@
   .form-textarea {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
     transition: all 0.2s;
@@ -192,8 +192,8 @@
   .form-input:focus,
   .form-textarea:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .form-textarea {
@@ -202,8 +202,8 @@
   }
 
   .script-preview {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 1rem;
     max-height: 200px;
@@ -213,12 +213,12 @@
   .script-preview pre {
     font-family: 'Monaco', 'Courier New', monospace;
     font-size: 0.8rem;
-    color: #4b5563;
+    color: var(--foreground);
     margin: 0;
   }
 
   .saved-params {
-    background: #f9fafb;
+    background: var(--secondary);
     border-radius: 6px;
     padding: 1rem;
   }
@@ -236,11 +236,11 @@
 
   .param-label {
     font-weight: 500;
-    color: #374151;
+    color: var(--foreground);
   }
 
   .param-value {
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .dialog-footer {
@@ -260,13 +260,13 @@
   }
 
   .btn-primary {
-    background: #3b82f6;
-    color: white;
+    background: var(--accent);
+    color: var(--accent-foreground);
     border: none;
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: #2563eb;
+    background: color-mix(in srgb, var(--accent) 90%, black);
   }
 
   .btn-primary:disabled {
@@ -275,12 +275,12 @@
   }
 
   .btn-secondary {
-    background: white;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    background: var(--card);
+    color: var(--foreground);
+    border: 1px solid var(--border);
   }
 
   .btn-secondary:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 </style>

@@ -21,11 +21,11 @@
   }: Props = $props();
   
   const variants = {
-    default: "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700",
-    glass: "bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border border-gray-200 dark:border-gray-700",
-    gradient: "bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 border border-gray-200 dark:border-gray-700",
-    bordered: "bg-transparent border border-gray-300 dark:border-gray-600",
-    elevated: "bg-white dark:bg-gray-800 shadow-sm hover:shadow-md"
+    default: "bg-[var(--card)] border border-[var(--border)]",
+    glass: "bg-[var(--card)]/80 backdrop-blur-sm border border-[var(--border)]",
+    gradient: "bg-gradient-to-br from-[var(--card)] to-[var(--secondary)] border border-[var(--border)]",
+    bordered: "bg-transparent border border-[var(--border)]",
+    elevated: "bg-[var(--card)] shadow-sm hover:shadow-md"
   };
 </script>
 

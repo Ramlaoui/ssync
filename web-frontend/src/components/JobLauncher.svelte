@@ -1,83 +1,77 @@
 <script lang="ts">
-  import { run, createBubbler, stopPropagation } from 'svelte/legacy';
+  import { createEventDispatcher, onMount } from "svelte";
+  import { push } from "svelte-spa-router";
+  import { createBubbler, run } from "svelte/legacy";
+  import { fade, fly, slide } from "svelte/transition";
 
   const bubble = createBubbler();
-  import { createEventDispatcher, onMount } from 'svelte';
-  import { slide, fade, fly } from 'svelte/transition';
-  import { cn } from '../lib/utils';
-  import Button from '../lib/components/ui/Button.svelte';
-  import Input from '../lib/components/ui/Input.svelte';
-  import Label from '../lib/components/ui/Label.svelte';
-  import Select from '../lib/components/ui/Select.svelte';
-  import Card from '../lib/components/ui/Card.svelte';
-  import Dropdown from '../lib/components/ui/Dropdown.svelte';
-  import DropdownItem from '../lib/components/ui/DropdownItem.svelte';
-  import DropdownDivider from '../lib/components/ui/DropdownDivider.svelte';
-  import DropdownLabel from '../lib/components/ui/DropdownLabel.svelte';
-  import Sidebar from '../lib/components/ui/Sidebar.svelte';
-  import CodeMirrorEditor from './CodeMirrorEditor.svelte';
-  import NavigationHeader from './NavigationHeader.svelte';
-  import FileBrowser from './FileBrowser.svelte';
-  import SyncSettings from './SyncSettings.svelte';
-  import ScriptHistory from './ScriptHistory.svelte';
-  import TemplateSidebar from './TemplateSidebar.svelte';
-  import TemplateDetailPopup from './TemplateDetailPopup.svelte';
-  import SaveTemplateDialog from './SaveTemplateDialog.svelte';
-  import LaunchStatusToast from './LaunchStatusToast.svelte';
-  import type { HostInfo } from '../types/api';
-  import { resubmitStore } from '../stores/resubmit';
-  import { validateParameters } from '../lib/sbatchUtils';
-  import { api } from '../services/api';
-  import { push, location } from 'svelte-spa-router';
-  import { navigationActions } from '../stores/navigation';
-
+  import Button from "../lib/components/ui/Button.svelte";
+  import Card from "../lib/components/ui/Card.svelte";
+  import Dropdown from "../lib/components/ui/Dropdown.svelte";
+  import DropdownDivider from "../lib/components/ui/DropdownDivider.svelte";
+  import DropdownItem from "../lib/components/ui/DropdownItem.svelte";
+  import Input from "../lib/components/ui/Input.svelte";
+  import Label from "../lib/components/ui/Label.svelte";
+  import Sidebar from "../lib/components/ui/Sidebar.svelte";
+  import {
+    updateScriptWithParameters as generateScript,
+    parseSbatchDirectives,
+    type JobParameters,
+  } from "../lib/sbatch-parser";
+  import { validateParameters } from "../lib/sbatchUtils";
+  import { api } from "../services/api";
+  import { resubmitStore } from "../stores/resubmit";
+  import type { HostInfo } from "../types/api";
+  import CodeMirrorEditor from "./CodeMirrorEditor.svelte";
+  import FileBrowser from "./FileBrowser.svelte";
+  import LaunchStatusToast from "./LaunchStatusToast.svelte";
+  import NavigationHeader from "./NavigationHeader.svelte";
+  import SaveTemplateDialog from "./SaveTemplateDialog.svelte";
+  import ScriptHistory from "./ScriptHistory.svelte";
+  import SyncSettings from "./SyncSettings.svelte";
+  import TemplateDetailPopup from "./TemplateDetailPopup.svelte";
+  import TemplateSidebar from "./TemplateSidebar.svelte";
   // Icons
   import {
-    Play,
-    Settings,
+    AlertCircle,
+    Beaker,
+    Brain,
+    Check,
     ChevronDown,
+    ChevronLeft,
     ChevronRight,
-    Zap,
     Clock,
+    Cloud,
+    Code,
+    Copy,
     Cpu,
-    HardDrive,
-    Server,
-    Monitor,
-    RefreshCw,
-    FolderOpen,
+    Database,
+    Edit2,
+    Eye,
     FileText,
+    Folder,
+    FolderOpen,
+    GitBranch,
     History,
+    Monitor,
     MoreHorizontal,
     MoreVertical,
-    Palette,
-    Type,
+    Play,
+    Plus,
+    RefreshCw,
+    Rocket,
+    Save,
+    Server,
+    Settings,
+    Shield,
+    Sliders,
+    Terminal,
     ToggleLeft,
     ToggleRight,
-    Folder,
-    GitBranch,
-    ArrowUpDown,
-    X,
-    Sliders,
-    Check,
-    AlertCircle,
-    Plus,
-    Edit2,
     Trash2,
-    Save,
-    Beaker,
-    Database,
-    Cloud,
-    Rocket,
-    Brain,
-    Shield,
-    Code,
-    Terminal,
-    ChevronLeft,
-    Download,
-    Eye,
-    EyeOff,
-    Copy
-  } from 'lucide-svelte';
+    X,
+    Zap,
+  } from "lucide-svelte";
 
   const dispatch = createEventDispatcher();
 
@@ -93,14 +87,16 @@ echo "Starting job..."
 `);
   let launching = $state(false);
   let hosts: HostInfo[] = $state([]);
-  let selectedHost = $state('');
+  let selectedHost = $state("");
   let loading = $state(false);
 
   // Launch status toast state
   let showLaunchToast = $state(false);
-  let launchToastStatus: 'launching' | 'success' | 'error' = $state('launching');
-  let launchToastMessage = $state('');
-  let pendingJobNavigation: { jobId: string; host: string } | null = $state(null);
+  let launchToastStatus: "launching" | "success" | "error" =
+    $state("launching");
+  let launchToastMessage = $state("");
+  let pendingJobNavigation: { jobId: string; host: string } | null =
+    $state(null);
 
   // Script Templates
   interface ScriptTemplate {
@@ -119,37 +115,22 @@ echo "Starting job..."
   let showSaveTemplateDialog = $state(false);
 
   // Simple shared state for parameters - this is the single source of truth
-  // Using empty string for optional number fields to avoid Svelte binding issues
-  let parameters = $state<{
-    cpus: number | string;
-    memory: number | string;
-    timeLimit: number | string;
-    nodes: number | string;
-    partition: string;
-    account: string;
-    jobName: string;
-    constraint: string;
-    ntasksPerNode: number | string;
-    gpusPerNode: number | string;
-    gres: string;
-    outputFile: string;
-    errorFile: string;
-    sourceDir: string;
-  }>({
-    cpus: '',
-    memory: '',
-    timeLimit: '',
-    nodes: '',
-    partition: '',
-    account: '',
-    jobName: '',
-    constraint: '',
-    ntasksPerNode: '',
-    gpusPerNode: '',
-    gres: '',
-    outputFile: '',
-    errorFile: '',
-    sourceDir: ''
+  // Note: JobParameters from sbatch-parser already includes all fields we need
+  let parameters = $state<JobParameters>({
+    cpus: undefined,
+    memory: undefined,
+    timeLimit: undefined,
+    nodes: undefined,
+    partition: "",
+    account: "",
+    jobName: "",
+    constraint: "",
+    ntasksPerNode: undefined,
+    gpusPerNode: undefined,
+    gres: "",
+    outputFile: "",
+    errorFile: "",
+    sourceDir: "",
   });
 
   // State
@@ -165,7 +146,7 @@ echo "Starting job..."
   let showHostDropdown = $state(false);
   let isMobile = $state(false);
   let showMobileConfig = $state(false);
-  let mobileConfigView = $state('main'); // 'main', 'directory', 'sync'
+  let mobileConfigView = $state("main"); // 'main', 'directory', 'sync'
   let showValidationInfo = $state(false);
   let showMobileMoreMenu = $state(false);
   let showPresetManager = $state(false);
@@ -184,288 +165,98 @@ echo "Starting job..."
   let showCapturedVariables = $state(false);
   let watchers: any[] = [];
   let showRecentWatchers = $state(false);
-  let allRecentWatchers: any[] = $state([]);  // Store all recent watchers from API
+  let allRecentWatchers: any[] = $state([]); // Store all recent watchers from API
   let newPreset: Partial<Preset> = $state({
-    name: '',
+    name: "",
     icon: Zap,
-    color: 'bg-blue-500'
+    color: "bg-blue-500",
   });
   let showIconDropdown = $state(false);
   let showColorDropdown = $state(false);
 
   // Sync settings state
-  let excludePatterns = $state(['*.log', '*.tmp', '__pycache__/']);
+  let excludePatterns = $state(["*.log", "*.tmp", "__pycache__/"]);
   let includePatterns = $state([]);
   let noGitignore = $state(false);
 
-  // Parse SBATCH directives from script
+  // Helper: Convert number | undefined to string for input binding
+  function numberToString(val: number | undefined): string {
+    return val !== undefined ? String(val) : "";
+  }
+
+  // Helper: Convert string from input back to number | undefined
+  function stringToNumber(val: string): number | undefined {
+    const trimmed = val.trim();
+    if (trimmed === "") return undefined;
+    const num = Number(trimmed);
+    return isNaN(num) ? undefined : num;
+  }
+
+  // String representations for input bindings
+  let cpusStr = $state(numberToString(parameters.cpus));
+  let memoryStr = $state(numberToString(parameters.memory));
+  let timeLimitStr = $state(numberToString(parameters.timeLimit));
+  let nodesStr = $state(numberToString(parameters.nodes));
+  let ntasksPerNodeStr = $state(numberToString(parameters.ntasksPerNode));
+  let gpusPerNodeStr = $state(numberToString(parameters.gpusPerNode));
+
+  // Sync string inputs back to parameters (when user types)
+  $effect(() => {
+    parameters.cpus = stringToNumber(cpusStr);
+  });
+  $effect(() => {
+    parameters.memory = stringToNumber(memoryStr);
+  });
+  $effect(() => {
+    parameters.timeLimit = stringToNumber(timeLimitStr);
+  });
+  $effect(() => {
+    parameters.nodes = stringToNumber(nodesStr);
+  });
+  $effect(() => {
+    parameters.ntasksPerNode = stringToNumber(ntasksPerNodeStr);
+  });
+  $effect(() => {
+    parameters.gpusPerNode = stringToNumber(gpusPerNodeStr);
+  });
+
+  // Sync parameters back to string inputs (when programmatically updated)
+  $effect(() => {
+    const newCpusStr = numberToString(parameters.cpus);
+    if (cpusStr !== newCpusStr) cpusStr = newCpusStr;
+  });
+  $effect(() => {
+    const newMemoryStr = numberToString(parameters.memory);
+    if (memoryStr !== newMemoryStr) memoryStr = newMemoryStr;
+  });
+  $effect(() => {
+    const newTimeLimitStr = numberToString(parameters.timeLimit);
+    if (timeLimitStr !== newTimeLimitStr) timeLimitStr = newTimeLimitStr;
+  });
+  $effect(() => {
+    const newNodesStr = numberToString(parameters.nodes);
+    if (nodesStr !== newNodesStr) nodesStr = newNodesStr;
+  });
+  $effect(() => {
+    const newNtasksStr = numberToString(parameters.ntasksPerNode);
+    if (ntasksPerNodeStr !== newNtasksStr) ntasksPerNodeStr = newNtasksStr;
+  });
+  $effect(() => {
+    const newGpusStr = numberToString(parameters.gpusPerNode);
+    if (gpusPerNodeStr !== newGpusStr) gpusPerNodeStr = newGpusStr;
+  });
+
+  // Parse SBATCH directives from script and update parameters
   function parseSbatchFromScript(scriptContent: string) {
-    const lines = scriptContent.split('\n');
-
-    for (const line of lines) {
-      if (line.startsWith('#SBATCH')) {
-        // Handle both --option=value and --option value formats
-        const match = line.match(/#SBATCH\s+--?([a-zA-Z-]+)(?:=(.+?))?(?:\s+(.+?))?$/);
-        if (match) {
-          const [, directive, value1, value2] = match;
-          const value = (value1 || value2 || '').trim();
-
-          switch(directive) {
-            case 'cpus-per-task':
-            case 'cpus':
-              if (value) parameters.cpus = parseInt(value) || undefined;
-              break;
-            case 'mem':
-            case 'memory':
-              const memMatch = value?.match(/(\d+)([GMK])?/);
-              if (memMatch) {
-                let mem = parseInt(memMatch[1]);
-                if (memMatch[2] === 'M' || memMatch[2] === 'K') mem = Math.ceil(mem / 1024);
-                parameters.memory = mem;
-              }
-              break;
-            case 'time':
-              // Convert time to minutes
-              const timeMatch = value?.match(/(\d+):(\d+):(\d+)/);
-              if (timeMatch) {
-                parameters.timeLimit = parseInt(timeMatch[1]) * 60 + parseInt(timeMatch[2]);
-              } else if (value?.match(/^\d+$/)) {
-                parameters.timeLimit = parseInt(value);
-              }
-              break;
-            case 'nodes':
-              if (value) parameters.nodes = parseInt(value) || undefined;
-              break;
-            case 'partition':
-            case 'p':
-              parameters.partition = value || '';
-              break;
-            case 'account':
-            case 'A':
-              parameters.account = value || '';
-              break;
-            case 'job-name':
-            case 'J':
-              parameters.jobName = value || '';
-              break;
-            case 'constraint':
-            case 'C':
-              parameters.constraint = value || '';
-              break;
-            case 'ntasks-per-node':
-              if (value) parameters.ntasksPerNode = parseInt(value) || undefined;
-              break;
-            case 'gpus-per-node':
-              if (value) parameters.gpusPerNode = parseInt(value) || undefined;
-              break;
-            case 'gres':
-              parameters.gres = value || '';
-              break;
-            case 'output':
-            case 'o':
-              parameters.outputFile = value || '';
-              break;
-            case 'error':
-            case 'e':
-              parameters.errorFile = value || '';
-              break;
-          }
-        }
-      }
-    }
+    const parsed = parseSbatchDirectives(scriptContent);
+    // Update our parameters with parsed values, keeping sourceDir intact
+    const sourceDir = parameters.sourceDir;
+    parameters = { ...parsed, sourceDir };
   }
 
   // Update script with SBATCH directives
   function updateScriptWithParameters() {
-    const lines = script.split('\n');
-    const allSbatchLines = [];
-    const knownDirectives = new Set(['job-name', 'J', 'partition', 'p', 'account', 'A',
-                                     'nodes', 'cpus-per-task', 'cpus', 'mem', 'memory',
-                                     'time', 'constraint', 'C', 'ntasks-per-node',
-                                     'gpus-per-node', 'gres', 'output', 'o', 'error', 'e']);
-    let shebangLine = '';
-    let bodyLines = [];
-    let foundSbatch = false;
-    let foundBody = false;
-
-    // Parse existing script and preserve all SBATCH lines
-    lines.forEach((line, index) => {
-      if (index === 0 && line.startsWith('#!')) {
-        shebangLine = line;
-      } else if (line.startsWith('#SBATCH')) {
-        allSbatchLines.push(line);
-        foundSbatch = true;
-        foundBody = false;
-      } else if (foundSbatch || foundBody) {
-        // Skip empty lines immediately after SBATCH directives
-        if (!foundBody && line.trim() === '') {
-          foundBody = true;
-        } else {
-          foundBody = true;
-          bodyLines.push(line);
-        }
-      } else {
-        bodyLines.push(line);
-      }
-    });
-
-    // Process SBATCH lines - update known ones, preserve unknown ones
-    const updatedSbatchLines = [];
-    const processedDirectives = new Set();
-
-    allSbatchLines.forEach(line => {
-      const match = line.match(/#SBATCH\s+--?([a-zA-Z-]+)/);
-      if (match) {
-        const directive = match[1];
-
-        // Check if this is a directive we manage
-        if (knownDirectives.has(directive)) {
-          // Skip it if we've already processed this directive type
-          if (!processedDirectives.has(directive)) {
-            processedDirectives.add(directive);
-
-            // Add updated version based on parameters
-            let updatedLine = null;
-            switch(directive) {
-              case 'job-name':
-              case 'J':
-                if (parameters.jobName) updatedLine = `#SBATCH --job-name=${parameters.jobName}`;
-                break;
-              case 'partition':
-              case 'p':
-                if (parameters.partition) updatedLine = `#SBATCH --partition=${parameters.partition}`;
-                break;
-              case 'account':
-              case 'A':
-                if (parameters.account) updatedLine = `#SBATCH --account=${parameters.account}`;
-                break;
-              case 'nodes':
-                if (parameters.nodes) updatedLine = `#SBATCH --nodes=${parameters.nodes}`;
-                break;
-              case 'cpus-per-task':
-              case 'cpus':
-                if (parameters.cpus) updatedLine = `#SBATCH --cpus-per-task=${parameters.cpus}`;
-                break;
-              case 'mem':
-              case 'memory':
-                if (parameters.memory) updatedLine = `#SBATCH --mem=${parameters.memory}G`;
-                break;
-              case 'time':
-                if (parameters.timeLimit) {
-                  const hours = Math.floor(parameters.timeLimit / 60);
-                  const minutes = parameters.timeLimit % 60;
-                  updatedLine = `#SBATCH --time=${hours}:${minutes.toString().padStart(2, '0')}:00`;
-                }
-                break;
-              case 'constraint':
-              case 'C':
-                if (parameters.constraint) updatedLine = `#SBATCH --constraint=${parameters.constraint}`;
-                break;
-              case 'ntasks-per-node':
-                if (parameters.ntasksPerNode) updatedLine = `#SBATCH --ntasks-per-node=${parameters.ntasksPerNode}`;
-                break;
-              case 'gpus-per-node':
-                if (parameters.gpusPerNode) updatedLine = `#SBATCH --gpus-per-node=${parameters.gpusPerNode}`;
-                break;
-              case 'gres':
-                if (parameters.gres) updatedLine = `#SBATCH --gres=${parameters.gres}`;
-                break;
-              case 'output':
-              case 'o':
-                if (parameters.outputFile) updatedLine = `#SBATCH --output=${parameters.outputFile}`;
-                break;
-              case 'error':
-              case 'e':
-                if (parameters.errorFile) updatedLine = `#SBATCH --error=${parameters.errorFile}`;
-                break;
-            }
-
-            if (updatedLine) {
-              updatedSbatchLines.push(updatedLine);
-            }
-          }
-        } else {
-          // Preserve unknown directives as-is
-          updatedSbatchLines.push(line);
-        }
-      } else {
-        // Preserve malformed SBATCH lines as-is
-        updatedSbatchLines.push(line);
-      }
-    });
-
-    // Add new directives that weren't in the original script
-    if (parameters.jobName && !processedDirectives.has('job-name') && !processedDirectives.has('J')) {
-      updatedSbatchLines.push(`#SBATCH --job-name=${parameters.jobName}`);
-    }
-    if (parameters.partition && !processedDirectives.has('partition') && !processedDirectives.has('p')) {
-      updatedSbatchLines.push(`#SBATCH --partition=${parameters.partition}`);
-    }
-    if (parameters.account && !processedDirectives.has('account') && !processedDirectives.has('A')) {
-      updatedSbatchLines.push(`#SBATCH --account=${parameters.account}`);
-    }
-    if (parameters.nodes && !processedDirectives.has('nodes')) {
-      updatedSbatchLines.push(`#SBATCH --nodes=${parameters.nodes}`);
-    }
-    if (parameters.cpus && !processedDirectives.has('cpus-per-task') && !processedDirectives.has('cpus')) {
-      updatedSbatchLines.push(`#SBATCH --cpus-per-task=${parameters.cpus}`);
-    }
-    if (parameters.memory && !processedDirectives.has('mem') && !processedDirectives.has('memory')) {
-      updatedSbatchLines.push(`#SBATCH --mem=${parameters.memory}G`);
-    }
-    if (parameters.timeLimit && !processedDirectives.has('time')) {
-      const hours = Math.floor(parameters.timeLimit / 60);
-      const minutes = parameters.timeLimit % 60;
-      updatedSbatchLines.push(`#SBATCH --time=${hours}:${minutes.toString().padStart(2, '0')}:00`);
-    }
-    if (parameters.constraint && !processedDirectives.has('constraint') && !processedDirectives.has('C')) {
-      updatedSbatchLines.push(`#SBATCH --constraint=${parameters.constraint}`);
-    }
-    if (parameters.ntasksPerNode && !processedDirectives.has('ntasks-per-node')) {
-      updatedSbatchLines.push(`#SBATCH --ntasks-per-node=${parameters.ntasksPerNode}`);
-    }
-    if (parameters.gpusPerNode && !processedDirectives.has('gpus-per-node')) {
-      updatedSbatchLines.push(`#SBATCH --gpus-per-node=${parameters.gpusPerNode}`);
-    }
-    if (parameters.gres && !processedDirectives.has('gres')) {
-      updatedSbatchLines.push(`#SBATCH --gres=${parameters.gres}`);
-    }
-    if (parameters.outputFile && !processedDirectives.has('output') && !processedDirectives.has('o')) {
-      updatedSbatchLines.push(`#SBATCH --output=${parameters.outputFile}`);
-    }
-    if (parameters.errorFile && !processedDirectives.has('error') && !processedDirectives.has('e')) {
-      updatedSbatchLines.push(`#SBATCH --error=${parameters.errorFile}`);
-    }
-
-    // Rebuild script
-    let newLines = [];
-
-    // Add shebang
-    newLines.push(shebangLine || '#!/bin/bash');
-
-    // Add all SBATCH directives (updated and preserved)
-    if (updatedSbatchLines.length > 0) {
-      newLines.push(...updatedSbatchLines);
-    }
-
-    // Add body with proper spacing
-    if (bodyLines.length > 0) {
-      // Remove leading empty lines from bodyLines
-      while (bodyLines.length > 0 && bodyLines[0].trim() === '') {
-        bodyLines.shift();
-      }
-
-      // Only add content if there's actual content
-      if (bodyLines.length > 0) {
-        // Add single blank line between SBATCH and body if there are SBATCH lines
-        if (updatedSbatchLines.length > 0) {
-          newLines.push('');
-        }
-        newLines.push(...bodyLines);
-      }
-    }
-
-    script = newLines.join('\n');
+    script = generateScript(script, parameters);
   }
 
   // Handle script changes from editor
@@ -477,15 +268,35 @@ echo "Starting job..."
 
   // Editor options with localStorage persistence
   let editorOptions = $state({
-    vimMode: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-vim-mode') === 'true' : true,
-    theme: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-theme') || 'light' : 'light',
-    fontSize: typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('editor-font-size') || '14') : 14,
-    lineNumbers: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-line-numbers') !== 'false' : true,
-    wordWrap: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-word-wrap') === 'true' : false,
-    tabSize: typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('editor-tab-size') || '2') : 2,
-    autoIndent: typeof localStorage !== 'undefined' ? localStorage.getItem('editor-auto-indent') !== 'false' : true
+    vimMode:
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("editor-vim-mode") === "true"
+        : true,
+    theme:
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("editor-theme") || "light"
+        : "light",
+    fontSize:
+      typeof localStorage !== "undefined"
+        ? parseInt(localStorage.getItem("editor-font-size") || "14")
+        : 14,
+    lineNumbers:
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("editor-line-numbers") !== "false"
+        : true,
+    wordWrap:
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("editor-word-wrap") === "true"
+        : false,
+    tabSize:
+      typeof localStorage !== "undefined"
+        ? parseInt(localStorage.getItem("editor-tab-size") || "2")
+        : 2,
+    autoIndent:
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("editor-auto-indent") !== "false"
+        : true,
   });
-
 
   // Quick presets for fast job launching
   // Preset types and data
@@ -506,50 +317,87 @@ echo "Starting job..."
   }
 
   const iconOptions = [
-    { name: 'Zap', icon: Zap },
-    { name: 'Clock', icon: Clock },
-    { name: 'CPU', icon: Cpu },
-    { name: 'Monitor', icon: Monitor },
-    { name: 'Server', icon: Server },
-    { name: 'Database', icon: Database },
-    { name: 'Cloud', icon: Cloud },
-    { name: 'Rocket', icon: Rocket },
-    { name: 'Beaker', icon: Beaker },
-    { name: 'Brain', icon: Brain },
-    { name: 'Shield', icon: Shield },
-    { name: 'Code', icon: Code },
-    { name: 'Terminal', icon: Terminal }
+    { name: "Zap", icon: Zap },
+    { name: "Clock", icon: Clock },
+    { name: "CPU", icon: Cpu },
+    { name: "Monitor", icon: Monitor },
+    { name: "Server", icon: Server },
+    { name: "Database", icon: Database },
+    { name: "Cloud", icon: Cloud },
+    { name: "Rocket", icon: Rocket },
+    { name: "Beaker", icon: Beaker },
+    { name: "Brain", icon: Brain },
+    { name: "Shield", icon: Shield },
+    { name: "Code", icon: Code },
+    { name: "Terminal", icon: Terminal },
   ];
 
   const colorOptions = [
-    { name: 'Yellow', class: 'bg-yellow-500' },
-    { name: 'Blue', class: 'bg-blue-500' },
-    { name: 'Green', class: 'bg-green-500' },
-    { name: 'Purple', class: 'bg-purple-500' },
-    { name: 'Red', class: 'bg-red-500' },
-    { name: 'Pink', class: 'bg-pink-500' },
-    { name: 'Indigo', class: 'bg-indigo-500' },
-    { name: 'Teal', class: 'bg-teal-500' },
-    { name: 'Orange', class: 'bg-orange-500' },
-    { name: 'Gray', class: 'bg-gray-500' }
+    { name: "Yellow", class: "bg-yellow-500" },
+    { name: "Blue", class: "bg-blue-500" },
+    { name: "Green", class: "bg-green-500" },
+    { name: "Purple", class: "bg-purple-500" },
+    { name: "Red", class: "bg-red-500" },
+    { name: "Pink", class: "bg-pink-500" },
+    { name: "Indigo", class: "bg-indigo-500" },
+    { name: "Teal", class: "bg-teal-500" },
+    { name: "Orange", class: "bg-orange-500" },
+    { name: "Gray", class: "bg-gray-500" },
   ];
 
   let defaultPresets: Preset[] = $state([
-    { id: 'quick', name: 'Quick Test', icon: Zap, time: 10, memory: 2, cpus: 1, color: 'bg-yellow-500', isDefault: true },
-    { id: 'standard', name: 'Standard', icon: Cpu, time: 60, memory: 4, cpus: 2, color: 'bg-blue-500', isDefault: true },
-    { id: 'long', name: 'Long Run', icon: Clock, time: 1440, memory: 8, cpus: 4, color: 'bg-green-500', isDefault: true },
-    { id: 'gpu', name: 'GPU', icon: Monitor, time: 240, memory: 16, cpus: 4, gpus: 1, color: 'bg-purple-500', isDefault: true }
+    {
+      id: "quick",
+      name: "Quick Test",
+      icon: Zap,
+      time: 10,
+      memory: 2,
+      cpus: 1,
+      color: "bg-yellow-500",
+      isDefault: true,
+    },
+    {
+      id: "standard",
+      name: "Standard",
+      icon: Cpu,
+      time: 60,
+      memory: 4,
+      cpus: 2,
+      color: "bg-blue-500",
+      isDefault: true,
+    },
+    {
+      id: "long",
+      name: "Long Run",
+      icon: Clock,
+      time: 1440,
+      memory: 8,
+      cpus: 4,
+      color: "bg-green-500",
+      isDefault: true,
+    },
+    {
+      id: "gpu",
+      name: "GPU",
+      icon: Monitor,
+      time: 240,
+      memory: 16,
+      cpus: 4,
+      gpus: 1,
+      color: "bg-purple-500",
+      isDefault: true,
+    },
   ]);
 
   // Helper function to validate and ensure icon is a valid component
   function ensureValidIcon(iconValue: any): any {
     // Check if it's a valid Svelte component (function)
-    if (typeof iconValue === 'function') {
+    if (typeof iconValue === "function") {
       return iconValue;
     }
     // Check if it's a string matching an icon name
-    if (typeof iconValue === 'string') {
-      const found = iconOptions.find(io => io.name === iconValue);
+    if (typeof iconValue === "string") {
+      const found = iconOptions.find((io) => io.name === iconValue);
       if (found) return found.icon;
     }
     // Default fallback
@@ -560,35 +408,35 @@ echo "Starting job..."
   function loadCustomPresets(): Preset[] {
     try {
       // Load customized default presets
-      const savedDefaults = localStorage.getItem('ssync_default_presets');
+      const savedDefaults = localStorage.getItem("ssync_default_presets");
       if (savedDefaults) {
         const parsedDefaults = JSON.parse(savedDefaults);
-        defaultPresets = parsedDefaults.map(p => ({
+        defaultPresets = parsedDefaults.map((p: any) => ({
           ...p,
           icon: ensureValidIcon(p.iconName || p.icon),
-          isDefault: true
+          isDefault: true,
         }));
       }
 
       // Load custom presets
-      const stored = localStorage.getItem('ssync_custom_presets');
+      const stored = localStorage.getItem("ssync_custom_presets");
       if (stored) {
         const presets = JSON.parse(stored);
         // Restore icon references with validation
-        return presets.map(p => ({
+        return presets.map((p: any) => ({
           ...p,
           icon: ensureValidIcon(p.iconName || p.icon),
-          isCustom: true
+          isCustom: true,
         }));
       }
     } catch (e) {
-      console.error('Failed to load presets:', e);
+      console.error("Failed to load presets:", e);
       // Clear corrupted data
       try {
-        localStorage.removeItem('ssync_custom_presets');
-        localStorage.removeItem('ssync_default_presets');
+        localStorage.removeItem("ssync_custom_presets");
+        localStorage.removeItem("ssync_default_presets");
       } catch (clearError) {
-        console.error('Failed to clear corrupted preset data:', clearError);
+        console.error("Failed to clear corrupted preset data:", clearError);
       }
     }
     return [];
@@ -597,66 +445,62 @@ echo "Starting job..."
   // Save custom presets to localStorage
   function saveCustomPresets() {
     try {
-      const toSave = customPresets.map(p => ({
+      const toSave = customPresets.map((p) => ({
         ...p,
-        iconName: iconOptions.find(io => io.icon === p.icon)?.name || 'Zap',
-        icon: undefined // Don't save the component reference
+        iconName: iconOptions.find((io) => io.icon === p.icon)?.name || "Zap",
+        icon: undefined, // Don't save the component reference
       }));
-      localStorage.setItem('ssync_custom_presets', JSON.stringify(toSave));
+      localStorage.setItem("ssync_custom_presets", JSON.stringify(toSave));
     } catch (e) {
-      console.error('Failed to save custom presets:', e);
+      console.error("Failed to save custom presets:", e);
     }
   }
 
   // Save default presets to localStorage
   function saveDefaultPresets() {
     try {
-      const toSave = defaultPresets.map(p => ({
+      const toSave = defaultPresets.map((p) => ({
         ...p,
-        iconName: iconOptions.find(io => io.icon === p.icon)?.name || 'Zap',
-        icon: undefined // Don't save the component reference
+        iconName: iconOptions.find((io) => io.icon === p.icon)?.name || "Zap",
+        icon: undefined, // Don't save the component reference
       }));
-      localStorage.setItem('ssync_default_presets', JSON.stringify(toSave));
+      localStorage.setItem("ssync_default_presets", JSON.stringify(toSave));
     } catch (e) {
-      console.error('Failed to save default presets:', e);
+      console.error("Failed to save default presets:", e);
     }
   }
 
   let customPresets: Preset[] = $state(loadCustomPresets());
 
-
-
-
-
   function handleScriptChange(event: CustomEvent) {
     handleScriptEdit(event.detail.content);
-    dispatch('scriptChanged', { content: event.detail.content });
+    dispatch("scriptChanged", { content: event.detail.content });
   }
 
   function applyPreset(preset: Preset) {
     parameters.timeLimit = preset.time;
     parameters.memory = preset.memory;
     parameters.cpus = preset.cpus;
-    parameters.gpusPerNode = preset.gpus || 0;
-    parameters.nodes = preset.nodes || 1;
-    if (preset.partition) parameters.partition = preset.partition;
-    if (preset.account) parameters.account = preset.account;
+    parameters.gpusPerNode = preset.gpus;
+    parameters.nodes = preset.nodes;
+    parameters.partition = preset.partition;
+    parameters.account = preset.account;
     handleConfigChange();
     showPresets = false;
   }
 
   function createPresetFromCurrent() {
     newPreset = {
-      name: '',
-      time: parameters.timeLimit || 60,
-      memory: parameters.memory || 4,
-      cpus: parameters.cpus || 1,
+      name: "",
+      time: parameters.timeLimit ?? 60,
+      memory: parameters.memory ?? 4,
+      cpus: parameters.cpus ?? 1,
       gpus: parameters.gpusPerNode,
       nodes: parameters.nodes,
       partition: parameters.partition,
       account: parameters.account,
       icon: Zap,
-      color: 'bg-blue-500'
+      color: "bg-blue-500",
     };
     editingPreset = null;
   }
@@ -667,23 +511,25 @@ echo "Starting job..."
     const preset: Preset = {
       id: editingPreset?.id || `custom-${Date.now()}`,
       name: newPreset.name,
-      time: newPreset.time || parameters.timeLimit || 60,
-      memory: newPreset.memory || parameters.memory || 4,
-      cpus: newPreset.cpus || parameters.cpus || 1,
+      time: newPreset.time ?? parameters.timeLimit ?? 60,
+      memory: newPreset.memory ?? parameters.memory ?? 4,
+      cpus: newPreset.cpus ?? parameters.cpus ?? 1,
       gpus: newPreset.gpus,
       nodes: newPreset.nodes,
       partition: newPreset.partition,
       account: newPreset.account,
       icon: newPreset.icon || Zap,
-      color: newPreset.color || 'bg-blue-500',
+      color: newPreset.color || "bg-blue-500",
       isCustom: editingPreset?.isCustom !== false,
-      isDefault: editingPreset?.isDefault
+      isDefault: editingPreset?.isDefault,
     };
 
     if (editingPreset) {
       // Check if editing a default preset
       if (editingPreset.isDefault) {
-        const index = defaultPresets.findIndex(p => p.id === editingPreset.id);
+        const index = defaultPresets.findIndex(
+          (p) => p.id === editingPreset.id,
+        );
         if (index >= 0) {
           defaultPresets[index] = preset;
           defaultPresets = [...defaultPresets];
@@ -691,7 +537,7 @@ echo "Starting job..."
         }
       } else {
         // Update existing custom preset
-        const index = customPresets.findIndex(p => p.id === editingPreset.id);
+        const index = customPresets.findIndex((p) => p.id === editingPreset.id);
         if (index >= 0) {
           customPresets[index] = preset;
           customPresets = [...customPresets];
@@ -724,34 +570,34 @@ echo "Starting job..."
       partition: preset.partition,
       account: preset.account,
       icon: ensureValidIcon(preset.icon),
-      color: preset.color
+      color: preset.color,
     };
   }
 
   function deletePreset(preset: Preset) {
     if (preset.isDefault) {
       // Remove from default presets
-      defaultPresets = defaultPresets.filter(p => p.id !== preset.id);
+      defaultPresets = defaultPresets.filter((p) => p.id !== preset.id);
       saveDefaultPresets();
     } else {
       // Remove from custom presets
-      customPresets = customPresets.filter(p => p.id !== preset.id);
+      customPresets = customPresets.filter((p) => p.id !== preset.id);
       saveCustomPresets();
     }
   }
 
   function resetPresetForm() {
     newPreset = {
-      name: '',
+      name: "",
       icon: Zap,
-      color: 'bg-blue-500'
+      color: "bg-blue-500",
     };
   }
 
   function handleConfigChange() {
     // Trigger script update when form changes
     updateScriptWithParameters();
-    dispatch('configChanged', { detail: parameters });
+    dispatch("configChanged", { detail: parameters });
   }
 
   async function handleLaunch() {
@@ -759,8 +605,8 @@ echo "Starting job..."
 
     // Show launching toast immediately
     showLaunchToast = true;
-    launchToastStatus = 'launching';
-    launchToastMessage = 'Syncing files and submitting job...';
+    launchToastStatus = "launching";
+    launchToastMessage = "Syncing files and submitting job...";
     launching = true;
 
     // Keep the original script for the actual launch
@@ -771,19 +617,38 @@ echo "Starting job..."
   }
 
   async function launchJobInBackground(originalScript: string) {
-    let launchError = '';
+    let launchError = "";
 
     try {
       // Save script to localStorage for history
       saveScriptToLocalHistory();
 
+      // Define proper interface for launch data
+      interface LaunchData {
+        script_content: string;
+        source_dir: string;
+        host: string;
+        job_name: string;
+        partition?: string;
+        account?: string;
+        constraint?: string;
+        cpus?: number;
+        mem?: number;
+        time?: number;
+        nodes?: number;
+        ntasks_per_node?: number;
+        gpus_per_node?: number;
+        gres?: string;
+        output?: string;
+        error?: string;
+      }
+
       // Prepare the launch request with correct field names for API
-      // Only include fields that have actual values
-      const launchData = {
-        script_content: originalScript,  // Use the original script without the loading message
+      const launchData: LaunchData = {
+        script_content: originalScript,
         source_dir: parameters.sourceDir,
         host: selectedHost,
-        job_name: parameters.jobName || 'Unnamed Job'
+        job_name: parameters.jobName || "Unnamed Job",
       };
 
       // Only add optional parameters if they have values
@@ -791,18 +656,20 @@ echo "Starting job..."
       if (parameters.account) launchData.account = parameters.account;
       if (parameters.constraint) launchData.constraint = parameters.constraint;
       if (parameters.cpus) launchData.cpus = parameters.cpus;
-      if (parameters.memory) launchData.mem = parameters.memory;  // API expects 'mem'
-      if (parameters.timeLimit) launchData.time = parameters.timeLimit;  // API expects 'time'
+      if (parameters.memory) launchData.mem = parameters.memory; // API expects 'mem'
+      if (parameters.timeLimit) launchData.time = parameters.timeLimit; // API expects 'time'
       if (parameters.nodes) launchData.nodes = parameters.nodes;
-      if (parameters.ntasksPerNode) launchData.ntasks_per_node = parameters.ntasksPerNode;
-      if (parameters.gpusPerNode) launchData.gpus_per_node = parameters.gpusPerNode;
+      if (parameters.ntasksPerNode)
+        launchData.ntasks_per_node = parameters.ntasksPerNode;
+      if (parameters.gpusPerNode)
+        launchData.gpus_per_node = parameters.gpusPerNode;
       if (parameters.gres) launchData.gres = parameters.gres;
-      if (parameters.outputFile) launchData.output = parameters.outputFile;  // API expects 'output'
-      if (parameters.errorFile) launchData.error = parameters.errorFile;  // API expects 'error'
+      if (parameters.outputFile) launchData.output = parameters.outputFile;
+      if (parameters.errorFile) launchData.error = parameters.errorFile;
 
       // Call the launch API with extended timeout (5 minutes for launch operations)
-      const response = await api.post('/api/jobs/launch', launchData, {
-        timeout: 300000  // 5 minutes timeout for job launch
+      const response = await api.post("/api/jobs/launch", launchData, {
+        timeout: 300000, // 5 minutes timeout for job launch
       });
 
       if (response.data && response.data.job_id) {
@@ -810,33 +677,34 @@ echo "Starting job..."
         const jobId = response.data.job_id;
         const host = response.data.hostname || selectedHost;
 
-        launchToastStatus = 'success';
+        launchToastStatus = "success";
         launchToastMessage = `Job ${jobId} launched successfully`;
         pendingJobNavigation = { jobId, host };
 
         // Auto-dismiss success toast after 5 seconds
         setTimeout(() => {
-          if (showLaunchToast && launchToastStatus === 'success') {
+          if (showLaunchToast && launchToastStatus === "success") {
             showLaunchToast = false;
           }
         }, 5000);
       } else {
-        throw new Error('Invalid response from server');
+        throw new Error("Invalid response from server");
       }
-
-    } catch (error) {
-      console.error('Launch failed:', error);
+    } catch (error: any) {
+      console.error("Launch failed:", error);
 
       // Better error extraction
       if (error.response?.data) {
         // Handle validation errors from 422 response
         const errorData = error.response.data;
-        if (typeof errorData.detail === 'string') {
+        if (typeof errorData.detail === "string") {
           launchError = errorData.detail;
         } else if (Array.isArray(errorData.detail)) {
           // Pydantic validation errors come as array
-          launchError = errorData.detail.map(e => `${e.loc?.join('.')}: ${e.msg}`).join(', ');
-        } else if (typeof errorData.detail === 'object') {
+          launchError = errorData.detail
+            .map((e: any) => `${e.loc?.join(".")}: ${e.msg}`)
+            .join(", ");
+        } else if (typeof errorData.detail === "object") {
           launchError = JSON.stringify(errorData.detail);
         } else if (errorData.message) {
           launchError = errorData.message;
@@ -846,11 +714,11 @@ echo "Starting job..."
       } else if (error.message) {
         launchError = error.message;
       } else {
-        launchError = 'Failed to launch job. Please try again.';
+        launchError = "Failed to launch job. Please try again.";
       }
 
       // Update toast with error
-      launchToastStatus = 'error';
+      launchToastStatus = "error";
       launchToastMessage = launchError;
     } finally {
       launching = false;
@@ -873,14 +741,14 @@ echo "Starting job..."
 
   function saveScriptToLocalHistory() {
     try {
-      const history = JSON.parse(localStorage.getItem('scriptHistory') || '[]');
+      const history = JSON.parse(localStorage.getItem("scriptHistory") || "[]");
       const entry = {
         script_content: script,
-        job_name: parameters.jobName || 'Unnamed Job',
-        hostname: selectedHost || 'unknown',
+        job_name: parameters.jobName || "Unnamed Job",
+        hostname: selectedHost || "unknown",
         submit_time: new Date().toISOString(),
-        state: 'PENDING',
-        job_id: `local_${Date.now()}`
+        state: "PENDING",
+        job_id: `local_${Date.now()}`,
       };
 
       // Add to beginning of history
@@ -891,33 +759,32 @@ echo "Starting job..."
         history.length = 50;
       }
 
-      localStorage.setItem('scriptHistory', JSON.stringify(history));
+      localStorage.setItem("scriptHistory", JSON.stringify(history));
     } catch (e) {
-      console.error('Failed to save script to history:', e);
+      console.error("Failed to save script to history:", e);
     }
   }
 
   // Script Template Functions
   function loadScriptTemplates(): ScriptTemplate[] {
     try {
-      const stored = localStorage.getItem('scriptTemplates');
+      const stored = localStorage.getItem("scriptTemplates");
       if (stored) {
         return JSON.parse(stored);
       }
     } catch (e) {
-      console.error('Failed to load script templates:', e);
+      console.error("Failed to load script templates:", e);
     }
     return [];
   }
 
   function saveScriptTemplates() {
     try {
-      localStorage.setItem('scriptTemplates', JSON.stringify(scriptTemplates));
+      localStorage.setItem("scriptTemplates", JSON.stringify(scriptTemplates));
     } catch (e) {
-      console.error('Failed to save script templates:', e);
+      console.error("Failed to save script templates:", e);
     }
   }
-
 
   function loadTemplate(template: ScriptTemplate) {
     // Update script - just set the value, don't call handleScriptEdit
@@ -930,7 +797,11 @@ echo "Starting job..."
     // Update parameters
     if (template.parameters) {
       // Load job parameters
-      const { selectedHost: savedHost, sourceDir: savedDir, ...jobParams } = template.parameters;
+      const {
+        selectedHost: savedHost,
+        sourceDir: savedDir,
+        ...jobParams
+      } = template.parameters;
       Object.assign(parameters, jobParams);
 
       // Load host and directory if saved
@@ -947,27 +818,27 @@ echo "Starting job..."
   }
 
   function deleteTemplate(templateId: string) {
-    if (confirm('Are you sure you want to delete this template?')) {
-      scriptTemplates = scriptTemplates.filter(t => t.id !== templateId);
+    if (confirm("Are you sure you want to delete this template?")) {
+      scriptTemplates = scriptTemplates.filter((t) => t.id !== templateId);
       saveScriptTemplates();
     }
   }
 
   function handleHistoryClick() {
     showHistory = !showHistory;
-    dispatch('openHistory');
+    dispatch("openHistory");
   }
 
   function handleDirectorySelect(event: CustomEvent) {
     parameters.sourceDir = event.detail;
     handleConfigChange();
     // Dispatch pathSelected event for parent to handle with store action
-    dispatch('pathSelected', event.detail);
+    dispatch("pathSelected", event.detail);
     showFileBrowser = false;
     // Close mobile config sidebar if open
     if (isMobile && showMobileConfig) {
       showMobileConfig = false;
-      mobileConfigView = 'main';
+      mobileConfigView = "main";
     }
   }
 
@@ -975,23 +846,26 @@ echo "Starting job..."
     excludePatterns = event.detail.excludePatterns;
     includePatterns = event.detail.includePatterns;
     noGitignore = event.detail.noGitignore;
-    dispatch('syncSettingsChanged', event.detail);
+    dispatch("syncSettingsChanged", event.detail);
   }
 
   // Editor options handlers
   function updateEditorOption(key: keyof typeof editorOptions, value: any) {
     editorOptions = { ...editorOptions, [key]: value };
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(`editor-${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`, value.toString());
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(
+        `editor-${key.replace(/([A-Z])/g, "-$1").toLowerCase()}`,
+        value.toString(),
+      );
     }
   }
 
   // Theme options
   const themeOptions = [
-    { id: 'light', name: 'Light', description: 'Classic light theme' },
-    { id: 'dark', name: 'Dark', description: 'Dark theme for low-light' },
-    { id: 'material', name: 'Material', description: 'Material design theme' },
-    { id: 'dracula', name: 'Dracula', description: 'Popular dark theme' }
+    { id: "light", name: "Light", description: "Classic light theme" },
+    { id: "dark", name: "Dark", description: "Dark theme for low-light" },
+    { id: "material", name: "Material", description: "Material design theme" },
+    { id: "dracula", name: "Dracula", description: "Popular dark theme" },
   ];
 
   // Font size options
@@ -1020,11 +894,13 @@ echo "Starting job..."
 
         const watcherPromises = sampleJobIds.map(async (jobId: string) => {
           try {
-            const watchersResponse = await api.get(`/api/jobs/${jobId}/watchers?host=${selectedHost}`);
+            const watchersResponse = await api.get(
+              `/api/jobs/${jobId}/watchers?host=${selectedHost}`,
+            );
             if (watchersResponse.data && watchersResponse.data.watchers) {
               return watchersResponse.data.watchers.map((w: any) => ({
                 ...w,
-                job_id: jobId
+                job_id: jobId,
               }));
             }
           } catch (err) {
@@ -1037,19 +913,22 @@ echo "Starting job..."
         const allWatchers = watcherResults.flat();
 
         // Remove duplicates based on watcher configuration
-        const uniqueWatchers = allWatchers.reduce((acc: any[], watcher: any) => {
-          const key = JSON.stringify(watcher.actions || {});
-          if (!acc.some(w => JSON.stringify(w.actions || {}) === key)) {
-            acc.push(watcher);
-          }
-          return acc;
-        }, []);
+        const uniqueWatchers = allWatchers.reduce(
+          (acc: any[], watcher: any) => {
+            const key = JSON.stringify(watcher.actions || {});
+            if (!acc.some((w) => JSON.stringify(w.actions || {}) === key)) {
+              acc.push(watcher);
+            }
+            return acc;
+          },
+          [],
+        );
 
         allRecentWatchers = uniqueWatchers.slice(0, 10); // Keep max 10 watchers
-        console.log('Loaded recent watchers:', allRecentWatchers);
+        console.log("Loaded recent watchers:", allRecentWatchers);
       }
     } catch (error) {
-      console.log('Could not fetch recent watchers:', error);
+      console.log("Could not fetch recent watchers:", error);
       // Not critical - we can continue without recent watchers
     }
   }
@@ -1059,7 +938,7 @@ echo "Starting job..."
     // Load hosts if not provided or empty
     if (!hosts || hosts.length === 0) {
       try {
-        const response = await api.get('/api/hosts');
+        const response = await api.get("/api/hosts");
         hosts = response.data;
 
         // Auto-select first host if none selected
@@ -1071,14 +950,14 @@ echo "Starting job..."
           await fetchRecentWatchers();
         }
       } catch (error) {
-        console.error('Failed to load hosts:', error);
+        console.error("Failed to load hosts:", error);
       }
     }
 
     // Check for resubmit data and populate fields
     const resubmitData = resubmitStore.consumeResubmitData();
     if (resubmitData) {
-      console.log('Loading resubmit data:', resubmitData);
+      console.log("Loading resubmit data:", resubmitData);
 
       // Set resubmit flags and data
       isResubmit = true;
@@ -1087,13 +966,13 @@ echo "Starting job..."
       // Set captured variables if available
       if (resubmitData.watcherVariables) {
         watcherVariables = resubmitData.watcherVariables;
-        console.log('Loaded captured variables:', watcherVariables);
+        console.log("Loaded captured variables:", watcherVariables);
       }
 
       // Set watcher configurations if available
       if (resubmitData.watchers) {
         watchers = resubmitData.watchers;
-        console.log('Loaded watcher configurations:', watchers);
+        console.log("Loaded watcher configurations:", watchers);
       }
 
       // Set script content
@@ -1107,11 +986,11 @@ echo "Starting job..."
         parameters.sourceDir = resubmitData.localSourceDir;
       } else {
         // Clear source dir so user has to select a new one
-        parameters.sourceDir = '';
+        parameters.sourceDir = "";
       }
 
       // Set job name if available
-      if (resubmitData.jobName && resubmitData.jobName !== 'N/A') {
+      if (resubmitData.jobName && resubmitData.jobName !== "N/A") {
         parameters.jobName = resubmitData.jobName;
       }
 
@@ -1134,10 +1013,10 @@ echo "Starting job..."
 
     // Check if mobile
     checkMobile();
-    window.addEventListener('resize', checkMobile);
+    window.addEventListener("resize", checkMobile);
 
     return () => {
-      window.removeEventListener('resize', checkMobile);
+      window.removeEventListener("resize", checkMobile);
     };
   });
 
@@ -1147,10 +1026,12 @@ echo "Starting job..."
   // Legacy vim mode for backwards compatibility
   let vimMode = $derived(editorOptions.vimMode);
   // Combine all presets without distinction, ensuring all icons are valid
-  let allPresets = $derived([...defaultPresets, ...customPresets].map(p => ({
-    ...p,
-    icon: ensureValidIcon(p.icon)
-  })));
+  let allPresets = $derived(
+    [...defaultPresets, ...customPresets].map((p) => ({
+      ...p,
+      icon: ensureValidIcon(p.icon),
+    })),
+  );
   // Compute validation details reactively based on parameters
   let validationDetails = $derived(validateParameters(parameters));
   let canLaunch = $derived(validationDetails.isValid && selectedHost);
@@ -1161,11 +1042,13 @@ echo "Starting job..."
     }
   });
   // Get specific message about what's preventing launch
-  let launchDisabledReason = $derived(!selectedHost
-    ? 'Select a host to continue'
-    : !validationDetails.isValid
-    ? (validationDetails.missingText || 'Complete required fields')
-    : '');
+  let launchDisabledReason = $derived(
+    !selectedHost
+      ? "Select a host to continue"
+      : !validationDetails.isValid
+        ? validationDetails.missingText || "Complete required fields"
+        : "",
+  );
 </script>
 
 <!-- Launch Status Toast -->
@@ -1174,7 +1057,9 @@ echo "Starting job..."
     status={launchToastStatus}
     message={launchToastMessage}
     onDismiss={handleDismissToast}
-    onNavigate={launchToastStatus === 'success' ? handleNavigateToJob : undefined}
+    onNavigate={launchToastStatus === "success"
+      ? handleNavigateToJob
+      : undefined}
   />
 {/if}
 
@@ -1182,8 +1067,17 @@ echo "Starting job..."
   <!-- Mobile Header -->
   {#if isMobile}
     <header class="mobile-header">
-      <button class="mobile-back-btn" onclick={() => window.history.back()} aria-label="Go back">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button
+        class="mobile-back-btn"
+        onclick={() => window.history.back()}
+        aria-label="Go back"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
@@ -1200,10 +1094,14 @@ echo "Starting job..."
           class="mobile-icon-btn validation-dot-mobile"
           class:valid={validationDetails.isValid}
           class:invalid={!validationDetails.isValid}
-          onclick={() => showValidationInfo = !showValidationInfo}
-          title={validationDetails.isValid ? 'Valid' : 'Invalid'}
+          onclick={() => (showValidationInfo = !showValidationInfo)}
+          title={validationDetails.isValid ? "Valid" : "Invalid"}
         >
-          <div class="status-dot-small" class:valid={validationDetails.isValid} class:invalid={!validationDetails.isValid}></div>
+          <div
+            class="status-dot-small"
+            class:valid={validationDetails.isValid}
+            class:invalid={!validationDetails.isValid}
+          ></div>
         </button>
 
         <div class="mobile-divider-vertical"></div>
@@ -1233,7 +1131,7 @@ echo "Starting job..."
         </button>
         <button
           class="mobile-icon-btn"
-          onclick={() => showMobileConfig = !showMobileConfig}
+          onclick={() => (showMobileConfig = !showMobileConfig)}
           title="Options"
         >
           <Sliders class="w-3.5 h-3.5" />
@@ -1264,7 +1162,10 @@ echo "Starting job..."
         {:else}
           <div class="validation-info-content invalid">
             <AlertCircle class="w-4 h-4" />
-            <span>{validationDetails.missingText || 'Script needs configuration'}</span>
+            <span
+              >{validationDetails.missingText ||
+                "Script needs configuration"}</span
+            >
           </div>
         {/if}
       </div>
@@ -1276,8 +1177,13 @@ echo "Starting job..."
         class="mobile-more-menu-backdrop"
         role="button"
         tabindex="0"
-        onclick={() => showMobileMoreMenu = false}
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showMobileMoreMenu = false; }}}
+        onclick={() => (showMobileMoreMenu = false)}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            showMobileMoreMenu = false;
+          }
+        }}
         aria-label="Close more menu"
       ></div>
       <div class="mobile-more-menu" transition:slide={{ duration: 200 }}>
@@ -1312,7 +1218,7 @@ echo "Starting job..."
             showSaveTemplateDialog = true;
             showMobileMoreMenu = false;
           }}
-          disabled={!script || script.trim() === ''}
+          disabled={!script || script.trim() === ""}
         >
           <Save class="w-4 h-4" />
           <span>Save Template</span>
@@ -1326,12 +1232,22 @@ echo "Starting job..."
         class="mobile-options-backdrop"
         role="button"
         tabindex="0"
-        onclick={() => showEditorOptions = false}
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showEditorOptions = false; }}}
+        onclick={() => (showEditorOptions = false)}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            showEditorOptions = false;
+          }
+        }}
         aria-label="Close editor options"
       ></div>
-      {@const SvelteComponent = editorOptions.vimMode ? ToggleRight : ToggleLeft}
-      <div class="mobile-editor-options-menu" transition:slide={{ duration: 200 }}>
+      {@const SvelteComponent = editorOptions.vimMode
+        ? ToggleRight
+        : ToggleLeft}
+      <div
+        class="mobile-editor-options-menu"
+        transition:slide={{ duration: 200 }}
+      >
         <!-- Copy same options as desktop -->
         <!-- Vim Mode Toggle -->
         <div class="option-item">
@@ -1341,7 +1257,8 @@ echo "Starting job..."
           </div>
           <button
             class="option-toggle {editorOptions.vimMode ? 'active' : ''}"
-            onclick={() => updateEditorOption('vimMode', !editorOptions.vimMode)}
+            onclick={() =>
+              updateEditorOption("vimMode", !editorOptions.vimMode)}
           >
             <SvelteComponent class="w-5 h-5" />
           </button>
@@ -1356,7 +1273,11 @@ echo "Starting job..."
           <select
             class="option-select"
             bind:value={editorOptions.theme}
-            onchange={(e) => updateEditorOption('theme', e.target.value)}
+            onchange={(e) =>
+              updateEditorOption(
+                "theme",
+                (e.target as HTMLSelectElement).value,
+              )}
           >
             {#each themeOptions as theme}
               <option value={theme.id}>{theme.name}</option>
@@ -1373,7 +1294,11 @@ echo "Starting job..."
           <select
             class="option-select"
             bind:value={editorOptions.fontSize}
-            onchange={(e) => updateEditorOption('fontSize', parseInt(e.target.value))}
+            onchange={(e) =>
+              updateEditorOption(
+                "fontSize",
+                parseInt((e.target as HTMLSelectElement).value),
+              )}
           >
             {#each fontSizeOptions as size}
               <option value={size}>{size}px</option>
@@ -1390,7 +1315,7 @@ echo "Starting job..."
       placement="bottom"
       align="end"
       width="240px"
-      on:close={() => showPresets = false}
+      on:close={() => (showPresets = false)}
     >
       <div class="preset-dropdown-header">
         <span class="preset-dropdown-title">Presets</span>
@@ -1415,17 +1340,20 @@ echo "Starting job..."
             <div class="mobile-preset-name">{preset.name}</div>
             <div class="mobile-preset-details">
               {preset.time}m • {preset.memory}GB
-              {#if preset.gpus} • {preset.gpus}GPU{/if}
+              {#if preset.gpus}
+                • {preset.gpus}GPU{/if}
             </div>
           </div>
         </DropdownItem>
       {/each}
       <DropdownDivider />
-      <DropdownItem on:click={() => {
-        createPresetFromCurrent();
-        showPresetManager = true;
-        showPresets = false;
-      }}>
+      <DropdownItem
+        on:click={() => {
+          createPresetFromCurrent();
+          showPresetManager = true;
+          showPresets = false;
+        }}
+      >
         <Plus class="w-3.5 h-3.5" />
         <span>Create from current</span>
       </DropdownItem>
@@ -1439,22 +1367,37 @@ echo "Starting job..."
       class="preset-manager-overlay"
       role="button"
       tabindex="0"
-      onclick={() => { showPresetSidebar = false; showPresetManager = false; }}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showPresetSidebar = false; showPresetManager = false; }}}
+      onclick={() => {
+        showPresetSidebar = false;
+        showPresetManager = false;
+      }}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          showPresetSidebar = false;
+          showPresetManager = false;
+        }
+      }}
       aria-label="Close preset manager"
       transition:fade={{ duration: 200 }}
-      onintrostart={bubble('introstart')}
-      onoutrostart={bubble('outrostart')}
-      onintroend={bubble('introend')}
-      onoutroend={bubble('outroend')}
+      onintrostart={bubble("introstart")}
+      onoutrostart={bubble("outrostart")}
+      onintroend={bubble("introend")}
+      onoutroend={bubble("outroend")}
     >
       <div
         class="preset-manager-sidebar"
         transition:fly={{ x: 400, duration: 300, opacity: 1 }}
       >
         <div class="preset-manager-header">
-          <h3>{showPresetManager ? 'Manage Presets' : 'Presets'}</h3>
-          <button class="preset-manager-close" onclick={() => { showPresetSidebar = false; showPresetManager = false; }}>
+          <h3>{showPresetManager ? "Manage Presets" : "Presets"}</h3>
+          <button
+            class="preset-manager-close"
+            onclick={() => {
+              showPresetSidebar = false;
+              showPresetManager = false;
+            }}
+          >
             <X class="w-4 h-4" />
           </button>
         </div>
@@ -1467,7 +1410,7 @@ echo "Starting job..."
                 <h4>Quick Apply</h4>
                 <button
                   class="preset-manage-toggle-btn"
-                  onclick={() => showPresetManager = true}
+                  onclick={() => (showPresetManager = true)}
                   title="Manage Presets"
                 >
                   <Settings class="w-4 h-4" />
@@ -1490,8 +1433,12 @@ echo "Starting job..."
                     <div class="preset-quick-info">
                       <span class="preset-name">{preset.name}</span>
                       <span class="preset-specs">
-                        {preset.time}min • {preset.memory}GB • {preset.cpus}CPU{preset.cpus > 1 ? 's' : ''}
-                        {#if preset.gpus} • {preset.gpus}GPU{/if}
+                        {preset.time}min • {preset.memory}GB • {preset.cpus}CPU{preset.cpus >
+                        1
+                          ? "s"
+                          : ""}
+                        {#if preset.gpus}
+                          • {preset.gpus}GPU{/if}
                       </span>
                     </div>
                   </button>
@@ -1516,7 +1463,7 @@ echo "Starting job..."
               <div class="preset-section-header">
                 <button
                   class="preset-back-btn"
-                  onclick={() => showPresetManager = false}
+                  onclick={() => (showPresetManager = false)}
                   title="Back to presets"
                 >
                   <ChevronLeft class="w-4 h-4" />
@@ -1526,7 +1473,7 @@ echo "Starting job..."
 
               <!-- Create/Edit Form -->
               <div class="preset-form">
-                <h4>{editingPreset ? 'Edit Preset' : 'New Preset'}</h4>
+                <h4>{editingPreset ? "Edit Preset" : "New Preset"}</h4>
 
                 <div class="preset-form-field">
                   <span class="field-label">Name</span>
@@ -1545,10 +1492,13 @@ echo "Starting job..."
                       <button
                         type="button"
                         class="dropdown-trigger"
-                        onclick={() => showIconDropdown = !showIconDropdown}
+                        onclick={() => (showIconDropdown = !showIconDropdown)}
                       >
                         <SvelteComponent_1 class="w-4 h-4" />
-                        <span>{iconOptions.find(o => o.icon === newPreset.icon)?.name || 'Select Icon'}</span>
+                        <span
+                          >{iconOptions.find((o) => o.icon === newPreset.icon)
+                            ?.name || "Select Icon"}</span
+                        >
                         <ChevronDown class="w-4 h-4 ml-auto" />
                       </button>
                       {#if showIconDropdown}
@@ -1556,7 +1506,9 @@ echo "Starting job..."
                           {#each iconOptions as opt}
                             <button
                               type="button"
-                              class="dropdown-item {newPreset.icon === opt.icon ? 'selected' : ''}"
+                              class="dropdown-item {newPreset.icon === opt.icon
+                                ? 'selected'
+                                : ''}"
                               onclick={() => {
                                 newPreset.icon = opt.icon;
                                 showIconDropdown = false;
@@ -1577,10 +1529,14 @@ echo "Starting job..."
                       <button
                         type="button"
                         class="dropdown-trigger"
-                        onclick={() => showColorDropdown = !showColorDropdown}
+                        onclick={() => (showColorDropdown = !showColorDropdown)}
                       >
                         <span class="color-preview {newPreset.color}"></span>
-                        <span>{colorOptions.find(o => o.class === newPreset.color)?.name || 'Select Color'}</span>
+                        <span
+                          >{colorOptions.find(
+                            (o) => o.class === newPreset.color,
+                          )?.name || "Select Color"}</span
+                        >
                         <ChevronDown class="w-4 h-4 ml-auto" />
                       </button>
                       {#if showColorDropdown}
@@ -1588,7 +1544,10 @@ echo "Starting job..."
                           {#each colorOptions as color}
                             <button
                               type="button"
-                              class="dropdown-item {newPreset.color === color.class ? 'selected' : ''}"
+                              class="dropdown-item {newPreset.color ===
+                              color.class
+                                ? 'selected'
+                                : ''}"
                               onclick={() => {
                                 newPreset.color = color.class;
                                 showColorDropdown = false;
@@ -1652,7 +1611,7 @@ echo "Starting job..."
                     onclick={savePreset}
                     disabled={!newPreset.name}
                   >
-                    {editingPreset ? 'Update' : 'Create'} Preset
+                    {editingPreset ? "Update" : "Create"} Preset
                   </button>
                   {#if editingPreset}
                     <button
@@ -1681,7 +1640,8 @@ echo "Starting job..."
                         <div class="preset-item-name">{preset.name}</div>
                         <div class="preset-item-details">
                           {preset.time}m • {preset.memory}GB • {preset.cpus}CPU
-                          {#if preset.gpus} • {preset.gpus}GPU{/if}
+                          {#if preset.gpus}
+                            • {preset.gpus}GPU{/if}
                         </div>
                       </div>
                     </div>
@@ -1715,7 +1675,7 @@ echo "Starting job..."
   <TemplateSidebar
     bind:isOpen={showTemplates}
     {scriptTemplates}
-    on:close={() => showTemplates = false}
+    on:close={() => (showTemplates = false)}
     on:select={(e) => {
       selectedTemplate = e.detail;
       showTemplateDetail = true;
@@ -1730,7 +1690,7 @@ echo "Starting job..."
   <TemplateDetailPopup
     isOpen={showTemplateDetail}
     template={selectedTemplate}
-    on:close={() => showTemplateDetail = false}
+    on:close={() => (showTemplateDetail = false)}
     on:load={(e) => {
       loadTemplate(e.detail);
       showTemplateDetail = false;
@@ -1748,19 +1708,19 @@ echo "Starting job..."
     {script}
     {parameters}
     {selectedHost}
-    on:close={() => showSaveTemplateDialog = false}
+    on:close={() => (showSaveTemplateDialog = false)}
     on:save={(e) => {
       const template = {
         id: `template_${Date.now()}`,
         ...e.detail,
         tags: [],
         created_at: new Date().toISOString(),
-        use_count: 0
+        use_count: 0,
       };
 
       scriptTemplates = [template, ...scriptTemplates];
       saveScriptTemplates();
-      console.log('Template saved:', template.name);
+      console.log("Template saved:", template.name);
     }}
   />
 
@@ -1768,135 +1728,138 @@ echo "Starting job..."
     <!-- Desktop only content starts here -->
     <!-- Desktop Navigation Header -->
     <NavigationHeader>
-    {#snippet left()}
-            <div  class="host-selector-modern">
-        <div class="host-dropdown-container">
-          <button
-            bind:this={hostDropdownTrigger}
-            class="host-dropdown-trigger {showHostDropdown ? 'active' : ''}"
-            onclick={() => showHostDropdown = !showHostDropdown}
-          >
-            <div class="host-trigger-content">
-              <Server class="w-4 h-4" />
-              <span class="host-label">
-                {#if selectedHost}
-                  <span class="host-name">{selectedHost}</span>
-                {:else}
-                  <span class="placeholder">Select cluster</span>
-                {/if}
-              </span>
+      {#snippet left()}
+        <div class="host-selector-modern">
+          <div class="host-dropdown-container">
+            <button
+              bind:this={hostDropdownTrigger}
+              class="host-dropdown-trigger {showHostDropdown ? 'active' : ''}"
+              onclick={() => (showHostDropdown = !showHostDropdown)}
+            >
+              <div class="host-trigger-content">
+                <Server class="w-4 h-4" />
+                <span class="host-label">
+                  {#if selectedHost}
+                    <span class="host-name">{selectedHost}</span>
+                  {:else}
+                    <span class="placeholder">Select cluster</span>
+                  {/if}
+                </span>
+              </div>
+              <ChevronDown
+                class="w-4 h-4 chevron {showHostDropdown ? 'rotate-180' : ''}"
+              />
+            </button>
+
+            <Dropdown
+              bind:open={showHostDropdown}
+              triggerRef={hostDropdownTrigger}
+              placement="bottom"
+              align="start"
+              width="auto"
+              on:close={() => (showHostDropdown = false)}
+            >
+              {#each hosts as host}
+                <DropdownItem
+                  active={selectedHost === host.hostname}
+                  on:click={() => {
+                    selectedHost = host.hostname;
+                    handleConfigChange();
+                  }}
+                >
+                  <Server class="w-4 h-4" />
+                  <span>{host.hostname}</span>
+                  {#if selectedHost === host.hostname}
+                    <Check class="w-4 h-4 ml-auto" />
+                  {/if}
+                </DropdownItem>
+              {/each}
+              {#if hosts.length === 0}
+                <DropdownItem disabled>
+                  <AlertCircle class="w-4 h-4" />
+                  <span>No clusters available</span>
+                </DropdownItem>
+              {/if}
+            </Dropdown>
+          </div>
+
+          {#if selectedHost}
+            <div class="connection-indicator">
+              <div class="pulse-dot"></div>
             </div>
-            <ChevronDown class="w-4 h-4 chevron {showHostDropdown ? 'rotate-180' : ''}" />
+          {/if}
+        </div>
+      {/snippet}
+
+      {#snippet actions()}
+        <div class="flex items-center space-x-3">
+          <!-- Presets - Now opens sidebar on desktop too -->
+          <button
+            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+            onclick={() => (showPresetSidebar = !showPresetSidebar)}
+            title="Presets"
+          >
+            <Zap class="w-4 h-4" />
+            <span class="hidden sm:inline">Presets</span>
           </button>
 
-          <Dropdown
-            bind:open={showHostDropdown}
-            triggerRef={hostDropdownTrigger}
-            placement="bottom"
-            align="start"
-            width="auto"
-            on:close={() => showHostDropdown = false}
+          <!-- Script Templates -->
+          <button
+            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+            onclick={() => (showTemplates = !showTemplates)}
+            title="Script Templates"
           >
-            {#each hosts as host}
-              <DropdownItem
-                active={selectedHost === host.hostname}
-                on:click={() => {
-                  selectedHost = host.hostname;
-                  handleConfigChange();
-                }}
-              >
-                <Server class="w-4 h-4" />
-                <span>{host.hostname}</span>
-                {#if selectedHost === host.hostname}
-                  <Check class="w-4 h-4 ml-auto" />
-                {/if}
-              </DropdownItem>
-            {/each}
-            {#if hosts.length === 0}
-              <DropdownItem disabled>
-                <AlertCircle class="w-4 h-4" />
-                <span>No clusters available</span>
-              </DropdownItem>
+            <FileText class="w-4 h-4" />
+            <span class="hidden sm:inline">Templates</span>
+          </button>
+
+          <!-- Script History -->
+          <button
+            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+            onclick={handleHistoryClick}
+            title="Script History"
+          >
+            <History class="w-4 h-4" />
+            <span class="hidden sm:inline">History</span>
+          </button>
+
+          <!-- Save as Template -->
+          <button
+            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+            onclick={() => (showSaveTemplateDialog = true)}
+            title="Save current script as template"
+            disabled={!script || script.trim() === ""}
+          >
+            <Save class="w-4 h-4" />
+            <span class="hidden sm:inline">Save Template</span>
+          </button>
+
+          <!-- Launch Button -->
+          <Button
+            on:click={handleLaunch}
+            disabled={!canLaunch || launching}
+            class="launch-header-button"
+            size="default"
+            title={!canLaunch ? launchDisabledReason : ""}
+          >
+            {#if launching}
+              <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
+              Launching...
+            {:else}
+              <Play class="mr-2 h-4 w-4" />
+              Launch Job
             {/if}
-          </Dropdown>
+          </Button>
         </div>
-
-        {#if selectedHost}
-          <div class="connection-indicator">
-            <div class="pulse-dot"></div>
-          </div>
-        {/if}
-      </div>
-          {/snippet}
-
-    {#snippet actions()}
-            <div  class="flex items-center space-x-3">
-        <!-- Presets - Now opens sidebar on desktop too -->
-        <button
-          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-          onclick={() => showPresetSidebar = !showPresetSidebar}
-          title="Presets"
-        >
-          <Zap class="w-4 h-4" />
-          <span class="hidden sm:inline">Presets</span>
-        </button>
-
-
-        <!-- Script Templates -->
-        <button
-          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-          onclick={() => showTemplates = !showTemplates}
-          title="Script Templates"
-        >
-          <FileText class="w-4 h-4" />
-          <span class="hidden sm:inline">Templates</span>
-        </button>
-
-        <!-- Script History -->
-        <button
-          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-          onclick={handleHistoryClick}
-          title="Script History"
-        >
-          <History class="w-4 h-4" />
-          <span class="hidden sm:inline">History</span>
-        </button>
-
-        <!-- Save as Template -->
-        <button
-          class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-          onclick={() => showSaveTemplateDialog = true}
-          title="Save current script as template"
-          disabled={!script || script.trim() === ''}
-        >
-          <Save class="w-4 h-4" />
-          <span class="hidden sm:inline">Save Template</span>
-        </button>
-
-
-        <!-- Launch Button -->
-        <Button
-          on:click={handleLaunch}
-          disabled={!canLaunch || launching}
-          class="launch-header-button"
-          size="default"
-          title={!canLaunch ? launchDisabledReason : ''}
-        >
-          {#if launching}
-            <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
-            Launching...
-          {:else}
-            <Play class="mr-2 h-4 w-4" />
-            Launch Job
-          {/if}
-        </Button>
-      </div>
-          {/snippet}
-  </NavigationHeader>
+      {/snippet}
+    </NavigationHeader>
   {/if}
 
   <!-- Main Content -->
-  <div class="launcher-content" class:mobile-with-sidebar={isMobile && showMobileConfig}>
+  <div
+    class="launcher-content"
+    class:mobile-with-sidebar={isMobile && showMobileConfig}
+  >
     <!-- Script Editor - Takes most space -->
     <div class="editor-section">
       {#if !isMobile}
@@ -1928,18 +1891,23 @@ echo "Starting job..."
                 width="320px"
                 maxHeight="400px"
                 closeOnSelect={false}
-                on:close={() => showEditorOptions = false}
+                on:close={() => (showEditorOptions = false)}
               >
                 <!-- Vim Mode Toggle -->
-                {@const SvelteComponent_2 = editorOptions.vimMode ? ToggleRight : ToggleLeft}
+                {@const SvelteComponent_2 = editorOptions.vimMode
+                  ? ToggleRight
+                  : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Vim Mode</span>
                     <span class="option-description">Vi/Vim key bindings</span>
                   </div>
                   <button
-                    class="option-toggle {editorOptions.vimMode ? 'active' : ''}"
-                    onclick={() => updateEditorOption('vimMode', !editorOptions.vimMode)}
+                    class="option-toggle {editorOptions.vimMode
+                      ? 'active'
+                      : ''}"
+                    onclick={() =>
+                      updateEditorOption("vimMode", !editorOptions.vimMode)}
                   >
                     <SvelteComponent_2 class="w-5 h-5" />
                   </button>
@@ -1956,7 +1924,11 @@ echo "Starting job..."
                   <select
                     class="option-select"
                     bind:value={editorOptions.theme}
-                    onchange={(e) => updateEditorOption('theme', e.target.value)}
+                    onchange={(e) =>
+                      updateEditorOption(
+                        "theme",
+                        (e.target as HTMLSelectElement).value,
+                      )}
                   >
                     {#each themeOptions as theme}
                       <option value={theme.id}>{theme.name}</option>
@@ -1973,7 +1945,11 @@ echo "Starting job..."
                   <select
                     class="option-select"
                     bind:value={editorOptions.fontSize}
-                    onchange={(e) => updateEditorOption('fontSize', parseInt(e.target.value))}
+                    onchange={(e) =>
+                      updateEditorOption(
+                        "fontSize",
+                        parseInt((e.target as HTMLSelectElement).value),
+                      )}
                   >
                     {#each fontSizeOptions as size}
                       <option value={size}>{size}px</option>
@@ -1984,30 +1960,43 @@ echo "Starting job..."
                 <DropdownDivider />
 
                 <!-- Line Numbers -->
-                {@const SvelteComponent_3 = editorOptions.lineNumbers ? ToggleRight : ToggleLeft}
+                {@const SvelteComponent_3 = editorOptions.lineNumbers
+                  ? ToggleRight
+                  : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Line Numbers</span>
                     <span class="option-description">Show line numbers</span>
                   </div>
                   <button
-                    class="option-toggle {editorOptions.lineNumbers ? 'active' : ''}"
-                    onclick={() => updateEditorOption('lineNumbers', !editorOptions.lineNumbers)}
+                    class="option-toggle {editorOptions.lineNumbers
+                      ? 'active'
+                      : ''}"
+                    onclick={() =>
+                      updateEditorOption(
+                        "lineNumbers",
+                        !editorOptions.lineNumbers,
+                      )}
                   >
                     <SvelteComponent_3 class="w-5 h-5" />
                   </button>
                 </div>
 
                 <!-- Word Wrap -->
-                {@const SvelteComponent_4 = editorOptions.wordWrap ? ToggleRight : ToggleLeft}
+                {@const SvelteComponent_4 = editorOptions.wordWrap
+                  ? ToggleRight
+                  : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Word Wrap</span>
                     <span class="option-description">Wrap long lines</span>
                   </div>
                   <button
-                    class="option-toggle {editorOptions.wordWrap ? 'active' : ''}"
-                    onclick={() => updateEditorOption('wordWrap', !editorOptions.wordWrap)}
+                    class="option-toggle {editorOptions.wordWrap
+                      ? 'active'
+                      : ''}"
+                    onclick={() =>
+                      updateEditorOption("wordWrap", !editorOptions.wordWrap)}
                   >
                     <SvelteComponent_4 class="w-5 h-5" />
                   </button>
@@ -2022,7 +2011,11 @@ echo "Starting job..."
                   <select
                     class="option-select"
                     bind:value={editorOptions.tabSize}
-                    onchange={(e) => updateEditorOption('tabSize', parseInt(e.target.value))}
+                    onchange={(e) =>
+                      updateEditorOption(
+                        "tabSize",
+                        parseInt((e.target as HTMLSelectElement).value),
+                      )}
                   >
                     {#each tabSizeOptions as size}
                       <option value={size}>{size} spaces</option>
@@ -2031,35 +2024,44 @@ echo "Starting job..."
                 </div>
 
                 <!-- Auto Indent -->
-                {@const SvelteComponent_5 = editorOptions.autoIndent ? ToggleRight : ToggleLeft}
+                {@const SvelteComponent_5 = editorOptions.autoIndent
+                  ? ToggleRight
+                  : ToggleLeft}
                 <div class="option-item">
                   <div class="option-info">
                     <span class="option-label">Auto Indent</span>
-                    <span class="option-description">Automatic indentation</span>
+                    <span class="option-description">Automatic indentation</span
+                    >
                   </div>
                   <button
-                    class="option-toggle {editorOptions.autoIndent ? 'active' : ''}"
-                    onclick={() => updateEditorOption('autoIndent', !editorOptions.autoIndent)}
+                    class="option-toggle {editorOptions.autoIndent
+                      ? 'active'
+                      : ''}"
+                    onclick={() =>
+                      updateEditorOption(
+                        "autoIndent",
+                        !editorOptions.autoIndent,
+                      )}
                   >
                     <SvelteComponent_5 class="w-5 h-5" />
                   </button>
                 </div>
               </Dropdown>
-          </div>
+            </div>
 
-          {#if validationDetails.isValid}
-            <div class="validation-status valid">
-              <div class="status-dot valid"></div>
-              <span>Valid</span>
-            </div>
-          {:else if validationDetails.missingText}
-            <div class="validation-status invalid">
-              <div class="status-dot invalid"></div>
-              <span>{validationDetails.missingText}</span>
-            </div>
-          {/if}
+            {#if validationDetails.isValid}
+              <div class="validation-status valid">
+                <div class="status-dot valid"></div>
+                <span>Valid</span>
+              </div>
+            {:else if validationDetails.missingText}
+              <div class="validation-status invalid">
+                <div class="status-dot invalid"></div>
+                <span>{validationDetails.missingText}</span>
+              </div>
+            {/if}
+          </div>
         </div>
-      </div>
       {/if}
 
       <div class="editor-container" class:mobile={isMobile}>
@@ -2088,7 +2090,9 @@ echo "Starting job..."
             <FolderOpen class="w-4 h-4 inline-block mr-2" />
             Source Directory
           </h3>
-          <p class="section-description">Choose the local directory to sync to the remote host</p>
+          <p class="section-description">
+            Choose the local directory to sync to the remote host
+          </p>
         </div>
 
         <div class="form-group">
@@ -2103,7 +2107,7 @@ echo "Starting job..."
             />
             <button
               class="directory-browse-btn-inline"
-              onclick={() => showFileBrowser = !showFileBrowser}
+              onclick={() => (showFileBrowser = !showFileBrowser)}
               title="{showFileBrowser ? 'Close' : 'Browse'} directory browser"
             >
               {#if showFileBrowser}
@@ -2118,10 +2122,13 @@ echo "Starting job..."
         </div>
 
         {#if showFileBrowser}
-          <div class="directory-browser-seamless" transition:slide={{ duration: 200 }}>
+          <div
+            class="directory-browser-seamless"
+            transition:slide={{ duration: 200 }}
+          >
             <FileBrowser
               bind:sourceDir={parameters.sourceDir}
-              initialPath={parameters.sourceDir || '/'}
+              initialPath={parameters.sourceDir || "/"}
               on:pathSelected={handleDirectorySelect}
             />
           </div>
@@ -2133,22 +2140,33 @@ echo "Starting job..."
         <Card class="mb-4">
           <div class="section-header">
             <button
-              class="section-header-toggle {showCapturedVariables ? 'active' : ''}"
-              onclick={() => showCapturedVariables = !showCapturedVariables}
+              class="section-header-toggle {showCapturedVariables
+                ? 'active'
+                : ''}"
+              onclick={() => (showCapturedVariables = !showCapturedVariables)}
             >
               <div class="section-header-content">
                 <h3 class="section-title">
                   <Database class="w-4 h-4 inline-block mr-2" />
                   Captured Variables from Job #{originalJobId}
                 </h3>
-                <p class="section-description">Variables captured by watchers from the original job</p>
+                <p class="section-description">
+                  Variables captured by watchers from the original job
+                </p>
               </div>
-              <ChevronDown class="section-toggle-icon {showCapturedVariables ? 'rotate-180' : ''}" />
+              <ChevronDown
+                class="section-toggle-icon {showCapturedVariables
+                  ? 'rotate-180'
+                  : ''}"
+              />
             </button>
           </div>
 
           {#if showCapturedVariables}
-            <div class="captured-variables-content" transition:slide={{ duration: 200 }}>
+            <div
+              class="captured-variables-content"
+              transition:slide={{ duration: 200 }}
+            >
               <div class="variables-grid">
                 {#each Object.entries(watcherVariables) as [key, value]}
                   <div class="variable-item">
@@ -2184,16 +2202,22 @@ echo "Starting job..."
           <div class="section-header">
             <button
               class="section-header-toggle {showRecentWatchers ? 'active' : ''}"
-              onclick={() => showRecentWatchers = !showRecentWatchers}
+              onclick={() => (showRecentWatchers = !showRecentWatchers)}
             >
               <div class="section-header-content">
                 <h3 class="section-title">
                   <Eye class="w-4 h-4 inline-block mr-2" />
                   Recent Watchers
                 </h3>
-                <p class="section-description">Recently used watcher configurations you can copy and reuse</p>
+                <p class="section-description">
+                  Recently used watcher configurations you can copy and reuse
+                </p>
               </div>
-              <ChevronDown class="section-toggle-icon {showRecentWatchers ? 'rotate-180' : ''}" />
+              <ChevronDown
+                class="section-toggle-icon {showRecentWatchers
+                  ? 'rotate-180'
+                  : ''}"
+              />
             </button>
           </div>
 
@@ -2205,7 +2229,9 @@ echo "Starting job..."
                     <div class="watcher-header">
                       <div class="watcher-title">
                         <Code class="w-4 h-4 text-blue-500" />
-                        <span class="watcher-name">{watcher.name || `Watcher ${index + 1}`}</span>
+                        <span class="watcher-name"
+                          >{watcher.name || `Watcher ${index + 1}`}</span
+                        >
                         <span class="watcher-type">{watcher.type}</span>
                         {#if watcher.job_id}
                           <span class="watcher-job">Job #{watcher.job_id}</span>
@@ -2214,7 +2240,11 @@ echo "Starting job..."
                       <button
                         class="copy-watcher-btn"
                         onclick={() => {
-                          const watcherCode = JSON.stringify(watcher.actions, null, 2);
+                          const watcherCode = JSON.stringify(
+                            watcher.actions,
+                            null,
+                            2,
+                          );
                           navigator.clipboard.writeText(watcherCode);
                         }}
                         title="Copy watcher configuration"
@@ -2237,7 +2267,8 @@ echo "Starting job..."
                         <div class="variables-mini-grid">
                           {#each Object.entries(watcher.variables) as [key, value]}
                             <span class="var-mini">
-                              <strong>{key}:</strong> {value}
+                              <strong>{key}:</strong>
+                              {value}
                             </span>
                           {/each}
                         </div>
@@ -2246,7 +2277,9 @@ echo "Starting job..."
 
                     {#if watcher.status}
                       <div class="watcher-status">
-                        <span class="status-badge status-{watcher.status.toLowerCase()}">
+                        <span
+                          class="status-badge status-{watcher.status.toLowerCase()}"
+                        >
                           {watcher.status}
                         </span>
                       </div>
@@ -2257,7 +2290,9 @@ echo "Starting job..."
               <div class="watchers-info">
                 <AlertCircle class="w-4 h-4 text-blue-500" />
                 <span class="text-sm text-gray-600">
-                  These are recently used watcher configurations from your recent jobs. You can copy and reuse them for your job submission.
+                  These are recently used watcher configurations from your
+                  recent jobs. You can copy and reuse them for your job
+                  submission.
                 </span>
               </div>
             </div>
@@ -2270,21 +2305,28 @@ echo "Starting job..."
         <div class="section-header">
           <button
             class="section-header-toggle {showSyncSettings ? 'active' : ''}"
-            onclick={() => showSyncSettings = !showSyncSettings}
+            onclick={() => (showSyncSettings = !showSyncSettings)}
           >
             <div class="section-header-content">
               <h3 class="section-title">
                 <GitBranch class="w-4 h-4 inline-block mr-2" />
                 Sync Settings
               </h3>
-              <p class="section-description">Configure file synchronization options</p>
+              <p class="section-description">
+                Configure file synchronization options
+              </p>
             </div>
-            <ChevronDown class="section-toggle-icon {showSyncSettings ? 'rotate-180' : ''}" />
+            <ChevronDown
+              class="section-toggle-icon {showSyncSettings ? 'rotate-180' : ''}"
+            />
           </button>
         </div>
 
         {#if showSyncSettings}
-          <div class="sync-settings-content" transition:slide={{ duration: 200 }}>
+          <div
+            class="sync-settings-content"
+            transition:slide={{ duration: 200 }}
+          >
             <SyncSettings
               bind:excludePatterns
               bind:includePatterns
@@ -2351,7 +2393,10 @@ echo "Starting job..."
 
       <!-- Resource Requirements Card -->
       <Card class="mb-4">
-        <div class="section-header" style="display: flex; align-items: center; justify-content: space-between;">
+        <div
+          class="section-header"
+          style="display: flex; align-items: center; justify-content: space-between;"
+        >
           <div>
             <h3 class="section-title">
               <Cpu class="w-4 h-4 inline-block mr-2" />
@@ -2361,10 +2406,10 @@ echo "Starting job..."
           </div>
           <button
             class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
-            onclick={() => showAdvanced = !showAdvanced}
+            onclick={() => (showAdvanced = !showAdvanced)}
           >
             <Settings class="w-4 h-4" />
-            {showAdvanced ? 'Hide Advanced' : 'Show Advanced'}
+            {showAdvanced ? "Hide Advanced" : "Show Advanced"}
           </button>
         </div>
 
@@ -2374,7 +2419,7 @@ echo "Starting job..."
             <Input
               id="cpus"
               type="number"
-              bind:value={parameters.cpus}
+              bind:value={cpusStr}
               placeholder="1"
               min="1"
               on:input={handleConfigChange}
@@ -2386,7 +2431,7 @@ echo "Starting job..."
             <Input
               id="memory"
               type="number"
-              bind:value={parameters.memory}
+              bind:value={memoryStr}
               placeholder="4"
               min="1"
               on:input={handleConfigChange}
@@ -2398,7 +2443,7 @@ echo "Starting job..."
             <Input
               id="time-limit"
               type="number"
-              bind:value={parameters.timeLimit}
+              bind:value={timeLimitStr}
               placeholder="60"
               min="1"
               on:input={handleConfigChange}
@@ -2410,7 +2455,7 @@ echo "Starting job..."
             <Input
               id="nodes"
               type="number"
-              bind:value={parameters.nodes}
+              bind:value={nodesStr}
               placeholder="1"
               min="1"
               on:input={handleConfigChange}
@@ -2423,7 +2468,7 @@ echo "Starting job..."
               <Input
                 id="ntasks-per-node"
                 type="number"
-                bind:value={parameters.ntasksPerNode}
+                bind:value={ntasksPerNodeStr}
                 placeholder="1"
                 min="1"
                 on:input={handleConfigChange}
@@ -2435,7 +2480,7 @@ echo "Starting job..."
               <Input
                 id="gpus-per-node"
                 type="number"
-                bind:value={parameters.gpusPerNode}
+                bind:value={gpusPerNodeStr}
                 placeholder="0"
                 min="0"
                 on:input={handleConfigChange}
@@ -2484,7 +2529,9 @@ echo "Starting job..."
                 <FolderOpen class="w-5 h-5 text-blue-600" />
                 <div>
                   <div class="font-medium text-gray-900">Working Directory</div>
-                  <div class="text-sm text-gray-500">Source files will be synced from here</div>
+                  <div class="text-sm text-gray-500">
+                    Source files will be synced from here
+                  </div>
                 </div>
               </div>
               <div class="mt-3 p-2 bg-gray-100 rounded font-mono text-sm">
@@ -2539,89 +2586,187 @@ echo "Starting job..."
       closeOnEscape={true}
       on:close={() => {
         showMobileConfig = false;
-        mobileConfigView = 'main';
+        mobileConfigView = "main";
       }}
     >
       {#snippet header()}
-            <div  class="flex items-center gap-3 w-full">
-          {#if mobileConfigView !== 'main'}
+        <div class="flex items-center gap-3 w-full">
+          {#if mobileConfigView !== "main"}
             <button
               class="mobile-config-back"
-              onclick={() => mobileConfigView = 'main'}
+              onclick={() => (mobileConfigView = "main")}
               type="button"
             >
               <ChevronLeft class="w-5 h-5" />
             </button>
           {/if}
           <h3 class="flex-1">
-            {#if mobileConfigView === 'directory'}
+            {#if mobileConfigView === "directory"}
               Select Directory
-            {:else if mobileConfigView === 'sync'}
+            {:else if mobileConfigView === "sync"}
               Sync Settings
             {:else}
               Configuration
             {/if}
           </h3>
         </div>
-          {/snippet}
-          {#if mobileConfigView === 'main'}
-            <!-- Directory Selection -->
-            <div class="mobile-config-section">
-              <button
-                class="mobile-dir-selector"
-                onclick={() => mobileConfigView = 'directory'}
-              >
-                <Folder class="w-4 h-4 flex-shrink-0" />
-                <span>{parameters.sourceDir || 'Select directory...'}</span>
-                <ChevronRight class="w-4 h-4 ml-auto flex-shrink-0" />
-              </button>
-            </div>
+      {/snippet}
+      {#if mobileConfigView === "main"}
+        <!-- Directory Selection -->
+        <div class="mobile-config-section">
+          <button
+            class="mobile-dir-selector"
+            onclick={() => (mobileConfigView = "directory")}
+          >
+            <Folder class="w-4 h-4 flex-shrink-0" />
+            <span>{parameters.sourceDir || "Select directory..."}</span>
+            <ChevronRight class="w-4 h-4 ml-auto flex-shrink-0" />
+          </button>
+        </div>
 
-          <!-- Basic Configuration -->
-          <div class="mobile-config-section">
+        <!-- Basic Configuration -->
+        <div class="mobile-config-section">
+          <div class="mobile-config-row">
+            <div class="mobile-config-field">
+              <span class="mobile-config-label">CPUs</span>
+              <Input
+                type="number"
+                bind:value={cpusStr}
+                min="1"
+                max="128"
+                class="mobile-config-input"
+                on:change={handleConfigChange}
+              />
+            </div>
+            <div class="mobile-config-field">
+              <span class="mobile-config-label">Memory (GB)</span>
+              <Input
+                type="number"
+                bind:value={memoryStr}
+                min="1"
+                max="512"
+                class="mobile-config-input"
+                on:change={handleConfigChange}
+              />
+            </div>
+          </div>
+          <div class="mobile-config-row">
+            <div class="mobile-config-field">
+              <span class="mobile-config-label">Time (min)</span>
+              <Input
+                type="number"
+                bind:value={timeLimitStr}
+                min="1"
+                max="10080"
+                class="mobile-config-input"
+                on:change={handleConfigChange}
+              />
+            </div>
+            <div class="mobile-config-field">
+              <span class="mobile-config-label">Nodes</span>
+              <Input
+                type="number"
+                bind:value={nodesStr}
+                min="1"
+                max="100"
+                class="mobile-config-input"
+                on:change={handleConfigChange}
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- Job Name -->
+        <div class="mobile-config-section">
+          <Label>Job Name</Label>
+          <Input
+            type="text"
+            bind:value={parameters.jobName}
+            placeholder="my-job"
+            class="mobile-config-input-full"
+            on:change={handleConfigChange}
+          />
+        </div>
+
+        <!-- Partition -->
+        <div class="mobile-config-section">
+          <Label>Partition</Label>
+          <Input
+            type="text"
+            bind:value={parameters.partition}
+            placeholder="default"
+            class="mobile-config-input-full"
+            on:change={handleConfigChange}
+          />
+        </div>
+
+        <!-- Account -->
+        <div class="mobile-config-section">
+          <Label>Account</Label>
+          <Input
+            type="text"
+            bind:value={parameters.account}
+            placeholder="project-123"
+            class="mobile-config-input-full"
+            on:change={handleConfigChange}
+          />
+        </div>
+
+        <!-- Constraint -->
+        <div class="mobile-config-section">
+          <Label>Constraint</Label>
+          <Input
+            type="text"
+            bind:value={parameters.constraint}
+            placeholder="gpu, bigmem, intel"
+            class="mobile-config-input-full"
+            on:change={handleConfigChange}
+          />
+        </div>
+
+        <!-- Advanced Options Toggle -->
+        <div class="mobile-config-section">
+          <button
+            class="mobile-advanced-toggle"
+            onclick={() => (showAdvanced = !showAdvanced)}
+          >
+            <Settings class="w-4 h-4" />
+            <span
+              >{showAdvanced
+                ? "Hide Advanced Options"
+                : "Show Advanced Options"}</span
+            >
+            <ChevronDown
+              class="w-4 h-4 chevron {showAdvanced ? 'rotate-180' : ''}"
+            />
+          </button>
+        </div>
+
+        {#if showAdvanced}
+          <!-- Advanced Resource Options -->
+          <div
+            class="mobile-config-section"
+            transition:slide={{ duration: 200 }}
+          >
             <div class="mobile-config-row">
               <div class="mobile-config-field">
-                <span class="mobile-config-label">CPUs</span>
+                <span class="mobile-config-label">Tasks/Node</span>
                 <Input
                   type="number"
-                  bind:value={parameters.cpus}
+                  bind:value={ntasksPerNodeStr}
                   min="1"
-                  max="128"
+                  placeholder="1"
                   class="mobile-config-input"
                   on:change={handleConfigChange}
                 />
               </div>
               <div class="mobile-config-field">
-                <span class="mobile-config-label">Memory (GB)</span>
+                <span class="mobile-config-label">GPUs/Node</span>
                 <Input
                   type="number"
-                  bind:value={parameters.memory}
-                  min="1"
-                  max="512"
-                  class="mobile-config-input"
-                  on:change={handleConfigChange}
-                />
-              </div>
-            </div>
-            <div class="mobile-config-row">
-              <div class="mobile-config-field">
-                <span class="mobile-config-label">Time (min)</span>
-                <Input
-                  type="number"
-                  bind:value={parameters.timeLimit}
-                  min="1"
-                  max="10080"
-                  class="mobile-config-input"
-                  on:change={handleConfigChange}
-                />
-              </div>
-              <div class="mobile-config-field">
-                <span class="mobile-config-label">Nodes</span>
-                <Input
-                  type="number"
-                  bind:value={parameters.nodes}
-                  min="1"
-                  max="100"
+                  bind:value={gpusPerNodeStr}
+                  min="0"
+                  placeholder="0"
                   class="mobile-config-input"
                   on:change={handleConfigChange}
                 />
@@ -2629,298 +2774,247 @@ echo "Starting job..."
             </div>
           </div>
 
-          <!-- Job Name -->
-          <div class="mobile-config-section">
-            <Label>Job Name</Label>
+          <div
+            class="mobile-config-section"
+            transition:slide={{ duration: 200 }}
+          >
+            <Label>GRES</Label>
             <Input
               type="text"
-              bind:value={parameters.jobName}
-              placeholder="my-job"
+              bind:value={parameters.gres}
+              placeholder="gpu:1"
               class="mobile-config-input-full"
               on:change={handleConfigChange}
             />
           </div>
 
-          <!-- Partition -->
-          <div class="mobile-config-section">
-            <Label>Partition</Label>
+          <div
+            class="mobile-config-section"
+            transition:slide={{ duration: 200 }}
+          >
+            <Label>Output File</Label>
             <Input
               type="text"
-              bind:value={parameters.partition}
-              placeholder="default"
+              bind:value={parameters.outputFile}
+              placeholder="%j.out"
               class="mobile-config-input-full"
               on:change={handleConfigChange}
             />
           </div>
 
-          <!-- Account -->
-          <div class="mobile-config-section">
-            <Label>Account</Label>
+          <div
+            class="mobile-config-section"
+            transition:slide={{ duration: 200 }}
+          >
+            <Label>Error File</Label>
             <Input
               type="text"
-              bind:value={parameters.account}
-              placeholder="project-123"
+              bind:value={parameters.errorFile}
+              placeholder="%j.err"
               class="mobile-config-input-full"
               on:change={handleConfigChange}
             />
           </div>
+        {/if}
 
-          <!-- Constraint -->
-          <div class="mobile-config-section">
-            <Label>Constraint</Label>
-            <Input
-              type="text"
-              bind:value={parameters.constraint}
-              placeholder="gpu, bigmem, intel"
-              class="mobile-config-input-full"
-              on:change={handleConfigChange}
-            />
-          </div>
-
-          <!-- Advanced Options Toggle -->
+        <!-- Captured Variables (only for resubmission) -->
+        {#if isResubmit && Object.keys(watcherVariables).length > 0}
           <div class="mobile-config-section">
             <button
               class="mobile-advanced-toggle"
-              onclick={() => showAdvanced = !showAdvanced}
+              onclick={() => (showCapturedVariables = !showCapturedVariables)}
             >
-              <Settings class="w-4 h-4" />
-              <span>{showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}</span>
-              <ChevronDown class="w-4 h-4 chevron {showAdvanced ? 'rotate-180' : ''}" />
+              <Database class="w-4 h-4" />
+              <span>Variables from Job #{originalJobId}</span>
+              <ChevronDown
+                class="w-4 h-4 chevron {showCapturedVariables
+                  ? 'rotate-180'
+                  : ''}"
+              />
             </button>
           </div>
 
-          {#if showAdvanced}
-            <!-- Advanced Resource Options -->
-            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
-              <div class="mobile-config-row">
-                <div class="mobile-config-field">
-                  <span class="mobile-config-label">Tasks/Node</span>
-                  <Input
-                    type="number"
-                    bind:value={parameters.ntasksPerNode}
-                    min="1"
-                    placeholder="1"
-                    class="mobile-config-input"
-                    on:change={handleConfigChange}
-                  />
-                </div>
-                <div class="mobile-config-field">
-                  <span class="mobile-config-label">GPUs/Node</span>
-                  <Input
-                    type="number"
-                    bind:value={parameters.gpusPerNode}
-                    min="0"
-                    placeholder="0"
-                    class="mobile-config-input"
-                    on:change={handleConfigChange}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
-              <Label>GRES</Label>
-              <Input
-                type="text"
-                bind:value={parameters.gres}
-                placeholder="gpu:1"
-                class="mobile-config-input-full"
-                on:change={handleConfigChange}
-              />
-            </div>
-
-            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
-              <Label>Output File</Label>
-              <Input
-                type="text"
-                bind:value={parameters.outputFile}
-                placeholder="%j.out"
-                class="mobile-config-input-full"
-                on:change={handleConfigChange}
-              />
-            </div>
-
-            <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
-              <Label>Error File</Label>
-              <Input
-                type="text"
-                bind:value={parameters.errorFile}
-                placeholder="%j.err"
-                class="mobile-config-input-full"
-                on:change={handleConfigChange}
-              />
-            </div>
-          {/if}
-
-          <!-- Captured Variables (only for resubmission) -->
-          {#if isResubmit && Object.keys(watcherVariables).length > 0}
-            <div class="mobile-config-section">
-              <button
-                class="mobile-advanced-toggle"
-                onclick={() => showCapturedVariables = !showCapturedVariables}
-              >
-                <Database class="w-4 h-4" />
-                <span>Variables from Job #{originalJobId}</span>
-                <ChevronDown class="w-4 h-4 chevron {showCapturedVariables ? 'rotate-180' : ''}" />
-              </button>
-            </div>
-
-            {#if showCapturedVariables}
-              <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
-                <div class="mobile-variables-grid">
-                  {#each Object.entries(watcherVariables) as [key, value]}
-                    <div class="mobile-variable-item">
-                      <div class="mobile-variable-header">
-                        <span class="mobile-variable-name">{key}</span>
-                        <button
-                          class="mobile-copy-btn"
-                          onclick={() => navigator.clipboard.writeText(value)}
-                          title="Copy value"
-                        >
-                          <Copy class="w-3 h-3" />
-                        </button>
-                      </div>
-                      <div class="mobile-variable-value">{value}</div>
+          {#if showCapturedVariables}
+            <div
+              class="mobile-config-section"
+              transition:slide={{ duration: 200 }}
+            >
+              <div class="mobile-variables-grid">
+                {#each Object.entries(watcherVariables) as [key, value]}
+                  <div class="mobile-variable-item">
+                    <div class="mobile-variable-header">
+                      <span class="mobile-variable-name">{key}</span>
+                      <button
+                        class="mobile-copy-btn"
+                        onclick={() => navigator.clipboard.writeText(value)}
+                        title="Copy value"
+                      >
+                        <Copy class="w-3 h-3" />
+                      </button>
                     </div>
-                  {/each}
-                </div>
-                <div class="mobile-variables-info">
-                  <AlertCircle class="w-4 h-4 text-blue-500" />
-                  <span>
-                    Variables captured from job #{originalJobId}. Reference them in your script.
-                  </span>
-                </div>
+                    <div class="mobile-variable-value">{value}</div>
+                  </div>
+                {/each}
               </div>
-            {/if}
-          {/if}
-
-          <!-- Recent Watchers -->
-          {#if allRecentWatchers && allRecentWatchers.length > 0}
-            <div class="mobile-config-section">
-              <button
-                class="mobile-advanced-toggle"
-                onclick={() => showRecentWatchers = !showRecentWatchers}
-              >
-                <Eye class="w-4 h-4" />
-                <span>Recent Watchers</span>
-                <ChevronDown class="w-4 h-4 chevron {showRecentWatchers ? 'rotate-180' : ''}" />
-              </button>
+              <div class="mobile-variables-info">
+                <AlertCircle class="w-4 h-4 text-blue-500" />
+                <span>
+                  Variables captured from job #{originalJobId}. Reference them
+                  in your script.
+                </span>
+              </div>
             </div>
+          {/if}
+        {/if}
 
-            {#if showRecentWatchers}
-              <div class="mobile-config-section" transition:slide={{ duration: 200 }}>
-                <div class="mobile-watchers-list">
-                  {#each allRecentWatchers as watcher, index}
-                    <div class="mobile-watcher-item">
-                      <div class="mobile-watcher-header">
-                        <div class="mobile-watcher-title">
-                          <Code class="w-4 h-4 text-blue-500" />
-                          <span class="mobile-watcher-name">{watcher.name || `Watcher ${index + 1}`}</span>
-                        </div>
-                        <button
-                          class="mobile-copy-btn"
-                          onclick={() => {
-                            const watcherCode = JSON.stringify(watcher.actions, null, 2);
-                            navigator.clipboard.writeText(watcherCode);
-                          }}
-                          title="Copy watcher configuration"
+        <!-- Recent Watchers -->
+        {#if allRecentWatchers && allRecentWatchers.length > 0}
+          <div class="mobile-config-section">
+            <button
+              class="mobile-advanced-toggle"
+              onclick={() => (showRecentWatchers = !showRecentWatchers)}
+            >
+              <Eye class="w-4 h-4" />
+              <span>Recent Watchers</span>
+              <ChevronDown
+                class="w-4 h-4 chevron {showRecentWatchers ? 'rotate-180' : ''}"
+              />
+            </button>
+          </div>
+
+          {#if showRecentWatchers}
+            <div
+              class="mobile-config-section"
+              transition:slide={{ duration: 200 }}
+            >
+              <div class="mobile-watchers-list">
+                {#each allRecentWatchers as watcher, index}
+                  <div class="mobile-watcher-item">
+                    <div class="mobile-watcher-header">
+                      <div class="mobile-watcher-title">
+                        <Code class="w-4 h-4 text-blue-500" />
+                        <span class="mobile-watcher-name"
+                          >{watcher.name || `Watcher ${index + 1}`}</span
                         >
-                          <Copy class="w-3 h-3" />
-                        </button>
                       </div>
+                      <button
+                        class="mobile-copy-btn"
+                        onclick={() => {
+                          const watcherCode = JSON.stringify(
+                            watcher.actions,
+                            null,
+                            2,
+                          );
+                          navigator.clipboard.writeText(watcherCode);
+                        }}
+                        title="Copy watcher configuration"
+                      >
+                        <Copy class="w-3 h-3" />
+                      </button>
+                    </div>
 
-                      <div class="mobile-watcher-meta">
-                        <span class="mobile-watcher-type">{watcher.type}</span>
-                        {#if watcher.job_id}
-                          <span class="mobile-watcher-job">Job #{watcher.job_id}</span>
-                        {/if}
-                      </div>
-
-                      {#if watcher.variables && Object.keys(watcher.variables).length > 0}
-                        <div class="mobile-watcher-variables">
-                          <div class="mobile-variables-label">
-                            <Database class="w-3 h-3" />
-                            <span>Variables:</span>
-                          </div>
-                          <div class="mobile-variables-tags">
-                            {#each Object.entries(watcher.variables) as [key, value]}
-                              <span class="mobile-var-tag">
-                                <strong>{key}:</strong> {value}
-                              </span>
-                            {/each}
-                          </div>
-                        </div>
-                      {/if}
-
-                      {#if watcher.status}
-                        <span class="mobile-status-badge status-{watcher.status.toLowerCase()}">
-                          {watcher.status}
-                        </span>
+                    <div class="mobile-watcher-meta">
+                      <span class="mobile-watcher-type">{watcher.type}</span>
+                      {#if watcher.job_id}
+                        <span class="mobile-watcher-job"
+                          >Job #{watcher.job_id}</span
+                        >
                       {/if}
                     </div>
-                  {/each}
-                </div>
-                <div class="mobile-variables-info">
-                  <AlertCircle class="w-4 h-4 text-blue-500" />
-                  <span>
-                    Recently used watcher configurations. Copy and reuse them for your job submission.
-                  </span>
-                </div>
+
+                    {#if watcher.variables && Object.keys(watcher.variables).length > 0}
+                      <div class="mobile-watcher-variables">
+                        <div class="mobile-variables-label">
+                          <Database class="w-3 h-3" />
+                          <span>Variables:</span>
+                        </div>
+                        <div class="mobile-variables-tags">
+                          {#each Object.entries(watcher.variables) as [key, value]}
+                            <span class="mobile-var-tag">
+                              <strong>{key}:</strong>
+                              {value}
+                            </span>
+                          {/each}
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if watcher.status}
+                      <span
+                        class="mobile-status-badge status-{watcher.status.toLowerCase()}"
+                      >
+                        {watcher.status}
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
               </div>
+              <div class="mobile-variables-info">
+                <AlertCircle class="w-4 h-4 text-blue-500" />
+                <span>
+                  Recently used watcher configurations. Copy and reuse them for
+                  your job submission.
+                </span>
+              </div>
+            </div>
+          {/if}
+        {/if}
+
+        <!-- Sync Settings -->
+        <div class="mobile-config-section">
+          <button
+            class="mobile-sync-settings-btn"
+            onclick={() => (mobileConfigView = "sync")}
+          >
+            <GitBranch class="w-4 h-4 flex-shrink-0" />
+            <span>Sync Settings</span>
+            <ChevronRight class="w-4 h-4 ml-auto flex-shrink-0" />
+          </button>
+        </div>
+
+        <!-- Launch Button in Sidebar -->
+        <div class="mobile-config-section">
+          <Button
+            on:click={() => {
+              handleLaunch();
+              showMobileConfig = false;
+              mobileConfigView = "main";
+            }}
+            disabled={!canLaunch || launching}
+            class="w-full"
+            size="lg"
+          >
+            {#if launching}
+              <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
+              Launching...
+            {:else}
+              <Play class="mr-2 h-4 w-4" />
+              Launch Job
             {/if}
-          {/if}
-
-            <!-- Sync Settings -->
-            <div class="mobile-config-section">
-              <button
-                class="mobile-sync-settings-btn"
-                onclick={() => mobileConfigView = 'sync'}
-              >
-                <GitBranch class="w-4 h-4 flex-shrink-0" />
-                <span>Sync Settings</span>
-                <ChevronRight class="w-4 h-4 ml-auto flex-shrink-0" />
-              </button>
-            </div>
-
-            <!-- Launch Button in Sidebar -->
-            <div class="mobile-config-section">
-              <Button
-                on:click={() => { handleLaunch(); showMobileConfig = false; mobileConfigView = 'main'; }}
-                disabled={!canLaunch || launching}
-                class="w-full"
-                size="lg"
-              >
-                {#if launching}
-                  <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
-                  Launching...
-                {:else}
-                  <Play class="mr-2 h-4 w-4" />
-                  Launch Job
-                {/if}
-              </Button>
-            </div>
-          {:else if mobileConfigView === 'directory'}
-            <!-- Directory Browser View -->
-            <div class="mobile-nested-view">
-              <FileBrowser
-                bind:sourceDir={parameters.sourceDir}
-                initialPath={parameters.sourceDir || ''}
-                on:pathSelected={handleDirectorySelect}
-                class="mobile-file-browser"
-              />
-            </div>
-          {:else if mobileConfigView === 'sync'}
-            <!-- Sync Settings View -->
-            <div class="mobile-nested-view">
-              <SyncSettings
-                bind:excludePatterns
-                bind:includePatterns
-                bind:noGitignore
-                on:change={handleSyncSettingsChange}
-                class="mobile-sync-settings"
-              />
-            </div>
-          {/if}
+          </Button>
+        </div>
+      {:else if mobileConfigView === "directory"}
+        <!-- Directory Browser View -->
+        <div class="mobile-nested-view">
+          <FileBrowser
+            bind:sourceDir={parameters.sourceDir}
+            initialPath={parameters.sourceDir || ""}
+            on:pathSelected={handleDirectorySelect}
+            class="mobile-file-browser"
+          />
+        </div>
+      {:else if mobileConfigView === "sync"}
+        <!-- Sync Settings View -->
+        <div class="mobile-nested-view">
+          <SyncSettings
+            bind:excludePatterns
+            bind:includePatterns
+            bind:noGitignore
+            on:change={handleSyncSettingsChange}
+            class="mobile-sync-settings"
+          />
+        </div>
+      {/if}
     </Sidebar>
   {/if}
 
@@ -2945,11 +3039,12 @@ echo "Starting job..."
       bind:isOpen={showHistory}
       currentHost={selectedHost}
       on:select={(e) => {
-        script = e.detail.content || e.detail.script || e.detail.script_content || '';
+        script =
+          e.detail.content || e.detail.script || e.detail.script_content || "";
         parseSbatchFromScript(script);
         showHistory = false;
       }}
-      on:close={() => showHistory = false}
+      on:close={() => (showHistory = false)}
     />
   {/if}
 </div>
@@ -2959,7 +3054,7 @@ echo "Starting job..."
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: #f8fafc;
+    background: var(--background);
     overflow: hidden;
   }
 
@@ -2979,7 +3074,7 @@ echo "Starting job..."
     align-items: center;
     gap: 0.5rem;
     font-size: 0.875rem;
-    color: #16a34a;
+    color: var(--success);
     font-weight: 500;
   }
 
@@ -2987,7 +3082,7 @@ echo "Starting job..."
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #16a34a;
+    background: var(--success);
   }
 
   /* Modern Host Selector Styles */
@@ -3008,12 +3103,12 @@ echo "Starting job..."
     gap: 0.75rem;
     padding: 0.625rem 0.875rem;
     min-width: 200px;
-    background: white;
-    border: 1.5px solid #e5e7eb;
+    background: var(--card);
+    border: 1.5px solid var(--border);
     border-radius: 0.625rem;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #1f2937;
+    color: var(--foreground);
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     position: relative;
@@ -3021,7 +3116,7 @@ echo "Starting job..."
   }
 
   .host-dropdown-trigger::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
@@ -3034,13 +3129,13 @@ echo "Starting job..."
   }
 
   .host-dropdown-trigger:hover {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .host-dropdown-trigger.active {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
   }
 
   .host-trigger-content {
@@ -3052,12 +3147,12 @@ echo "Starting job..."
   }
 
   .host-trigger-content .placeholder {
-    color: #9ca3af;
+    color: var(--muted-foreground);
   }
 
   .host-name {
     font-weight: 600;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    background: linear-gradient(135deg, var(--accent), var(--accent));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -3065,7 +3160,7 @@ echo "Starting job..."
 
   .chevron {
     transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    color: #6b7280;
+    color: var(--muted);
     position: relative;
     z-index: 1;
   }
@@ -3075,10 +3170,12 @@ echo "Starting job..."
     top: calc(100% + 0.5rem);
     left: 0;
     right: 0;
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--popover);
+    border: 1px solid var(--border);
     border-radius: 0.75rem;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    box-shadow:
+      0 10px 25px -5px color-mix(in srgb, var(--foreground) 10%, transparent),
+      0 8px 10px -6px color-mix(in srgb, var(--foreground) 10%, transparent);
     overflow: hidden;
     z-index: 50;
     min-width: 240px;
@@ -3090,17 +3187,17 @@ echo "Starting job..."
     justify-content: space-between;
     width: 100%;
     padding: 0.75rem 1rem;
-    background: white;
+    background: var(--popover);
     border: none;
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--popover-foreground);
     cursor: pointer;
     transition: all 0.15s;
     position: relative;
   }
 
   .host-option::before {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     top: 0;
@@ -3113,7 +3210,7 @@ echo "Starting job..."
   }
 
   .host-option:hover {
-    background: #f9fafb;
+    background: var(--secondary);
   }
 
   .host-option:hover::before {
@@ -3121,8 +3218,8 @@ echo "Starting job..."
   }
 
   .host-option.selected {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(139, 92, 246, 0.05));
-    color: #3b82f6;
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
+    color: var(--accent);
     font-weight: 500;
   }
 
@@ -3141,7 +3238,7 @@ echo "Starting job..."
   }
 
   .check-icon {
-    color: #3b82f6;
+    color: var(--accent);
   }
 
   .host-empty {
@@ -3150,7 +3247,7 @@ echo "Starting job..."
     justify-content: center;
     gap: 0.5rem;
     padding: 1.5rem;
-    color: #9ca3af;
+    color: var(--muted-foreground);
     font-size: 0.875rem;
   }
 
@@ -3159,8 +3256,8 @@ echo "Starting job..."
     align-items: center;
     justify-content: center;
     padding: 0.5rem;
-    background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), rgba(16, 185, 129, 0.1));
-    border: 1px solid rgba(34, 197, 94, 0.2);
+    background: var(--success-bg);
+    border: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
     border-radius: 9999px;
     animation: fade-in 0.3s;
   }
@@ -3175,7 +3272,7 @@ echo "Starting job..."
 
   .launch-disabled-reason {
     font-size: 0.75rem;
-    color: #ef4444;
+    color: var(--destructive);
     font-weight: 500;
     white-space: nowrap;
   }
@@ -3183,17 +3280,17 @@ echo "Starting job..."
   .pulse-dot {
     width: 8px;
     height: 8px;
-    background: #10b981;
+    background: var(--success);
     border-radius: 50%;
     position: relative;
   }
 
   .pulse-dot.valid {
-    background: #10b981;
+    background: var(--success);
   }
 
   .pulse-dot::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
@@ -3717,7 +3814,7 @@ echo "Starting job..."
   }
 
   .directory-path {
-    font-family: 'Monaco', 'Menlo', monospace;
+    font-family: "Monaco", "Menlo", monospace;
     font-size: 0.875rem;
     color: #1e293b;
   }
@@ -3802,7 +3899,7 @@ echo "Starting job..."
     padding: 0.5rem 0.75rem;
     border: 1px solid #e5e7eb;
     border-radius: 0.5rem;
-    font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+    font-family: "SF Mono", "Monaco", "Courier New", monospace;
     font-size: 0.875rem;
     background: white;
     transition: all 0.15s;
@@ -3913,7 +4010,7 @@ echo "Starting job..."
     border: 1px solid #e2e8f0;
     border-radius: 0.5rem;
     padding: 0.75rem;
-    font-family: 'Monaco', 'Courier New', monospace;
+    font-family: "Monaco", "Courier New", monospace;
   }
 
   .variable-header {
@@ -4053,7 +4150,7 @@ echo "Starting job..."
   .watcher-code pre {
     margin: 0;
     color: #10b981;
-    font-family: 'Monaco', 'Courier New', monospace;
+    font-family: "Monaco", "Courier New", monospace;
     font-size: 0.8rem;
     line-height: 1.5;
     white-space: pre-wrap;
@@ -4130,10 +4227,6 @@ echo "Starting job..."
     background: #f0f9ff;
     border: 1px solid #bfdbfe;
     border-radius: 0.5rem;
-  }
-
-  .directory-info {
-    /* Uses default Card styling */
   }
 
   .mb-4 {
@@ -4793,23 +4886,39 @@ echo "Starting job..."
   }
 
   @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
 
   @keyframes fadeOut {
-    from { opacity: 1; }
-    to { opacity: 0; }
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
   }
 
   @keyframes slideInRight {
-    from { transform: translateX(100%); }
-    to { transform: translateX(0); }
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
   }
 
   @keyframes slideOutRight {
-    from { transform: translateX(0); }
-    to { transform: translateX(100%); }
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(100%);
+    }
   }
 
   .mobile-config-header {
@@ -4872,7 +4981,9 @@ echo "Starting job..."
     font-weight: 500;
     text-align: left;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    box-shadow:
+      0 1px 3px 0 rgba(0, 0, 0, 0.1),
+      0 1px 2px 0 rgba(0, 0, 0, 0.06);
     position: relative;
     overflow: hidden;
   }
@@ -4880,7 +4991,9 @@ echo "Starting job..."
   .mobile-dir-selector:hover {
     border-color: #6366f1;
     background: linear-gradient(to bottom, #fafafa, #f5f5f5);
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.1),
+      0 2px 4px -1px rgba(0, 0, 0, 0.06);
     transform: translateY(-1px);
   }
 
@@ -4942,7 +5055,9 @@ echo "Starting job..."
     font-weight: 500;
     text-align: left;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    box-shadow:
+      0 1px 3px 0 rgba(0, 0, 0, 0.1),
+      0 1px 2px 0 rgba(0, 0, 0, 0.06);
     position: relative;
     overflow: hidden;
   }
@@ -4950,7 +5065,9 @@ echo "Starting job..."
   .mobile-sync-settings-btn:hover {
     border-color: #6366f1;
     background: linear-gradient(to bottom, #fafafa, #f5f5f5);
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.1),
+      0 2px 4px -1px rgba(0, 0, 0, 0.06);
     transform: translateY(-1px);
   }
 
@@ -5041,7 +5158,7 @@ echo "Starting job..."
     font-size: 0.8125rem;
     color: #6b7280;
     word-break: break-all;
-    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    font-family: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace;
     background: white;
     padding: 0.5rem;
     border-radius: 0.375rem;
@@ -5237,17 +5354,15 @@ echo "Starting job..."
     }
 
     .launcher-content {
-      height: calc(100vh - 80px); /* Fixed height master container for small mobile */
+      height: calc(
+        100vh - 80px
+      ); /* Fixed height master container for small mobile */
       padding: 0;
       gap: 0;
       overflow: hidden;
       display: flex;
       flex-direction: column;
       box-sizing: border-box;
-    }
-
-    .launcher-content.mobile-with-sidebar {
-      /* Keep same height when sidebar is open */
     }
 
     .editor-section {
@@ -5509,7 +5624,7 @@ echo "Starting job..."
   }
 
   .preset-create-from-current::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
@@ -5540,7 +5655,6 @@ echo "Starting job..."
       0 3px 6px -2px rgba(139, 92, 246, 0.15);
   }
 
-
   /* Template Dialogs */
   .modal-backdrop {
     position: fixed;
@@ -5559,7 +5673,9 @@ echo "Starting job..."
   .save-template-dialog {
     background: white;
     border-radius: 12px;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    box-shadow:
+      0 20px 25px -5px rgba(0, 0, 0, 0.1),
+      0 10px 10px -5px rgba(0, 0, 0, 0.04);
     max-width: 500px;
     width: 90%;
     max-height: 80vh;
@@ -5747,151 +5863,5 @@ echo "Starting job..."
       transform: translateY(0);
       opacity: 1;
     }
-  }
-
-  /* Dark Mode Overrides */
-  :global(.dark) .modern-launcher {
-    background: #111827;
-  }
-
-  :global(.dark) .mobile-header {
-    background: linear-gradient(to bottom, rgb(31, 41, 55), rgb(31, 41, 55));
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-  }
-
-  :global(.dark) .mobile-host-select {
-    background: rgb(55, 65, 81);
-    border-color: rgb(75, 85, 99);
-    color: rgb(229, 231, 235);
-  }
-
-  :global(.dark) .mobile-divider,
-  :global(.dark) .mobile-divider-vertical {
-    background: rgb(75, 85, 99);
-  }
-
-  :global(.dark) .mobile-icon-btn {
-    color: rgb(156, 163, 175);
-  }
-
-  :global(.dark) .mobile-icon-btn:hover {
-    background: rgb(55, 65, 81);
-    color: rgb(229, 231, 235);
-  }
-
-  :global(.dark) .editor-container {
-    background: rgb(17, 24, 39);
-  }
-
-  :global(.dark) .editor-container.mobile {
-    background: rgb(17, 24, 39);
-  }
-
-  :global(.dark) .host-dropdown-trigger {
-    background: rgb(31, 41, 55);
-    border-color: rgb(75, 85, 99);
-    color: rgb(229, 231, 235);
-  }
-
-  :global(.dark) .host-dropdown-trigger:hover {
-    border-color: rgb(59, 130, 246);
-  }
-
-  :global(.dark) .host-dropdown-trigger .placeholder {
-    color: rgb(107, 114, 128);
-  }
-
-  :global(.dark) .preset-manager-sidebar {
-    background: rgb(31, 41, 55);
-  }
-
-  :global(.dark) .preset-manager-header {
-    background: rgb(31, 41, 55);
-    border-bottom-color: rgb(75, 85, 99);
-  }
-
-  :global(.dark) .preset-manager-header h3 {
-    color: rgb(243, 244, 246);
-  }
-
-  :global(.dark) .preset-manager-close {
-    color: rgb(156, 163, 175);
-  }
-
-  :global(.dark) .preset-manager-close:hover {
-    background: rgb(55, 65, 81);
-    color: rgb(229, 231, 235);
-  }
-
-  :global(.dark) .preset-section-header h4 {
-    color: rgb(243, 244, 246);
-  }
-
-  :global(.dark) .preset-manage-toggle-btn,
-  :global(.dark) .preset-back-btn {
-    color: rgb(156, 163, 175);
-    border-color: rgb(75, 85, 99);
-  }
-
-  :global(.dark) .preset-manage-toggle-btn:hover,
-  :global(.dark) .preset-back-btn:hover {
-    background: rgb(55, 65, 81);
-    color: rgb(229, 231, 235);
-    border-color: rgb(107, 114, 128);
-  }
-
-  :global(.dark) .preset-quick-item {
-    background: rgb(55, 65, 81);
-    border-color: rgb(75, 85, 99);
-  }
-
-  :global(.dark) .preset-quick-item:hover {
-    background: rgb(67, 77, 91);
-    border-color: rgb(107, 114, 128);
-  }
-
-  :global(.dark) .preset-name {
-    color: rgb(243, 244, 246);
-  }
-
-  :global(.dark) .preset-specs {
-    color: rgb(156, 163, 175);
-  }
-
-  :global(.dark) .config-card {
-    background: rgb(31, 41, 55);
-    border-color: rgb(75, 85, 99);
-  }
-
-  :global(.dark) .config-header {
-    border-bottom-color: rgb(75, 85, 99);
-  }
-
-  :global(.dark) .config-title {
-    color: rgb(243, 244, 246);
-  }
-
-  :global(.dark) .form-group label {
-    color: rgb(209, 213, 219);
-  }
-
-  :global(.dark) .form-control {
-    background: rgb(55, 65, 81);
-    border-color: rgb(75, 85, 99);
-    color: rgb(229, 231, 235);
-  }
-
-  :global(.dark) .form-control:focus {
-    border-color: rgb(59, 130, 246);
-    background: rgb(31, 41, 55);
-  }
-
-  :global(.dark) .btn-secondary {
-    background: rgb(55, 65, 81);
-    color: rgb(229, 231, 235);
-  }
-
-  :global(.dark) .btn-secondary:hover {
-    background: rgb(67, 77, 91);
   }
 </style>

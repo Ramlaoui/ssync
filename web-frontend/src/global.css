@@ -339,28 +339,4 @@ textarea:focus:not(:focus-visible),
     }
 }
 
-/* JobLauncher component dark mode fallbacks - TODO: Add proper dark: variants to JobLauncher.svelte */
-.dark .host-dropdown-trigger,
-.dark .host-dropdown,
-.dark .host-option,
-.dark .preset-manager-sidebar,
-.dark .preset-item,
-.dark .template-dialog,
-.dark .template-item,
-.dark .history-dialog,
-.dark .history-item,
-.dark .config-preset-item,
-.dark .directory-tree-node,
-.dark .editor-options-menu {
-    background: var(--card) !important;
-    color: var(--foreground) !important;
-    border-color: var(--border) !important;
-}
-
-.dark .host-option:hover,
-.dark .preset-item:hover,
-.dark .template-item:hover,
-.dark .history-item:hover,
-.dark .directory-tree-node:hover {
-    background: var(--secondary) !important;
-}
+/* JobLauncher component now uses CSS variables directly - no fallbacks needed */

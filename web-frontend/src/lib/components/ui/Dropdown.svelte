@@ -202,11 +202,11 @@
 <style>
   .dropdown-container {
     position: fixed;
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--popover);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
-                0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 10px 15px -3px color-mix(in srgb, var(--foreground) 10%, transparent),
+                0 4px 6px -2px color-mix(in srgb, var(--foreground) 5%, transparent);
     overflow-y: auto;
     overflow-x: hidden;
     padding: 0.5rem 0;
@@ -223,11 +223,11 @@
   }
 
   .dropdown-container::-webkit-scrollbar-thumb {
-    background: #d1d5db;
+    background: var(--muted);
     border-radius: 3px;
   }
 
   .dropdown-container::-webkit-scrollbar-thumb:hover {
-    background: #9ca3af;
+    background: var(--muted-foreground);
   }
 </style>

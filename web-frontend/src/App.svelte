@@ -106,6 +106,17 @@
     isMobile = window.innerWidth < 768;
   }
 
+  // Prevent body scroll when sidebar is open on mobile
+  $effect(() => {
+    if (isMobile && $sidebarOpen) {
+      // Prevent scrolling on body
+      document.body.style.overflow = 'hidden';
+    } else {
+      // Re-enable scrolling
+      document.body.style.overflow = '';
+    }
+  });
+
   onMount(async () => {
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -129,6 +140,8 @@
 
     return () => {
       window.removeEventListener('resize', checkMobile);
+      // Cleanup: ensure body scroll is restored
+      document.body.style.overflow = '';
     };
   });
 
@@ -161,7 +174,7 @@
 >
   <div class="h-full w-full bg-background flex flex-col overflow-hidden">
     <!-- Minimalist Header -->
-    <header class="flex-shrink-0 z-50 navbar-header">
+    <header class="flex-shrink-0 navbar-header">
       <div class="px-3 sm:px-6 lg:px-8">
         <div class="flex h-16 md:h-16 items-center justify-between">
           <!-- Logo and Navigation -->
@@ -431,7 +444,7 @@
   /* Mobile Sidebar Overlay */
   .mobile-sidebar-backdrop {
     position: fixed;
-    top: 0;
+    top: 65px; /* Below navbar (64px) + border (1px) */
     left: 0;
     right: 0;
     bottom: 0;
@@ -449,7 +462,7 @@
 
   .sidebar-container.mobile {
     position: fixed;
-    top: 0;
+    top: 65px; /* Below navbar (64px) + border (1px) */
     left: 0;
     bottom: 0;
     z-index: 70;

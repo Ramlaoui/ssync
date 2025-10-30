@@ -4,19 +4,18 @@
   const bubble = createBubbler();
   import { cn } from "../../cn";
   import type { HTMLInputAttributes } from "svelte/elements";
-  
+
   type $$Props = HTMLInputAttributes & {
     class?: string;
   };
-  
-  
-  interface Props {
+
+
+  interface Props extends Omit<HTMLInputAttributes, 'value' | 'class'> {
     class?: string;
-    value?: $$Props["value"];
-    [key: string]: any
+    value?: string | number | null | undefined;
   }
 
-  let { class: className = "", value = $bindable(""), ...rest }: Props = $props();
+  let { class: className = "", value = $bindable(undefined), ...rest }: Props = $props();
 </script>
 
 <input

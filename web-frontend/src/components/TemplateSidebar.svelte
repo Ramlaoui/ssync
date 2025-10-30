@@ -124,8 +124,8 @@
   }
 
   .template-list-item {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--secondary);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
     cursor: pointer;
@@ -133,10 +133,10 @@
   }
 
   .template-list-item:hover {
-    background: #f3f4f6;
-    border-color: #d1d5db;
+    background: var(--secondary);
+    border-color: var(--border);
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--foreground) 5%, transparent);
   }
 
   .template-item-header {
@@ -149,7 +149,7 @@
   .template-item-name {
     font-size: 0.95rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin: 0;
   }
 
@@ -159,30 +159,30 @@
   }
 
   .template-action-btn {
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.375rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .template-action-btn:hover {
-    background: #f3f4f6;
-    color: #111827;
-    border-color: #d1d5db;
+    background: var(--secondary);
+    color: var(--foreground);
+    border-color: var(--border);
   }
 
   .template-action-btn.delete:hover {
-    background: #fef2f2;
-    color: #dc2626;
-    border-color: #fecaca;
+    background: var(--destructive);
+    color: var(--card);
+    border-color: var(--destructive);
   }
 
   .template-item-description {
     font-size: 0.8rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin: 0 0 0.5rem 0;
     line-height: 1.4;
   }
@@ -195,23 +195,23 @@
   }
 
   .meta-chip {
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0.125rem 0.375rem;
     font-size: 0.7rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
 
   .meta-usage {
     font-size: 0.7rem;
-    color: #9ca3af;
+    color: var(--muted);
     margin-left: auto;
   }
 
   .template-item-preview {
-    background: white;
-    border: 1px solid #e5e7eb;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0.5rem;
   }
@@ -219,6 +219,6 @@
   .template-item-preview code {
     font-family: 'Monaco', 'Courier New', monospace;
     font-size: 0.7rem;
-    color: #4b5563;
+    color: var(--muted-foreground);
   }
 </style>
