@@ -318,7 +318,6 @@
 <div class="job-sidebar" class:collapsed={actuallyCollapsed} class:mobile={isMobile} class:closing={isClosing}>
   <div class="sidebar-header">
     {#if !actuallyCollapsed}
-    <h3>Jobs</h3>
     <div class="header-actions">
       <!-- Search button -->
       <button
@@ -643,6 +642,7 @@
     position: relative;
     transition: width 0.3s ease;
     overflow: hidden;
+    flex-shrink: 0; /* Prevent sidebar from shrinking */
     /* Optimize composite layer creation */
     contain: layout style paint;
     transform: translateZ(0);
@@ -700,11 +700,12 @@
   }
 
   .sidebar-header {
-    padding: 1rem;
-    border-bottom: 1px solid var(--border);
+    height: 64px; /* Match NavigationHeader height */
+    padding: 0 1rem;
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
+    flex-shrink: 0;
   }
 
   .job-sidebar.mobile .sidebar-header {

@@ -6,7 +6,6 @@
   import Router, { push, link, location } from "svelte-spa-router";
   import ErrorBoundary from "./components/ErrorBoundary.svelte";
   import PerformanceMonitor from "./components/PerformanceMonitor.svelte";
-  import HomePage from "./pages/HomePage.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
   import JobPage from "./pages/JobPage.svelte";
   import LaunchPage from "./pages/LaunchPage.svelte";
@@ -16,6 +15,8 @@
   import type { HostInfo } from "./types/api";
   import { navigationActions } from "./stores/navigation";
   import { theme } from "./stores/theme";
+  import { sidebarOpen } from "./stores/sidebar";
+  import JobSidebar from "./components/JobSidebar.svelte";
   // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - now using centralized JobStateManager
   // import { connectAllJobsWebSocket } from "./stores/jobWebSocket";
   import {
@@ -34,10 +35,9 @@
   // Mobile detection
   let isMobile = $state(typeof window !== 'undefined' && window.innerWidth < 768);
 
-  // Define routes - HomePage handles mobile/desktop switching internally
+  // Define routes - JobsPage is now the default landing page
   const routes = {
-    '/': HomePage,
-    '/jobs': JobsPage,
+    '/': JobsPage,
     '/jobs/:id/:host': JobPage,
     '/launch': LaunchPage,
     '/watchers': WatchersPage,
@@ -48,8 +48,8 @@
   let activeTab = $derived($location === '/launch' ? 'launch' :
                  $location === '/settings' ? 'settings' :
                  $location === '/watchers' ? 'watchers' :
-                 $location === '/jobs' || $location.startsWith('/jobs/') ? 'jobs' :
-                 'home');
+                 $location === '/' || $location.startsWith('/jobs/') ? 'jobs' :
+                 'jobs');
 
   // Track route changes for back navigation
   let previousLocation: string | undefined = $state();
@@ -80,8 +80,6 @@
 
     // Update document title based on current route
     if ($location === '/') {
-      document.title = 'Dashboard | ssync';
-    } else if ($location === '/jobs') {
       document.title = 'Jobs | ssync';
     } else if ($location === '/launch') {
       document.title = 'Launch Job | ssync';
@@ -161,16 +159,17 @@
     window.location.reload();
   }}
 >
-  <div class="min-h-screen bg-background flex flex-col">
+  <div class="h-full w-full bg-background flex flex-col overflow-hidden">
     <!-- Minimalist Header -->
-    <header class="sticky top-0 z-50 navbar-header">
+    <header class="flex-shrink-0 z-50 navbar-header">
       <div class="px-3 sm:px-6 lg:px-8">
         <div class="flex h-16 md:h-16 items-center justify-between">
           <!-- Logo and Navigation -->
           <div class="flex items-center space-x-2 md:space-x-4">
             <button
-              class="navbar-title text-base md:text-lg font-semibold text-foreground hover:opacity-70 transition-opacity duration-200"
-              onclick={() => push('/')}
+              class="navbar-title text-base md:text-lg font-semibold text-foreground hover:opacity-70 transition-opacity duration-200 cursor-pointer"
+              onclick={() => sidebarOpen.update(v => !v)}
+              title="Toggle jobs sidebar"
             >
               ssync
             </button>
@@ -178,7 +177,7 @@
             <!-- Desktop Navigation -->
             <nav class="hidden md:flex items-center space-x-1">
               <a
-                href="/jobs"
+                href="/"
                 use:link
                 class="nav-link {activeTab === 'jobs' ? 'nav-link-active' : ''}"
               >
@@ -216,7 +215,7 @@
             <!-- Mobile Navigation - inline with logo -->
             <nav class="md:hidden flex items-center space-x-1">
               <a
-                href="/jobs"
+                href="/"
                 use:link
                 class="mobile-nav-link-inline {activeTab === 'jobs' ? 'mobile-nav-link-inline-active' : ''}"
               >
@@ -289,8 +288,16 @@
     {/if}
 
     <!-- Main Content -->
-    <main class="flex-1 overflow-hidden flex flex-col">
-      <Router {routes} />
+    <main class="flex-1 w-full min-h-0 overflow-hidden flex">
+      <!-- Global Job Sidebar -->
+      {#if $sidebarOpen}
+        <JobSidebar />
+      {/if}
+
+      <!-- Page Content -->
+      <div class="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
+        <Router {routes} />
+      </div>
     </main>
   </div>
   

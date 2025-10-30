@@ -216,7 +216,7 @@
         </button>
       {:else}
         <!-- Desktop Job Detail Page: Jobs button -->
-        <button class="header-nav-button" onclick={() => push('/jobs')}>
+        <button class="header-nav-button" onclick={() => push('/')}>
           <ArrowLeft class="w-4 h-4" />
           Jobs
         </button>

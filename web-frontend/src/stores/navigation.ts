@@ -107,7 +107,7 @@ export const navigationActions = {
       case 'launch':
         return '/launch';
       case 'job':
-        return '/jobs';
+        return '/';
       default:
         return '/';
     }
@@ -126,10 +126,9 @@ export const navigationActions = {
     const stored = loadFromStorage();
 
     if (stored.previousRoute) {
-      if (stored.previousRoute === '/jobs') return 'Jobs';
+      if (stored.previousRoute === '/') return 'Jobs';
       if (stored.previousRoute === '/watchers') return 'Watchers';
       if (stored.previousRoute === '/launch') return 'Launch';
-      if (stored.previousRoute === '/') return 'Home';
     }
 
     switch (stored.context) {
