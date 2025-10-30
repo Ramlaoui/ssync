@@ -28,12 +28,21 @@
   <script>
     // Apply theme immediately to prevent flash
     (function() {
-      var storedTheme = localStorage.getItem('theme');
-      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      var isDark = storedTheme === 'dark' || (!storedTheme && prefersDark) || (storedTheme === 'system' && prefersDark);
+      try {
+        var storedTheme = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var isDark = storedTheme === 'dark' || (!storedTheme && prefersDark) || (storedTheme === 'system' && prefersDark);
 
-      if (isDark) {
-        document.documentElement.classList.add('dark');
+        if (isDark) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (error) {
+        // localStorage access failed (possibly in private browsing mode)
+        // Fallback to system preference
+        console.warn('localStorage access failed, using system preference');
+        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+          document.documentElement.classList.add('dark');
+        }
       }
     })();
 

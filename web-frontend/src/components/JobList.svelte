@@ -5,7 +5,8 @@
   import HostStatusIndicator from './HostStatusIndicator.svelte';
   import { jobUtils } from '../lib/jobUtils';
   import { jobStateManager } from '../lib/JobStateManager';
-  import { RefreshCw } from 'lucide-svelte';
+  import { RefreshCw, Eye } from 'lucide-svelte';
+  import { watchersByJob } from '../stores/watchers';
 
   interface Props {
     hostname: string;
@@ -87,7 +88,19 @@
     }
     return truncated + '...';
   }
-  
+
+  function hasWatchers(jobId: string): boolean {
+    return ($watchersByJob[jobId]?.length || 0) > 0;
+  }
+
+  function getWatcherCount(jobId: string): number {
+    return $watchersByJob[jobId]?.length || 0;
+  }
+
+  function formatWatcherCount(count: number): string {
+    return count > 99 ? '99+' : count.toString();
+  }
+
   onMount(() => {
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -135,7 +148,15 @@
         >
           <div class="flex justify-between items-start mb-2">
             <div class="flex flex-col">
-              <span class="text-base font-semibold text-gray-700 dark:text-gray-200">{job.job_id}</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-base font-semibold text-gray-700 dark:text-gray-200">{job.job_id}</span>
+                {#if hasWatchers(job.job_id)}
+                  <span class="watcher-indicator" title="{getWatcherCount(job.job_id)} watcher(s) active">
+                    <Eye size={12} />
+                    <span class="watcher-count">{formatWatcherCount(getWatcherCount(job.job_id))}</span>
+                  </span>
+                {/if}
+              </div>
               <span class="text-xs text-gray-500 dark:text-gray-400">{job.user || 'N/A'}</span>
             </div>
             <span
@@ -188,7 +209,15 @@
               onkeydown={(e) => e.key === 'Enter' && selectJob(job)}
             >
               <td class="px-4 py-3 whitespace-nowrap">
-                <strong class="text-gray-700 dark:text-gray-200 font-semibold">{job.job_id}</strong>
+                <div class="flex items-center gap-1.5">
+                  <strong class="text-gray-700 dark:text-gray-200 font-semibold">{job.job_id}</strong>
+                  {#if hasWatchers(job.job_id)}
+                    <span class="watcher-indicator" title="{getWatcherCount(job.job_id)} watcher(s) active">
+                      <Eye size={12} />
+                      <span class="watcher-count">{formatWatcherCount(getWatcherCount(job.job_id))}</span>
+                    </span>
+                  {/if}
+                </div>
               </td>
               <td class="px-4 py-3">
                 <div class="text-sm font-medium text-gray-700 dark:text-gray-200" title={job.name}>
@@ -250,3 +279,25 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .watcher-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    color: #6366f1;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+  }
+
+  .watcher-indicator:hover {
+    opacity: 1;
+  }
+
+  .watcher-count {
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
+  }
+</style>

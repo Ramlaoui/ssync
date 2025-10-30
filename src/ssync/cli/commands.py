@@ -67,12 +67,16 @@ class StatusCommand(BaseCommand):
                 click.echo(f"Failed to start API server: {error_msg}", err=True)
                 return False
 
+            # When querying specific job IDs, ignore since/limit to get precise results
+            query_since = None if job_ids else since
+            query_limit = None if job_ids else limit
+
             # Get jobs via API
             jobs = api_client.get_jobs(
                 host=host,
                 user=user,
-                since=since,
-                limit=limit,
+                since=query_since,
+                limit=query_limit,
                 job_ids=job_ids,
                 state_filter=state,
                 active_only=active_only,

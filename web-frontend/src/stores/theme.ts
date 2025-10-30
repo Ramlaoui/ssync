@@ -1,4 +1,5 @@
 import { writable, derived } from 'svelte/store';
+import { safeGetItem, safeSetItem } from '../lib/safeStorage';
 
 type Theme = 'light' | 'dark' | 'system';
 
@@ -8,7 +9,7 @@ const browser = typeof window !== 'undefined';
 // Create the store with system preference as default
 function createThemeStore() {
     // Get initial theme from localStorage or default to system
-    const storedTheme = browser ? localStorage.getItem('theme') as Theme : 'system';
+    const storedTheme = browser ? safeGetItem('theme') as Theme : 'system';
     const initialTheme: Theme = storedTheme || 'system';
 
     const { subscribe, set, update } = writable<Theme>(initialTheme);
@@ -17,7 +18,7 @@ function createThemeStore() {
         subscribe,
         set: (theme: Theme) => {
             if (browser) {
-                localStorage.setItem('theme', theme);
+                safeSetItem('theme', theme);
                 applyTheme(theme);
             }
             set(theme);
@@ -26,7 +27,7 @@ function createThemeStore() {
             update(current => {
                 const next = current === 'dark' ? 'light' : 'dark';
                 if (browser) {
-                    localStorage.setItem('theme', next);
+                    safeSetItem('theme', next);
                     applyTheme(next);
                 }
                 return next;
@@ -34,7 +35,7 @@ function createThemeStore() {
         },
         init: () => {
             if (browser) {
-                const stored = localStorage.getItem('theme') as Theme;
+                const stored = safeGetItem('theme') as Theme;
                 const theme = stored || 'system';
                 applyTheme(theme);
                 set(theme);
@@ -81,7 +82,7 @@ export const resolvedTheme = derived(theme, ($theme) => {
 if (browser) {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     mediaQuery.addEventListener('change', (e) => {
-        const currentTheme = localStorage.getItem('theme') as Theme;
+        const currentTheme = safeGetItem('theme') as Theme;
         if (currentTheme === 'system' || !currentTheme) {
             applyTheme('system');
         }

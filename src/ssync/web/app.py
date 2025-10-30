@@ -2313,15 +2313,22 @@ async def cancel_job(
             try:
                 success = manager.cancel_job(slurm_host, job_id)
                 if success:
-                    # Immediately stop any watchers for this job
-                    from ..watchers import get_watcher_engine
-                    engine = get_watcher_engine()
-                    await engine.stop_watchers_for_job(job_id, slurm_host.host.hostname)
-                    logger.info(f"Cancelled job {job_id} and stopped watchers")
+                    logger.info(f"Cancelled job {job_id} on {slurm_host.host.hostname}")
+
+                    # Try to stop any watchers for this job (don't fail the whole operation if this fails)
+                    try:
+                        from ..watchers import get_watcher_engine
+                        engine = get_watcher_engine()
+                        await engine.stop_watchers_for_job(job_id, slurm_host.host.hostname)
+                        logger.info(f"Stopped watchers for job {job_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to stop watchers for job {job_id}: {e}")
 
                     return {"message": "Job cancelled successfully"}
+                else:
+                    logger.warning(f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: scancel returned false")
             except Exception as e:
-                logger.debug(f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: {e}")
+                logger.warning(f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: {e}")
                 continue
 
         raise HTTPException(status_code=500, detail="Failed to cancel job on any host")

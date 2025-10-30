@@ -4,10 +4,11 @@
 
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
 import { writable, get } from 'svelte/store';
+import { safeGetItem, safeSetItem } from '../lib/safeStorage';
 
 export const apiConfig = writable({
   baseURL: import.meta.env.VITE_API_URL || '',
-  apiKey: localStorage.getItem('ssync_api_key') || import.meta.env.VITE_API_KEY || '',
+  apiKey: safeGetItem('ssync_api_key') || import.meta.env.VITE_API_KEY || '',
   authenticated: false,
   authError: null as string | null
 });
@@ -47,7 +48,7 @@ apiInstance = createApiInstance();
 
 apiConfig.subscribe(config => {
   if (config.apiKey) {
-    localStorage.setItem('ssync_api_key', config.apiKey);
+    safeSetItem('ssync_api_key', config.apiKey);
     apiInstance = createApiInstance();
   }
 });

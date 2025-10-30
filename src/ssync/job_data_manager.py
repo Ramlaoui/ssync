@@ -425,8 +425,8 @@ class JobDataManager:
                 await self._update_fetch_state(hostname, conn)
 
             # 3. ENHANCE WITH CACHED JOBS (filtered by user and respecting active_only/completed_only)
-            # Only merge cached jobs if we're not filtering to active_only
-            if not active_only:
+            # Only merge cached jobs if we're not filtering to active_only AND not querying specific job_ids
+            if not active_only and not job_ids:
                 cached_jobs = self.cache.get_cached_completed_jobs(
                     hostname, since=since_dt
                 )

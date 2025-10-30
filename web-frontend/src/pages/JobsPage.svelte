@@ -18,6 +18,7 @@
   import Separator from "../lib/components/ui/Separator.svelte";
   import NavigationHeader from "../components/NavigationHeader.svelte";
   import CollapsibleSection from "../lib/components/ui/CollapsibleSection.svelte";
+  import { fetchAllWatchers } from "../stores/watchers";
 
   let hosts: HostInfo[] = $state([]);
   let loading = $state(false);
@@ -327,6 +328,9 @@
   onMount(async () => {
     // Load hosts first
     await loadHosts();
+
+    // Load watchers for eye icon display (non-blocking)
+    fetchAllWatchers().catch(err => console.warn('Failed to load watchers:', err));
 
     // ⚡ PERFORMANCE FIX: Don't force sync on mount - let WebSocket deliver initial data
     // The JobStateManager connects WebSocket on initialization and will receive initial

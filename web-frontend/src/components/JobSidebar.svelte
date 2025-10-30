@@ -12,6 +12,8 @@
   import ArrayJobCard from './ArrayJobCard.svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import CollapsibleSection from '../lib/components/ui/CollapsibleSection.svelte';
+  import { Eye } from 'lucide-svelte';
+  import { watchersByJob } from '../stores/watchers';
 
   interface Props {
     currentJobId?: string;
@@ -156,9 +158,14 @@
     }
   });
 
-  let hasSearchResults = $derived(filteredRunningJobs.length > 0 ||
-                                   filteredPendingJobs.length > 0 ||
-                                   filteredRecentJobs.length > 0);
+  let hasSearchResults = $derived(
+    filteredRunningJobs.length > 0 ||
+    filteredPendingJobs.length > 0 ||
+    filteredRecentJobs.length > 0 ||
+    runningArrayGroups.length > 0 ||
+    pendingArrayGroups.length > 0 ||
+    completedArrayGroups.length > 0
+  );
 
   function matchesSearch(job: JobInfo, query: string): boolean {
     // Early return for better performance
@@ -191,11 +198,23 @@
   function toggleSearch() {
     showSearch = !showSearch;
     if (showSearch) {
-      // Focus the input after animation
+      // Focus the input immediately and after animation to ensure keyboard opens on mobile
+      // Immediate focus for mobile keyboard
+      requestAnimationFrame(() => {
+        const input = document.querySelector('.sidebar-search-input') as HTMLInputElement;
+        if (input) {
+          input.focus();
+          // Force click event on mobile to ensure keyboard appears
+          if (isMobile) {
+            input.click();
+          }
+        }
+      });
+      // Additional delayed focus in case animation interferes
       setTimeout(() => {
         const input = document.querySelector('.sidebar-search-input') as HTMLInputElement;
         if (input) input.focus();
-      }, 300);
+      }, 100);
     } else {
       searchInputValue = '';
       searchQuery = '';
@@ -262,7 +281,19 @@
     }
     return cleanName;
   }
-  
+
+  function hasWatchers(jobId: string): boolean {
+    return ($watchersByJob[jobId]?.length || 0) > 0;
+  }
+
+  function getWatcherCount(jobId: string): number {
+    return $watchersByJob[jobId]?.length || 0;
+  }
+
+  function formatWatcherCount(count: number): string {
+    return count > 99 ? '99+' : count.toString();
+  }
+
   onMount(() => {
     // JobStateManager automatically handles initial load
 
@@ -415,7 +446,15 @@
                 <div class="job-status" style="background-color: {job.state ? jobUtils.getStateColor(job.state) : '#9ca3af'}"></div>
                 <div class="job-info">
                   <div class="job-header">
-                    <span class="job-id">{job.job_id}</span>
+                    <div class="job-id-wrapper">
+                      <span class="job-id">{job.job_id}</span>
+                      {#if hasWatchers(job.job_id)}
+                        <span class="watcher-indicator" title="{getWatcherCount(job.job_id)} watcher(s) active">
+                          <Eye size={12} />
+                          <span class="watcher-count">{formatWatcherCount(getWatcherCount(job.job_id))}</span>
+                        </span>
+                      {/if}
+                    </div>
                     {#if job.runtime}
                       <span class="job-runtime-badge runtime-active">{formatRuntime(job.runtime)}</span>
                     {/if}
@@ -468,7 +507,15 @@
                 <div class="job-status" style="background-color: {job.state ? jobUtils.getStateColor(job.state) : '#9ca3af'}"></div>
                 <div class="job-info">
                   <div class="job-header">
-                    <span class="job-id">{job.job_id}</span>
+                    <div class="job-id-wrapper">
+                      <span class="job-id">{job.job_id}</span>
+                      {#if hasWatchers(job.job_id)}
+                        <span class="watcher-indicator" title="{getWatcherCount(job.job_id)} watcher(s) active">
+                          <Eye size={12} />
+                          <span class="watcher-count">{formatWatcherCount(getWatcherCount(job.job_id))}</span>
+                        </span>
+                      {/if}
+                    </div>
                   </div>
                   <div class="job-content">
                     <span class="job-name">{formatJobName(job.name)}</span>
@@ -531,7 +578,15 @@
                 <div class="job-status" style="background-color: {job.state ? jobUtils.getStateColor(job.state) : '#9ca3af'}"></div>
                 <div class="job-info">
                   <div class="job-header">
-                    <span class="job-id">{job.job_id}</span>
+                    <div class="job-id-wrapper">
+                      <span class="job-id">{job.job_id}</span>
+                      {#if hasWatchers(job.job_id)}
+                        <span class="watcher-indicator" title="{getWatcherCount(job.job_id)} watcher(s) active">
+                          <Eye size={12} />
+                          <span class="watcher-count">{formatWatcherCount(getWatcherCount(job.job_id))}</span>
+                        </span>
+                      {/if}
+                    </div>
                     {#if job.runtime}
                       <span class="job-runtime-badge">{formatRuntime(job.runtime)}</span>
                     {/if}
@@ -550,6 +605,19 @@
         </div>
       {/if}
 
+      <!-- No search results state -->
+      {#if searchQuery && !hasSearchResults && $allJobs.length > 0}
+        <div class="no-search-results">
+          <svg viewBox="0 0 24 24" fill="currentColor" class="no-results-icon">
+            <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+          </svg>
+          <p style="margin-bottom: 0.5rem; color: var(--muted-foreground);">No results for "{searchQuery}"</p>
+          <button class="clear-search-btn" onclick={clearSearch}>
+            Clear search
+          </button>
+        </div>
+      {/if}
+
       {#if $allJobs.length === 0}
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -565,7 +633,7 @@
 
 <style>
   .job-sidebar {
-    width: 280px;
+    width: 320px;
     height: 100%;
     max-height: 100vh;
     background: var(--secondary);
@@ -586,11 +654,13 @@
   
   .job-sidebar.mobile {
     width: 100%;
+    max-width: 100vw; /* Prevent expansion beyond viewport */
     height: 100%;
     border-right: none;
     border-top: 1px solid var(--border);
     /* On mobile, always show full width regardless of collapsed state */
     animation: slideInFromLeft 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    box-sizing: border-box; /* Include padding/border in width calculation */
   }
 
   .job-sidebar.mobile.closing {
@@ -761,6 +831,25 @@
     scroll-behavior: smooth;
     will-change: scroll-position;
     transform: translateZ(0);
+    /* Hide scrollbar while maintaining scroll functionality */
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE and Edge */
+  }
+
+  /* Hide scrollbar for WebKit browsers (Chrome, Safari, Edge) */
+  .sidebar-content::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /* Additional scrollbar hiding for all states */
+  .sidebar-content::-webkit-scrollbar-track {
+    display: none;
+  }
+
+  .sidebar-content::-webkit-scrollbar-thumb {
+    display: none;
   }
 
   .job-sidebar.mobile .sidebar-content {
@@ -768,6 +857,9 @@
     display: flex;
     flex-direction: column;
     padding: 0.375rem; /* Much smaller padding on mobile */
+    max-width: 100%; /* Prevent content from expanding beyond sidebar */
+    overflow-x: hidden; /* Hide horizontal overflow */
+    box-sizing: border-box;
   }
   
   .loading-state,
@@ -834,6 +926,7 @@
     align-items: flex-start;
     gap: 0.75rem;
     width: 100%;
+    max-width: 100%; /* Prevent expansion beyond parent */
     padding: 1rem;
     background: rgb(243 244 246); /* gray-100 for light mode */
     border: 1px solid var(--border);
@@ -844,6 +937,7 @@
     box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
     position: relative;
     overflow: hidden;
+    box-sizing: border-box; /* Include padding/border in width */
     /* Optimize rendering performance */
     backface-visibility: hidden;
     transform: translateZ(0);
@@ -923,6 +1017,38 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 0.25rem;
+    gap: 0.5rem;
+    min-width: 0; /* Allow flex items to shrink */
+    max-width: 100%;
+  }
+
+  .job-id-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .watcher-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    color: #6366f1;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+    margin-left: 0.25rem;
+  }
+
+  .watcher-indicator:hover {
+    opacity: 1;
+  }
+
+  .watcher-count {
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
   }
 
   .job-content {
@@ -930,12 +1056,19 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 0.25rem;
+    gap: 0.5rem;
+    min-width: 0; /* Allow flex items to shrink */
+    max-width: 100%;
   }
 
   .job-id {
     font-size: 1rem;
     font-weight: 700;
     color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
 
   .job-runtime {

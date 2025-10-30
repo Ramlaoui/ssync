@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { safeGetItem, safeSetItem } from '../lib/safeStorage';
 
 interface WebSocketConfig {
   initialRetryDelay: number;    // milliseconds
@@ -36,7 +37,7 @@ function loadPreferences(): UIPreferences {
     return defaultPreferences;
   }
 
-  const stored = localStorage.getItem('ui-preferences');
+  const stored = safeGetItem('ui-preferences');
   if (stored) {
     try {
       return { ...defaultPreferences, ...JSON.parse(stored) };
@@ -54,7 +55,7 @@ export const preferences = writable<UIPreferences>(initialPreferences);
 // Save to localStorage whenever preferences change
 preferences.subscribe((value) => {
   if (typeof window !== 'undefined') {
-    localStorage.setItem('ui-preferences', JSON.stringify(value));
+    safeSetItem('ui-preferences', JSON.stringify(value));
   }
 });
 
