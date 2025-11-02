@@ -240,11 +240,11 @@ class JobDataManager:
             try:
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
-                    timeout=15.0,  # 15s timeout for initial connection
+                    timeout=30.0,  # 30s timeout for initial connection
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Connection to {hostname} timed out after 15s, attempting connection refresh..."
+                    f"Connection to {hostname} timed out after 30s, attempting connection refresh..."
                 )
                 # Try a gentle refresh first (not force) - this preserves more state
                 try:
@@ -254,7 +254,7 @@ class JobDataManager:
                             slurm_host.host,
                             False,  # Don't force
                         ),
-                        timeout=15.0,  # Give 15s for retry
+                        timeout=30.0,  # Give 30s for retry
                     )
                 except asyncio.TimeoutError:
                     logger.error(
@@ -753,6 +753,7 @@ class JobDataManager:
                             conn.run,
                             f"test -f '{job_info.stdout_file}' && echo 'exists' || echo 'notfound'",
                             hide=True,
+                            timeout=10,
                         )
 
                         if "exists" in check_result.stdout:
@@ -760,6 +761,7 @@ class JobDataManager:
                                 conn.run,
                                 f"cat '{job_info.stdout_file}'",
                                 hide=True,
+                                timeout=60,
                             )
                             if result.ok:
                                 stdout_content = result.stdout
@@ -839,6 +841,7 @@ class JobDataManager:
                             conn.run,
                             f"test -f '{job_info.stderr_file}' && echo 'exists' || echo 'notfound'",
                             hide=True,
+                            timeout=10,
                         )
 
                         if "exists" in check_result.stdout:
@@ -846,6 +849,7 @@ class JobDataManager:
                                 conn.run,
                                 f"cat '{job_info.stderr_file}'",
                                 hide=True,
+                                timeout=60,
                             )
                             if result.ok:
                                 stderr_content = result.stdout

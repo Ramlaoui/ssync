@@ -18,10 +18,11 @@ let apiInstance: AxiosInstance;
 function createApiInstance() {
   const config = get(apiConfig);
   
-  // ⚡ PERFORMANCE: Reduced timeout for faster failure detection
+  // ⚡ PERFORMANCE: Timeout for API requests
+  // Increased to 90s to allow for large output file fetching (backend has 60s SSH timeout + overhead)
   apiInstance = axios.create({
     baseURL: config.baseURL,
-    timeout: 15000, // Reduced from 30s to 15s for faster UI responsiveness
+    timeout: 90000, // 90s timeout for API requests
     headers: config.apiKey ? {
       'X-API-Key': config.apiKey
     } : {}

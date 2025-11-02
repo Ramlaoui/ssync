@@ -232,7 +232,7 @@ class ServerManager:
             # Wait for API to become responsive
             protocol = "https" if self.use_https else "http"
             start_time = time.time()
-            max_wait = 15  # Maximum seconds to wait
+            max_wait = 30  # Maximum seconds to wait
 
             # Use localhost for health checks even if binding to 0.0.0.0
             check_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
