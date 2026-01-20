@@ -96,17 +96,26 @@ class ServerManager:
         pid = self._get_saved_pid()
         if pid and self._is_process_running(pid):
             # Verify it's actually our API server by checking the endpoint
-            try:
-                protocol = "https" if self.use_https else "http"
-                response = requests.get(
-                    f"{protocol}://{check_host}:{self.port}/health",
-                    timeout=2,
-                    verify=False,
-                )
-                return response.status_code == 200
-            except requests.exceptions.RequestException:
-                # Process exists but API not responding, might be starting up
-                return False
+            # Retry a few times in case server is starting up
+            protocol = "https" if self.use_https else "http"
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    response = requests.get(
+                        f"{protocol}://{check_host}:{self.port}/health",
+                        timeout=2,
+                        verify=False,
+                    )
+                    if response.status_code == 200:
+                        return True
+                except requests.exceptions.RequestException:
+                    # Process exists but API not responding yet
+                    if attempt < max_retries - 1:
+                        # Wait a bit before retrying (server might be starting up)
+                        time.sleep(0.5)
+                        continue
+                    # All retries failed
+                    return False
 
         # No PID or process not running, check if something else is on the port
         if not self._check_port_available():

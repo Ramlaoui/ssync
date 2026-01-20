@@ -236,37 +236,20 @@ class JobDataManager:
         logger.info(f"_fetch_host_jobs called for {hostname} with limit={limit}, job_ids={job_ids}")
 
         try:
-            # Get connection with timeout - if it takes too long, try force refresh
+            # ⚡ PERFORMANCE: Reduced timeout from 30s to 5s for faster failure
+            # This prevents long blocking when hosts are unreachable
             try:
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
-                    timeout=30.0,  # 30s timeout for initial connection
+                    timeout=5.0,  # 5s timeout for initial connection (reduced from 30s)
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Connection to {hostname} timed out after 30s, attempting connection refresh..."
+                    f"Connection to {hostname} timed out after 5s, skipping host for this cycle"
                 )
-                # Try a gentle refresh first (not force) - this preserves more state
-                try:
-                    conn = await asyncio.wait_for(
-                        self._run_in_executor(
-                            manager._get_connection,
-                            slurm_host.host,
-                            False,  # Don't force
-                        ),
-                        timeout=30.0,  # Give 30s for retry
-                    )
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"Connection to {hostname} still timing out after retry, using force refresh as last resort..."
-                    )
-                    # Only force refresh as absolute last resort
-                    conn = await asyncio.wait_for(
-                        self._run_in_executor(
-                            manager._get_connection, slurm_host.host, True
-                        ),
-                        timeout=30.0,  # Give more time for fresh connection
-                    )
+                # Don't retry - just skip this host and try again next cycle
+                # This prevents cascading timeouts that block other operations
+                return []
 
             # Check SLURM availability - run in thread pool
             slurm_available = await self._run_in_executor(
@@ -425,8 +408,26 @@ class JobDataManager:
                 await self._update_fetch_state(hostname, conn)
 
             # 3. ENHANCE WITH CACHED JOBS (filtered by user and respecting active_only/completed_only)
-            # Only merge cached jobs if we're not filtering to active_only AND not querying specific job_ids
-            if not active_only and not job_ids:
+            # Special case: When querying specific job_ids, ALWAYS check cache if not found in SLURM
+            if job_ids and len(jobs) < len(job_ids):
+                # Some job_ids were not found in SLURM - try cache
+                found_job_ids = {job.job_id for job in jobs}
+                missing_job_ids = set(job_ids) - found_job_ids
+
+                logger.debug(
+                    f"Looking for {len(missing_job_ids)} missing job_ids in cache: {missing_job_ids}"
+                )
+
+                for missing_id in missing_job_ids:
+                    cached_job = self.cache.get_cached_job(missing_id, hostname)
+                    if cached_job and cached_job.job_info:
+                        # Verify it belongs to the current user
+                        if cached_job.job_info.user == effective_user:
+                            jobs.append(cached_job.job_info)
+                            logger.debug(f"Found missing job {missing_id} in cache")
+
+            # Regular case: merge with cached completed jobs for bulk queries
+            elif not active_only and not job_ids:
                 cached_jobs = self.cache.get_cached_completed_jobs(
                     hostname, since=since_dt
                 )

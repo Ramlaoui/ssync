@@ -7,7 +7,7 @@
 
 import { writable, derived, get, type Readable } from 'svelte/store';
 import type { JobInfo, HostInfo, JobStatusResponse, ArrayJobGroup } from '../types/api';
-import { api } from '../services/api';
+import { api, apiConfig } from '../services/api';
 import { notificationService } from '../services/notifications';
 import { preferences } from '../stores/preferences';
 import type {
@@ -277,8 +277,11 @@ class JobStateManager {
     }
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws/jobs`;
-    console.log('[JobStateManager] 🌐 WebSocket URL:', wsUrl);
+    // Add API key to WebSocket URL if configured
+    const config = get(apiConfig);
+    const apiKeyParam = config.apiKey ? `?api_key=${encodeURIComponent(config.apiKey)}` : '';
+    const wsUrl = `${protocol}//${location.host}/ws/jobs${apiKeyParam}`;
+    console.log('[JobStateManager] 🌐 WebSocket URL:', wsUrl.replace(/api_key=[^&]+/, 'api_key=***'));
 
     this.ws = this.wsFactory.create(wsUrl) as WebSocket;
     console.log('[JobStateManager] 📡 WebSocket object created, waiting for connection...');

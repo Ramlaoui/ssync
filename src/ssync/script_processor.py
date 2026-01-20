@@ -23,6 +23,60 @@ class ScriptProcessor:
             return False
 
     @staticmethod
+    def extract_array_spec(script_content: str) -> Optional[str]:
+        """
+        Extract array job specification from SLURM script.
+
+        Returns:
+            Array spec string (e.g., "0-5", "1,3,5", "0-100%10") or None if not an array job
+        """
+        # Look for #SBATCH --array=... directive
+        match = re.search(r"#SBATCH\s+--array[=\s]+([^\s]+)", script_content)
+        if match:
+            return match.group(1)
+        return None
+
+    @staticmethod
+    def parse_array_spec(array_spec: str) -> Optional[int]:
+        """
+        Parse array spec to determine expected number of tasks.
+
+        Args:
+            array_spec: Array specification like "0-5", "1,3,5", "0-100%10"
+
+        Returns:
+            Expected number of tasks, or None if cannot determine
+        """
+        if not array_spec:
+            return None
+
+        try:
+            # Handle step notation (e.g., "0-100%10" means 11 tasks)
+            if "%" in array_spec:
+                range_part, step = array_spec.split("%")
+                step = int(step)
+            else:
+                range_part = array_spec
+                step = 1
+
+            # Handle comma-separated list (e.g., "1,3,5")
+            if "," in range_part:
+                return len(range_part.split(","))
+
+            # Handle range notation (e.g., "0-5")
+            if "-" in range_part:
+                start, end = range_part.split("-")
+                start = int(start)
+                end = int(end)
+                return (end - start) // step + 1
+
+            # Single task
+            return 1
+
+        except (ValueError, IndexError):
+            return None
+
+    @staticmethod
     def ensure_shebang(content: str) -> str:
         """Ensure script has proper shebang."""
         if not content.startswith("#!"):
@@ -244,7 +298,7 @@ class ScriptProcessor:
                         watcher.captures = [v.strip() for v in value.split(",")]
                 elif key == "condition":
                     watcher.condition = value.strip("\"'")
-                elif key == "timer_mode_enabled":
+                elif key == "timer_mode_enabled" or key == "timer_mode":
                     watcher.timer_mode_enabled = value.lower() in [
                         "true",
                         "yes",

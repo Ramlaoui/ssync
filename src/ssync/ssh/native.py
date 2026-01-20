@@ -53,6 +53,10 @@ class NativeSSH:
 
         return str(control_dir / f"control_{host_hash}.sock")
 
+    # Class-level tracking of failed connection attempts to avoid repeated failures
+    _failed_hosts: Dict[str, float] = {}  # host_id -> last_failed_time
+    _FAILURE_BACKOFF = 60.0  # Don't retry failed hosts for 60 seconds
+
     @classmethod
     def ensure_control_master(
         cls, host_config: Union[str, Dict], host_id: str
@@ -66,6 +70,18 @@ class NativeSSH:
         Returns:
             Control socket path if successful, None otherwise
         """
+        import time
+
+        # Check if this host recently failed - if so, skip retry for backoff period
+        if host_id in cls._failed_hosts:
+            time_since_failure = time.time() - cls._failed_hosts[host_id]
+            if time_since_failure < cls._FAILURE_BACKOFF:
+                logger.debug(
+                    f"Skipping ControlMaster retry for {host_id} "
+                    f"(failed {time_since_failure:.1f}s ago, backoff={cls._FAILURE_BACKOFF}s)"
+                )
+                return None
+
         # Get control path
         control_path = cls.get_control_path(host_id)
 
@@ -75,6 +91,8 @@ class NativeSSH:
             if cls._check_control_master(control_path, host_config):
                 # Existing ControlMaster is valid, use it!
                 cls._control_masters[host_id] = control_path
+                # Clear failure record on success
+                cls._failed_hosts.pop(host_id, None)
                 logger.debug(f"Found existing ControlMaster for {host_id}")
                 return control_path
             else:
@@ -183,20 +201,30 @@ class NativeSSH:
             # Check if socket was created
             if Path(control_path).exists():
                 cls._control_masters[host_id] = control_path
+                # Clear failure record on success
+                cls._failed_hosts.pop(host_id, None)
                 logger.debug(f"ControlMaster established for {host_id}")
                 return control_path
             else:
+                # Record failure with timestamp for backoff
+                cls._failed_hosts[host_id] = time.time()
                 if result.stderr:
-                    logger.error(f"Failed to establish ControlMaster: {result.stderr}")
+                    logger.error(f"Failed to establish ControlMaster for {host_id}: {result.stderr}")
                 if result.stdout:
                     logger.debug(f"SSH stdout: {result.stdout}")
                 return None
 
         except subprocess.TimeoutExpired:
+            # Record failure with timestamp for backoff
+            import time
+            cls._failed_hosts[host_id] = time.time()
             logger.error(f"Timeout establishing ControlMaster for {host_id}")
             return None
         except Exception as e:
-            logger.error(f"Error establishing ControlMaster: {e}")
+            # Record failure with timestamp for backoff
+            import time
+            cls._failed_hosts[host_id] = time.time()
+            logger.error(f"Error establishing ControlMaster for {host_id}: {e}")
             return None
 
     @classmethod

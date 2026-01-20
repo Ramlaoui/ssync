@@ -135,7 +135,7 @@ class ActionExecutor:
     async def _cancel_job(
         self, job_id: str, hostname: str, params: Dict[str, Any]
     ) -> Tuple[bool, str]:
-        """Cancel a SLURM job."""
+        """Cancel a SLURM job with per-host throttling."""
         try:
             from ..web.app import get_slurm_manager
 
@@ -146,8 +146,20 @@ class ActionExecutor:
             slurm_host = manager.get_host_by_name(hostname)
             conn = manager._get_connection(slurm_host.host)
 
-            # Cancel the job
-            result = conn.run(f"scancel {job_id}", hide=True, warn=True)
+            # Import throttler for rate limiting SSH commands per host
+            import asyncio
+
+            from .engine import get_host_throttler
+
+            throttler = get_host_throttler()
+
+            # Cancel the job with throttling
+            def do_cancel():
+                return conn.run(f"scancel {job_id}", hide=True, warn=True)
+
+            async with throttler.throttle(hostname):
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, do_cancel)
 
             if result.ok:
                 reason = params.get("reason", "Triggered by watcher")
@@ -173,7 +185,7 @@ class ActionExecutor:
     async def _resubmit_job(
         self, job_id: str, hostname: str, params: Dict[str, Any]
     ) -> Tuple[bool, str]:
-        """Resubmit a job with modified parameters."""
+        """Resubmit a job with modified parameters and per-host throttling."""
         try:
             from ..cache import get_cache
             from ..web.app import get_slurm_manager
@@ -198,7 +210,7 @@ class ActionExecutor:
                 replacement = f"#SBATCH --{key}={value}"
                 script_content = re.sub(pattern, replacement, script_content)
 
-            # Cancel previous job first if requested
+            # Cancel previous job first if requested (already throttled)
             if params.get("cancel_previous", True):
                 await self._cancel_job(job_id, hostname, {"reason": "Resubmitting"})
 
@@ -206,19 +218,29 @@ class ActionExecutor:
             slurm_host = manager.get_host_by_name(hostname)
             conn = manager._get_connection(slurm_host.host)
 
+            # Import throttler for rate limiting SSH commands per host
+            import asyncio
+
+            from .engine import get_host_throttler
+
+            throttler = get_host_throttler()
+
             # Write script to temp file and submit
             with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
                 f.write(script_content)
                 temp_path = f.name
 
             try:
-                # Transfer script
-                conn.put(temp_path, f"/tmp/resubmit_{job_id}.sh")
+                # Transfer script and submit with throttling
+                def do_transfer_and_submit():
+                    conn.put(temp_path, f"/tmp/resubmit_{job_id}.sh")
+                    return conn.run(
+                        f"sbatch /tmp/resubmit_{job_id}.sh", hide=True, warn=True
+                    )
 
-                # Submit
-                result = conn.run(
-                    f"sbatch /tmp/resubmit_{job_id}.sh", hide=True, warn=True
-                )
+                async with throttler.throttle(hostname):
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(None, do_transfer_and_submit)
 
                 if result.ok:
                     # Extract new job ID
@@ -233,7 +255,20 @@ class ActionExecutor:
             finally:
                 # Clean up temp file
                 os.unlink(temp_path)
-                conn.run(f"rm -f /tmp/resubmit_{job_id}.sh", warn=True)
+
+                # Cleanup remote file with throttling
+                async def cleanup_remote():
+                    async with throttler.throttle(hostname):
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            None,
+                            lambda: conn.run(f"rm -f /tmp/resubmit_{job_id}.sh", warn=True)
+                        )
+
+                try:
+                    await cleanup_remote()
+                except Exception:
+                    pass  # Ignore cleanup errors
 
         except Exception as e:
             logger.error(f"Failed to resubmit job {job_id}: {e}")
@@ -246,7 +281,7 @@ class ActionExecutor:
         params: Dict[str, Any],
         variables: Dict[str, Any],
     ) -> Tuple[bool, str]:
-        """Send email notification."""
+        """Send email notification with per-host throttling."""
         try:
             recipient = params.get("to", os.environ.get("SSYNC_EMAIL"))
             if not recipient:
@@ -269,12 +304,24 @@ class ActionExecutor:
                 slurm_host = manager.get_host_by_name(hostname)
                 conn = manager._get_connection(slurm_host.host)
 
-                # Send email via mail command
-                result = conn.run(
-                    f'echo "{message}" | mail -s "{subject}" {recipient}',
-                    hide=True,
-                    warn=True,
-                )
+                # Import throttler for rate limiting SSH commands per host
+                import asyncio
+
+                from .engine import get_host_throttler
+
+                throttler = get_host_throttler()
+
+                # Send email via mail command with throttling
+                def do_send_email():
+                    return conn.run(
+                        f'echo "{message}" | mail -s "{subject}" {recipient}',
+                        hide=True,
+                        warn=True,
+                    )
+
+                async with throttler.throttle(hostname):
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(None, do_send_email)
 
                 if result.ok:
                     logger.info(
@@ -349,7 +396,7 @@ class ActionExecutor:
         params: Dict[str, Any],
         variables: Dict[str, Any],
     ) -> Tuple[bool, str]:
-        """Run a custom command."""
+        """Run a custom command with per-host throttling."""
         try:
             command = params.get("command")
             if not command:
@@ -414,19 +461,32 @@ class ActionExecutor:
             slurm_host = manager.get_host_by_name(hostname)
             conn = manager._get_connection(slurm_host.host)
 
+            # Import throttler for rate limiting SSH commands per host
+            from .engine import get_host_throttler
+
+            throttler = get_host_throttler()
+
             # Try to get job's working directory for better context
+            # This is also throttled to prevent resource exhaustion
             work_dir = None
             try:
-                # Get job info to find working directory
-                job_result = conn.run(
-                    f"scontrol show job {job_id}", hide=True, warn=True
-                )
-                if job_result.ok:
-                    for line in job_result.stdout.split("\n"):
-                        if "WorkDir=" in line:
-                            work_dir = line.split("WorkDir=")[1].split()[0]
-                            break
-            except:
+                async with throttler.throttle(hostname):
+                    # Get job info to find working directory
+                    import asyncio
+
+                    def get_work_dir():
+                        job_result = conn.run(
+                            f"scontrol show job {job_id}", hide=True, warn=True
+                        )
+                        if job_result.ok:
+                            for line in job_result.stdout.split("\n"):
+                                if "WorkDir=" in line:
+                                    return line.split("WorkDir=")[1].split()[0]
+                        return None
+
+                    loop = asyncio.get_event_loop()
+                    work_dir = await loop.run_in_executor(None, get_work_dir)
+            except Exception:
                 pass  # Continue without work dir
 
             # Run command (in job's working directory if available)
@@ -439,7 +499,7 @@ class ActionExecutor:
                     command = f"cd {work_dir} && {command}"
                     logger.info(f"Running command in job directory: {work_dir}")
 
-            # Run command asynchronously using asyncio.to_thread to avoid blocking
+            # Run command asynchronously with throttling to prevent resource exhaustion
             import asyncio
 
             def run_ssh_command():
@@ -453,9 +513,11 @@ class ActionExecutor:
                     logger.error(f"SSH command execution failed: {e}")
                     return None
 
-            # Run the SSH command in a thread pool to avoid blocking the event loop
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, run_ssh_command)
+            # Throttle the main command execution
+            async with throttler.throttle(hostname):
+                # Run the SSH command in a thread pool to avoid blocking the event loop
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, run_ssh_command)
 
             if result is None:
                 return False, "Failed to execute SSH command"

@@ -3,8 +3,9 @@
 import asyncio
 import json
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from ..cache import get_cache
 from ..models.job import JobInfo, JobState
@@ -18,6 +19,94 @@ from ..utils.logging import setup_logger
 logger = setup_logger(__name__)
 
 
+class HostCommandThrottler:
+    """
+    Limits concurrent SSH commands per host to prevent resource exhaustion.
+
+    This prevents the "Resource temporarily unavailable" (OS error 11) errors
+    that occur when too many concurrent SSH commands overwhelm a login node.
+    """
+
+    def __init__(self, max_concurrent_per_host: int = 3):
+        """
+        Initialize the throttler.
+
+        Args:
+            max_concurrent_per_host: Maximum concurrent SSH commands allowed per host.
+                                     Default is 3 to be conservative with login node resources.
+        """
+        self.max_concurrent = max_concurrent_per_host
+        self._semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._lock = asyncio.Lock()
+        self._pending_count: Dict[str, int] = {}  # Track waiting requests
+
+    async def _get_semaphore(self, hostname: str) -> asyncio.Semaphore:
+        """Get or create a semaphore for the given host."""
+        async with self._lock:
+            if hostname not in self._semaphores:
+                self._semaphores[hostname] = asyncio.Semaphore(self.max_concurrent)
+                self._pending_count[hostname] = 0
+            return self._semaphores[hostname]
+
+    @asynccontextmanager
+    async def throttle(self, hostname: str):
+        """
+        Context manager for throttled command execution.
+
+        Usage:
+            async with throttler.throttle("my-host"):
+                # Execute SSH command here
+                result = conn.run(...)
+        """
+        semaphore = await self._get_semaphore(hostname)
+
+        # Track pending requests for monitoring
+        async with self._lock:
+            self._pending_count[hostname] = self._pending_count.get(hostname, 0) + 1
+            pending = self._pending_count[hostname]
+
+        if pending > self.max_concurrent:
+            logger.debug(
+                f"Throttling: {pending} commands waiting for host {hostname} "
+                f"(max concurrent: {self.max_concurrent})"
+            )
+
+        try:
+            await semaphore.acquire()
+            async with self._lock:
+                self._pending_count[hostname] -= 1
+            yield
+        finally:
+            semaphore.release()
+
+    def get_stats(self) -> Dict[str, Dict[str, int]]:
+        """Get current throttling statistics."""
+        stats = {}
+        for hostname in self._semaphores:
+            sem = self._semaphores[hostname]
+            # Semaphore._value gives available slots (internal but useful for debugging)
+            available = getattr(sem, '_value', self.max_concurrent)
+            stats[hostname] = {
+                "max_concurrent": self.max_concurrent,
+                "available_slots": available,
+                "in_use": self.max_concurrent - available,
+                "pending": self._pending_count.get(hostname, 0),
+            }
+        return stats
+
+
+# Global throttler instance - shared across all watchers and action executors
+_host_throttler: Optional[HostCommandThrottler] = None
+
+
+def get_host_throttler() -> HostCommandThrottler:
+    """Get or create the global host command throttler."""
+    global _host_throttler
+    if _host_throttler is None:
+        _host_throttler = HostCommandThrottler(max_concurrent_per_host=3)
+    return _host_throttler
+
+
 class WatcherEngine:
     """Engine for running and managing watchers."""
 
@@ -28,10 +117,17 @@ class WatcherEngine:
         self._pattern_cache: Dict[str, re.Pattern] = {}  # Cache compiled regex patterns
 
     async def start_watchers_for_job(
-        self, job_id: str, hostname: str, watchers: List[WatcherDefinition]
+        self, job_id: str, hostname: str, watchers: List[WatcherDefinition],
+        parent_watcher_id: Optional[int] = None
     ) -> List[int]:
         """
         Start watchers for a newly submitted job.
+
+        Args:
+            job_id: Job ID to watch
+            hostname: Hostname of the SLURM cluster
+            watchers: List of watcher definitions
+            parent_watcher_id: Optional parent watcher ID for array task watchers
 
         Returns:
             List of watcher IDs
@@ -40,20 +136,35 @@ class WatcherEngine:
 
         for definition in watchers:
             # Store watcher in database
-            watcher_id = self._store_watcher(job_id, hostname, definition)
+            watcher_id = self._store_watcher(job_id, hostname, definition, parent_watcher_id)
             if watcher_id:
                 watcher_ids.append(watcher_id)
 
-                # Start monitoring task
-                task = asyncio.create_task(
-                    self._monitor_watcher(watcher_id, job_id, hostname)
-                )
-                self.active_tasks[watcher_id] = task
+                # Update expected task count for array templates
+                if definition.is_array_template and definition.array_spec:
+                    from ..script_processor import ScriptProcessor
+                    expected_tasks = ScriptProcessor.parse_array_spec(definition.array_spec)
+                    if expected_tasks:
+                        self._update_watcher_expected_task_count(watcher_id, expected_tasks)
 
-                logger.info(
-                    f"Started watcher {watcher_id} for job {job_id}: "
-                    f"pattern='{definition.pattern}', interval={definition.interval_seconds}s"
-                )
+                # Only start monitoring for non-template watchers
+                # Templates will spawn child watchers for discovered tasks
+                if not definition.is_array_template:
+                    # Start monitoring task
+                    task = asyncio.create_task(
+                        self._monitor_watcher(watcher_id, job_id, hostname)
+                    )
+                    self.active_tasks[watcher_id] = task
+
+                    logger.info(
+                        f"Started watcher {watcher_id} for job {job_id}: "
+                        f"pattern='{definition.pattern}', interval={definition.interval_seconds}s"
+                    )
+                else:
+                    logger.info(
+                        f"Created array template watcher {watcher_id} for job {job_id}: "
+                        f"array_spec='{definition.array_spec}'"
+                    )
 
         return watcher_ids
 
@@ -125,6 +236,169 @@ class WatcherEngine:
         except Exception as e:
             logger.error(f"Error cleaning up orphaned watchers: {e}")
 
+    async def discover_and_spawn_array_tasks(self, template_watcher_id: int) -> int:
+        """
+        Discover array tasks for a template watcher and spawn child watchers.
+
+        Args:
+            template_watcher_id: ID of the template watcher
+
+        Returns:
+            Number of new tasks discovered and spawned
+        """
+        try:
+            # Get template watcher
+            template = self._get_watcher(template_watcher_id)
+            if not template or not template.definition.is_array_template:
+                logger.warning(f"Watcher {template_watcher_id} is not an array template")
+                return 0
+
+            # Get base job ID (remove any task suffix if present)
+            base_job_id = template.job_id.split("_")[0] if "_" in template.job_id else template.job_id
+
+            # Discover array tasks by querying jobs with pattern base_job_id_*
+            discovered_tasks = await self._discover_array_task_jobs(base_job_id, template.hostname)
+
+            # Get already spawned tasks
+            existing_task_ids = self._get_spawned_task_ids(template_watcher_id)
+
+            # Spawn watchers for new tasks
+            new_tasks = [task_id for task_id in discovered_tasks if task_id not in existing_task_ids]
+
+            if new_tasks:
+                logger.info(
+                    f"Discovered {len(new_tasks)} new array tasks for watcher {template_watcher_id}: {new_tasks}"
+                )
+
+                for task_job_id in new_tasks:
+                    # Clone the template definition (without the array template flag)
+                    child_definition = WatcherDefinition(
+                        name=template.definition.name,
+                        pattern=template.definition.pattern,
+                        interval_seconds=template.definition.interval_seconds,
+                        captures=template.definition.captures,
+                        condition=template.definition.condition,
+                        actions=template.definition.actions,
+                        max_triggers=template.definition.max_triggers,
+                        output_type=template.definition.output_type,
+                        timer_mode_enabled=template.definition.timer_mode_enabled,
+                        timer_interval_seconds=template.definition.timer_interval_seconds,
+                        is_array_template=False,  # Child watchers are not templates
+                        array_spec=None,
+                    )
+
+                    # Start watcher for this specific array task
+                    await self.start_watchers_for_job(
+                        job_id=task_job_id,
+                        hostname=template.hostname,
+                        watchers=[child_definition],
+                        parent_watcher_id=template_watcher_id,
+                    )
+
+                # Update discovered task count
+                total_discovered = len(existing_task_ids) + len(new_tasks)
+                self._update_watcher_discovered_task_count(template_watcher_id, total_discovered)
+
+                return len(new_tasks)
+            else:
+                logger.debug(f"No new array tasks found for watcher {template_watcher_id}")
+                return 0
+
+        except Exception as e:
+            logger.error(f"Error discovering array tasks for watcher {template_watcher_id}: {e}")
+            return 0
+
+    async def _discover_array_task_jobs(self, base_job_id: str, hostname: str) -> List[str]:
+        """
+        Discover array task job IDs by querying SLURM.
+
+        Args:
+            base_job_id: Base job ID (without task suffix)
+            hostname: Hostname to query
+
+        Returns:
+            List of array task job IDs (e.g., ["12345_0", "12345_1", ...])
+        """
+        try:
+            from ..job_data_manager import get_job_data_manager
+
+            manager = get_job_data_manager()
+
+            # Fetch all jobs for this hostname
+            # SLURM will show array tasks as separate jobs with IDs like "12345_0", "12345_1"
+            all_jobs = await manager.fetch_all_jobs(hostname=hostname, force_refresh=True)
+
+            # Filter for jobs that match the array pattern
+            array_tasks = []
+            for job in all_jobs:
+                if job.array_job_id == base_job_id:
+                    # This is an array task
+                    array_tasks.append(job.job_id)
+
+            return array_tasks
+
+        except Exception as e:
+            logger.error(f"Failed to discover array tasks for {base_job_id}: {e}")
+            return []
+
+    def _get_spawned_task_ids(self, template_watcher_id: int) -> Set[str]:
+        """Get job IDs for which child watchers have already been spawned."""
+        try:
+            with self.cache._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT job_id FROM job_watchers WHERE parent_watcher_id = ?",
+                    (template_watcher_id,),
+                )
+                return {row["job_id"] for row in cursor.fetchall()}
+        except Exception as e:
+            logger.error(f"Failed to get spawned task IDs: {e}")
+            return set()
+
+    async def check_array_templates(self):
+        """Check all array template watchers and spawn watchers for new tasks."""
+        try:
+            # Get all array template watchers
+            with self.cache._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT id, job_id, hostname
+                    FROM job_watchers
+                    WHERE is_array_template = 1 AND state = 'active'
+                    """
+                )
+                templates = cursor.fetchall()
+
+            if not templates:
+                return
+
+            logger.debug(f"Checking {len(templates)} array template watchers for new tasks")
+
+            # Check each template for new tasks
+            for row in templates:
+                template_id = row["id"]
+                job_id = row["job_id"]
+
+                # Check if the parent job is still active
+                job_info = await self._get_job_info(job_id, row["hostname"])
+
+                if not job_info:
+                    # Parent job not found, mark template as completed
+                    logger.info(f"Parent job {job_id} not found, completing template {template_id}")
+                    self._update_watcher_state(template_id, WatcherState.COMPLETED)
+                    continue
+
+                if job_info.state in [JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.TIMEOUT]:
+                    # Parent job finished, mark template as completed
+                    logger.info(f"Parent job {job_id} finished, completing template {template_id}")
+                    self._update_watcher_state(template_id, WatcherState.COMPLETED)
+                    continue
+
+                # Discover and spawn new array tasks
+                await self.discover_and_spawn_array_tasks(template_id)
+
+        except Exception as e:
+            logger.error(f"Error checking array templates: {e}")
+
     async def check_and_restart_watchers(self):
         """Check health of watchers and restart if needed."""
         try:
@@ -182,6 +456,9 @@ class WatcherEngine:
                             f"Watcher {watcher_id} hasn't checked in {time_since_check:.0f}s "
                             f"(expected every {interval}s)"
                         )
+
+            # Check array templates for new tasks (integrated into health check loop)
+            await self.check_array_templates()
 
         except Exception as e:
             logger.error(f"Error checking watcher health: {e}")
@@ -679,18 +956,20 @@ class WatcherEngine:
     # Database helper methods
 
     def _store_watcher(
-        self, job_id: str, hostname: str, definition: WatcherDefinition
+        self, job_id: str, hostname: str, definition: WatcherDefinition,
+        parent_watcher_id: Optional[int] = None
     ) -> Optional[int]:
         """Store watcher in database."""
         try:
             with self.cache._get_connection() as conn:
                 cursor = conn.execute(
                     """
-                    INSERT INTO job_watchers 
-                    (job_id, hostname, name, pattern, interval_seconds, 
+                    INSERT INTO job_watchers
+                    (job_id, hostname, name, pattern, interval_seconds,
                      captures_json, condition, actions_json, created_at, state,
-                     timer_mode_enabled, timer_interval_seconds)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     timer_mode_enabled, timer_interval_seconds,
+                     is_array_template, array_spec, parent_watcher_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -714,6 +993,9 @@ class WatcherEngine:
                         WatcherState.ACTIVE.value,
                         1 if definition.timer_mode_enabled else 0,
                         definition.timer_interval_seconds,
+                        1 if definition.is_array_template else 0,
+                        definition.array_spec,
+                        parent_watcher_id,
                     ),
                 )
                 conn.commit()
@@ -757,6 +1039,14 @@ class WatcherEngine:
                         timer_interval_seconds=row["timer_interval_seconds"]
                         if "timer_interval_seconds" in row.keys()
                         else 30,
+                        is_array_template=bool(
+                            row["is_array_template"]
+                            if "is_array_template" in row.keys()
+                            else 0
+                        ),
+                        array_spec=row["array_spec"]
+                        if "array_spec" in row.keys()
+                        else None,
                     )
 
                     instance = WatcherInstance(
@@ -772,6 +1062,15 @@ class WatcherEngine:
                             if "timer_mode_active" in row.keys()
                             else 0
                         ),
+                        parent_watcher_id=row["parent_watcher_id"]
+                        if "parent_watcher_id" in row.keys()
+                        else None,
+                        discovered_task_count=row["discovered_task_count"]
+                        if "discovered_task_count" in row.keys()
+                        else 0,
+                        expected_task_count=row["expected_task_count"]
+                        if "expected_task_count" in row.keys()
+                        else None,
                     )
 
                     # Load variables
@@ -890,6 +1189,30 @@ class WatcherEngine:
                 conn.commit()
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} last check: {e}")
+
+    def _update_watcher_discovered_task_count(self, watcher_id: int, count: int):
+        """Update discovered task count for array template watchers."""
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute(
+                    "UPDATE job_watchers SET discovered_task_count = ? WHERE id = ?",
+                    (count, watcher_id),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to update watcher {watcher_id} discovered task count: {e}")
+
+    def _update_watcher_expected_task_count(self, watcher_id: int, count: int):
+        """Update expected task count for array template watchers."""
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute(
+                    "UPDATE job_watchers SET expected_task_count = ? WHERE id = ?",
+                    (count, watcher_id),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to update watcher {watcher_id} expected task count: {e}")
 
     def _get_watcher_variables(self, watcher_id: int) -> Dict[str, Any]:
         """Get watcher variables from database."""

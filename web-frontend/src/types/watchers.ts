@@ -39,6 +39,12 @@ export interface Watcher {
   timer_mode_active?: boolean;
   // Captured variables
   variables?: Record<string, string>;
+  // Array template fields
+  is_array_template?: boolean;
+  array_spec?: string;
+  parent_watcher_id?: number;
+  discovered_task_count?: number;
+  expected_task_count?: number;
 }
 
 export interface WatcherEvent {

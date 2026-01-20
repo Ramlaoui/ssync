@@ -104,6 +104,13 @@ class JobDataCache:
     def _init_database(self):
         """Initialize SQLite database with required tables."""
         with self._get_connection() as conn:
+            # Enable WAL mode for better concurrency (allows multiple readers + 1 writer)
+            conn.execute("PRAGMA journal_mode=WAL")
+            # Set busy timeout to 10 seconds
+            conn.execute("PRAGMA busy_timeout=10000")
+            # Enable synchronous=NORMAL for better performance (still safe with WAL)
+            conn.execute("PRAGMA synchronous=NORMAL")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cached_jobs (
                     job_id TEXT,
@@ -234,6 +241,38 @@ class JobDataCache:
             except:
                 pass  # Column already exists
 
+            # Add array template columns if they don't exist (for migration)
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN is_array_template INTEGER DEFAULT 0"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN array_spec TEXT"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN parent_watcher_id INTEGER"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN discovered_task_count INTEGER DEFAULT 0"
+                )
+            except:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN expected_task_count INTEGER"
+                )
+            except:
+                pass  # Column already exists
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS watcher_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -337,6 +376,9 @@ class JobDataCache:
         with self._lock:
             conn = sqlite3.connect(str(self.db_path), timeout=30.0)
             conn.row_factory = sqlite3.Row
+            # Set WAL mode for this connection (idempotent, safe to call multiple times)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=10000")
             try:
                 yield conn
             finally:

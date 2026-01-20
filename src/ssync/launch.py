@@ -437,15 +437,26 @@ class LaunchManager:
             # Extract watchers from the local script before submission
             watchers = []
             try:
-                # Read the local script to extract watchers
+                # Read the local script to extract watchers and array spec
                 result_read = conn.run(f"cat {remote_script_path}", hide=True)
                 script_content = result_read.stdout
 
                 from .script_processor import ScriptProcessor
 
                 watchers, _ = ScriptProcessor.extract_watchers(script_content)
+                array_spec = ScriptProcessor.extract_array_spec(script_content)
 
-                if watchers:
+                # If this is an array job, mark watchers as templates
+                if array_spec and watchers:
+                    expected_tasks = ScriptProcessor.parse_array_spec(array_spec)
+                    for watcher in watchers:
+                        watcher.is_array_template = True
+                        watcher.array_spec = array_spec
+                    logger.info(
+                        f"Found {len(watchers)} watchers in array job script "
+                        f"(array={array_spec}, expected_tasks={expected_tasks})"
+                    )
+                elif watchers:
                     logger.info(f"Found {len(watchers)} watchers in script")
             except Exception as e:
                 logger.warning(f"Failed to extract watchers: {e}")

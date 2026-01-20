@@ -1,6 +1,6 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type { Watcher, WatcherEvent, WatcherStats, WatchersResponse, WatcherEventsResponse } from '../types/watchers';
-import { api } from '../services/api';
+import { api, apiConfig } from '../services/api';
 
 // Debug mode - set to true to enable verbose logging
 const DEBUG_WATCHERS = true;
@@ -229,12 +229,17 @@ export function connectWatcherWebSocket(jobId?: string): void {
   if (watcherWs) {
     watcherWs.close();
   }
-  
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = jobId 
-    ? `${protocol}//${window.location.host}/ws/watchers/${jobId}`
-    : `${protocol}//${window.location.host}/ws/watchers`;
-  
+
+  // Add API key to WebSocket URL if configured
+  const config = get(apiConfig);
+  const apiKeyParam = config.apiKey ? `?api_key=${encodeURIComponent(config.apiKey)}` : '';
+
+  const wsUrl = jobId
+    ? `${protocol}//${window.location.host}/ws/watchers/${jobId}${apiKeyParam}`
+    : `${protocol}//${window.location.host}/ws/watchers${apiKeyParam}`;
+
   watcherWs = new WebSocket(wsUrl);
   
   watcherWs.onmessage = (event) => {

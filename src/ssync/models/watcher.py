@@ -53,6 +53,8 @@ class WatcherDefinition:
     output_type: str = "stdout"  # stdout, stderr, or both
     timer_mode_enabled: bool = False  # Switch to timer mode after first match
     timer_interval_seconds: int = 30  # Interval for timer mode execution
+    is_array_template: bool = False  # Whether this is a template for array jobs
+    array_spec: Optional[str] = None  # Original array spec (e.g., "0-5" or "1,3,5")
 
 
 @dataclass
@@ -70,6 +72,9 @@ class WatcherInstance:
     created_at: datetime = field(default_factory=datetime.now)
     variables: Dict[str, Any] = field(default_factory=dict)  # Captured variables
     timer_mode_active: bool = False  # Whether watcher is in timer mode
+    parent_watcher_id: Optional[int] = None  # Links child watchers to template parent
+    discovered_task_count: int = 0  # Number of discovered array tasks (for templates)
+    expected_task_count: Optional[int] = None  # Expected number of array tasks (for templates)
 
 
 @dataclass

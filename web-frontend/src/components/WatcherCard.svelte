@@ -32,6 +32,8 @@
   let isTriggering = $state(false);
   let triggerMessage = $state('');
   let showDetailDialog = $state(false);
+  let isDiscoveringTasks = $state(false);
+  let discoveryMessage = $state('');
   
   // Real-time pulse animation for active watchers
   let isActive = $derived(watcher.state === 'active');
@@ -276,6 +278,46 @@
     dispatch('refresh');
     showDetailDialog = false;
   }
+
+  async function discoverArrayTasks() {
+    if (isDiscoveringTasks) return;
+    isDiscoveringTasks = true;
+    discoveryMessage = '';
+
+    try {
+      const response = await api.post(`/api/watchers/${watcher.id}/discover-array-tasks`);
+
+      if (response.data.success) {
+        const newTasks = response.data.new_tasks_discovered || 0;
+        const total = response.data.total_discovered || 0;
+        const expected = response.data.expected_tasks;
+
+        if (newTasks > 0) {
+          discoveryMessage = `✓ Discovered ${newTasks} new task(s) (${total}/${expected || '?'} total)`;
+        } else {
+          discoveryMessage = `○ No new tasks found (${total}/${expected || '?'} discovered)`;
+        }
+
+        // Refresh to show new watchers
+        dispatch('refresh');
+      } else {
+        discoveryMessage = '○ ' + (response.data.message || 'Not an array template');
+      }
+
+      setTimeout(() => {
+        discoveryMessage = '';
+      }, 5000);
+
+    } catch (error) {
+      console.error('Failed to discover array tasks:', error);
+      discoveryMessage = '✗ Failed to discover tasks';
+      setTimeout(() => {
+        discoveryMessage = '';
+      }, 5000);
+    } finally {
+      isDiscoveringTasks = false;
+    }
+  }
 </script>
 
 <div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
@@ -331,8 +373,42 @@
           </svg>
         </div>
       {/if}
-      
-      
+
+      {#if watcher.is_array_template}
+        <div class="array-indicator" title="Array Job Template - Discovers tasks like {watcher.job_id}_0, {watcher.job_id}_1, etc. ({watcher.discovered_task_count || 0}/{watcher.expected_task_count || '?'} discovered)">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3,3H9V9H3V3M15,3H21V9H15V3M3,15H9V21H3V15M15,15H21V21H15V15M11,5H13V7H11V5M11,11H13V13H11V11M5,11H7V13H5V11M11,17H13V19H11V17Z"/>
+          </svg>
+          <span class="text-xs">{watcher.discovered_task_count || 0}/{watcher.expected_task_count || '?'}</span>
+        </div>
+        <button
+          class="control-btn discover-btn"
+          class:discovering={isDiscoveringTasks}
+          onclick={stopPropagation(discoverArrayTasks)}
+          disabled={isDiscoveringTasks}
+          title="Discover new array tasks">
+          {#if isDiscoveringTasks}
+            <svg class="spinner-icon" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.4" stroke-dashoffset="10"/>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+            </svg>
+          {/if}
+        </button>
+      {/if}
+
+      {#if discoveryMessage}
+        <div
+          class="discovery-message"
+          class:success={discoveryMessage.includes('✓')}
+          class:error={discoveryMessage.includes('✗')}
+        >
+          {discoveryMessage}
+        </div>
+      {/if}
+
       <button
         id="copy-btn-{watcher.id}"
         class="copy-btn"
@@ -670,6 +746,63 @@
   @keyframes timer-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
+  }
+
+  .array-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 12px;
+    background: var(--accent-bg, rgba(99, 102, 241, 0.1));
+    color: var(--accent, #6366f1);
+    font-size: 0.75rem;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .array-indicator svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .discovery-message {
+    position: absolute;
+    top: 40px;
+    right: 10px;
+    padding: 8px 12px;
+    background: var(--popover);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.75rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    z-index: 10;
+    animation: slideDown 0.2s ease-out;
+  }
+
+  .discovery-message.success {
+    border-color: var(--success);
+    color: var(--success);
+  }
+
+  .discovery-message.error {
+    border-color: var(--destructive);
+    color: var(--destructive);
+  }
+
+  .discover-btn {
+    background: var(--accent-bg, rgba(99, 102, 241, 0.1));
+    color: var(--accent, #6366f1);
+  }
+
+  .discover-btn:hover:not(:disabled) {
+    background: var(--accent, #6366f1);
+    color: white;
+  }
+
+  .discover-btn.discovering {
+    opacity: 0.7;
+    cursor: not-allowed;
   }
   
   .job-link {

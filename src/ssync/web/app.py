@@ -482,6 +482,38 @@ async def verify_api_key_flexible(
     return True
 
 
+async def verify_websocket_api_key(websocket: WebSocket):
+    """Verify API key for WebSocket connections before accepting."""
+    if not REQUIRE_API_KEY:
+        return True
+
+    # WebSocket clients can send API key via:
+    # 1. Query parameter: ws://host/ws/endpoint?api_key=xxx
+    # 2. Header: x-api-key (during handshake)
+
+    # Check query parameters first
+    api_key = websocket.query_params.get("api_key")
+    logger.info(f"WebSocket auth: api_key from query params: {bool(api_key)}, path: {websocket.url.path}")
+
+    # Fall back to headers
+    if not api_key:
+        api_key = websocket.headers.get("x-api-key")
+        logger.info(f"WebSocket auth: api_key from headers: {bool(api_key)}")
+
+    if not api_key:
+        logger.warning(f"WebSocket auth failed: no API key provided for {websocket.url.path}")
+        await websocket.close(code=1008, reason="API key required")
+        return False
+
+    if not api_key_manager.validate_key(api_key):
+        logger.warning(f"WebSocket auth failed: invalid API key for {websocket.url.path}")
+        await websocket.close(code=1008, reason="Invalid or expired API key")
+        return False
+
+    logger.info(f"WebSocket auth successful for {websocket.url.path}")
+    return True
+
+
 _slurm_manager: Optional[SlurmManager] = None
 _config_last_modified: Optional[float] = None
 _shutdown_event = threading.Event()
@@ -776,9 +808,17 @@ async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
         # Clean up expired entries while we're at it
         _cache_middleware.cache.cleanup_expired_ranges()
 
+        # Add request coalescer stats
+        from ..request_coalescer import get_request_coalescer
+        coalescer = get_request_coalescer()
+        coalescer_stats = coalescer.get_stats()
+
         return {
             "status": "success",
-            "statistics": stats,
+            "statistics": {
+                **stats,
+                "request_coalescer": coalescer_stats,
+            },
             "message": "Cache statistics retrieved successfully",
         }
     except Exception as e:
@@ -1073,6 +1113,14 @@ async def get_job_status(
                     f"Concurrent fetch completed: {sum(len(r.jobs) for r in results)} total jobs from {len(slurm_hosts)} hosts"
                 )
 
+                # Verify and update cache to mark completed jobs
+                current_job_ids = {}
+                for job in all_jobs:
+                    if job.hostname not in current_job_ids:
+                        current_job_ids[job.hostname] = []
+                    current_job_ids[job.hostname].append(job.job_id)
+                await cache_middleware._verify_and_update_cache(current_job_ids)
+
                 # Cache results and return
                 cached_results = await cache_middleware.cache_job_status_response(
                     results
@@ -1203,6 +1251,13 @@ async def get_job_status(
         results = await asyncio.gather(
             *[fetch_host_jobs(slurm_host) for slurm_host in slurm_hosts]
         )
+
+        # Verify and update cache to mark completed jobs
+        current_job_ids = {}
+        for response in results:
+            if response.jobs:
+                current_job_ids[response.hostname] = [job.job_id for job in response.jobs]
+        await cache_middleware._verify_and_update_cache(current_job_ids)
 
         # Cache the results with date range info if applicable
         if host and since and not job_id_list:
@@ -2362,7 +2417,9 @@ async def get_job_watchers(
                 SELECT id, job_id, hostname, name, pattern, interval_seconds,
                        captures_json, condition, actions_json, state,
                        trigger_count, last_check, last_position, created_at,
-                       timer_mode_enabled, timer_interval_seconds, timer_mode_active
+                       timer_mode_enabled, timer_interval_seconds, timer_mode_active,
+                       is_array_template, array_spec, parent_watcher_id,
+                       discovered_task_count, expected_task_count
                 FROM job_watchers
                 WHERE job_id = ?
             """
@@ -2411,6 +2468,32 @@ async def get_job_watchers(
                     watcher["timer_mode_active"] = bool(row_dict["timer_mode_active"])
                 else:
                     watcher["timer_mode_active"] = False
+
+                # Add array template fields with safe fallbacks
+                if "is_array_template" in row_dict:
+                    watcher["is_array_template"] = bool(row_dict["is_array_template"])
+                else:
+                    watcher["is_array_template"] = False
+
+                if "array_spec" in row_dict:
+                    watcher["array_spec"] = row_dict["array_spec"]
+                else:
+                    watcher["array_spec"] = None
+
+                if "parent_watcher_id" in row_dict:
+                    watcher["parent_watcher_id"] = row_dict["parent_watcher_id"]
+                else:
+                    watcher["parent_watcher_id"] = None
+
+                if "discovered_task_count" in row_dict:
+                    watcher["discovered_task_count"] = row_dict["discovered_task_count"]
+                else:
+                    watcher["discovered_task_count"] = 0
+
+                if "expected_task_count" in row_dict:
+                    watcher["expected_task_count"] = row_dict["expected_task_count"]
+                else:
+                    watcher["expected_task_count"] = None
 
                 watchers.append(watcher)
                 watcher_ids.append(row["id"])
@@ -2845,29 +2928,33 @@ async def trigger_watcher_manually(
                     job_info = manager.get_job_info(watcher_row["hostname"], watcher_row["job_id"])
 
                     if job_info:
-                        # Try to get output from SLURM paths
-                        import os
-                        if job_info.stdout_path:
-                            try:
-                                from ..ssh.connection import get_connection
-                                conn = get_connection(watcher_row["hostname"])
-                                result = conn.run(f"cat {job_info.stdout_path}", warn=True, hide=True)
-                                if result.ok:
-                                    stdout_content = result.stdout
-                                    logger.info(f"Fetched stdout from SLURM: {len(stdout_content)} chars")
-                            except Exception as e:
-                                logger.warning(f"Failed to fetch stdout from SLURM: {e}")
+                        # Get connection to the host
+                        try:
+                            slurm_host = manager.get_host_by_name(watcher_row["hostname"])
+                            conn = manager._get_connection(slurm_host.host)
+                        except Exception as e:
+                            logger.warning(f"Failed to get connection for {watcher_row['hostname']}: {e}")
+                            conn = None
 
-                        if job_info.stderr_path:
-                            try:
-                                from ..ssh.connection import get_connection
-                                conn = get_connection(watcher_row["hostname"])
-                                result = conn.run(f"cat {job_info.stderr_path}", warn=True, hide=True)
-                                if result.ok:
-                                    stderr_content = result.stdout
-                                    logger.info(f"Fetched stderr from SLURM: {len(stderr_content)} chars")
-                            except Exception as e:
-                                logger.warning(f"Failed to fetch stderr from SLURM: {e}")
+                        if conn:
+                            # Try to get output from SLURM paths
+                            if job_info.stdout_file:
+                                try:
+                                    result = conn.run(f"cat '{job_info.stdout_file}'", warn=True, hide=True)
+                                    if result.ok:
+                                        stdout_content = result.stdout
+                                        logger.info(f"Fetched stdout from SLURM: {len(stdout_content)} chars")
+                                except Exception as e:
+                                    logger.warning(f"Failed to fetch stdout from SLURM: {e}")
+
+                            if job_info.stderr_file:
+                                try:
+                                    result = conn.run(f"cat '{job_info.stderr_file}'", warn=True, hide=True)
+                                    if result.ok:
+                                        stderr_content = result.stdout
+                                        logger.info(f"Fetched stderr from SLURM: {len(stderr_content)} chars")
+                                except Exception as e:
+                                    logger.warning(f"Failed to fetch stderr from SLURM: {e}")
                 except Exception as e:
                     logger.warning(f"Failed to fetch output from SLURM: {e}")
 
@@ -2999,6 +3086,57 @@ async def resume_watcher(
     except Exception as e:
         logger.error(f"Error resuming watcher {watcher_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to resume watcher")
+
+
+@app.post("/api/watchers/{watcher_id}/discover-array-tasks")
+async def discover_array_tasks(
+    watcher_id: int,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """
+    Manually trigger array task discovery for a template watcher.
+
+    This endpoint discovers array tasks (e.g., job_12345_0, job_12345_1)
+    for array job watchers and spawns child watchers for each discovered task.
+    """
+    try:
+        from ..watchers import get_watcher_engine
+
+        engine = get_watcher_engine()
+
+        # Get watcher details
+        watcher = engine._get_watcher(watcher_id)
+        if not watcher:
+            raise HTTPException(status_code=404, detail="Watcher not found")
+
+        # Check if this is an array template watcher
+        if not watcher.definition.is_array_template:
+            return {
+                "success": False,
+                "message": "This watcher is not an array template watcher",
+                "is_array_template": False,
+            }
+
+        # Discover and spawn array tasks
+        new_tasks_count = await engine.discover_and_spawn_array_tasks(watcher_id)
+
+        # Get updated counts
+        updated_watcher = engine._get_watcher(watcher_id)
+
+        return {
+            "success": True,
+            "message": f"Discovered {new_tasks_count} new array task(s)",
+            "new_tasks_discovered": new_tasks_count,
+            "total_discovered": updated_watcher.discovered_task_count if updated_watcher else 0,
+            "expected_tasks": updated_watcher.expected_task_count if updated_watcher else None,
+            "is_array_template": True,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error discovering array tasks for watcher {watcher_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to discover array tasks: {str(e)}")
 
 
 @app.post("/api/watchers")
@@ -3863,6 +4001,10 @@ async def send_job_output(websocket: WebSocket, hostname: str, job_id: str):
 async def websocket_job(websocket: WebSocket, job_id: str):
     """WebSocket endpoint for real-time updates of a specific job."""
     try:
+        # Verify API key before accepting connection
+        if not await verify_websocket_api_key(websocket):
+            return
+
         # Parse job_id to extract hostname if present (format: hostname:job_id)
         if ":" in job_id:
             hostname, actual_job_id = job_id.split(":", 1)
@@ -3877,18 +4019,29 @@ async def websocket_job(websocket: WebSocket, job_id: str):
         # Send initial job data
         try:
             from ..job_data_manager import get_job_data_manager
+            from ..request_coalescer import get_request_coalescer
 
             manager = get_slurm_manager()
             job_data_manager = get_job_data_manager()
+            coalescer = get_request_coalescer()
+
+            # ⚡ PERFORMANCE FIX: Use request coalescer to batch individual job fetches
+            # When many WebSocket connections open simultaneously (e.g., user viewing
+            # 30 jobs), this batches them into a few bulk queries instead of 30 individual
+            # SSH operations, preventing thread pool saturation.
 
             # Fetch current job info
             if hostname:
-                jobs = await job_data_manager.fetch_all_jobs(
-                    hostname=hostname, job_ids=[actual_job_id], limit=1
-                )
-                job_info = jobs[0] if jobs else None
+                # Define batch fetch function
+                async def fetch_batch(host: str, job_ids: List[str]):
+                    return await job_data_manager.fetch_all_jobs(
+                        hostname=host, job_ids=job_ids, limit=len(job_ids)
+                    )
+
+                # Use coalescer to batch with other concurrent requests
+                job_info = await coalescer.fetch_job(actual_job_id, hostname, fetch_batch)
             else:
-                # Search across all hosts
+                # Search across all hosts (less common, no coalescing for now)
                 all_jobs = await job_data_manager.fetch_all_jobs(
                     hostname=None, job_ids=[actual_job_id], limit=1
                 )
@@ -3973,9 +4126,13 @@ async def monitor_all_jobs_singleton():
         job_data_manager = get_job_data_manager()
         job_states = {}
 
+        # ⚡ PERFORMANCE: Use different intervals for different update types
+        last_full_update = 0
+        FAST_INTERVAL = 15  # Fast updates for running jobs every 15 seconds
+        FULL_INTERVAL = 60  # Full updates including completed jobs every 60 seconds
+
         while True:
-            # ⚡ PERFORMANCE: Reduced from 30s to 10s for faster updates without overloading SLURM
-            await asyncio.sleep(10)  # Check every 10 seconds (3x faster than before)
+            await asyncio.sleep(FAST_INTERVAL)
 
             # If no clients are connected, stop the task
             if not _all_jobs_websockets:
@@ -3986,13 +4143,29 @@ async def monitor_all_jobs_singleton():
                 # ⚡ DIAGNOSTIC: Log monitoring task activity
                 logger.debug(f"Monitor task running - {len(_all_jobs_websockets)} clients connected")
 
-                # Every 10 seconds: Check all recent jobs for updates
-                all_jobs = await job_data_manager.fetch_all_jobs(
-                    hostname=None,
-                    limit=500,  # Catch more jobs for comprehensive updates
-                    active_only=False,
-                    since="1d",  # Only check jobs from last day
-                )
+                current_time = asyncio.get_event_loop().time()
+                time_since_full = current_time - last_full_update
+
+                # Determine if we should do a full update (including completed jobs)
+                # or just active jobs (faster)
+                if time_since_full >= FULL_INTERVAL:
+                    # Full update every 60 seconds: fetch all recent jobs
+                    logger.debug("Performing full job update (active + recent completed)")
+                    all_jobs = await job_data_manager.fetch_all_jobs(
+                        hostname=None,
+                        limit=500,
+                        active_only=False,
+                        since="1d",  # Only check jobs from last day
+                    )
+                    last_full_update = current_time
+                else:
+                    # Fast update every 15 seconds: only fetch active jobs
+                    logger.debug("Performing fast job update (active only)")
+                    all_jobs = await job_data_manager.fetch_all_jobs(
+                        hostname=None,
+                        limit=500,
+                        active_only=True,  # ⚡ Only fetch running/pending jobs for speed
+                    )
 
                 logger.debug(f"Monitor task fetched {len(all_jobs)} jobs")
 
@@ -4122,6 +4295,10 @@ async def websocket_all_jobs(websocket: WebSocket):
     global _all_jobs_monitor_task, _all_jobs_websockets
 
     try:
+        # Verify API key before accepting connection
+        if not await verify_websocket_api_key(websocket):
+            return
+
         # Accept the connection
         await job_manager.connect(websocket)
 
@@ -4265,6 +4442,10 @@ async def websocket_all_jobs(websocket: WebSocket):
 async def websocket_watchers(websocket: WebSocket):
     """WebSocket endpoint for real-time watcher updates."""
     try:
+        # Verify API key before accepting connection
+        if not await verify_websocket_api_key(websocket):
+            return
+
         # Accept the connection
         await watcher_manager.connect(websocket)
 
