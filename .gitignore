@@ -33,7 +33,6 @@ pytest_output.txt
 notebooks/
 *_test.py
 *_debug.py
-cleanup_*.py
 diagnose_*.py
 fix_*.py
 monitor_*.py
