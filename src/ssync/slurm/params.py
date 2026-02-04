@@ -1,4 +1,4 @@
-"""Helpers to normalize and format SLURM submission parameters.
+"""Helpers to normalize and format Slurm submission parameters.
 
 Centralizes conversion of common aliases, memory/time formatting and
 generation of SBATCH directive lines.
@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class SlurmParams:
-    """Canonical SLURM submission parameters shared across the codebase.
+    """Canonical Slurm submission parameters shared across the codebase.
 
     Fields mirror the previous definition in `manager.py`. Use
     `to_directives` or `as_dict()` to convert to SBATCH lines.

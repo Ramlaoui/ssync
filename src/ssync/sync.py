@@ -12,7 +12,7 @@ logger = setup_logger(__name__)
 
 
 class SyncManager:
-    """Manages file synchronization to SLURM hosts."""
+    """Manages file synchronization to Slurm hosts."""
 
     def __init__(
         self,
@@ -186,7 +186,7 @@ class SyncManager:
         exclude: list[str] | None = None,
         include_patterns: list[str] | None = None,
     ) -> bool:
-        """Sync source directory to a specific SLURM host using rsync over SSH."""
+        """Sync source directory to a specific Slurm host using rsync over SSH."""
         # Validate path restrictions
         is_valid, error_msg = self._validate_path(self.source_dir)
         if not is_valid:
@@ -279,7 +279,7 @@ class SyncManager:
                 logger.info(f"Successfully synced to {slurm_host.host.hostname}")
                 return True
             else:
-                logger.warning(f"Rsync failed with exit code {result.returncode}")
+                logger.warning(f"rsync failed with exit code {result.returncode}")
                 return False
         except Exception as e:
             logger.warning(f"Failed to sync to {slurm_host.host.hostname}: {e}")

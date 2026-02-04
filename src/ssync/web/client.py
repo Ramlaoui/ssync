@@ -1,4 +1,4 @@
-"""Authenticated API client for SLURM Manager."""
+"""Authenticated API client for Slurm Manager."""
 
 import os
 import subprocess
@@ -14,13 +14,25 @@ from ..utils.logging import setup_logger
 logger = setup_logger(__name__, "INFO")
 
 
-class AuthenticatedSlurmApiClient:
+class AuthenticatedSlurmAPIClient:
     """API client with authentication support."""
 
     def __init__(
-        self, base_url: str = "https://localhost:8042", api_key: Optional[str] = None
+        self, base_url: Optional[str] = None, api_key: Optional[str] = None
     ):
-        self.base_url = base_url
+        """Initialize authenticated API client.
+
+        Args:
+            base_url: API server URL. If None, reads from config.
+            api_key: API key for authentication. If None, reads from config/env.
+        """
+        from ..utils.config import config as global_config
+
+        if base_url is None:
+            self.base_url = global_config.api_settings.url
+        else:
+            self.base_url = base_url
+
         self.api_key = api_key or self._get_api_key()
         self.session = requests.Session()
 
@@ -237,5 +249,4 @@ class AuthenticatedSlurmApiClient:
         return response.json()
 
 
-# Backward compatibility - use authenticated client by default
-SlurmApiClient = AuthenticatedSlurmApiClient
+# Backward compatibility - use authenticated client by defaultSlurmAPIClient = AuthenticatedSlurmAPIClient

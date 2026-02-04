@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from .manager import Job, SlurmManager
-from .script_processor import ScriptProcessor
+from .parsers.script_processor import ScriptProcessor
 from .sync import SyncManager
 from .utils.logging import setup_logger
-from .utils.slurm_params import SlurmParams
-from .utils.ssh import send_file
+from .slurm.params import SlurmParams
+from .ssh.helpers import send_file
+from .utils.async_helpers import create_task
 
 logger = setup_logger(__name__, "INFO")
 
@@ -92,7 +93,7 @@ class LaunchManager:
             script_path: Path to the script to submit (.sh or .slurm)
             source_dir: Source directory to sync to remote (optional, required only if sync_enabled=True)
             host: Target host (required)
-            slurm_params: SLURM parameters for job submission
+            slurm_params: Slurm parameters for job submission
             python_env: Python environment setup command
             exclude: Patterns to exclude from sync
             include: Patterns to include in sync
@@ -188,7 +189,7 @@ class LaunchManager:
                 else:
                     login_setup_commands = python_env
 
-            logger.info("Preparing clean compute script for SLURM submission...")
+            logger.info("Preparing clean compute script for Slurm submission...")
             remote_script_dir = remote_work_dir / "scripts"
             temp_dir = Path("/tmp/slurm_launch")
             temp_dir.mkdir(exist_ok=True)
@@ -311,7 +312,7 @@ class LaunchManager:
                             "Continuing despite setup failure (abort_on_setup_failure=False)"
                         )
 
-            logger.info("Submitting job to SLURM...")
+            logger.info("Submitting job to Slurm...")
             logger.info(f"Changing to working directory: {remote_work_dir}")
 
             await loop.run_in_executor(executor, conn.run, f"cd {remote_work_dir}")
@@ -342,7 +343,7 @@ class LaunchManager:
                 return job
 
             except RuntimeError as e:
-                # The actual SLURM error is already in the exception message
+                # The actual Slurm error is already in the exception message
                 # Just re-raise it with the hostname for context
                 error_msg = str(e)
                 if not error_msg.startswith(
@@ -375,11 +376,11 @@ class LaunchManager:
         remote_script_path: str,
         work_dir: Path,
     ) -> Optional[Job]:
-        """Submit a script to SLURM from a specific working directory.
+        """Submit a script to Slurm from a specific working directory.
 
         Args:
-            slurm_host: The SLURM host to submit to
-            slurm_params: SLURM parameters for the job
+            slurm_host: The Slurm host to submit to
+            slurm_params: Slurm parameters for the job
             remote_script_path: Path to the script on the remote host
             work_dir: Working directory to run sbatch from
 
@@ -389,46 +390,17 @@ class LaunchManager:
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
         try:
-            # Build sbatch command with all provided CLI parameters
-            # CLI parameters always take precedence over script directives (standard SLURM behavior)
-            cmd = ["sbatch"]
+            result, full_cmd, cmd, submit_line = (
+                self.slurm_manager.slurm_client.submit.run_sbatch(
+                    conn,
+                    slurm_params,
+                    remote_script_path,
+                    work_dir=str(work_dir),
+                    warn=True,
+                )
+            )
 
-            # Add all provided parameters - they will override any script directives
-            if slurm_params.job_name:
-                cmd.append(f"--job-name={slurm_params.job_name}")
-            if slurm_params.time_min:
-                cmd.append(f"--time={slurm_params.time_min}")
-            if slurm_params.cpus_per_task:
-                cmd.append(f"--cpus-per-task={slurm_params.cpus_per_task}")
-            if slurm_params.mem_gb:
-                cmd.append(f"--mem={slurm_params.mem_gb}G")
-            if slurm_params.partition:
-                cmd.append(f"--partition={slurm_params.partition}")
-            if slurm_params.output:
-                cmd.append(f"--output={slurm_params.output}")
-            if slurm_params.error:
-                cmd.append(f"--error={slurm_params.error}")
-            if slurm_params.constraint:
-                cmd.append(f"--constraint={slurm_params.constraint}")
-            if slurm_params.account:
-                cmd.append(f"--account={slurm_params.account}")
-            if slurm_params.nodes:
-                cmd.append(f"--nodes={slurm_params.nodes}")
-            if slurm_params.n_tasks_per_node:
-                cmd.append(f"--ntasks-per-node={slurm_params.n_tasks_per_node}")
-            if slurm_params.gpus_per_node:
-                cmd.append(f"--gpus-per-node={slurm_params.gpus_per_node}")
-            if slurm_params.gres:
-                cmd.append(f"--gres={slurm_params.gres}")
-
-            cmd.append(remote_script_path)
-            full_cmd = f"cd {work_dir} && {' '.join(cmd)}"
-
-            # Store the sbatch command for caching (without the 'cd' part)
-            submit_line = " ".join(cmd)
-
-            # Log which parameters are being passed
-            if len(cmd) > 2:  # More than just "sbatch script.sh"
+            if len(cmd) > 2:
                 logger.info(
                     "Submitting with CLI parameters (will override script directives)"
                 )
@@ -441,7 +413,7 @@ class LaunchManager:
                 result_read = conn.run(f"cat {remote_script_path}", hide=True)
                 script_content = result_read.stdout
 
-                from .script_processor import ScriptProcessor
+                from .parsers.script_processor import ScriptProcessor
 
                 watchers, _ = ScriptProcessor.extract_watchers(script_content)
                 array_spec = ScriptProcessor.extract_array_spec(script_content)
@@ -460,8 +432,6 @@ class LaunchManager:
                     logger.info(f"Found {len(watchers)} watchers in script")
             except Exception as e:
                 logger.warning(f"Failed to extract watchers: {e}")
-
-            result = conn.run(full_cmd, hide=False, warn=True)
 
             # Capture both stdout and stderr for better debugging
             stdout = result.stdout.strip() if result.stdout else ""
@@ -511,7 +481,7 @@ class LaunchManager:
                         try:
                             loop = asyncio.get_running_loop()
                             # We're in an async context, can directly create the task
-                            asyncio.create_task(
+                            create_task(
                                 engine.start_watchers_for_job(
                                     job_id,
                                     slurm_host.host.hostname,
@@ -556,14 +526,14 @@ class LaunchManager:
                 # Provide detailed error information
                 error_details = []
 
-                # Check for common SLURM errors in stderr
+                # Check for common Slurm errors in stderr
                 if stderr:
-                    error_details.append(f"SLURM Error: {stderr}")
+                    error_details.append(f"Slurm Error: {stderr}")
 
                     # Check for specific error patterns
                     if "Invalid account" in stderr or "Invalid user" in stderr:
                         error_details.append(
-                            "Account or user validation failed. Check your SLURM account settings."
+                            "Account or user validation failed. Check your Slurm account settings."
                         )
                     elif "Invalid partition" in stderr:
                         error_details.append(
@@ -634,7 +604,7 @@ class LaunchManager:
                 test_result = conn.run("which sbatch", hide=True, warn=True)
                 if test_result.return_code != 0:
                     logger.error(
-                        "sbatch command not found. SLURM may not be installed or not in PATH."
+                        "sbatch command not found. Slurm may not be installed or not in PATH."
                     )
                 else:
                     logger.debug(f"sbatch location: {test_result.stdout.strip()}")

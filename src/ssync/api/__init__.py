@@ -1,4 +1,4 @@
-from .client import ApiClient
+from .client import APIClient
 from .server import ServerManager
 
-__all__ = ["ApiClient", "ServerManager"]
+__all__ = ["APIClient", "ServerManager"]

@@ -6,7 +6,7 @@ from typing import List, Optional
 import click
 import requests
 
-from ..api import ApiClient
+from ..api import APIClient
 from ..manager import SlurmManager
 from ..sync import SyncManager
 from .display import JobDisplay
@@ -59,7 +59,7 @@ class StatusCommand(BaseCommand):
 
         try:
             # Initialize API client
-            api_client = ApiClient(verbose=self.verbose)
+            api_client = APIClient(verbose=self.verbose)
 
             # Start API server
             success, error_msg = api_client.ensure_server_running(self.config_path)
@@ -128,7 +128,7 @@ class SyncCommand(BaseCommand):
     ):
         """Execute sync command."""
         try:
-            # Initialize SLURM manager
+            # Initialize Slurm manager
             slurm_manager = SlurmManager(self.slurm_hosts, use_ssh_config=True)
 
             # Get path restrictions from config
@@ -201,9 +201,6 @@ class SyncCommand(BaseCommand):
             return False
 
 
-# SubmitCommand removed - functionality is covered by LaunchCommand
-
-
 class LaunchCommand(BaseCommand):
     """Handles the launch command logic via API."""
 
@@ -243,7 +240,7 @@ class LaunchCommand(BaseCommand):
                 script_content = f.read()
 
             # Initialize API client
-            api_client = ApiClient(verbose=self.verbose)
+            api_client = APIClient(verbose=self.verbose)
 
             # Start API server if not running
             success, error_msg = api_client.ensure_server_running(self.config_path)
@@ -307,7 +304,7 @@ class CancelCommand(BaseCommand):
         """Execute cancel command."""
         try:
             # Initialize API client
-            api_client = ApiClient(verbose=self.verbose)
+            api_client = APIClient(verbose=self.verbose)
 
             # Start API server if not running
             success, error_msg = api_client.ensure_server_running(self.config_path)

@@ -44,9 +44,15 @@ class CacheSettings:
     cache_dir: Optional[str] = None  # If None, use default ~/.cache/ssync
     max_age_days: int = 365  # How long to keep cache entries
     script_max_age_days: int = 0  # 0 means never expire scripts
+    recycled_id_max_age_days: int = (
+        30  # Ignore cached jobs older than this to avoid ID reuse
+    )
     cleanup_interval_hours: int = 168  # How often to run cleanup (weekly)
     max_size_mb: int = 1024  # Maximum cache size in MB
     auto_cleanup: bool = False  # Whether to automatically cleanup old entries
+    zombie_cleanup_days: int = (
+        7  # Days after which stale PD/UNKNOWN jobs are marked completed
+    )
 
     def __post_init__(self):
         # Validate settings
@@ -54,10 +60,29 @@ class CacheSettings:
             self.max_age_days = 0
         if self.script_max_age_days < 0:
             self.script_max_age_days = 0
+        if self.recycled_id_max_age_days < 0:
+            self.recycled_id_max_age_days = 0
         if self.cleanup_interval_hours < 1:
             self.cleanup_interval_hours = 1
         if self.max_size_mb < 10:
             self.max_size_mb = 10
+        if self.zombie_cleanup_days < 0:
+            self.zombie_cleanup_days = 0
+
+
+@dataclass
+class APISettings:
+    """API server configuration settings."""
+
+    host: str = "localhost"
+    port: int = 8042
+    https: bool = True
+
+    @property
+    def url(self) -> str:
+        """Get the full URL for the API server."""
+        scheme = "https" if self.https else "http"
+        return f"{scheme}://{self.host}:{self.port}"
 
 
 @dataclass(frozen=True)

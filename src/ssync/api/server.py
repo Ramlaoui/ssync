@@ -1,14 +1,12 @@
 """API server management utilities."""
 
 import os
-import signal
 import subprocess
 import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Optional
-from urllib.parse import urlparse
+from typing import List, Optional
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -23,42 +21,49 @@ logger = setup_logger(__name__, "INFO")
 
 
 class ServerManager:
-    """Manages the ssync API server lifecycle."""
+    """Manages the ssync API server lifecycle.
 
-    def __init__(self, base_url: str = "https://localhost:8042"):
-        self.base_url = base_url
-        parsed = urlparse(base_url)
-        self.host = parsed.hostname or "127.0.0.1"
-        self.port = parsed.port or 8042
-        self.use_https = parsed.scheme == "https"
-        self.pid_file = Path.home() / ".config" / "ssync" / "api-server.pid"
-        self.log_file = Path.home() / ".config" / "ssync" / "api-server.log"
+    Uses config-based server discovery - no PID or log files needed.
+    Server address comes from config, lifecycle managed via HTTP endpoints.
+    """
 
-    def _ensure_dirs(self):
-        """Ensure required directories exist."""
-        self.pid_file.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, url: Optional[str] = None, api_key: Optional[str] = None):
+        """Initialize ServerManager.
 
-    def _save_pid(self, pid: int):
-        """Save process PID to file."""
-        self._ensure_dirs()
-        self.pid_file.write_text(str(pid))
+        Args:
+            url: API server URL. If None, reads from config.
+            api_key: API key for authentication. If None, reads from config.
+        """
+        from ..utils.config import config as global_config
 
-    def _get_saved_pid(self) -> Optional[int]:
-        """Get saved PID if exists."""
-        if self.pid_file.exists():
-            try:
-                return int(self.pid_file.read_text().strip())
-            except (ValueError, IOError):
-                return None
-        return None
+        if url is None:
+            self.url = global_config.api_settings.url
+            self.host = global_config.api_settings.host
+            self.port = global_config.api_settings.port
+            self.use_https = global_config.api_settings.https
+        else:
+            from urllib.parse import urlparse
 
-    def _is_process_running(self, pid: int) -> bool:
-        """Check if process with given PID is running."""
-        try:
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, PermissionError):
-            return False
+            self.url = url
+            parsed = urlparse(url)
+            self.host = parsed.hostname or "localhost"
+            self.port = parsed.port or 8042
+            self.use_https = parsed.scheme == "https"
+
+        self.api_key = api_key if api_key is not None else global_config.api_key
+
+    def _get_headers(self) -> dict:
+        """Get headers including API key if available."""
+        headers = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
+
+    def _get_check_url(self) -> tuple[str, str]:
+        """Get the host and protocol for health checks."""
+        check_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+        protocol = "https" if self.use_https else "http"
+        return check_host, protocol
 
     def _check_uvicorn_available(self) -> bool:
         """Check if uvicorn is available."""
@@ -88,84 +93,56 @@ class ServerManager:
             return False
 
     def is_running(self) -> bool:
-        """Check if API server is running."""
-        # Use localhost for health checks even if binding to 0.0.0.0
-        check_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+        """Check if API server is running by hitting the health endpoint."""
+        check_host, protocol = self._get_check_url()
 
-        # First check if we have a PID and process is running
-        pid = self._get_saved_pid()
-        if pid and self._is_process_running(pid):
-            # Verify it's actually our API server by checking the endpoint
-            # Retry a few times in case server is starting up
-            protocol = "https" if self.use_https else "http"
-            max_retries = 5
-            for attempt in range(max_retries):
-                try:
-                    response = requests.get(
-                        f"{protocol}://{check_host}:{self.port}/health",
-                        timeout=2,
-                        verify=False,
-                    )
-                    if response.status_code == 200:
-                        return True
-                except requests.exceptions.RequestException:
-                    # Process exists but API not responding yet
-                    if attempt < max_retries - 1:
-                        # Wait a bit before retrying (server might be starting up)
-                        time.sleep(0.5)
-                        continue
-                    # All retries failed
-                    return False
-
-        # No PID or process not running, check if something else is on the port
-        if not self._check_port_available():
-            # Port is in use, check if it's our API
-            try:
-                protocol = "https" if self.use_https else "http"
-                response = requests.get(
-                    f"{protocol}://{check_host}:{self.port}/health",
-                    timeout=2,
-                    verify=False,
-                )
-                # It's our API but we don't have the PID
-                if response.status_code == 200:
-                    # Server is running, but we lost track of the PID
-                    # This is fine - just log at debug level instead of warning
-                    logger.debug("API server already running (PID tracking lost)")
-                    return True
-            except requests.exceptions.RequestException:
-                pass
-
-        return False
+        try:
+            response = requests.get(
+                f"{protocol}://{check_host}:{self.port}/health",
+                timeout=5,
+                verify=False,
+            )
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
 
     def stop(self) -> bool:
-        """Stop the running server."""
-        pid = self._get_saved_pid()
-        if pid and self._is_process_running(pid):
-            try:
-                os.kill(pid, signal.SIGTERM)
-                # Wait for graceful shutdown
+        """Stop the running server via the shutdown endpoint."""
+        if not self.is_running():
+            logger.debug("Server is not running")
+            return False
+
+        check_host, protocol = self._get_check_url()
+
+        try:
+            response = requests.post(
+                f"{protocol}://{check_host}:{self.port}/api/shutdown",
+                headers=self._get_headers(),
+                timeout=5,
+                verify=False,
+            )
+            if response.status_code == 200:
+                # Wait for server to actually stop
                 for _ in range(10):
                     time.sleep(0.5)
-                    if not self._is_process_running(pid):
-                        break
-                else:
-                    # Force kill if still running
-                    os.kill(pid, signal.SIGKILL)
-
-                logger.info(f"Stopped API server (PID: {pid})")
-                self.pid_file.unlink(missing_ok=True)
+                    if not self.is_running():
+                        logger.info("API server stopped")
+                        return True
+                logger.warning("Server may not have stopped completely")
                 return True
-            except Exception as e:
-                logger.error(f"Failed to stop API server: {e}")
+            else:
+                logger.error(f"Shutdown request failed: {response.status_code}")
                 return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to stop server: {e}")
+            return False
 
-        # Clean up stale PID file
-        self.pid_file.unlink(missing_ok=True)
-        return False
+    def start(self, config_path: Optional[Path] = None) -> bool:
+        """Start API server if not running.
 
-    def start(self, config_path: Path) -> bool:
-        """Start API server if not running."""
+        Args:
+            config_path: Path to config file. If None, uses default.
+        """
         if self.is_running():
             logger.debug("API server already running")
             return True
@@ -187,14 +164,12 @@ class ServerManager:
         )
 
         try:
-            self._ensure_dirs()
-
             # Build uvicorn command
             cmd = [
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "ssync.web.app:app",  # Fixed module path
+                "ssync.web.app:app",
                 "--host",
                 self.host,
                 "--port",
@@ -208,14 +183,10 @@ class ServerManager:
                     ["--ssl-keyfile", str(key_path), "--ssl-certfile", str(cert_path)]
                 )
 
-            # Open log file for output
-            log_fd = open(self.log_file, "w")
-
-            # Set up environment with proper trusted hosts for 0.0.0.0 binding
-            env = {
-                **os.environ,
-                "SSYNC_CONFIG_PATH": str(config_path),
-            }
+            # Set up environment
+            env = {**os.environ}
+            if config_path:
+                env["SSYNC_CONFIG_PATH"] = str(config_path)
 
             # If binding to 0.0.0.0, add it to trusted hosts
             if self.host == "0.0.0.0":
@@ -224,44 +195,24 @@ class ServerManager:
                 )
                 env["SSYNC_TRUSTED_HOSTS"] = f"{current_trusted},0.0.0.0"
 
-            # Start the process with proper stdin handling to avoid TTY issues
-            process = subprocess.Popen(
+            # Start the process as a daemon (no log file, output goes to /dev/null)
+            subprocess.Popen(
                 cmd,
-                stdin=subprocess.DEVNULL,  # Critical: prevents TTY issues with SSH
-                stdout=log_fd,
-                stderr=subprocess.STDOUT,  # Combine stderr with stdout
-                start_new_session=True,  # Detach from parent
-                env=env,  # Pass environment with config path and trusted hosts
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=env,
             )
 
-            # Save PID
-            self._save_pid(process.pid)
-            logger.debug(f"Started API server with PID: {process.pid}")
-
             # Wait for API to become responsive
-            protocol = "https" if self.use_https else "http"
+            check_host, protocol = self._get_check_url()
             start_time = time.time()
-            max_wait = 30  # Maximum seconds to wait
-
-            # Use localhost for health checks even if binding to 0.0.0.0
-            check_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+            max_wait = 30
 
             while time.time() - start_time < max_wait:
                 time.sleep(0.5)
 
-                # Check if process is still running
-                if not self._is_process_running(process.pid):
-                    # Process died, check logs
-                    log_fd.close()
-                    if self.log_file.exists():
-                        logs = self.log_file.read_text()
-                        logger.error(f"API server failed to start. Logs:\n{logs}")
-                    else:
-                        logger.error("API server failed to start (no logs available)")
-                    self.pid_file.unlink(missing_ok=True)
-                    return False
-
-                # Try to connect
                 try:
                     response = requests.get(
                         f"{protocol}://{check_host}:{self.port}/health",
@@ -272,40 +223,42 @@ class ServerManager:
                         logger.info(
                             f"API server started successfully on {protocol}://{self.host}:{self.port}"
                         )
-                        log_fd.close()
                         return True
                 except requests.exceptions.RequestException:
-                    # Not ready yet, keep waiting
                     continue
 
             # Timeout reached
-            log_fd.close()
             logger.error(
-                f"API server failed to become responsive within {max_wait} seconds"
+                f"API server failed to become responsive within {max_wait} seconds. "
+                f"Run 'ssync api' in foreground to debug."
             )
-
-            # Check if still running and show logs
-            if self._is_process_running(process.pid):
-                if self.log_file.exists():
-                    logs = self.log_file.read_text()
-                    if logs:
-                        logger.error(f"API server logs:\n{logs}")
-                # Kill the unresponsive process
-                self.stop()
-
             return False
 
         except Exception as e:
             logger.error(f"Failed to start API server: {e}")
             return False
 
-    def get_logs(self, lines: int = 50) -> Optional[str]:
-        """Get recent logs from the API server."""
-        if self.log_file.exists():
-            try:
-                with open(self.log_file, "r") as f:
-                    all_lines = f.readlines()
-                    return "".join(all_lines[-lines:])
-            except Exception as e:
-                logger.error(f"Failed to read logs: {e}")
-        return None
+    def get_logs(self, lines: int = 50) -> Optional[List[str]]:
+        """Get recent logs from the API server via the /api/logs endpoint."""
+        if not self.is_running():
+            logger.debug("Server is not running, cannot fetch logs")
+            return None
+
+        check_host, protocol = self._get_check_url()
+
+        try:
+            response = requests.get(
+                f"{protocol}://{check_host}:{self.port}/api/logs",
+                params={"lines": lines},
+                headers=self._get_headers(),
+                timeout=5,
+                verify=False,
+            )
+            if response.status_code == 200:
+                return response.json().get("logs", [])
+            else:
+                logger.error(f"Failed to fetch logs: {response.status_code}")
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch logs: {e}")
+            return None

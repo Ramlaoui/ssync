@@ -15,6 +15,7 @@ from ..models.watcher import (
     WatcherState,
 )
 from ..utils.logging import setup_logger
+from ..utils.async_helpers import create_task
 
 logger = setup_logger(__name__)
 
@@ -125,7 +126,7 @@ class WatcherEngine:
 
         Args:
             job_id: Job ID to watch
-            hostname: Hostname of the SLURM cluster
+            hostname: Hostname of the Slurm cluster
             watchers: List of watcher definitions
             parent_watcher_id: Optional parent watcher ID for array task watchers
 
@@ -142,7 +143,7 @@ class WatcherEngine:
 
                 # Update expected task count for array templates
                 if definition.is_array_template and definition.array_spec:
-                    from ..script_processor import ScriptProcessor
+                    from ..parsers.script_processor import ScriptProcessor
                     expected_tasks = ScriptProcessor.parse_array_spec(definition.array_spec)
                     if expected_tasks:
                         self._update_watcher_expected_task_count(watcher_id, expected_tasks)
@@ -151,7 +152,7 @@ class WatcherEngine:
                 # Templates will spawn child watchers for discovered tasks
                 if not definition.is_array_template:
                     # Start monitoring task
-                    task = asyncio.create_task(
+                    task = create_task(
                         self._monitor_watcher(watcher_id, job_id, hostname)
                     )
                     self.active_tasks[watcher_id] = task
@@ -310,7 +311,7 @@ class WatcherEngine:
 
     async def _discover_array_task_jobs(self, base_job_id: str, hostname: str) -> List[str]:
         """
-        Discover array task job IDs by querying SLURM.
+        Discover array task job IDs by querying Slurm.
 
         Args:
             base_job_id: Base job ID (without task suffix)
@@ -325,7 +326,7 @@ class WatcherEngine:
             manager = get_job_data_manager()
 
             # Fetch all jobs for this hostname
-            # SLURM will show array tasks as separate jobs with IDs like "12345_0", "12345_1"
+            # Slurm will show array tasks as separate jobs with IDs like "12345_0", "12345_1"
             all_jobs = await manager.fetch_all_jobs(hostname=hostname, force_refresh=True)
 
             # Filter for jobs that match the array pattern
@@ -438,7 +439,7 @@ class WatcherEngine:
                         )
 
                         # Restart the watcher
-                        task = asyncio.create_task(
+                        task = create_task(
                             self._monitor_watcher(watcher_id, job_id, hostname)
                         )
                         self.active_tasks[watcher_id] = task
@@ -701,7 +702,7 @@ class WatcherEngine:
                     # Execute action and track results properly
                     try:
                         # Create task but also track it for cleanup
-                        task = asyncio.create_task(
+                        task = create_task(
                             self._execute_action(
                                 watcher, action, matched_text, captured_vars
                             )

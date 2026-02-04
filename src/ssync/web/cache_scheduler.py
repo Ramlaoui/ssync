@@ -11,6 +11,7 @@ from typing import Optional
 from ..utils.config import config as app_config
 from ..utils.logging import setup_logger
 from .cache_middleware import get_cache_middleware
+from ..utils.async_helpers import create_task
 
 logger = setup_logger(__name__)
 
@@ -21,7 +22,7 @@ class CacheScheduler:
 
     Handles:
     - Periodic cache cleanup
-    - Cache verification against SLURM state
+    - Cache verification against Slurm state
     - Statistics collection
     """
 
@@ -50,7 +51,7 @@ class CacheScheduler:
 
         self._running = True
         self._shutdown_event.clear()
-        self._task = asyncio.create_task(self._run_scheduler())
+        self._task = create_task(self._run_scheduler())
         logger.info("Cache scheduler started")
 
     async def stop(self):
@@ -126,6 +127,17 @@ class CacheScheduler:
 
             # Get updated stats
             stats = await self.cache_middleware.get_cache_stats()
+
+            # Zombie cleanup - mark stale PD/UNKNOWN jobs as completed
+            zombie_days = self.cache_settings.zombie_cleanup_days
+            if zombie_days > 0:
+                zombies = self.cache_middleware.cache.find_zombie_jobs(zombie_days)
+                for job_id, hostname, state in zombies:
+                    self.cache_middleware.cache.mark_job_completed(job_id, hostname)
+                if zombies:
+                    logger.info(
+                        f"Zombie cleanup: marked {len(zombies)} stale jobs as completed"
+                    )
 
             logger.info(
                 f"Cache maintenance completed: {stats['total_jobs']} jobs, "

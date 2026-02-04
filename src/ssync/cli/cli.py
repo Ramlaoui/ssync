@@ -1,13 +1,9 @@
-"""Clean, modular CLI for ssync."""
-
 from pathlib import Path
 
 import click
 
 from ..utils.config import ConfigError, config
-from .attach_watchers import attach_watchers
 from .auth import auth
-from .cleanup_watchers import cleanup_watchers
 from .commands import CancelCommand, LaunchCommand, StatusCommand, SyncCommand
 from .watchers import watchers
 
@@ -21,7 +17,7 @@ from .watchers import watchers
 @click.option("--verbose", is_flag=True, help="Enable verbose output")
 @click.pass_context
 def cli(ctx, no_ssh_config, verbose):
-    """Sync files and manage SLURM jobs across multiple clusters."""
+    """Sync files and manage Slurm jobs across multiple clusters."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     ctx.obj["use_ssh_config"] = not no_ssh_config
@@ -41,7 +37,7 @@ def cli(ctx, no_ssh_config, verbose):
 @click.option("--simple", is_flag=True, help="Show simple tabular output")
 @click.option(
     "--since",
-    default="1d",
+    default="14d",
     help="Include completed jobs since time (e.g., 1h, 1d, 1w, 2025-08-20)",
 )
 @click.option("--limit", default=20, type=int, help="Limit number of jobs to show")
@@ -68,7 +64,7 @@ def status_command(
     completed_only,
     cat_output,
 ):
-    """Check SLURM queue status across hosts."""
+    """Check Slurm queue status across hosts."""
     command = StatusCommand(
         config_path=config.config_path,
         slurm_hosts=ctx.obj["slurm_hosts"],
@@ -97,9 +93,9 @@ def status_command(
 @click.option("--host", help="Target host (auto-detected if not specified)")
 @click.pass_context
 def cancel_command(ctx, job_id, host):
-    """Cancel a SLURM job.
+    """Cancel a Slurm job.
 
-    JOB_ID: SLURM job ID to cancel
+    JOB_ID: Slurm job ID to cancel
     """
     command = CancelCommand(
         config_path=config.config_path,
@@ -134,7 +130,7 @@ def cancel_command(ctx, job_id, host):
 @click.argument("source_dir", type=click.Path(exists=True, path_type=Path))
 @click.pass_context
 def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_dir):
-    """Sync source directory to SLURM hosts."""
+    """Sync source directory to Slurm hosts."""
     command = SyncCommand(
         config_path=config.config_path,
         slurm_hosts=ctx.obj["slurm_hosts"],
@@ -160,11 +156,11 @@ def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_di
 
 @cli.command(name="launch")
 @click.option("--host", required=True, help="Target host for job submission")
-@click.option("--job-name", help="SLURM job name")
+@click.option("--job-name", help="Slurm job name")
 @click.option("--cpus", type=int, help="Number of CPUs per task")
 @click.option("--mem", type=int, help="Memory in GB")
 @click.option("--time", type=int, help="Time limit in minutes")
-@click.option("--partition", help="SLURM partition")
+@click.option("--partition", help="Slurm partition")
 @click.option("--output", help="Output file path")
 @click.option("--error", help="Error file path")
 @click.option("--nodes", type=int, help="Number of nodes")
@@ -172,7 +168,7 @@ def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_di
 @click.option("--gpus-per-node", type=int, help="Number of GPUs per node")
 @click.option("--gres", help="Generic resources (e.g., 'gpu:2')")
 @click.option("--constraint", help="Node constraints (e.g., gpu, bigmem)")
-@click.option("--account", help="SLURM account for billing")
+@click.option("--account", help="Slurm account for billing")
 @click.option("--python-env", help="Python environment setup command")
 @click.option(
     "--exclude", multiple=True, help="Additional patterns to exclude from sync"
@@ -181,7 +177,7 @@ def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_di
     "--include", multiple=True, help="Patterns to include (overrides .gitignore)"
 )
 @click.option("--no-gitignore", is_flag=True, help="Disable .gitignore usage")
-@click.option("--no-defaults", is_flag=True, help="Ignore per-host SLURM defaults")
+@click.option("--no-defaults", is_flag=True, help="Ignore per-host Slurm defaults")
 @click.option(
     "--no-abort-on-setup-failure",
     is_flag=True,
@@ -255,9 +251,7 @@ def launch_command(
         ctx.exit(1)
 
 
-cli.add_command(attach_watchers)
 cli.add_command(auth)
-cli.add_command(cleanup_watchers)
 cli.add_command(watchers)
 
 
@@ -278,7 +272,7 @@ def api(ctx, port, host, no_https, stop, logs):
     base_url = f"{protocol}://{host}:{port}"
 
     # Create server manager
-    server = ServerManager(base_url)
+    server = ServerManager(url=base_url)
 
     # Handle stop command
     if stop:
@@ -290,27 +284,22 @@ def api(ctx, port, host, no_https, stop, logs):
 
     # Handle logs command
     if logs:
-        log_content = server.get_logs()
-        if log_content:
-            click.echo(log_content)
+        log_lines = server.get_logs()
+        if log_lines:
+            click.echo("\n".join(log_lines))
         else:
-            click.echo("No logs available")
+            click.echo("No logs available (server may not be running)")
         return
 
     # Start the server
     click.echo(f"Starting API server on {base_url}...")
     if server.start(config.config_path):
         click.echo(f"✓ API server started on {base_url}")
-        click.echo(f"  Logs: {server.log_file}")
-        click.echo(f"  PID file: {server.pid_file}")
         click.echo("\nUse 'ssync api --stop' to stop the server")
+        click.echo("Use 'ssync api --logs' to view server logs")
     else:
         click.echo("✗ Failed to start API server", err=True)
-        # Show recent logs if available
-        log_content = server.get_logs(20)
-        if log_content:
-            click.echo("\nRecent logs:", err=True)
-            click.echo(log_content, err=True)
+        click.echo("Run 'ssync api' in foreground to debug startup issues", err=True)
         ctx.exit(1)
 
 

@@ -1,8 +1,8 @@
 """
-Simple but powerful caching mechanism for SLURM job data.
+Simple but powerful caching mechanism for Slurm job data.
 
 This module provides persistent caching for job information, scripts, and outputs
-to preserve data even when jobs are no longer queryable from SLURM.
+to preserve data even when jobs are no longer queryable from Slurm.
 """
 
 import hashlib
@@ -72,6 +72,9 @@ class JobDataCache:
         if cache_dir is None:
             cache_dir = Path.home() / ".cache" / "ssync"
 
+        from .utils.config import config as app_config
+
+        self.cache_settings = app_config.cache_settings
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -249,9 +252,7 @@ class JobDataCache:
             except:
                 pass  # Column already exists
             try:
-                conn.execute(
-                    "ALTER TABLE job_watchers ADD COLUMN array_spec TEXT"
-                )
+                conn.execute("ALTER TABLE job_watchers ADD COLUMN array_spec TEXT")
             except:
                 pass  # Column already exists
             try:
@@ -445,6 +446,7 @@ class JobDataCache:
         now = datetime.now()
         # Check if job is in active state (Pending or Running)
         from .models.job import JobState as JS
+
         is_active = job_info.state in [JS.PENDING, JS.RUNNING]
 
         existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
@@ -552,7 +554,9 @@ class JobDataCache:
 
             conn.commit()
 
-    def _update_array_metadata(self, conn, job_info: JobInfo, script_content: Optional[str] = None):
+    def _update_array_metadata(
+        self, conn, job_info: JobInfo, script_content: Optional[str] = None
+    ):
         """Update array job metadata and task statistics.
 
         This method maintains the array_jobs and array_task_stats tables.
@@ -564,13 +568,13 @@ class JobDataCache:
         now = datetime.now()
 
         # Skip parent entries (with brackets) - we only track actual tasks
-        if array_task_id and '[' in array_task_id:
+        if array_task_id and "[" in array_task_id:
             return
 
         # Ensure array_jobs record exists
         cursor = conn.execute(
             "SELECT 1 FROM array_jobs WHERE array_job_id = ? AND hostname = ?",
-            (array_job_id, hostname)
+            (array_job_id, hostname),
         )
         array_exists = cursor.fetchone() is not None
 
@@ -596,7 +600,7 @@ class JobDataCache:
                     job_info.work_dir,
                     now.isoformat(),
                     now.isoformat(),
-                )
+                ),
             )
             logger.debug(f"Created array job metadata for {array_job_id} on {hostname}")
         else:
@@ -621,7 +625,7 @@ class JobDataCache:
                         now.isoformat(),
                         array_job_id,
                         hostname,
-                    )
+                    ),
                 )
             else:
                 conn.execute(
@@ -642,7 +646,7 @@ class JobDataCache:
                         now.isoformat(),
                         array_job_id,
                         hostname,
-                    )
+                    ),
                 )
 
         # Update task count
@@ -652,7 +656,7 @@ class JobDataCache:
             WHERE array_job_id = ? AND hostname = ?
               AND job_id NOT LIKE '%[%'
             """,
-            (array_job_id, hostname)
+            (array_job_id, hostname),
         )
         task_count = cursor.fetchone()[0]
 
@@ -662,7 +666,7 @@ class JobDataCache:
             SET total_tasks = ?, last_updated = ?
             WHERE array_job_id = ? AND hostname = ?
             """,
-            (task_count, now.isoformat(), array_job_id, hostname)
+            (task_count, now.isoformat(), array_job_id, hostname),
         )
 
         # Recalculate state statistics
@@ -687,7 +691,7 @@ class JobDataCache:
               AND job_id NOT LIKE '%[%'
             GROUP BY state
             """,
-            (array_job_id, hostname)
+            (array_job_id, hostname),
         )
 
         state_counts = {row[0]: row[1] for row in cursor.fetchall()}
@@ -698,7 +702,7 @@ class JobDataCache:
             DELETE FROM array_task_stats
             WHERE array_job_id = ? AND hostname = ?
             """,
-            (array_job_id, hostname)
+            (array_job_id, hostname),
         )
 
         # Insert updated stats
@@ -709,10 +713,12 @@ class JobDataCache:
                 (array_job_id, hostname, state, count, last_updated)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (array_job_id, hostname, state, count, now.isoformat())
+                (array_job_id, hostname, state, count, now.isoformat()),
             )
 
-    def get_array_job_metadata(self, array_job_id: str, hostname: str) -> Optional[Dict[str, Any]]:
+    def get_array_job_metadata(
+        self, array_job_id: str, hostname: str
+    ) -> Optional[Dict[str, Any]]:
         """Get metadata for an array job including statistics.
 
         Returns:
@@ -725,7 +731,7 @@ class JobDataCache:
                 SELECT * FROM array_jobs
                 WHERE array_job_id = ? AND hostname = ?
                 """,
-                (array_job_id, hostname)
+                (array_job_id, hostname),
             )
             row = cursor.fetchone()
 
@@ -740,7 +746,7 @@ class JobDataCache:
                 SELECT state, count FROM array_task_stats
                 WHERE array_job_id = ? AND hostname = ?
                 """,
-                (array_job_id, hostname)
+                (array_job_id, hostname),
             )
 
             stats = {row["state"]: row["count"] for row in cursor.fetchall()}
@@ -748,7 +754,9 @@ class JobDataCache:
 
             return metadata
 
-    def get_array_tasks(self, array_job_id: str, hostname: str, limit: Optional[int] = None) -> List[JobInfo]:
+    def get_array_tasks(
+        self, array_job_id: str, hostname: str, limit: Optional[int] = None
+    ) -> List[JobInfo]:
         """Get all tasks for an array job efficiently.
 
         Args:
@@ -781,6 +789,7 @@ class JobDataCache:
                     # Convert state string back to JobState enum
                     if "state" in job_dict and isinstance(job_dict["state"], str):
                         from .models.job import JobState
+
                         try:
                             job_dict["state"] = JobState(job_dict["state"])
                         except ValueError:
@@ -792,7 +801,10 @@ class JobDataCache:
             return jobs
 
     def get_cached_job(
-        self, job_id: str, hostname: Optional[str] = None, max_age_days: int = 30
+        self,
+        job_id: str,
+        hostname: Optional[str] = None,
+        max_age_days: Optional[int] = None,
     ) -> Optional[CachedJobData]:
         """
         Retrieve cached job data.
@@ -820,6 +832,8 @@ class JobDataCache:
             row = cursor.fetchone()
             if row:
                 cached_data = self._row_to_cached_data(row)
+                if max_age_days is None:
+                    max_age_days = self.cache_settings.recycled_id_max_age_days
 
                 # Validate that the cached job isn't too old (likely a recycled ID)
                 if cached_data.job_info and cached_data.job_info.submit_time:
@@ -855,6 +869,74 @@ class JobDataCache:
 
             return None
 
+    def get_cached_jobs_by_ids(
+        self,
+        job_ids: List[str],
+        hostname: Optional[str] = None,
+        max_age_days: Optional[int] = None,
+    ) -> Dict[str, CachedJobData]:
+        """Batch lookup cached jobs by ID.
+
+        Returns a dict of job_id -> CachedJobData for jobs that exist and pass age checks.
+        """
+        if not job_ids:
+            return {}
+
+        results: Dict[str, CachedJobData] = {}
+        if max_age_days is None:
+            max_age_days = self.cache_settings.recycled_id_max_age_days
+
+        # SQLite has a limit on variables; chunk to stay under it.
+        chunk_size = 500
+        with self._get_connection() as conn:
+            for i in range(0, len(job_ids), chunk_size):
+                chunk = job_ids[i : i + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                if hostname:
+                    query = (
+                        f"SELECT * FROM cached_jobs WHERE job_id IN ({placeholders}) "
+                        "AND hostname = ?"
+                    )
+                    params = [*chunk, hostname]
+                else:
+                    query = (
+                        f"SELECT * FROM cached_jobs WHERE job_id IN ({placeholders})"
+                    )
+                    params = [*chunk]
+
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+                for row in rows:
+                    cached_data = self._row_to_cached_data(row)
+                    job_id = cached_data.job_id
+
+                    # Validate age to avoid recycled IDs
+                    if cached_data.job_info and cached_data.job_info.submit_time:
+                        from datetime import datetime, timezone
+
+                        now = datetime.now(timezone.utc)
+                        submit_time = cached_data.job_info.submit_time
+                        if isinstance(submit_time, str):
+                            submit_time = datetime.fromisoformat(
+                                submit_time.replace("Z", "+00:00")
+                            )
+                        if submit_time.tzinfo is None:
+                            submit_time = submit_time.replace(tzinfo=timezone.utc)
+                        if now.tzinfo is None:
+                            now = now.replace(tzinfo=timezone.utc)
+
+                        age_days = (now - submit_time).days
+                        if age_days > max_age_days:
+                            logger.info(
+                                f"Cached job {job_id} on {cached_data.hostname} is {age_days} days old "
+                                f"(> {max_age_days} days), likely a recycled ID - ignoring cache"
+                            )
+                            continue
+
+                    results[job_id] = cached_data
+
+        return results
+
     def get_cached_jobs(
         self,
         hostname: Optional[str] = None,
@@ -888,7 +970,9 @@ class JobDataCache:
             if since:
                 # Filter by submit time if available in the JSON
                 # Strip timezone for comparison with stored times (which have no timezone)
-                since_for_comparison = since.replace(tzinfo=None) if since.tzinfo else since
+                since_for_comparison = (
+                    since.replace(tzinfo=None) if since.tzinfo else since
+                )
                 query += " AND datetime(json_extract(job_info_json, '$.submit_time')) > datetime(?)"
                 params.append(since_for_comparison.isoformat())
 
@@ -1526,7 +1610,7 @@ class JobDataCache:
         self, current_job_ids: Dict[str, List[str]]
     ) -> List[Tuple[str, str]]:
         """
-        Verify cached jobs against current SLURM state and return jobs to mark as completed.
+        Verify cached jobs against current Slurm state and return jobs to mark as completed.
 
         Args:
             current_job_ids: Dict mapping hostname to list of current job IDs
@@ -1550,6 +1634,42 @@ class JobDataCache:
                 to_mark_completed.append((job_id, hostname))
 
         return to_mark_completed
+
+    def find_zombie_jobs(self, max_age_days: int = 7) -> list[tuple[str, str, str]]:
+        """Find zombie jobs: stale PD/UNKNOWN entries that are likely abandoned.
+
+        Returns list of (job_id, hostname, current_state) tuples.
+        """
+        from datetime import timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        zombies = []
+
+        with self._get_connection() as conn:
+            # Find active jobs that have been stuck in PD/UNKNOWN for too long
+            cursor = conn.execute(
+                """
+                SELECT job_id, hostname, 
+                       json_extract(job_info_json, '$.state') as state,
+                       json_extract(job_info_json, '$.submit_time') as submit_time,
+                       json_extract(job_info_json, '$.runtime') as runtime
+                FROM cached_jobs 
+                WHERE is_active = 1
+                  AND (state = 'PD' OR state = 'UNKNOWN')
+                  AND cached_at < ?
+                """,
+                (cutoff.isoformat(),),
+            )
+
+            for row in cursor.fetchall():
+                # Zombie indicators: no runtime (never started) and old submit time
+                submit_time = row["submit_time"]
+                runtime = row["runtime"]
+
+                if not runtime or runtime in ("N/A", "", "0:00"):
+                    zombies.append((row["job_id"], row["hostname"], row["state"]))
+
+        return zombies
 
     def clear_all(self) -> int:
         """
@@ -1817,18 +1937,18 @@ class JobDataCache:
             )
 
     def get_cached_completed_job_ids(
-        self, hostname: str, since: Optional[datetime] = None, max_age_days: int = 30
+        self, hostname: str, since: Optional[datetime] = None, max_age_days: int = 90
     ) -> Set[str]:
         """Get IDs of all cached completed jobs for a host - FAST lookup.
 
-        This is used to avoid re-querying SLURM for jobs we already have cached.
+        This is used to avoid re-querying Slurm for jobs we already have cached.
         Much faster than fetching full job data.
 
         Args:
             hostname: The hostname to get job IDs for
             since: Optional datetime to filter jobs submitted after this time
             max_age_days: Maximum age in days for cached jobs to be considered valid.
-                         Jobs older than this are likely recycled IDs. Default 30 days.
+                         Jobs older than this are likely recycled IDs. Default 90 days.
 
         Returns:
             Set of job IDs that are completed (is_active = 0) in cache and not too old

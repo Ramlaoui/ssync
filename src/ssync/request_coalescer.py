@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from .models.job import JobInfo
 from .utils.logging import setup_logger
+from .utils.async_helpers import background_tasks_disabled, create_task
 
 logger = setup_logger(__name__)
 
@@ -86,6 +87,10 @@ class JobRequestCoalescer:
         Returns:
             JobInfo if found, None otherwise
         """
+        if background_tasks_disabled():
+            jobs = await fetch_func(hostname, [job_id])
+            return jobs[0] if jobs else None
+
         async with self.lock:
             self.stats['total_requests'] += 1
 
@@ -106,7 +111,7 @@ class JobRequestCoalescer:
 
             # Schedule batch execution if not already scheduled
             if hostname not in self.batch_tasks or self.batch_tasks[hostname].done():
-                self.batch_tasks[hostname] = asyncio.create_task(
+                self.batch_tasks[hostname] = create_task(
                     self._execute_batch_after_delay(hostname, fetch_func)
                 )
 
@@ -120,7 +125,7 @@ class JobRequestCoalescer:
                 # Cancel the delayed task and execute now
                 if not self.batch_tasks[hostname].done():
                     self.batch_tasks[hostname].cancel()
-                self.batch_tasks[hostname] = asyncio.create_task(
+                self.batch_tasks[hostname] = create_task(
                     self._execute_batch(hostname, fetch_func)
                 )
 

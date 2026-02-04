@@ -1,24 +1,24 @@
-"""Simplified SLURM manager using refactored components."""
+"""Simplified Slurm manager using refactored components."""
 
 import re
 from dataclasses import dataclass
 from typing import List, Optional
 
-from .connection import ConnectionManager
+from .ssh.manager import ConnectionManager
 from .models import JobInfo
 from .models.cluster import Host, SlurmHost
 from .slurm import SlurmClient
 from .utils.config import config
 from .utils.logging import setup_logger
-from .utils.slurm_params import SlurmParams
-from .utils.ssh import send_file
+from .slurm.params import SlurmParams
+from .ssh.helpers import send_file
 
 logger = setup_logger(__name__, "INFO")
 
 
 @dataclass
 class Job:
-    """Represents a submitted SLURM job."""
+    """Represents a submitted Slurm job."""
 
     def __init__(self, job_id: str, slurm_host: SlurmHost, manager):
         self.job_id = job_id
@@ -35,7 +35,7 @@ class Job:
 
 
 class SlurmManager:
-    """Manages SLURM operations across multiple hosts."""
+    """Manages Slurm operations across multiple hosts."""
 
     def __init__(
         self,
@@ -82,7 +82,7 @@ class SlurmManager:
         skip_user_detection: bool = False,
         force_refresh: bool = False,
     ) -> List[JobInfo]:
-        """Get all jobs from a SLURM host via JobDataManager."""
+        """Get all jobs from a Slurm host via JobDataManager."""
         from .job_data_manager import get_job_data_manager
 
         hostname = (
@@ -111,7 +111,7 @@ class SlurmManager:
         remote_script_path: str | None = None,
         enable_watchers: bool = True,
     ) -> Optional[Job]:
-        """Submit a script to SLURM."""
+        """Submit a script to Slurm."""
 
         params = params or SlurmParams()
 
@@ -122,35 +122,6 @@ class SlurmManager:
         conn = self._get_connection(host)
 
         try:
-            cmd = ["sbatch"]
-
-            if params.job_name:
-                cmd.append(f"--job-name={params.job_name}")
-            if params.time_min:
-                cmd.append(f"--time={params.time_min}")
-            if params.cpus_per_task:
-                cmd.append(f"--cpus-per-task={params.cpus_per_task}")
-            if params.mem_gb:
-                cmd.append(f"--mem={params.mem_gb}G")
-            if params.partition:
-                cmd.append(f"--partition={params.partition}")
-            if params.output:
-                cmd.append(f"--output={params.output}")
-            if params.error:
-                cmd.append(f"--error={params.error}")
-            if params.constraint:
-                cmd.append(f"--constraint={params.constraint}")
-            if params.account:
-                cmd.append(f"--account={params.account}")
-            if params.nodes:
-                cmd.append(f"--nodes={params.nodes}")
-            if params.n_tasks_per_node:
-                cmd.append(f"--ntasks-per-node={params.n_tasks_per_node}")
-            if params.gpus_per_node:
-                cmd.append(f"--gpus-per-node={params.gpus_per_node}")
-            if params.gres:
-                cmd.append(f"--gres={params.gres}")
-
             if local_script_path:
                 remote_scratch_dir = config.get_remote_cache_path(slurm_host)
                 remote_script_path = send_file(
@@ -167,7 +138,7 @@ class SlurmManager:
                 try:
                     from pathlib import Path
 
-                    from .script_processor import ScriptProcessor
+                    from .parsers.script_processor import ScriptProcessor
 
                     script_content = Path(local_script_path).read_text()
                     watchers, _ = ScriptProcessor.extract_watchers(script_content)
@@ -177,9 +148,15 @@ class SlurmManager:
                 except Exception as e:
                     logger.warning(f"Failed to extract watchers: {e}")
 
-            cmd.append(remote_script_path)
-            submit_line = " ".join(cmd)  # Store the submit line for caching
-            result = conn.run(submit_line, hide=False)
+            result, _full_cmd, _cmd, submit_line = (
+                self.slurm_client.submit.run_sbatch(
+                    conn,
+                    params,
+                    remote_script_path,
+                    work_dir=None,
+                    warn=True,
+                )
+            )
             job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
             if job_id_match:
                 job_id = job_id_match.group(1)
@@ -271,7 +248,7 @@ class SlurmManager:
             return None
 
     def cancel_job(self, slurm_host: SlurmHost | str, job_id: str) -> bool:
-        """Cancel a SLURM job."""
+        """Cancel a Slurm job."""
         host = self.get_host_by_name(slurm_host)
         conn = self._get_connection(host.host)
         return self.slurm_client.cancel_job(conn, job_id)
@@ -302,7 +279,7 @@ class SlurmManager:
     def get_job_info(
         self, slurm_host: SlurmHost | str, job_id: str, username: str | None = None
     ) -> Optional[JobInfo]:
-        """Get detailed information about a SLURM job."""
+        """Get detailed information about a Slurm job."""
         host = self.get_host_by_name(slurm_host)
         conn = self._get_connection(host.host)
         return self.slurm_client.get_job_details(
@@ -310,7 +287,7 @@ class SlurmManager:
         )
 
     def get_host_by_name(self, hostname: str | SlurmHost) -> SlurmHost:
-        """Get a SLURM host by hostname."""
+        """Get a Slurm host by hostname."""
         if isinstance(hostname, SlurmHost):
             return hostname
         for slurm_host in self.slurm_hosts:

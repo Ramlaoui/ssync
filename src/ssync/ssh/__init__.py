@@ -6,6 +6,8 @@ connections with sshpass for password authentication.
 """
 
 from .connection import SSHCommandResult, SSHConnection
+from .helpers import get_file, send_file
+from .manager import ConnectionManager
 from .native import NativeSSH, SSHResult
 
 __all__ = [
@@ -13,4 +15,7 @@ __all__ = [
     "SSHResult",
     "SSHConnection",
     "SSHCommandResult",
+    "ConnectionManager",
+    "get_file",
+    "send_file",
 ]

@@ -4,7 +4,7 @@ Unified Job Data Manager - THE SINGLE JOB FETCHER AND DATA MANAGER.
 This service completely replaces the existing job fetching logic in manager.py
 and provides a unified interface for:
 
-- Fetching jobs from SLURM (active + completed)
+- Fetching jobs from Slurm (active + completed)
 - Capturing and preserving ALL job data (info + scripts + outputs)
 - Managing job lifecycle transitions
 - Serving job data with smart caching
@@ -13,6 +13,7 @@ DESIGN PRINCIPLE: One fetcher, one source of truth, one data flow.
 """
 
 import asyncio
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional, Set
 from .cache import get_cache
 from .models.job import JobInfo, JobState
 from .utils.logging import setup_logger
+from .utils.async_helpers import create_task
 
 logger = setup_logger(__name__)
 
@@ -95,7 +97,7 @@ class JobDataManager:
         THE MAIN JOB FETCHER - replaces manager.py get_all_jobs().
 
         This method:
-        1. Fetches jobs from SLURM (active + completed as needed)
+        1. Fetches jobs from Slurm (active + completed as needed)
         2. Captures scripts proactively for new jobs
         3. Updates cache with comprehensive data
         4. Triggers background output harvesting
@@ -111,7 +113,7 @@ class JobDataManager:
             active_only: Only return running/pending jobs
             completed_only: Only return completed jobs
             skip_user_detection: Skip user detection logic
-            force_refresh: Force refresh from SLURM (ignore cache timing)
+            force_refresh: Force refresh from Slurm (ignore cache timing)
 
         Returns:
             List of JobInfo objects with comprehensive data
@@ -121,7 +123,7 @@ class JobDataManager:
 
             manager = get_slurm_manager()
             if not manager:
-                logger.warning("No SLURM manager available")
+                logger.warning("No Slurm manager available")
                 return []
 
             # Determine hosts to query
@@ -142,19 +144,41 @@ class JobDataManager:
                     available_hosts.append(slurm_host)
                 else:
                     # Host is already being fetched - return cached data for this host
-                    logger.info(f"Host {host_name} is already being fetched, returning cached data")
-                    cached_job_data = self.cache.get_cached_jobs(hostname=host_name, limit=limit or 1000)
-                    if cached_job_data:
-                        # Extract JobInfo objects from CachedJobData
-                        cached_jobs = [cjd.job_info for cjd in cached_job_data if cjd.job_info]
-                        logger.info(f"Returning {len(cached_jobs)} cached jobs for busy host {host_name}")
+                    logger.info(
+                        f"Host {host_name} is already being fetched, returning cached data"
+                    )
+                    # If specific job_ids requested, only get those from cache
+                    if job_ids:
+                        cached_job_data = self.cache.get_cached_jobs_by_ids(
+                            job_ids, host_name
+                        )
+                        cached_jobs = [
+                            cjd.job_info
+                            for cjd in cached_job_data.values()
+                            if cjd.job_info
+                        ]
+                    else:
+                        cached_job_data = self.cache.get_cached_jobs(
+                            hostname=host_name, limit=limit or 1000
+                        )
+                        cached_jobs = [
+                            cjd.job_info for cjd in cached_job_data if cjd.job_info
+                        ]
+                    if cached_jobs:
+                        logger.info(
+                            f"Returning {len(cached_jobs)} cached jobs for busy host {host_name}"
+                        )
                         cached_jobs_from_busy_hosts.extend(cached_jobs)
                     else:
-                        logger.debug(f"No cached jobs available for busy host {host_name}")
+                        logger.debug(
+                            f"No cached jobs available for busy host {host_name}"
+                        )
 
             # If all hosts are busy, return cached data only
             if not available_hosts:
-                logger.info(f"All hosts are busy, returning {len(cached_jobs_from_busy_hosts)} cached jobs")
+                logger.info(
+                    f"All hosts are busy, returning {len(cached_jobs_from_busy_hosts)} cached jobs"
+                )
                 return cached_jobs_from_busy_hosts
 
             # Mark all hosts as being fetched
@@ -205,7 +229,7 @@ class JobDataManager:
                     self._fetching_hosts.discard(slurm_host.host.hostname)
 
             # Apply final filtering (limit already applied per-host)
-            filtered_jobs = self._apply_filters(all_jobs, state_filter, None)
+            filtered_jobs = self._apply_filters(all_jobs, state_filter, None, job_ids)
 
             logger.info(
                 f"Fetched {len(filtered_jobs)} jobs from {len(hosts_to_query)} hosts"
@@ -233,30 +257,37 @@ class JobDataManager:
         """Fetch jobs from a single host with comprehensive data capture."""
         hostname = slurm_host.host.hostname
         jobs = []
-        logger.info(f"_fetch_host_jobs called for {hostname} with limit={limit}, job_ids={job_ids}")
+        logger.info(
+            f"_fetch_host_jobs called for {hostname} with limit={limit}, job_ids={job_ids}"
+        )
 
         try:
             # ⚡ PERFORMANCE: Reduced timeout from 30s to 5s for faster failure
             # This prevents long blocking when hosts are unreachable
+            from .utils.config import config
+
+            connect_timeout = float(
+                config.connection_settings.get("connect_timeout", 10)
+            )
             try:
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
-                    timeout=5.0,  # 5s timeout for initial connection (reduced from 30s)
+                    timeout=connect_timeout,
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Connection to {hostname} timed out after 5s, skipping host for this cycle"
+                    f"Connection to {hostname} timed out after {connect_timeout:.0f}s, skipping host for this cycle"
                 )
                 # Don't retry - just skip this host and try again next cycle
                 # This prevents cascading timeouts that block other operations
                 return []
 
-            # Check SLURM availability - run in thread pool
+            # Check Slurm availability - run in thread pool
             slurm_available = await self._run_in_executor(
                 manager.slurm_client.check_slurm_availability, conn, hostname
             )
             if not slurm_available:
-                logger.warning(f"SLURM not available on {hostname}")
+                logger.warning(f"Slurm not available on {hostname}")
                 return []
 
             # Parse since parameter - each host gets its own parsing to ensure proper timezone handling
@@ -289,12 +320,9 @@ class JobDataManager:
                 logger.warning(
                     "If you really need to fetch all users' jobs, you must explicitly set an environment variable:"
                 )
-                logger.warning(
-                    "  export SSYNC_ALLOW_FETCH_ALL_USERS=1"
-                )
+                logger.warning("  export SSYNC_ALLOW_FETCH_ALL_USERS=1")
 
                 # Check if explicitly allowed via environment variable
-                import os
                 if os.environ.get("SSYNC_ALLOW_FETCH_ALL_USERS") == "1":
                     logger.warning(
                         f"SSYNC_ALLOW_FETCH_ALL_USERS=1 detected - proceeding to fetch ALL users on {hostname}"
@@ -359,7 +387,7 @@ class JobDataManager:
                     if cached_completed_ids:
                         logger.info(
                             f"Found {len(cached_completed_ids)} completed jobs in cache for {hostname}, "
-                            f"will skip re-querying these from SLURM"
+                            f"will skip re-querying these from Slurm"
                         )
 
                 completed_jobs = await self._run_in_executor(
@@ -377,11 +405,14 @@ class JobDataManager:
                 )
 
                 # CACHE COMPLETED JOBS AND FETCH OUTPUTS
+                cached_completed_map = self.cache.get_cached_jobs_by_ids(
+                    [job.job_id for job in completed_jobs], hostname
+                )
                 for job in completed_jobs:
                     job.hostname = hostname
 
                     # Check if we already have this job cached
-                    cached_job = self.cache.get_cached_job(job.job_id, hostname)
+                    cached_job = cached_completed_map.get(job.job_id)
 
                     # Cache job info (preserving existing data)
                     self.cache.cache_job(
@@ -397,9 +428,7 @@ class JobDataManager:
                         if job.stdout_file or job.stderr_file:
                             try:
                                 # Fetch outputs asynchronously without blocking the main fetch
-                                asyncio.create_task(
-                                    self._fetch_outputs_from_cached_paths(job)
-                                )
+                                create_task(self._fetch_outputs_from_cached_paths(job))
                             except Exception:
                                 pass
                 jobs.extend(completed_jobs)
@@ -408,9 +437,9 @@ class JobDataManager:
                 await self._update_fetch_state(hostname, conn)
 
             # 3. ENHANCE WITH CACHED JOBS (filtered by user and respecting active_only/completed_only)
-            # Special case: When querying specific job_ids, ALWAYS check cache if not found in SLURM
+            # Special case: When querying specific job_ids, ALWAYS check cache if not found in Slurm
             if job_ids and len(jobs) < len(job_ids):
-                # Some job_ids were not found in SLURM - try cache
+                # Some job_ids were not found in Slurm - try cache
                 found_job_ids = {job.job_id for job in jobs}
                 missing_job_ids = set(job_ids) - found_job_ids
 
@@ -418,13 +447,15 @@ class JobDataManager:
                     f"Looking for {len(missing_job_ids)} missing job_ids in cache: {missing_job_ids}"
                 )
 
-                for missing_id in missing_job_ids:
-                    cached_job = self.cache.get_cached_job(missing_id, hostname)
+                cached_missing_map = self.cache.get_cached_jobs_by_ids(
+                    list(missing_job_ids), hostname
+                )
+                for missing_id, cached_job in cached_missing_map.items():
                     if cached_job and cached_job.job_info:
-                        # Verify it belongs to the current user
-                        if cached_job.job_info.user == effective_user:
-                            jobs.append(cached_job.job_info)
-                            logger.debug(f"Found missing job {missing_id} in cache")
+                        # When specific job IDs are requested, don't filter by user
+                        # The user explicitly asked for these jobs, so return them
+                        jobs.append(cached_job.job_info)
+                        logger.debug(f"Found missing job {missing_id} in cache")
 
             # Regular case: merge with cached completed jobs for bulk queries
             elif not active_only and not job_ids:
@@ -467,9 +498,6 @@ class JobDataManager:
             logger.error(f"Error fetching jobs from {hostname}: {e}")
             return []
 
-    # Removed complex _capture_job_data_comprehensive method - no longer needed
-    # Job data is now captured at submission time and outputs are fetched on-demand
-
     def _is_users_job(self, manager, conn, job: JobInfo) -> bool:
         """Check if a job belongs to the current user."""
         try:
@@ -489,7 +517,7 @@ class JobDataManager:
         BEFORE the job completes and scontrol commands stop working.
 
         Args:
-            job_id: SLURM job ID
+            job_id: Slurm job ID
             hostname: Target host
             script_content: The script content that was submitted
         """
@@ -590,7 +618,7 @@ class JobDataManager:
         For completed jobs, automatically fetches outputs if not already cached.
 
         Args:
-            job_info: Updated job information from SLURM
+            job_info: Updated job information from Slurm
         """
         try:
             # Always preserve existing data, only update status fields
@@ -618,9 +646,7 @@ class JobDataManager:
                         logger.info(
                             f"Job {job_info.job_id} completed, fetching outputs"
                         )
-                        asyncio.create_task(
-                            self._fetch_outputs_from_cached_paths(job_info)
-                        )
+                        create_task(self._fetch_outputs_from_cached_paths(job_info))
 
         except Exception as e:
             logger.error(f"Failed to update job status for {job_info.job_id}: {e}")
@@ -726,7 +752,7 @@ class JobDataManager:
             # Try to fetch stdout if needed
             if should_fetch_stdout:
                 try:
-                    # For completed jobs, check if the path looks like a script file (common SLURM bug)
+                    # For completed jobs, check if the path looks like a script file (common Slurm bug)
                     # For running jobs, we've already corrected this in get_active_jobs
                     if (
                         is_completed
@@ -743,7 +769,7 @@ class JobDataManager:
                     ):
                         logger.warning(
                             f"Completed job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
-                            "This is likely a SLURM bug. scontrol may not work for completed jobs, skipping fetch."
+                            "This is likely a Slurm bug. scontrol may not work for completed jobs, skipping fetch."
                         )
                         stdout_content = None
                         should_fetch_stdout = False
@@ -814,7 +840,7 @@ class JobDataManager:
             # Try to fetch stderr if needed
             if should_fetch_stderr:
                 try:
-                    # For completed jobs, check if the path looks like a script file (common SLURM bug)
+                    # For completed jobs, check if the path looks like a script file (common Slurm bug)
                     # For running jobs, we've already corrected this in get_active_jobs
                     if (
                         is_completed
@@ -831,7 +857,7 @@ class JobDataManager:
                     ):
                         logger.warning(
                             f"Completed job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
-                            "This is likely a SLURM bug. scontrol may not work for completed jobs, skipping fetch."
+                            "This is likely a Slurm bug. scontrol may not work for completed jobs, skipping fetch."
                         )
                         stderr_content = None
                         should_fetch_stderr = False
@@ -997,7 +1023,7 @@ class JobDataManager:
             if cached_job and cached_job.script_content:
                 return cached_job.script_content
 
-            # Try to get from SLURM as fallback
+            # Try to get from Slurm as fallback
             from .web.app import get_slurm_manager
 
             manager = get_slurm_manager()
@@ -1067,9 +1093,18 @@ class JobDataManager:
                 return datetime.now(timezone.utc) - timedelta(days=1)
 
     def _apply_filters(
-        self, jobs: List[JobInfo], state_filter: Optional[str], limit: Optional[int]
+        self,
+        jobs: List[JobInfo],
+        state_filter: Optional[str],
+        limit: Optional[int],
+        job_ids: Optional[List[str]] = None,
     ) -> List[JobInfo]:
         """Apply final filters and limits to job list."""
+        # Apply job_ids filter if specified
+        if job_ids:
+            job_ids_set = set(job_ids)
+            jobs = [job for job in jobs if job.job_id in job_ids_set]
+
         # Apply state filter
         if state_filter:
             jobs = [job for job in jobs if job.state.value == state_filter]
@@ -1145,10 +1180,10 @@ class JobDataManager:
     def _merge_with_cached_jobs(
         self, slurm_jobs: List[JobInfo], cached_jobs: List[JobInfo]
     ) -> List[JobInfo]:
-        """Merge SLURM jobs with cached jobs, removing duplicates."""
+        """Merge Slurm jobs with cached jobs, removing duplicates."""
         slurm_job_ids = {job.job_id for job in slurm_jobs}
 
-        # Add cached jobs that aren't already in SLURM results
+        # Add cached jobs that aren't already in Slurm results
         for cached_job in cached_jobs:
             if cached_job.job_id not in slurm_job_ids:
                 slurm_jobs.append(cached_job)

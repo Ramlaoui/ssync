@@ -1,4 +1,4 @@
-"""Security utilities and middleware for the SLURM Manager API."""
+"""Security utilities and middleware for the Slurm Manager API."""
 
 import hashlib
 import os
@@ -195,7 +195,7 @@ class PathValidator:
 
 
 class ScriptValidator:
-    """Validate and sanitize SLURM scripts for security."""
+    """Validate and sanitize Slurm scripts for security."""
 
     # Dangerous command patterns
     DANGEROUS_PATTERNS = [
@@ -221,7 +221,7 @@ class ScriptValidator:
     @classmethod
     def validate_script(cls, script_content: str) -> str:
         """
-        Validate and sanitize a SLURM script.
+        Validate and sanitize a Slurm script.
 
         Args:
             script_content: Script content to validate
@@ -304,7 +304,7 @@ class InputSanitizer:
         if not job_id:
             raise HTTPException(status_code=400, detail="Job ID cannot be empty")
 
-        # SLURM job IDs can be:
+        # Slurm job IDs can be:
         # - Simple numeric: 12345
         # - Array task: 12345_67
         # - Array parent with range: 12345_[0-99]

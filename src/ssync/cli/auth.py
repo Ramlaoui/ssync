@@ -24,7 +24,7 @@ def auth():
 def setup(force):
     """Set up API authentication (one-time setup for new users)."""
 
-    click.echo("🔐 Setting up SLURM Manager authentication...\n")
+    click.echo("🔐 Setting up Slurm Manager authentication...\n")
 
     # Check if API key already exists
     config_dir = Path.home() / ".config" / "ssync"
@@ -172,9 +172,9 @@ def show(reveal):
 @auth.command()
 def test():
     """Test API authentication."""
-    from ..web.client import AuthenticatedSlurmApiClient
+    from ..web.client import AuthenticatedSlurmAPIClient
 
-    client = AuthenticatedSlurmApiClient()
+    client = AuthenticatedSlurmAPIClient()
 
     if not client.api_key:
         click.echo("❌ No API key configured")

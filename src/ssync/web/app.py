@@ -1,4 +1,4 @@
-"""Secure version of the SLURM Manager API with enhanced security measures."""
+"""Secure version of the Slurm Manager API with enhanced security measures."""
 
 import asyncio
 import fnmatch
@@ -22,6 +22,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -32,7 +33,8 @@ from ..cache import get_cache
 from ..manager import SlurmManager
 from ..models.job import JobState
 from ..utils.logging import setup_logger
-from ..utils.slurm_params import SlurmParams
+from ..slurm.params import SlurmParams
+from ..utils.async_helpers import create_task
 from .cache_middleware import get_cache_middleware
 from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
 from .models import (
@@ -60,7 +62,9 @@ from .security import (
 logger = setup_logger(__name__, "INFO")
 
 
-def group_array_job_tasks(jobs: List[JobInfoWeb], use_cache: bool = True) -> tuple[List[JobInfoWeb], List[ArrayJobGroup]]:
+def group_array_job_tasks(
+    jobs: List[JobInfoWeb], use_cache: bool = True
+) -> tuple[List[JobInfoWeb], List[ArrayJobGroup]]:
     """Group array job tasks together using pre-computed cache stats when possible.
 
     Args:
@@ -79,6 +83,7 @@ def group_array_job_tasks(jobs: List[JobInfoWeb], use_cache: bool = True) -> tup
     parent_jobs = {}  # Map array_job_id to parent job entry
     regular_jobs = []
     array_hostnames = {}  # Map array_job_id to hostname
+    array_state_counts = defaultdict(lambda: defaultdict(int))
 
     for job in jobs:
         # Check if this is an array task (numeric task ID)
@@ -86,10 +91,25 @@ def group_array_job_tasks(jobs: List[JobInfoWeb], use_cache: bool = True) -> tup
             # This is an individual array task - add to array_tasks
             array_tasks[job.array_job_id].append(job)
             array_hostnames[job.array_job_id] = job.hostname
+            # Track state counts for accurate group status
+            if job.state == JobStateWeb.PENDING:
+                array_state_counts[job.array_job_id]["pending"] += 1
+            elif job.state == JobStateWeb.RUNNING:
+                array_state_counts[job.array_job_id]["running"] += 1
+            elif job.state == JobStateWeb.COMPLETED:
+                array_state_counts[job.array_job_id]["completed"] += 1
+            elif job.state == JobStateWeb.FAILED:
+                array_state_counts[job.array_job_id]["failed"] += 1
+            elif job.state == JobStateWeb.CANCELLED:
+                array_state_counts[job.array_job_id]["cancelled"] += 1
             # DO NOT add to regular_jobs - this is part of an array group
         # Check if this is a parent job entry (has brackets like [0-4])
-        elif (job.array_job_id and job.array_task_id and
-              '[' in job.array_task_id and ']' in job.array_task_id):
+        elif (
+            job.array_job_id
+            and job.array_task_id
+            and "[" in job.array_task_id
+            and "]" in job.array_task_id
+        ):
             # This is a parent job entry - store it for metadata but don't include in regular jobs
             parent_jobs[job.array_job_id] = job
             array_hostnames[job.array_job_id] = job.hostname
@@ -98,60 +118,37 @@ def group_array_job_tasks(jobs: List[JobInfoWeb], use_cache: bool = True) -> tup
             # Regular non-array job
             regular_jobs.append(job)
 
-    # Create array job groups using cached metadata when available
+    # Create array job groups using the task list for authoritative state counts
     array_groups = []
+    cache = get_cache() if use_cache else None
 
-    if use_cache:
-        # Try to use pre-computed stats from cache (much faster!)
-        cache = get_cache()
+    for array_job_id, tasks in array_tasks.items():
+        hostname = array_hostnames.get(array_job_id)
+        if not hostname or not tasks:
+            continue
 
-        for array_job_id, tasks in array_tasks.items():
-            hostname = array_hostnames.get(array_job_id)
-            if not hostname:
-                continue
+        # Use cache for metadata only (name/user), not state counts
+        metadata = (
+            cache.get_array_job_metadata(array_job_id, hostname) if cache else None
+        )
+        counts = array_state_counts.get(array_job_id, {})
 
-            # Try to get pre-computed metadata from cache
-            metadata = cache.get_array_job_metadata(array_job_id, hostname)
-
-            if metadata and metadata.get('state_counts'):
-                # Use pre-computed statistics (FAST!)
-                state_counts = metadata['state_counts']
-
-                # Map JobState enum values to display names
-                from ..models.job import JobState
-                pending_count = state_counts.get(JobState.PENDING.value, 0)
-                running_count = state_counts.get(JobState.RUNNING.value, 0)
-                completed_count = state_counts.get(JobState.COMPLETED.value, 0)
-                failed_count = state_counts.get(JobState.FAILED.value, 0)
-                cancelled_count = state_counts.get(JobState.CANCELLED.value, 0)
-
-                # Use the first task's info for the group metadata
-                first_task = tasks[0] if tasks else None
-                if not first_task:
-                    continue
-
-                group = ArrayJobGroup(
-                    array_job_id=array_job_id,
-                    job_name=metadata.get('job_name', first_task.name),
-                    hostname=hostname,
-                    user=metadata.get('user', first_task.user),
-                    total_tasks=metadata.get('total_tasks', len(tasks)),
-                    tasks=tasks,
-                    pending_count=pending_count,
-                    running_count=running_count,
-                    completed_count=completed_count,
-                    failed_count=failed_count,
-                    cancelled_count=cancelled_count,
-                )
-                array_groups.append(group)
-                logger.debug(f"Using cached metadata for array {array_job_id}: {len(tasks)} tasks")
-            else:
-                # Fallback to runtime computation (slower but still works)
-                array_groups.extend(_compute_array_group_runtime(array_job_id, tasks))
-    else:
-        # Runtime computation (original behavior)
-        for array_job_id, tasks in array_tasks.items():
-            array_groups.extend(_compute_array_group_runtime(array_job_id, tasks))
+        first_task = tasks[0]
+        group = ArrayJobGroup(
+            array_job_id=array_job_id,
+            job_name=(metadata.get("job_name") if metadata else None)
+            or first_task.name,
+            hostname=hostname,
+            user=(metadata.get("user") if metadata else None) or first_task.user,
+            total_tasks=len(tasks),
+            tasks=tasks,
+            pending_count=counts.get("pending", 0),
+            running_count=counts.get("running", 0),
+            completed_count=counts.get("completed", 0),
+            failed_count=counts.get("failed", 0),
+            cancelled_count=counts.get("cancelled", 0),
+        )
+        array_groups.append(group)
 
     return regular_jobs, array_groups
 
@@ -172,8 +169,12 @@ def deduplicate_array_jobs(jobs: List[JobInfoWeb]) -> List[JobInfoWeb]:
 
     for job in jobs:
         # Skip parent array job entries (those with brackets like [0-4])
-        if (job.array_job_id and job.array_task_id and
-            '[' in job.array_task_id and ']' in job.array_task_id):
+        if (
+            job.array_job_id
+            and job.array_task_id
+            and "[" in job.array_task_id
+            and "]" in job.array_task_id
+        ):
             # This is a parent entry - skip it
             continue
         else:
@@ -183,7 +184,59 @@ def deduplicate_array_jobs(jobs: List[JobInfoWeb]) -> List[JobInfoWeb]:
     return deduplicated_jobs
 
 
-def _compute_array_group_runtime(array_job_id: str, tasks: List[JobInfoWeb]) -> List[ArrayJobGroup]:
+def _parse_submit_time(value: Optional[str]) -> datetime:
+    """Parse submit_time strings safely for sorting."""
+    if not value:
+        return datetime.fromtimestamp(0)
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:
+            return datetime.fromtimestamp(0)
+
+
+def apply_grouped_limit(
+    display_jobs: List[JobInfoWeb],
+    array_groups: Optional[List[ArrayJobGroup]],
+    limit: Optional[int],
+) -> tuple[List[JobInfoWeb], Optional[List[ArrayJobGroup]]]:
+    """Apply limit where each array group counts as one item."""
+    if not limit or limit <= 0:
+        return display_jobs, array_groups
+
+    groups = array_groups or []
+
+    items: list[tuple[datetime, str, object]] = []
+    for job in display_jobs:
+        items.append((_parse_submit_time(job.submit_time), "job", job))
+    for group in groups:
+        group_time = None
+        if group.tasks:
+            group_time = max(
+                (_parse_submit_time(t.submit_time) for t in group.tasks if t),
+                default=None,
+            )
+        items.append((group_time or datetime.fromtimestamp(0), "group", group))
+
+    items.sort(key=lambda item: item[0], reverse=True)
+    items = items[:limit]
+
+    limited_jobs: List[JobInfoWeb] = []
+    limited_groups: List[ArrayJobGroup] = []
+    for _ts, kind, obj in items:
+        if kind == "job":
+            limited_jobs.append(obj)  # type: ignore[arg-type]
+        else:
+            limited_groups.append(obj)  # type: ignore[arg-type]
+
+    return limited_jobs, limited_groups
+
+
+def _compute_array_group_runtime(
+    array_job_id: str, tasks: List[JobInfoWeb]
+) -> List[ArrayJobGroup]:
     """Compute array job group statistics at runtime (fallback when cache unavailable)."""
     from collections import defaultdict
 
@@ -191,15 +244,15 @@ def _compute_array_group_runtime(array_job_id: str, tasks: List[JobInfoWeb]) -> 
     state_counts = defaultdict(int)
     for task in tasks:
         if task.state == JobStateWeb.PENDING:
-            state_counts['pending'] += 1
+            state_counts["pending"] += 1
         elif task.state == JobStateWeb.RUNNING:
-            state_counts['running'] += 1
+            state_counts["running"] += 1
         elif task.state == JobStateWeb.COMPLETED:
-            state_counts['completed'] += 1
+            state_counts["completed"] += 1
         elif task.state == JobStateWeb.FAILED:
-            state_counts['failed'] += 1
+            state_counts["failed"] += 1
         elif task.state == JobStateWeb.CANCELLED:
-            state_counts['cancelled'] += 1
+            state_counts["cancelled"] += 1
 
     # Use the first task's info for the group metadata
     first_task = tasks[0]
@@ -211,22 +264,29 @@ def _compute_array_group_runtime(array_job_id: str, tasks: List[JobInfoWeb]) -> 
         user=first_task.user,
         total_tasks=len(tasks),
         tasks=tasks,
-        pending_count=state_counts.get('pending', 0),
-        running_count=state_counts.get('running', 0),
-        completed_count=state_counts.get('completed', 0),
-        failed_count=state_counts.get('failed', 0),
-        cancelled_count=state_counts.get('cancelled', 0),
+        pending_count=state_counts.get("pending", 0),
+        running_count=state_counts.get("running", 0),
+        completed_count=state_counts.get("completed", 0),
+        failed_count=state_counts.get("failed", 0),
+        cancelled_count=state_counts.get("cancelled", 0),
     )
 
     logger.debug(f"Computed runtime stats for array {array_job_id}: {len(tasks)} tasks")
     return [group]
 
+
+# Check if docs should be enabled before creating the app
+ENABLE_DOCS = os.getenv("SSYNC_ENABLE_DOCS", "false").lower() == "true"
+
+# API Key security scheme for Swagger UI
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
 app = FastAPI(
-    title="SLURM Manager API",
-    description="Secure Web API for managing SLURM jobs across multiple clusters",
+    title="Slurm Manager API",
+    description="Secure Web API for managing Slurm jobs across multiple clusters",
     version="2.0.0",
-    docs_url=None,  # Disable interactive docs in production
-    redoc_url=None,  # Disable ReDoc in production
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
 )
 
 THREAD_POOL_SIZE = int(os.getenv("SSYNC_THREAD_POOL_SIZE", str(os.cpu_count() + 4)))
@@ -239,7 +299,12 @@ logger.info(f"Initialized thread pool with {THREAD_POOL_SIZE} workers")
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup."""
-    logger.info(f"Starting SLURM Manager API with {THREAD_POOL_SIZE} worker threads")
+    # Enable memory logging for API access
+    from ..utils.logging import enable_memory_logging
+
+    enable_memory_logging()
+
+    logger.info(f"Starting Slurm Manager API with {THREAD_POOL_SIZE} worker threads")
 
     _ = get_slurm_manager()
     logger.info("Secure API started, manager initialized")
@@ -259,7 +324,7 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start cache scheduler: {e}")
 
-    asyncio.create_task(periodic_connection_health_check())
+    create_task(periodic_connection_health_check())
     logger.info("Started periodic connection health check")
 
 
@@ -268,7 +333,7 @@ async def shutdown_event():
     """Clean up resources on shutdown."""
     global _slurm_manager
 
-    logger.info("Shutting down SLURM Manager API...")
+    logger.info("Shutting down Slurm Manager API...")
 
     _shutdown_event.set()
 
@@ -303,11 +368,6 @@ async def shutdown_event():
 
     logger.info("Shutdown complete")
 
-
-ENABLE_DOCS = os.getenv("SSYNC_ENABLE_DOCS", "false").lower() == "true"
-if ENABLE_DOCS:
-    app.docs_url = "/docs"
-    app.redoc_url = "/redoc"
 
 # Handle trusted hosts - support both domain wildcards and IP ranges
 trusted_hosts_env = os.getenv("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1")
@@ -433,7 +493,9 @@ app.add_middleware(RateLimitMiddleware)
 REQUIRE_API_KEY = os.getenv("SSYNC_REQUIRE_API_KEY", "false").lower() == "true"
 
 
-async def verify_api_key(request: Request):
+async def verify_api_key(
+    request: Request, api_key: Optional[str] = Depends(api_key_header)
+):
     """Verify API key for protected endpoints."""
     if not REQUIRE_API_KEY:
         return True
@@ -441,7 +503,6 @@ async def verify_api_key(request: Request):
     if request.url.path == "/health":
         return True
 
-    api_key = request.headers.get("x-api-key")
     if not api_key:
         raise HTTPException(
             status_code=401, detail="API key required. Please provide X-API-Key header."
@@ -493,7 +554,9 @@ async def verify_websocket_api_key(websocket: WebSocket):
 
     # Check query parameters first
     api_key = websocket.query_params.get("api_key")
-    logger.info(f"WebSocket auth: api_key from query params: {bool(api_key)}, path: {websocket.url.path}")
+    logger.info(
+        f"WebSocket auth: api_key from query params: {bool(api_key)}, path: {websocket.url.path}"
+    )
 
     # Fall back to headers
     if not api_key:
@@ -501,12 +564,16 @@ async def verify_websocket_api_key(websocket: WebSocket):
         logger.info(f"WebSocket auth: api_key from headers: {bool(api_key)}")
 
     if not api_key:
-        logger.warning(f"WebSocket auth failed: no API key provided for {websocket.url.path}")
+        logger.warning(
+            f"WebSocket auth failed: no API key provided for {websocket.url.path}"
+        )
         await websocket.close(code=1008, reason="API key required")
         return False
 
     if not api_key_manager.validate_key(api_key):
-        logger.warning(f"WebSocket auth failed: invalid API key for {websocket.url.path}")
+        logger.warning(
+            f"WebSocket auth failed: invalid API key for {websocket.url.path}"
+        )
         await websocket.close(code=1008, reason="Invalid or expired API key")
         return False
 
@@ -581,7 +648,7 @@ else:
     async def root(authenticated: bool = Depends(verify_api_key)):
         """API root endpoint."""
         return {
-            "message": "SLURM Manager API",
+            "message": "Slurm Manager API",
             "version": "2.0.0",
             "security": "enhanced",
             "documentation": "/docs" if ENABLE_DOCS else "disabled",
@@ -590,7 +657,7 @@ else:
 
 
 def get_slurm_manager() -> SlurmManager:
-    """Get or create persistent SLURM manager instance with connection reuse."""
+    """Get or create persistent Slurm manager instance with connection reuse."""
     global _slurm_manager, _config_last_modified
 
     config_path = config.config_path
@@ -628,11 +695,42 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+@app.post("/api/shutdown")
+async def shutdown_server(authenticated: bool = Depends(verify_api_key)):
+    """Shutdown the API server gracefully."""
+    import asyncio
+    import os
+    import signal
+
+    logger.info("Shutdown requested via API")
+
+    async def delayed_shutdown():
+        """Shutdown after a brief delay to allow response to be sent."""
+        await asyncio.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    create_task(delayed_shutdown())
+    return {"status": "shutting_down", "message": "Server is shutting down"}
+
+
+@app.get("/api/logs")
+async def get_server_logs(
+    lines: int = Query(default=50, ge=1, le=1000),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get recent server logs."""
+    from ..utils.logging import get_memory_handler
+
+    memory_handler = get_memory_handler()
+    logs = memory_handler.get_logs(lines)
+    return {"logs": logs, "count": len(logs)}
+
+
 @app.get("/api/info")
 async def api_info(authenticated: bool = Depends(verify_api_key)):
     """API info endpoint."""
     return {
-        "message": "SLURM Manager API",
+        "message": "Slurm Manager API",
         "version": "2.0.0",
         "security": "enhanced",
         "documentation": "/docs" if ENABLE_DOCS else "disabled",
@@ -810,6 +908,7 @@ async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
 
         # Add request coalescer stats
         from ..request_coalescer import get_request_coalescer
+
         coalescer = get_request_coalescer()
         coalescer_stats = coalescer.get_stats()
 
@@ -923,7 +1022,7 @@ def _format_time_delta(delta: timedelta) -> str:
 
 @app.get("/api/hosts", response_model=List[HostInfoWeb])
 async def get_hosts(authenticated: bool = Depends(verify_api_key)):
-    """Get list of configured SLURM hosts."""
+    """Get list of configured Slurm hosts."""
     try:
         manager = get_slurm_manager()
         hosts = []
@@ -978,7 +1077,7 @@ async def get_job_status(
     search: Optional[str] = Query(None, description="Search for jobs by name or ID"),
     group_array_jobs: bool = Query(False, description="Group array job tasks together"),
     force_refresh: bool = Query(
-        False, description="Force refresh from SLURM, bypassing all caches"
+        False, description="Force refresh from Slurm, bypassing all caches"
     ),
     authenticated: bool = Depends(verify_api_key),
 ):
@@ -1005,7 +1104,9 @@ async def get_job_status(
             logger.info(f"Filtering for specific user: {user}")
             user = InputSanitizer.sanitize_username(user)
         else:
-            logger.info("No user specified - will auto-detect current user for security")
+            logger.info(
+                "No user specified - will auto-detect current user for security"
+            )
 
         if search:
             search = InputSanitizer.sanitize_text(search)
@@ -1095,6 +1196,9 @@ async def get_job_status(
                     array_groups = None
                     if group_array_jobs and host_jobs:
                         display_jobs, array_groups = group_array_job_tasks(host_jobs)
+                        display_jobs, array_groups = apply_grouped_limit(
+                            display_jobs, array_groups, limit
+                        )
                     else:
                         # Even when not grouping, deduplicate array job parent entries
                         display_jobs = deduplicate_array_jobs(host_jobs)
@@ -1102,7 +1206,12 @@ async def get_job_status(
                     response = JobStatusResponse(
                         hostname=hostname,
                         jobs=display_jobs,
-                        total_jobs=len(host_jobs),  # Keep original count
+                        total_jobs=(
+                            len(display_jobs)
+                            + (len(array_groups) if array_groups else 0)
+                            if group_array_jobs
+                            else len(host_jobs)
+                        ),
                         query_time=datetime.now(),
                         group_array_jobs=group_array_jobs,
                         array_groups=array_groups,
@@ -1155,8 +1264,60 @@ async def get_job_status(
                 )
 
                 if cached_jobs is not None:
+                    # ⚡ FIX: Filter out jobs that are already marked as completed in cache
+                    # This prevents showing stale completed jobs while background refresh runs
+                    active_cached_jobs = []
+                    for job in cached_jobs:
+                        # Check if job is marked as completed in cache
+                        cached = cache_middleware.cache.get_cached_jobs_by_ids(
+                            [job.job_id], hostname
+                        ).get(job.job_id)
+                        if cached and not cached.is_active:
+                            # Job is completed, skip it
+                            logger.debug(
+                                f"Filtering out completed job {job.job_id} from cache results"
+                            )
+                            continue
+                        active_cached_jobs.append(job)
+
+                    # ⚡ FIX: Trigger background cache refresh if cache is getting stale
+                    # This fetches fresh data and properly marks completed jobs
+                    cache_entry = cache_middleware.cache.check_date_range_cache_entry(
+                        hostname, cache_filters, since
+                    )
+                    if cache_entry:
+                        cache_age = (
+                            datetime.now()
+                            - cache_entry.get("cached_at", datetime.now())
+                        ).total_seconds()
+                        if cache_age > 60:  # If cache is older than 60 seconds
+                            logger.info(
+                                f"Cache for {hostname} is {cache_age:.0f}s old - triggering background refresh"
+                            )
+                            # Trigger async refresh without awaiting
+                            asyncio.create_task(
+                                fetch_host_jobs_async(
+                                    slurm_host,
+                                    user,
+                                    since,
+                                    None,
+                                    state,
+                                    active_only,
+                                    completed_only,
+                                    skip_user_detection,
+                                    True,
+                                )
+                            )
+
+                    # Apply state filter if provided
+                    # Note: State filter is applied here because cached jobs may have stale state data
+                    if state:
+                        active_cached_jobs = [
+                            job for job in active_cached_jobs if job.state == state
+                        ]
+
                     # Apply search filter if provided
-                    web_jobs = cached_jobs
+                    web_jobs = active_cached_jobs
                     if search:
                         search_lower = search.lower()
                         filtered_jobs = []
@@ -1171,6 +1332,9 @@ async def get_job_status(
                     array_groups = None
                     if group_array_jobs and web_jobs:
                         display_jobs, array_groups = group_array_job_tasks(web_jobs)
+                        display_jobs, array_groups = apply_grouped_limit(
+                            display_jobs, array_groups, limit
+                        )
                     else:
                         # Even when not grouping, deduplicate array job parent entries
                         display_jobs = deduplicate_array_jobs(web_jobs)
@@ -1178,7 +1342,12 @@ async def get_job_status(
                     response = JobStatusResponse(
                         hostname=slurm_host.host.hostname,
                         jobs=display_jobs,
-                        total_jobs=len(web_jobs),
+                        total_jobs=(
+                            len(display_jobs)
+                            + (len(array_groups) if array_groups else 0)
+                            if group_array_jobs
+                            else len(web_jobs)
+                        ),
                         query_time=datetime.now(),
                         group_array_jobs=group_array_jobs,
                         array_groups=array_groups,
@@ -1189,7 +1358,7 @@ async def get_job_status(
                     )
                     return response
 
-            # Cache miss or not a cacheable query - fetch from SLURM via JobDataManager
+            # Cache miss or not a cacheable query - fetch from Slurm via JobDataManager
             try:
                 # Use the async JobDataManager directly
                 jobs = await manager.get_all_jobs(
@@ -1223,6 +1392,9 @@ async def get_job_status(
                 array_groups = None
                 if group_array_jobs and web_jobs:
                     display_jobs, array_groups = group_array_job_tasks(web_jobs)
+                    display_jobs, array_groups = apply_grouped_limit(
+                        display_jobs, array_groups, limit
+                    )
                 else:
                     # Even when not grouping, deduplicate array job parent entries
                     display_jobs = deduplicate_array_jobs(web_jobs)
@@ -1230,7 +1402,11 @@ async def get_job_status(
                 response = JobStatusResponse(
                     hostname=slurm_host.host.hostname,
                     jobs=display_jobs,
-                    total_jobs=len(web_jobs),  # Keep original count
+                    total_jobs=(
+                        len(display_jobs) + (len(array_groups) if array_groups else 0)
+                        if group_array_jobs
+                        else len(web_jobs)
+                    ),
                     query_time=datetime.now(),
                     group_array_jobs=group_array_jobs,
                     array_groups=array_groups,
@@ -1256,7 +1432,9 @@ async def get_job_status(
         current_job_ids = {}
         for response in results:
             if response.jobs:
-                current_job_ids[response.hostname] = [job.job_id for job in response.jobs]
+                current_job_ids[response.hostname] = [
+                    job.job_id for job in response.jobs
+                ]
         await cache_middleware._verify_and_update_cache(current_job_ids)
 
         # Cache the results with date range info if applicable
@@ -1287,7 +1465,7 @@ async def get_job_status(
 
 async def _refresh_job_in_background(job_id: str, host: Optional[str]):
     """
-    Background task to refresh job data from SLURM and broadcast updates via WebSocket.
+    Background task to refresh job data from Slurm and broadcast updates via WebSocket.
 
     This allows cache-first requests to return immediately while still getting fresh data.
     """
@@ -1326,18 +1504,22 @@ async def _refresh_job_in_background(job_id: str, host: Optional[str]):
                         slurm_host.host.hostname,
                         {
                             "type": "job_update",
-                            "job": job_web.model_dump(mode='json'),
+                            "job": job_web.model_dump(mode="json"),
                             "source": "background_refresh",
                         },
                     )
 
-                    logger.debug(f"Background refresh completed for job {job_id}, broadcasted update")
+                    logger.debug(
+                        f"Background refresh completed for job {job_id}, broadcasted update"
+                    )
                     return
             except Exception as e:
-                logger.debug(f"Failed to refresh job {job_id} from host {slurm_host.host.hostname}: {e}")
+                logger.debug(
+                    f"Failed to refresh job {job_id} from host {slurm_host.host.hostname}: {e}"
+                )
                 continue
 
-        logger.debug(f"Background refresh: job {job_id} not found in SLURM")
+        logger.debug(f"Background refresh: job {job_id} not found in Slurm")
 
     except Exception as e:
         logger.error(f"Background refresh failed for job {job_id}: {e}")
@@ -1348,7 +1530,8 @@ async def get_job_details(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host to search"),
     cache_first: bool = Query(
-        False, description="Return cached data immediately if available, then refresh in background"
+        False,
+        description="Return cached data immediately if available, then refresh in background",
     ),
     authenticated: bool = Depends(verify_api_key),
 ):
@@ -1360,11 +1543,15 @@ async def get_job_details(
 
         # If cache_first is requested, return cached data immediately and trigger background refresh
         if cache_first:
-            cached_job = await _cache_middleware.get_job_with_cache_fallback(job_id, host)
+            cached_job = await _cache_middleware.get_job_with_cache_fallback(
+                job_id, host
+            )
             if cached_job:
-                logger.info(f"Returning cached job {job_id} immediately (cache_first=true)")
+                logger.info(
+                    f"Returning cached job {job_id} immediately (cache_first=true)"
+                )
                 # Trigger async refresh in background (don't await)
-                asyncio.create_task(_refresh_job_in_background(job_id, host))
+                create_task(_refresh_job_in_background(job_id, host))
                 return cached_job
 
         manager = get_slurm_manager()
@@ -1400,7 +1587,7 @@ async def get_job_details(
                         slurm_host.host.hostname,
                         {
                             "type": "job_update",
-                            "job": job_web.model_dump(mode='json'),
+                            "job": job_web.model_dump(mode="json"),
                             "source": "slurm",
                         },
                     )
@@ -2101,7 +2288,7 @@ async def get_job_script(
             logger.info(f"Returning cached script for job {job_id}")
             return cached_script
 
-        # Try to get from SLURM and cache it
+        # Try to get from Slurm and cache it
         script_found_in_slurm = False
         for slurm_host in slurm_hosts:
             try:
@@ -2142,7 +2329,7 @@ async def get_job_script(
                 )
                 continue
 
-        # If we didn't find the script in SLURM, check cache again without host filter
+        # If we didn't find the script in Slurm, check cache again without host filter
         # This handles cases where the job moved hosts or host wasn't specified correctly
         if not script_found_in_slurm and host:
             cached_script = await _cache_middleware.get_cached_job_script(job_id, None)
@@ -2153,7 +2340,7 @@ async def get_job_script(
                 return cached_script
 
         # Script not found anywhere
-        logger.warning(f"Script not found for job {job_id} in cache or SLURM")
+        logger.warning(f"Script not found for job {job_id} in cache or Slurm")
         raise HTTPException(status_code=404, detail="Script not found")
 
     except HTTPException:
@@ -2219,7 +2406,7 @@ async def launch_job(
             # Initialize launch manager with thread pool executor
             launch_manager = LaunchManager(manager, executor=executor)
 
-            # Validate SLURM parameters
+            # Validate Slurm parameters
             slurm_params = SlurmParams(
                 job_name=request.job_name[:64]
                 if request.job_name
@@ -2293,15 +2480,15 @@ async def launch_job(
 
         # Parse and enhance error messages based on common patterns
         if "Failed to submit job" in error_message:
-            # Extract the specific SLURM errors if present
-            if "SLURM Error:" in error_message:
-                # The error already has detailed SLURM information
+            # Extract the specific Slurm errors if present
+            if "Slurm Error:" in error_message:
+                # The error already has detailed Slurm information
                 raise HTTPException(status_code=500, detail=error_message)
             else:
                 # Generic submission failure - add context
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Job submission failed: {error_message}. Check cluster availability, SLURM configuration, and resource limits.",
+                    detail=f"Job submission failed: {error_message}. Check cluster availability, Slurm configuration, and resource limits.",
                 )
         elif "Connection" in error_message or "SSH" in error_message:
             raise HTTPException(
@@ -2321,7 +2508,7 @@ async def launch_job(
         elif "Invalid account" in error_message:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid SLURM account: {error_message}. Verify your account is active and has access.",
+                detail=f"Invalid Slurm account: {error_message}. Verify your account is active and has access.",
             )
         elif "not found" in error_message.lower():
             raise HTTPException(
@@ -2335,7 +2522,7 @@ async def launch_job(
         elif "sbatch" in error_message.lower() and "not found" in error_message.lower():
             raise HTTPException(
                 status_code=503,
-                detail="SLURM commands not available on the cluster. Verify SLURM is installed and accessible.",
+                detail="Slurm commands not available on the cluster. Verify Slurm is installed and accessible.",
             )
         else:
             # For any other errors, return the full error message with a generic prefix
@@ -2373,17 +2560,24 @@ async def cancel_job(
                     # Try to stop any watchers for this job (don't fail the whole operation if this fails)
                     try:
                         from ..watchers import get_watcher_engine
+
                         engine = get_watcher_engine()
-                        await engine.stop_watchers_for_job(job_id, slurm_host.host.hostname)
+                        await engine.stop_watchers_for_job(
+                            job_id, slurm_host.host.hostname
+                        )
                         logger.info(f"Stopped watchers for job {job_id}")
                     except Exception as e:
                         logger.warning(f"Failed to stop watchers for job {job_id}: {e}")
 
                     return {"message": "Job cancelled successfully"}
                 else:
-                    logger.warning(f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: scancel returned false")
+                    logger.warning(
+                        f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: scancel returned false"
+                    )
             except Exception as e:
-                logger.warning(f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: {e}")
+                logger.warning(
+                    f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: {e}"
+                )
                 continue
 
         raise HTTPException(status_code=500, detail="Failed to cancel job on any host")
@@ -2758,6 +2952,51 @@ async def get_watcher_stats(
         raise HTTPException(status_code=500, detail="Failed to get watcher statistics")
 
 
+@app.post("/api/watchers/cleanup")
+async def cleanup_orphaned_watchers(
+    dry_run: bool = Query(default=False, description="Only list what would be cleaned"),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Clean up watchers for completed or non-existent jobs."""
+    try:
+        from ..watchers import get_watcher_engine
+
+        engine = get_watcher_engine()
+
+        if dry_run:
+            # Just list active watchers that might be orphaned
+            cache = get_cache()
+            with cache._get_connection() as conn:
+                cursor = conn.execute(
+                    """SELECT w.id, w.job_id, w.hostname, w.state, w.name
+                       FROM job_watchers w
+                       WHERE w.state = 'active'"""
+                )
+                active_watchers = [
+                    {
+                        "id": row["id"],
+                        "job_id": row["job_id"],
+                        "hostname": row["hostname"],
+                        "state": row["state"],
+                        "name": row["name"],
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+            return {
+                "dry_run": True,
+                "active_watchers": active_watchers,
+                "count": len(active_watchers),
+            }
+        else:
+            await engine.cleanup_orphaned_watchers()
+            return {"message": "Cleanup completed", "dry_run": False}
+
+    except Exception as e:
+        logger.error(f"Error cleaning up watchers: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup watchers: {e}")
+
+
 @app.post("/api/watchers/{watcher_id}/pause")
 async def pause_watcher(
     watcher_id: int,
@@ -2870,7 +3109,7 @@ async def trigger_watcher_manually(
             }
 
         # Regular pattern matching mode
-        # If test_text is provided, use it; otherwise fetch latest output from cache or SLURM
+        # If test_text is provided, use it; otherwise fetch latest output from cache or Slurm
         if test_text:
             content = test_text
             logger.info(f"Manually triggering watcher {watcher_id} with test text")
@@ -2920,50 +3159,78 @@ async def trigger_watcher_manually(
                     f"Using cached output for watcher {watcher_id} - stdout: {len(stdout_content)} chars, stderr: {len(stderr_content)} chars"
                 )
 
-            # If cache is empty, try to fetch from SLURM directly
+            # If cache is empty, try to fetch from Slurm directly
             if not stdout_content and not stderr_content:
                 try:
-                    logger.info(f"Cache empty, fetching output from SLURM for job {watcher_row['job_id']}")
+                    logger.info(
+                        f"Cache empty, fetching output from Slurm for job {watcher_row['job_id']}"
+                    )
                     manager = get_slurm_manager()
-                    job_info = manager.get_job_info(watcher_row["hostname"], watcher_row["job_id"])
+                    job_info = manager.get_job_info(
+                        watcher_row["hostname"], watcher_row["job_id"]
+                    )
 
                     if job_info:
                         # Get connection to the host
                         try:
-                            slurm_host = manager.get_host_by_name(watcher_row["hostname"])
+                            slurm_host = manager.get_host_by_name(
+                                watcher_row["hostname"]
+                            )
                             conn = manager._get_connection(slurm_host.host)
                         except Exception as e:
-                            logger.warning(f"Failed to get connection for {watcher_row['hostname']}: {e}")
+                            logger.warning(
+                                f"Failed to get connection for {watcher_row['hostname']}: {e}"
+                            )
                             conn = None
 
                         if conn:
-                            # Try to get output from SLURM paths
+                            # Try to get output from Slurm paths
                             if job_info.stdout_file:
                                 try:
-                                    result = conn.run(f"cat '{job_info.stdout_file}'", warn=True, hide=True)
+                                    result = conn.run(
+                                        f"cat '{job_info.stdout_file}'",
+                                        warn=True,
+                                        hide=True,
+                                    )
                                     if result.ok:
                                         stdout_content = result.stdout
-                                        logger.info(f"Fetched stdout from SLURM: {len(stdout_content)} chars")
+                                        logger.info(
+                                            f"Fetched stdout from Slurm: {len(stdout_content)} chars"
+                                        )
                                 except Exception as e:
-                                    logger.warning(f"Failed to fetch stdout from SLURM: {e}")
+                                    logger.warning(
+                                        f"Failed to fetch stdout from Slurm: {e}"
+                                    )
 
                             if job_info.stderr_file:
                                 try:
-                                    result = conn.run(f"cat '{job_info.stderr_file}'", warn=True, hide=True)
+                                    result = conn.run(
+                                        f"cat '{job_info.stderr_file}'",
+                                        warn=True,
+                                        hide=True,
+                                    )
                                     if result.ok:
                                         stderr_content = result.stdout
-                                        logger.info(f"Fetched stderr from SLURM: {len(stderr_content)} chars")
+                                        logger.info(
+                                            f"Fetched stderr from Slurm: {len(stderr_content)} chars"
+                                        )
                                 except Exception as e:
-                                    logger.warning(f"Failed to fetch stderr from SLURM: {e}")
+                                    logger.warning(
+                                        f"Failed to fetch stderr from Slurm: {e}"
+                                    )
                 except Exception as e:
-                    logger.warning(f"Failed to fetch output from SLURM: {e}")
+                    logger.warning(f"Failed to fetch output from Slurm: {e}")
 
             # Combine outputs based on watcher output_type
-            output_type = watcher.definition.output_type if hasattr(watcher.definition, 'output_type') else 'stdout'
+            output_type = (
+                watcher.definition.output_type
+                if hasattr(watcher.definition, "output_type")
+                else "stdout"
+            )
 
-            if output_type == 'stdout':
+            if output_type == "stdout":
                 content = stdout_content
-            elif output_type == 'stderr':
+            elif output_type == "stderr":
                 content = stderr_content
             else:  # both
                 content = stdout_content + "\n" + stderr_content
@@ -2977,7 +3244,7 @@ async def trigger_watcher_manually(
                 # No output available at all
                 content = ""
                 logger.warning(
-                    f"No output found for job {watcher_row['job_id']} on {watcher_row['hostname']} (cache and SLURM both empty)"
+                    f"No output found for job {watcher_row['job_id']} on {watcher_row['hostname']} (cache and Slurm both empty)"
                 )
 
         # Run pattern matching and actions
@@ -3068,7 +3335,7 @@ async def resume_watcher(
             # Only try to create task if the engine has an event loop
             if hasattr(engine, "active_tasks"):
                 try:
-                    task = asyncio.create_task(
+                    task = create_task(
                         engine._monitor_watcher(watcher_id, job_id, hostname)
                     )
                     engine.active_tasks[watcher_id] = task
@@ -3127,8 +3394,12 @@ async def discover_array_tasks(
             "success": True,
             "message": f"Discovered {new_tasks_count} new array task(s)",
             "new_tasks_discovered": new_tasks_count,
-            "total_discovered": updated_watcher.discovered_task_count if updated_watcher else 0,
-            "expected_tasks": updated_watcher.expected_task_count if updated_watcher else None,
+            "total_discovered": updated_watcher.discovered_task_count
+            if updated_watcher
+            else 0,
+            "expected_tasks": updated_watcher.expected_task_count
+            if updated_watcher
+            else None,
             "is_array_template": True,
         }
 
@@ -3136,7 +3407,9 @@ async def discover_array_tasks(
         raise
     except Exception as e:
         logger.error(f"Error discovering array tasks for watcher {watcher_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to discover array tasks: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to discover array tasks: {str(e)}"
+        )
 
 
 @app.post("/api/watchers")
@@ -3183,23 +3456,39 @@ async def create_watcher(
                 manager = get_slurm_manager()
                 job_info = manager.get_job_info(hostname, job_id)
 
-                logger.info(f"Checking job {job_id} state for watcher creation - job_info: {job_info}, state: {job_info.state if job_info else 'None'}")
+                logger.info(
+                    f"Checking job {job_id} state for watcher creation - job_info: {job_info}, state: {job_info.state if job_info else 'None'}"
+                )
 
                 if job_info:
                     # If job is in a terminal/finished state, create as static watcher
-                    if job_info.state in [JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.TIMEOUT, JobState.UNKNOWN]:
+                    if job_info.state in [
+                        JobState.COMPLETED,
+                        JobState.FAILED,
+                        JobState.CANCELLED,
+                        JobState.TIMEOUT,
+                        JobState.UNKNOWN,
+                    ]:
                         state = "static"
-                        logger.info(f"Creating STATIC watcher for finished job {job_id} (state: {job_info.state.value})")
+                        logger.info(
+                            f"Creating STATIC watcher for finished job {job_id} (state: {job_info.state.value})"
+                        )
                     else:
-                        logger.info(f"Creating ACTIVE watcher for running job {job_id} (state: {job_info.state.value})")
+                        logger.info(
+                            f"Creating ACTIVE watcher for running job {job_id} (state: {job_info.state.value})"
+                        )
                 else:
                     # Job not found - likely completed and purged from queue
                     # Create as static watcher since we can still access cached output
                     state = "static"
-                    logger.info(f"Job {job_id} not found in queue - creating STATIC watcher (job likely completed)")
+                    logger.info(
+                        f"Job {job_id} not found in queue - creating STATIC watcher (job likely completed)"
+                    )
             except Exception as e:
                 # If we can't get job info, assume static for safety
-                logger.warning(f"Could not determine job state for {job_id}: {e} - defaulting to STATIC")
+                logger.warning(
+                    f"Could not determine job state for {job_id}: {e} - defaulting to STATIC"
+                )
                 state = "static"
             # Use the same interval for timer mode by default unless explicitly specified
             timer_interval_seconds = watcher_config.get(
@@ -3263,14 +3552,16 @@ async def create_watcher(
                     engine = get_watcher_engine()
 
                     if hasattr(engine, "active_tasks"):
-                        task = asyncio.create_task(
+                        task = create_task(
                             engine._monitor_watcher(watcher_id, job_id, hostname)
                         )
                         engine.active_tasks[watcher_id] = task
                 except Exception as engine_error:
                     logger.debug(f"Could not start watcher monitoring: {engine_error}")
             elif state == "static":
-                logger.info(f"Created static watcher {watcher_id} - will only run on manual trigger")
+                logger.info(
+                    f"Created static watcher {watcher_id} - will only run on manual trigger"
+                )
 
             # Return the created watcher
             cursor = conn.execute(
@@ -3488,7 +3779,7 @@ async def update_watcher(
                     ):
                         # Restart monitoring
                         if hasattr(engine, "active_tasks"):
-                            task = asyncio.create_task(
+                            task = create_task(
                                 engine._monitor_watcher(
                                     watcher_id,
                                     updated_row_dict["job_id"],
@@ -3861,11 +4152,16 @@ async def monitor_job_updates(
                     # Job disappeared or completed - stop any watchers
                     try:
                         from ..watchers import get_watcher_engine
+
                         engine = get_watcher_engine()
                         await engine.stop_watchers_for_job(actual_job_id, hostname)
-                        logger.debug(f"Stopped watchers for disappeared job {actual_job_id}")
+                        logger.debug(
+                            f"Stopped watchers for disappeared job {actual_job_id}"
+                        )
                     except Exception as e:
-                        logger.error(f"Error stopping watchers for disappeared job {actual_job_id}: {e}")
+                        logger.error(
+                            f"Error stopping watchers for disappeared job {actual_job_id}: {e}"
+                        )
 
                     await websocket.send_json(
                         {
@@ -3885,7 +4181,9 @@ async def monitor_job_updates(
                             "hostname": hostname,
                             "old_state": last_state.value if last_state else None,
                             "new_state": job_info.state.value,
-                            "job": JobInfoWeb.from_job_info(job_info).model_dump(mode='json'),
+                            "job": JobInfoWeb.from_job_info(job_info).model_dump(
+                                mode="json"
+                            ),
                         }
                     )
                     last_state = job_info.state
@@ -3900,11 +4198,16 @@ async def monitor_job_updates(
                     ]:
                         try:
                             from ..watchers import get_watcher_engine
+
                             engine = get_watcher_engine()
                             await engine.stop_watchers_for_job(actual_job_id, hostname)
-                            logger.info(f"Stopped watchers for job {actual_job_id} (state: {job_info.state.value})")
+                            logger.info(
+                                f"Stopped watchers for job {actual_job_id} (state: {job_info.state.value})"
+                            )
                         except Exception as e:
-                            logger.error(f"Error stopping watchers for job {actual_job_id}: {e}")
+                            logger.error(
+                                f"Error stopping watchers for job {actual_job_id}: {e}"
+                            )
 
                     # Also broadcast to all-jobs watchers
                     await job_manager.broadcast_job_update(
@@ -3914,7 +4217,9 @@ async def monitor_job_updates(
                             "type": "state_change",
                             "old_state": last_state.value if last_state else None,
                             "new_state": job_info.state.value,
-                            "job": JobInfoWeb.from_job_info(job_info).model_dump(mode='json'),
+                            "job": JobInfoWeb.from_job_info(job_info).model_dump(
+                                mode="json"
+                            ),
                         },
                     )
 
@@ -4039,7 +4344,9 @@ async def websocket_job(websocket: WebSocket, job_id: str):
                     )
 
                 # Use coalescer to batch with other concurrent requests
-                job_info = await coalescer.fetch_job(actual_job_id, hostname, fetch_batch)
+                job_info = await coalescer.fetch_job(
+                    actual_job_id, hostname, fetch_batch
+                )
             else:
                 # Search across all hosts (less common, no coalescing for now)
                 all_jobs = await job_data_manager.fetch_all_jobs(
@@ -4054,7 +4361,9 @@ async def websocket_job(websocket: WebSocket, job_id: str):
                 await websocket.send_json(
                     {
                         "type": "initial",
-                        "job": JobInfoWeb.from_job_info(job_info).model_dump(mode='json'),
+                        "job": JobInfoWeb.from_job_info(job_info).model_dump(
+                            mode="json"
+                        ),
                         "hostname": hostname,
                     }
                 )
@@ -4062,7 +4371,7 @@ async def websocket_job(websocket: WebSocket, job_id: str):
                 # Only start monitoring for active jobs (running/pending)
                 if job_info.state in [JobState.RUNNING, JobState.PENDING]:
                     # Start background task to monitor job changes
-                    monitor_task = asyncio.create_task(
+                    monitor_task = create_task(
                         monitor_job_updates(websocket, job_id, hostname, actual_job_id)
                     )
                 else:
@@ -4122,6 +4431,7 @@ async def monitor_all_jobs_singleton():
 
     try:
         from ..job_data_manager import get_job_data_manager
+
         get_slurm_manager()
         job_data_manager = get_job_data_manager()
         job_states = {}
@@ -4141,7 +4451,9 @@ async def monitor_all_jobs_singleton():
 
             try:
                 # ⚡ DIAGNOSTIC: Log monitoring task activity
-                logger.debug(f"Monitor task running - {len(_all_jobs_websockets)} clients connected")
+                logger.debug(
+                    f"Monitor task running - {len(_all_jobs_websockets)} clients connected"
+                )
 
                 current_time = asyncio.get_event_loop().time()
                 time_since_full = current_time - last_full_update
@@ -4150,7 +4462,9 @@ async def monitor_all_jobs_singleton():
                 # or just active jobs (faster)
                 if time_since_full >= FULL_INTERVAL:
                     # Full update every 60 seconds: fetch all recent jobs
-                    logger.debug("Performing full job update (active + recent completed)")
+                    logger.debug(
+                        "Performing full job update (active + recent completed)"
+                    )
                     all_jobs = await job_data_manager.fetch_all_jobs(
                         hostname=None,
                         limit=500,
@@ -4200,7 +4514,7 @@ async def monitor_all_jobs_singleton():
                         # Create job dict and validate consistency
                         # IMPORTANT: Create a fresh JobInfoWeb object for each update
                         web_job = JobInfoWeb.from_job_info(job)
-                        job_dict = web_job.model_dump(mode='json')
+                        job_dict = web_job.model_dump(mode="json")
 
                         # Make a deep copy to ensure no dict reuse across updates
                         # This prevents the same dict object from being shared across multiple updates
@@ -4208,24 +4522,30 @@ async def monitor_all_jobs_singleton():
 
                         # Verify job_id didn't change during processing
                         if job.job_id != original_job_id:
-                            logger.error(f"Job object MUTATED during processing: was {original_job_id}, now {job.job_id}")
+                            logger.error(
+                                f"Job object MUTATED during processing: was {original_job_id}, now {job.job_id}"
+                            )
                             continue
 
                         # Verify job_id consistency before adding to updates
-                        if job_dict_copy['job_id'] != original_job_id:
-                            logger.error(f"Job ID mismatch in batch_update: original_job_id={original_job_id} vs job_dict['job_id']={job_dict_copy['job_id']}, hostname={original_hostname}")
+                        if job_dict_copy["job_id"] != original_job_id:
+                            logger.error(
+                                f"Job ID mismatch in batch_update: original_job_id={original_job_id} vs job_dict['job_id']={job_dict_copy['job_id']}, hostname={original_hostname}"
+                            )
                             logger.error(f"Full job object: {job}")
                             logger.error(f"Full job_dict: {job_dict_copy}")
                             continue  # Skip this update to prevent cache corruption
 
-                        updates.append({
-                            "type": "job_update",
-                            "job_id": original_job_id,  # Use captured value
-                            "hostname": original_hostname,  # Use captured value
-                            "old_state": old_state.value if old_state else None,
-                            "new_state": job.state.value,
-                            "job": job_dict_copy,
-                        })
+                        updates.append(
+                            {
+                                "type": "job_update",
+                                "job_id": original_job_id,  # Use captured value
+                                "hostname": original_hostname,  # Use captured value
+                                "old_state": old_state.value if old_state else None,
+                                "new_state": job.state.value,
+                                "job": job_dict_copy,
+                            }
+                        )
 
                 # Detect jobs that disappeared from the list (completed/removed)
                 completed_jobs = set(job_states.keys()) - current_job_ids
@@ -4237,31 +4557,50 @@ async def monitor_all_jobs_singleton():
                             hostname=hostname, job_ids=[job_id], limit=1
                         )
                         if completed_job_data:
-                            updates.append({
-                                "type": "job_completed",
-                                "job_id": job_id,
-                                "hostname": hostname,
-                                "job": JobInfoWeb.from_job_info(completed_job_data[0]).model_dump(mode='json'),
-                            })
+                            updates.append(
+                                {
+                                    "type": "job_completed",
+                                    "job_id": job_id,
+                                    "hostname": hostname,
+                                    "job": JobInfoWeb.from_job_info(
+                                        completed_job_data[0]
+                                    ).model_dump(mode="json"),
+                                }
+                            )
                         else:
                             # Skip sending update if we can't get job data
                             # Frontend will handle job removal via periodic sync
-                            logger.debug(f"Skipping job_completed update for {job_id} - no job data available")
+                            logger.debug(
+                                f"Skipping job_completed update for {job_id} - no job data available"
+                            )
                     except Exception as e:
                         # Skip sending update if fetch fails
                         # Frontend will handle job removal via periodic sync
-                        logger.debug(f"Skipping job_completed update for {job_id} - fetch failed: {e}")
+                        logger.debug(
+                            f"Skipping job_completed update for {job_id} - fetch failed: {e}"
+                        )
 
                     del job_states[job_key]
 
                 # Broadcast to all connected clients
                 if updates:
                     # ⚡ DIAGNOSTIC: Count update types
-                    new_jobs = sum(1 for u in updates if u["type"] == "job_update" and not any(j for j in job_states if j.split(':')[1] == u["job_id"]))
-                    state_changes = sum(1 for u in updates if u["type"] == "state_change")
+                    new_jobs = sum(
+                        1
+                        for u in updates
+                        if u["type"] == "job_update"
+                        and not any(
+                            j for j in job_states if j.split(":")[1] == u["job_id"]
+                        )
+                    )
+                    state_changes = sum(
+                        1 for u in updates if u["type"] == "state_change"
+                    )
                     running_refreshes = len(updates) - new_jobs - state_changes
 
-                    logger.info(f"Broadcasting {len(updates)} updates ({new_jobs} new, {state_changes} state changes, {running_refreshes} running refreshes) to {len(_all_jobs_websockets)} clients")
+                    logger.info(
+                        f"Broadcasting {len(updates)} updates ({new_jobs} new, {state_changes} state changes, {running_refreshes} running refreshes) to {len(_all_jobs_websockets)} clients"
+                    )
 
                     message = {
                         "type": "batch_update",
@@ -4312,21 +4651,32 @@ async def websocket_all_jobs(websocket: WebSocket):
             cache = get_cache()
 
             # ⚡ FIX: First try to get jobs from cache to avoid blocking on concurrent fetches
-            # If cache is empty or stale, fetch from SLURM
+            # If cache is empty or stale, fetch from Slurm
             all_jobs = []
 
             # Try to get recent jobs from cache first (only from last day)
             from datetime import datetime, timedelta
+
             since_dt = datetime.now() - timedelta(days=1)
-            cached_job_data = cache.get_cached_jobs(hostname=None, limit=500, since=since_dt)
+            cached_job_data = cache.get_cached_jobs(
+                hostname=None, limit=500, since=since_dt
+            )
 
             if cached_job_data and len(cached_job_data) > 0:
                 # Convert CachedJobData to JobInfo
-                logger.info(f"Using {len(cached_job_data)} cached jobs (since {since_dt}) for WebSocket initial data")
-                all_jobs = [cached_data.job_info for cached_data in cached_job_data if cached_data.job_info]
+                logger.info(
+                    f"Using {len(cached_job_data)} cached jobs (since {since_dt}) for WebSocket initial data"
+                )
+                all_jobs = [
+                    cached_data.job_info
+                    for cached_data in cached_job_data
+                    if cached_data.job_info
+                ]
             else:
-                # No cache available, fetch from SLURM (may return empty if hosts are locked)
-                logger.info("No cache available, fetching jobs for WebSocket initial data")
+                # No cache available, fetch from Slurm (may return empty if hosts are locked)
+                logger.info(
+                    "No cache available, fetching jobs for WebSocket initial data"
+                )
                 all_jobs = await job_data_manager.fetch_all_jobs(
                     hostname=None,
                     limit=500,  # Increased from 100 to 500 for more complete initial data
@@ -4355,7 +4705,7 @@ async def websocket_all_jobs(websocket: WebSocket):
                     jobs_by_host_objects[job.hostname] = []
 
                 web_job = JobInfoWeb.from_job_info(job)
-                jobs_by_host[job.hostname].append(web_job.model_dump(mode='json'))
+                jobs_by_host[job.hostname].append(web_job.model_dump(mode="json"))
                 jobs_by_host_objects[job.hostname].append(web_job)
 
             # ⚡ NEW: Compute array job groups for each host for instant display
@@ -4366,10 +4716,14 @@ async def websocket_all_jobs(websocket: WebSocket):
                     if array_groups:
                         # Convert to dict format for JSON serialization
                         # Use model_dump() which handles all fields correctly
-                        array_groups_by_host[hostname] = [g.model_dump(mode='json') for g in array_groups]
+                        array_groups_by_host[hostname] = [
+                            g.model_dump(mode="json") for g in array_groups
+                        ]
 
             # ⚡ PERFORMANCE: Log initial data size for monitoring
-            logger.info(f"Sending initial WebSocket data: {len(all_jobs)} jobs from {len(jobs_by_host)} hosts with {len(array_groups_by_host)} hosts having array groups")
+            logger.info(
+                f"Sending initial WebSocket data: {len(all_jobs)} jobs from {len(jobs_by_host)} hosts with {len(array_groups_by_host)} hosts having array groups"
+            )
 
             await websocket.send_json(
                 {
@@ -4387,7 +4741,7 @@ async def websocket_all_jobs(websocket: WebSocket):
                 # Start singleton monitoring task if not already running
                 if _all_jobs_monitor_task is None or _all_jobs_monitor_task.done():
                     logger.info("Starting singleton all-jobs monitor task")
-                    _all_jobs_monitor_task = asyncio.create_task(monitor_all_jobs_singleton())
+                    _all_jobs_monitor_task = create_task(monitor_all_jobs_singleton())
 
         except WebSocketDisconnect:
             # Client disconnected - this is normal, don't log as error
@@ -4413,6 +4767,7 @@ async def websocket_all_jobs(websocket: WebSocket):
                 # ⚡ PERFORMANCE: Handle both JSON and text ping messages
                 try:
                     import json
+
                     parsed = json.loads(data)
                     if parsed.get("type") == "ping":
                         await websocket.send_json({"type": "pong"})
@@ -4500,10 +4855,10 @@ def main():
 
     # Show authentication status
     if REQUIRE_API_KEY:
-        logger.info("🔐 Starting SLURM Manager API with authentication enabled")
+        logger.info("🔐 Starting Slurm Manager API with authentication enabled")
         logger.info("   API key required for all requests")
     else:
-        logger.info("🚀 Starting SLURM Manager API in open mode (no authentication)")
+        logger.info("🚀 Starting Slurm Manager API in open mode (no authentication)")
         logger.info("   To enable authentication: export SSYNC_REQUIRE_API_KEY=true")
         logger.info("   To generate API key: ssync auth setup")
 

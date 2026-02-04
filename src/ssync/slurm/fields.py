@@ -1,6 +1,6 @@
-"""SLURM field definitions for squeue and sacct commands."""
+"""Slurm field definitions for squeue and sacct commands."""
 
-# SLURM squeue command field definitions
+# Slurm squeue command field definitions
 SQUEUE_FIELDS = [
     "%i",  # JobID
     "%j",  # JobName
@@ -24,7 +24,7 @@ SQUEUE_FIELDS = [
     "%R",  # NodeList
 ]
 
-# SLURM sacct command field definitions - core fields for maximum compatibility
+# Slurm sacct command field definitions - core fields for maximum compatibility
 SACCT_FIELDS = [
     "JobID",  # 0
     "JobName",  # 1

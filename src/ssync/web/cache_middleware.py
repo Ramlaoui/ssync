@@ -1,5 +1,5 @@
 """
-Cache middleware for SLURM API endpoints.
+Cache middleware for Slurm API endpoints.
 
 This middleware transparently caches job data without modifying existing logic.
 """
@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from ..cache import get_cache
 from ..utils.logging import setup_logger
 from .models import JobInfoWeb, JobOutputResponse, JobStatusResponse
+from ..utils.async_helpers import create_task
 
 logger = setup_logger(__name__)
 
@@ -19,9 +20,9 @@ class CacheMiddleware:
     Middleware that transparently handles caching for job-related API operations.
 
     This class intercepts API responses and:
-    1. Caches job data when retrieved from SLURM
-    2. Falls back to cached data when SLURM queries fail
-    3. Verifies cache validity against current SLURM state
+    1. Caches job data when retrieved from Slurm
+    2. Falls back to cached data when Slurm queries fail
+    3. Verifies cache validity against current Slurm state
     """
 
     def __init__(self):
@@ -61,7 +62,7 @@ class CacheMiddleware:
         Cache job status responses and enhance with cached data.
 
         Args:
-            responses: List of JobStatusResponse from SLURM queries
+            responses: List of JobStatusResponse from Slurm queries
             hostname: Optional hostname for date range caching
             filters: Optional filters for date range caching
             since: Optional since parameter for date range caching
@@ -159,11 +160,12 @@ class CacheMiddleware:
         if cached_job_ids is None:
             return None
 
-        cached_jobs = []
-        for job_id in cached_job_ids:
-            cached_job = self.cache.get_cached_job(job_id, hostname)
-            if cached_job:
-                cached_jobs.append(JobInfoWeb.from_job_info(cached_job.job_info))
+        cached_map = self.cache.get_cached_jobs_by_ids(cached_job_ids, hostname)
+        cached_jobs = [
+            JobInfoWeb.from_job_info(cached.job_info)
+            for cached in cached_map.values()
+            if cached and cached.job_info
+        ]
 
         if cached_jobs:
             logger.info(
@@ -184,9 +186,9 @@ class CacheMiddleware:
             hostname: Optional hostname filter
 
         Returns:
-            JobInfoWeb if found (from SLURM or cache), None otherwise
+            JobInfoWeb if found (from Slurm or cache), None otherwise
         """
-        cached_job = self.cache.get_cached_job(job_id, hostname)
+        cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
 
         if cached_job:
             logger.debug(f"Found cached job {job_id}")
@@ -226,7 +228,7 @@ class CacheMiddleware:
         Returns:
             JobOutputResponse if cached data exists, None otherwise
         """
-        cached_job = self.cache.get_cached_job(job_id, hostname)
+        cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
 
         if cached_job and (
             cached_job.stdout_compressed or cached_job.stderr_compressed
@@ -292,7 +294,7 @@ class CacheMiddleware:
         # Then update the local source dir if provided
         if local_source_dir:
             # Get existing cached job and update with local source dir
-            cached = self.cache.get_cached_job(job_id, hostname)
+            cached = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
             if cached:
                 self.cache.cache_job(
                     cached.job_info,
@@ -315,7 +317,7 @@ class CacheMiddleware:
         Returns:
             Script response dict if cached, None otherwise
         """
-        cached_job = self.cache.get_cached_job(job_id, hostname)
+        cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
 
         if cached_job and cached_job.script_content:
             return {
@@ -332,11 +334,11 @@ class CacheMiddleware:
         self, hostname: str, current_jobs: List[JobInfoWeb]
     ) -> List[JobInfoWeb]:
         """
-        Enhance job list with additional cached jobs that are no longer in SLURM but still relevant.
+        Enhance job list with additional cached jobs that are no longer in Slurm but still relevant.
 
         Args:
             hostname: Hostname to get cached jobs for
-            current_jobs: Current jobs from SLURM
+            current_jobs: Current jobs from Slurm
 
         Returns:
             Enhanced job list with recent cached jobs
@@ -360,7 +362,7 @@ class CacheMiddleware:
 
     async def _verify_and_update_cache(self, current_job_ids: Dict[str, List[str]]):
         """
-        Verify cached jobs against current SLURM state and update accordingly.
+        Verify cached jobs against current Slurm state and update accordingly.
 
         ⚡ PERFORMANCE FIX: Rate-limited and runs in background to avoid blocking requests.
 
@@ -391,7 +393,7 @@ class CacheMiddleware:
         self._last_verify_time = current_time
 
         # ⚡ Run verification in background (don't block the request)
-        asyncio.create_task(self._run_verification_in_background(current_job_ids))
+        create_task(self._run_verification_in_background(current_job_ids))
 
     async def _run_verification_in_background(self, current_job_ids: Dict[str, List[str]]):
         """Run cache verification in background without blocking requests."""
@@ -502,7 +504,7 @@ class CacheMiddleware:
         Fetch final states for all jobs on a single host in parallel.
 
         Args:
-            manager: SLURM manager instance
+            manager: Slurm manager instance
             hostname: Hostname to fetch from
             job_ids: List of job IDs to fetch
 
@@ -544,7 +546,7 @@ class CacheMiddleware:
         Fetch final state for a single job.
 
         Args:
-            manager: SLURM manager instance
+            manager: Slurm manager instance
             conn: SSH connection
             hostname: Hostname
             job_id: Job ID to fetch
@@ -566,7 +568,7 @@ class CacheMiddleware:
                 self._unknown_retry_attempts.pop(job_key, None)
                 return None
 
-            # Use thread pool to run blocking SLURM commands
+            # Use thread pool to run blocking Slurm commands
             from .app import executor
             import asyncio
 
@@ -605,7 +607,7 @@ class CacheMiddleware:
                 )
 
                 # Get existing cached job to preserve script if already cached
-                cached_job = self.cache.get_cached_job(job_id, hostname)
+                cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
                 script_content = cached_job.script_content if cached_job else None
 
                 # Try to fetch script if not already cached
@@ -653,7 +655,7 @@ class CacheMiddleware:
                     )
                     # Mark as completed anyway to stop retrying
                     # Use the cached job info if available, otherwise create minimal entry
-                    cached_job = self.cache.get_cached_job(job_id, hostname)
+                    cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
                     if cached_job and cached_job.job_info:
                         # Update to UNKNOWN state
                         from ..models.job import JobState
@@ -702,14 +704,15 @@ class CacheMiddleware:
 
             # Try to get scripts for each host
             for hostname, job_ids in jobs_by_host.items():
+                cached_map = self.cache.get_cached_jobs_by_ids(job_ids, hostname)
                 for job_id in job_ids:
                     # Check if we already have the script cached
-                    cached_job = self.cache.get_cached_job(job_id, hostname)
+                    cached_job = cached_map.get(job_id)
                     if cached_job and cached_job.script_content:
                         logger.debug(f"Script already cached for job {job_id}")
                         continue
 
-                    # Try to get script from SLURM before it's completely gone
+                    # Try to get script from Slurm before it's completely gone
                     try:
                         # Import here to avoid circular imports
                         from .app import get_slurm_manager
@@ -731,7 +734,7 @@ class CacheMiddleware:
                                 )
                             else:
                                 logger.debug(
-                                    f"No script content found for job {job_id} in SLURM"
+                                    f"No script content found for job {job_id} in Slurm"
                                 )
                         else:
                             logger.debug(

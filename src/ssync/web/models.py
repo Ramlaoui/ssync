@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class SlurmDefaultsWeb(BaseModel):
-    """Web-serializable SLURM default parameters."""
+    """Web-serializable Slurm default parameters."""
 
     # Basic job parameters
     partition: Optional[str] = None
@@ -38,7 +38,7 @@ class SlurmDefaultsWeb(BaseModel):
 
 
 class JobStateWeb(str, Enum):
-    """SLURM job states for web API."""
+    """Slurm job states for web API."""
 
     PENDING = "PD"
     RUNNING = "R"
@@ -308,7 +308,7 @@ class LaunchJobRequest(BaseModel):
     source_dir: Optional[str] = None  # Optional - only required if sync is enabled
     host: str
 
-    # SLURM parameters
+    # Slurm parameters
     job_name: Optional[str] = None
     cpus: Optional[int] = None
     mem: Optional[int] = None

@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class JobState(Enum):
-    """SLURM job states."""
+    """Slurm job states."""
 
     PENDING = "PD"
     RUNNING = "R"
@@ -17,7 +17,7 @@ class JobState(Enum):
 
 @dataclass
 class JobInfo:
-    """Information about a SLURM job."""
+    """Information about a Slurm job."""
 
     job_id: str
     name: str

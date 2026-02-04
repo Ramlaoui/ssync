@@ -2,9 +2,9 @@
 
 from typing import Dict
 
-from .models.cluster import Host
-from .ssh.connection import SSHConnection
-from .utils.logging import setup_logger
+from ..models.cluster import Host
+from .connection import SSHConnection
+from ..utils.logging import setup_logger
 
 logger = setup_logger(__name__, "INFO")
 
@@ -146,7 +146,7 @@ class ConnectionManager:
 
     def close_all(self):
         """Clean up all connections and ControlMasters."""
-        from .ssh.native import NativeSSH
+        from .native import NativeSSH
 
         NativeSSH.cleanup_all()
         self._connections.clear()
@@ -154,7 +154,7 @@ class ConnectionManager:
 
     def get_stats(self) -> Dict:
         """Get connection statistics."""
-        from .ssh.native import NativeSSH
+        from .native import NativeSSH
 
         return {
             "connections": len(self._connections),

@@ -9,6 +9,7 @@ from typing import Optional
 
 from ..cache import get_cache
 from .engine import get_watcher_engine
+from ..utils.async_helpers import create_task
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class WatcherService:
             return
 
         self.running = True
-        self._task = asyncio.create_task(self._run())
+        self._task = create_task(self._run())
         logger.info("Watcher service started")
 
     async def stop(self):
@@ -71,7 +72,7 @@ class WatcherService:
         for watcher_id, job_id, hostname in watchers:
             if watcher_id not in self.engine.active_tasks:
                 logger.info(f"Starting monitor for watcher {watcher_id} (job {job_id})")
-                task = asyncio.create_task(
+                task = create_task(
                     self.engine._monitor_watcher(watcher_id, job_id, hostname)
                 )
                 self.engine.active_tasks[watcher_id] = task

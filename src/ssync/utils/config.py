@@ -1,10 +1,12 @@
 import os
 import re
 from pathlib import Path
+from typing import Dict
 
 import yaml
 
 from ..models.cluster import (
+    APISettings,
     CacheSettings,
     Host,
     PathRestrictions,
@@ -30,7 +32,9 @@ class Config:
         self.config = self.load_config()
         self.cache_settings = self.load_cache_settings()
         self.api_key = self.load_api_key()
+        self.api_settings = self.load_api_settings()
         self.path_restrictions = self.load_path_restrictions()
+        self.connection_settings = self.load_connection_settings()
 
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
@@ -67,7 +71,7 @@ class Config:
         return xdg_cache
 
     def load_config(self) -> list[SlurmHost]:
-        """Load SLURM hosts configuration from YAML file.
+        """Load Slurm hosts configuration from YAML file.
 
         Expected format (with SSH config support):
         hosts:
@@ -179,6 +183,10 @@ class Config:
                         script_max_age_days=cache_config.get(
                             "script_max_age_days", settings.script_max_age_days
                         ),
+                        recycled_id_max_age_days=cache_config.get(
+                            "recycled_id_max_age_days",
+                            settings.recycled_id_max_age_days,
+                        ),
                         cleanup_interval_hours=cache_config.get(
                             "cleanup_interval_hours", settings.cleanup_interval_hours
                         ),
@@ -207,6 +215,10 @@ class Config:
         if os.getenv("SSYNC_CACHE_SCRIPT_MAX_AGE_DAYS"):
             settings.script_max_age_days = int(
                 os.getenv("SSYNC_CACHE_SCRIPT_MAX_AGE_DAYS")
+            )
+        if os.getenv("SSYNC_CACHE_RECYCLED_ID_MAX_AGE_DAYS"):
+            settings.recycled_id_max_age_days = int(
+                os.getenv("SSYNC_CACHE_RECYCLED_ID_MAX_AGE_DAYS")
             )
         if os.getenv("SSYNC_CACHE_CLEANUP_INTERVAL_HOURS"):
             settings.cleanup_interval_hours = int(
@@ -247,6 +259,75 @@ class Config:
             api_key = os.getenv("SSYNC_API_KEY")
 
         return api_key
+
+    def load_api_settings(self) -> APISettings:
+        """Load API server settings from config file with environment variable overrides."""
+        # Default settings
+        settings = APISettings()
+
+        # Try to load from config file
+        config_path = Path(self.config_path)
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    content = f.read()
+                    # Environment variable substitution
+                    content = re.sub(
+                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
+                    )
+                    data = yaml.safe_load(content)
+
+                if data and "api" in data:
+                    api_config = data["api"]
+                    settings = APISettings(
+                        host=api_config.get("host", settings.host),
+                        port=api_config.get("port", settings.port),
+                        https=api_config.get("https", settings.https),
+                    )
+            except Exception:
+                # If there's any error loading API settings, use defaults
+                pass
+
+        # Environment variable overrides
+        if os.getenv("SSYNC_API_HOST"):
+            settings.host = os.getenv("SSYNC_API_HOST")
+        if os.getenv("SSYNC_API_PORT"):
+            settings.port = int(os.getenv("SSYNC_API_PORT"))
+        if os.getenv("SSYNC_API_HTTPS"):
+            settings.https = os.getenv("SSYNC_API_HTTPS", "true").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+
+        return settings
+
+    def load_connection_settings(self) -> Dict[str, int]:
+        """Load connection settings from config file or environment variables."""
+        settings = {"connect_timeout": 5}
+
+        config_path = Path(self.config_path)
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    content = f.read()
+                    content = re.sub(
+                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
+                    )
+                    data = yaml.safe_load(content)
+
+                if data and "connections" in data:
+                    conn_config = data["connections"]
+                    settings["connect_timeout"] = int(
+                        conn_config.get("connect_timeout", settings["connect_timeout"])
+                    )
+            except Exception:
+                pass
+
+        if os.getenv("SSYNC_CONNECT_TIMEOUT"):
+            settings["connect_timeout"] = int(os.getenv("SSYNC_CONNECT_TIMEOUT"))
+
+        return settings
 
     def load_path_restrictions(self) -> PathRestrictions:
         """Load path restrictions from config file with environment variable overrides."""

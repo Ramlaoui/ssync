@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Any, Protocol
 
-from .config import config
-from .logging import setup_logger
+from ..utils.config import config
+from ..utils.logging import setup_logger
 
 logger = setup_logger(__name__, "INFO")
 

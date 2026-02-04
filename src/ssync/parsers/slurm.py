@@ -1,15 +1,15 @@
-"""SLURM output parsing utilities."""
+"""Slurm output parsing utilities."""
 
 from ..models.job import JobInfo, JobState
-from .fields import SACCT_FIELDS, SQUEUE_FIELDS
+from ..slurm.fields import SACCT_FIELDS, SQUEUE_FIELDS
 
 
 class SlurmParser:
-    """Handles parsing of SLURM command outputs into JobInfo objects."""
+    """Handles parsing of Slurm command outputs into JobInfo objects."""
 
     @staticmethod
     def map_slurm_state(state_str: str, from_sacct: bool = False) -> JobState:
-        """Map SLURM state string to JobState enum."""
+        """Map Slurm state string to JobState enum."""
         if from_sacct:
             state_clean = state_str.split()[0]
             # Terminal success states
@@ -63,14 +63,14 @@ class SlurmParser:
 
     @staticmethod
     def create_var_dict(fields: list[str], field_names: list[str] = None) -> dict:
-        """Create variable dictionary for SLURM path expansion.
+        """Create variable dictionary for Slurm path expansion.
 
         Args:
-            fields: Field values from SLURM command output
+            fields: Field values from Slurm command output
             field_names: Field names for sacct parsing (optional)
 
         Returns:
-            Dictionary mapping SLURM variable names to values
+            Dictionary mapping Slurm variable names to values
         """
         if field_names:
 
@@ -81,26 +81,48 @@ class SlurmParser:
                 except (ValueError, IndexError):
                     return ""
 
+            job_id = get_field_value("JobID")
+            array_job_id = ""
+            array_task_id = ""
+            if "_" in job_id:
+                array_job_id, array_task_id = job_id.split("_", 1)
+            elif "[" in job_id and "]" in job_id:
+                array_job_id = job_id.split("[")[0]
+                array_task_id = job_id.split("[")[1].rstrip("]")
+
             return {
-                "j": get_field_value("JobID"),
-                "i": get_field_value("JobID"),
+                "j": job_id,
+                "i": job_id,
                 "u": get_field_value("User"),
                 "x": get_field_value("JobName"),
+                "A": array_job_id or job_id,
+                "a": array_task_id,
             }
         else:
+            job_id = fields[0] if len(fields) > 0 else ""
+            array_job_id = ""
+            array_task_id = ""
+            if "_" in job_id:
+                array_job_id, array_task_id = job_id.split("_", 1)
+            elif "[" in job_id and "]" in job_id:
+                array_job_id = job_id.split("[")[0]
+                array_task_id = job_id.split("[")[1].rstrip("]")
+
             return {
-                "j": fields[0] if len(fields) > 0 else "",
-                "i": fields[0] if len(fields) > 0 else "",
+                "j": job_id,
+                "i": job_id,
                 "u": fields[3] if len(fields) > 3 else "",
                 "x": fields[1] if len(fields) > 1 else "",
+                "A": array_job_id or job_id,
+                "a": array_task_id,
             }
 
     @staticmethod
     def expand_slurm_path_vars(path_str: str, var_dict: dict) -> str:
-        """Expand SLURM path variables like %j, %u, %A, etc.
+        """Expand Slurm path variables like %j, %u, %A, etc.
 
         Args:
-            path_str: The path string with SLURM variables
+            path_str: The path string with Slurm variables
             var_dict: Dictionary mapping variable names to values
 
         Returns:

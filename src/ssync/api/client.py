@@ -17,23 +17,26 @@ warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 logger = setup_logger(__name__, "INFO")
 
 
-class ApiClient:
+class APIClient:
     """Client for communicating with ssync web API."""
 
-    def __init__(self, base_url: str = "https://localhost:8042", verbose: bool = False):
-        self.base_url = base_url
-        self.server_manager = ServerManager(base_url)
+    def __init__(self, base_url: Optional[str] = None, verbose: bool = False):
+        """Initialize APIClient.
+
+        Args:
+            base_url: API server URL. If None, reads from config.
+            verbose: Enable verbose logging.
+        """
+        from ..utils.config import config as global_config
+
+        if base_url is None:
+            self.base_url = global_config.api_settings.url
+        else:
+            self.base_url = base_url
+
+        self.server_manager = ServerManager(url=self.base_url)
         self.verbose = verbose
-        self.api_key = self._get_api_key()
-
-    def _get_api_key(self) -> Optional[str]:
-        """Get API key from config or environment."""
-        try:
-            from ..utils.config import config as global_config
-
-            return global_config.api_key if global_config.api_key else None
-        except Exception:
-            return None
+        self.api_key = global_config.api_key if global_config.api_key else None
 
     def _get_headers(self) -> dict:
         """Get headers including API key if available."""
@@ -41,6 +44,64 @@ class ApiClient:
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
+
+    def get(
+        self, endpoint: str, params: Optional[dict] = None, timeout: int = 30
+    ) -> dict:
+        """Make a GET request to the API.
+
+        Args:
+            endpoint: API endpoint (e.g., "/api/watchers")
+            params: Query parameters
+            timeout: Request timeout in seconds
+
+        Returns:
+            Response JSON as dict
+
+        Raises:
+            requests.exceptions.RequestException on failure
+        """
+        response = requests.get(
+            f"{self.base_url}{endpoint}",
+            params=params,
+            headers=self._get_headers(),
+            timeout=timeout,
+            verify=False,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def post(
+        self,
+        endpoint: str,
+        data: Optional[dict] = None,
+        params: Optional[dict] = None,
+        timeout: int = 30,
+    ) -> dict:
+        """Make a POST request to the API.
+
+        Args:
+            endpoint: API endpoint (e.g., "/api/watchers")
+            data: Request body as dict
+            params: Query parameters
+            timeout: Request timeout in seconds
+
+        Returns:
+            Response JSON as dict
+
+        Raises:
+            requests.exceptions.RequestException on failure
+        """
+        response = requests.post(
+            f"{self.base_url}{endpoint}",
+            json=data,
+            params=params,
+            headers=self._get_headers(),
+            timeout=timeout,
+            verify=False,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def ensure_server_running(self, config_path: Path) -> tuple[bool, Optional[str]]:
         """Ensure API server is running, start if needed.
@@ -60,12 +121,12 @@ class ApiClient:
             if self.server_manager.start(config_path):
                 return True, None
             else:
-                # Get logs for debugging
+                # Get logs for debugging (server must be running to get logs via API)
                 logs = self.server_manager.get_logs(30)
                 if logs:
-                    return False, f"Failed to start API server. Recent logs:\n{logs}"
+                    return False, f"Failed to start API server. Recent logs:\n{chr(10).join(logs)}"
                 else:
-                    return False, "Failed to start API server (no logs available)"
+                    return False, "Failed to start API server. Run 'ssync api' in foreground to debug."
         except Exception as e:
             return False, f"Failed to start API server: {str(e)}"
 

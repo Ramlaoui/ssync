@@ -1,23 +1,23 @@
-"""Script preprocessing for SLURM job submission."""
+"""Script preprocessing for Slurm job submission."""
 
 import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .models.watcher import ActionType, WatcherAction, WatcherDefinition
-from .utils.slurm_params import SlurmParams, to_directives
+from ..models.watcher import ActionType, WatcherAction, WatcherDefinition
+from ..slurm.params import SlurmParams, to_directives
 
 
 class ScriptProcessor:
-    """Processes shell and SLURM scripts for job submission."""
+    """Processes shell and Slurm scripts for job submission."""
 
     @staticmethod
     def is_slurm_script(script_path: Path) -> bool:
-        """Check if script contains SLURM directives."""
+        """Check if script contains Slurm directives."""
         try:
             content = script_path.read_text()
-            # Look for SLURM directives like #SBATCH
+            # Look for Slurm directives like #SBATCH
             return bool(re.search(r"#SBATCH\s+", content))
         except Exception:
             return False
@@ -25,7 +25,7 @@ class ScriptProcessor:
     @staticmethod
     def extract_array_spec(script_content: str) -> Optional[str]:
         """
-        Extract array job specification from SLURM script.
+        Extract array job specification from Slurm script.
 
         Returns:
             Array spec string (e.g., "0-5", "1,3,5", "0-100%10") or None if not an array job
@@ -100,7 +100,7 @@ class ScriptProcessor:
         gpus_per_node: Optional[int] = None,
         gres: Optional[str] = None,
     ) -> str:
-        """Add SLURM directives to a shell script using centralized formatter.
+        """Add Slurm directives to a shell script using centralized formatter.
 
         This delegates formatting/normalization to `to_directives` so all
         callers share the same logic for aliases and units.
@@ -143,7 +143,7 @@ class ScriptProcessor:
         target_dir: Path,
         params: Optional[Union[SlurmParams, dict]] = None,
     ) -> Path:
-        """Prepare script for SLURM submission.
+        """Prepare script for Slurm submission.
 
         Returns path to the prepared script in target directory.
         """
@@ -152,7 +152,7 @@ class ScriptProcessor:
         # Ensure proper shebang
         content = cls.ensure_shebang(content)
 
-        # Add SLURM directives if it's a plain shell script
+        # Add Slurm directives if it's a plain shell script
         if not cls.is_slurm_script(script_path):
             if params is None:
                 directive_params = {}

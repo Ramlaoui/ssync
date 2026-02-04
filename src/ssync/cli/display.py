@@ -15,12 +15,12 @@ class JobDisplay:
     def filter_array_jobs(jobs: List[JobInfo]) -> List[JobInfo]:
         """Filter out array parent entries when individual tasks exist.
 
-        SLURM returns both array parent entries (e.g., 443214_[2-3%4]) and individual
+        Slurm returns both array parent entries (e.g., 443214_[2-3%4]) and individual
         tasks (e.g., 443214_0, 443214_1). The parent entry only shows the state of
         REMAINING tasks, which is misleading. This method filters them out.
 
         Args:
-            jobs: List of jobs from SLURM
+            jobs: List of jobs from Slurm
 
         Returns:
             Filtered list with array parent entries removed when tasks exist

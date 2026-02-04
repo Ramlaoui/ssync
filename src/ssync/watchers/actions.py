@@ -135,13 +135,13 @@ class ActionExecutor:
     async def _cancel_job(
         self, job_id: str, hostname: str, params: Dict[str, Any]
     ) -> Tuple[bool, str]:
-        """Cancel a SLURM job with per-host throttling."""
+        """Cancel a Slurm job with per-host throttling."""
         try:
             from ..web.app import get_slurm_manager
 
             manager = get_slurm_manager()
             if not manager:
-                return False, "No SLURM manager available"
+                return False, "No Slurm manager available"
 
             slurm_host = manager.get_host_by_name(hostname)
             conn = manager._get_connection(slurm_host.host)
@@ -192,7 +192,7 @@ class ActionExecutor:
 
             manager = get_slurm_manager()
             if not manager:
-                return False, "No SLURM manager available"
+                return False, "No Slurm manager available"
 
             # Get original script
             cache = get_cache()
@@ -456,7 +456,7 @@ class ActionExecutor:
 
             manager = get_slurm_manager()
             if not manager:
-                return False, "No SLURM manager available"
+                return False, "No Slurm manager available"
 
             slurm_host = manager.get_host_by_name(hostname)
             conn = manager._get_connection(slurm_host.host)
