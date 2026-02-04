@@ -410,7 +410,7 @@ class TestJobStateManagement:
 
     @pytest.mark.unit
     def test_verify_cached_jobs(self, tmp_path):
-        """Test verifying cached jobs against current SLURM state."""
+        """Test verifying cached jobs against current Slurm state."""
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
 
         # Cache 3 active jobs
@@ -423,7 +423,7 @@ class TestJobStateManagement:
             )
             cache.cache_job(job)
 
-        # Only jobs 0 and 1 are still in SLURM
+        # Only jobs 0 and 1 are still in Slurm
         current_job_ids = {"test.host": ["0", "1"]}
 
         to_complete = cache.verify_cached_jobs(current_job_ids)

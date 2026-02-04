@@ -3,8 +3,8 @@
 import pytest
 
 from ssync.models.watcher import ActionType, WatcherAction, WatcherDefinition
-from ssync.script_processor import ScriptProcessor
-from ssync.utils.slurm_params import SlurmParams
+from ssync.parsers.script_processor import ScriptProcessor
+from ssync.slurm.params import SlurmParams
 
 
 class TestEnsureShebang:
@@ -520,7 +520,7 @@ class TestPrepareScript:
 
     @pytest.mark.unit
     def test_preserves_existing_slurm_directives(self, temp_dir):
-        # Create a script with existing SLURM directives
+        # Create a script with existing Slurm directives
         source = temp_dir / "slurm.sh"
         source.write_text("#!/bin/bash\n#SBATCH --job-name=existing\necho 'test'")
 

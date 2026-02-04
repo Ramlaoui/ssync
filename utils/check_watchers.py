@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the status of watchers for SLURM jobs."""
+"""Check the status of watchers for Slurm jobs."""
 
 import argparse
 import json

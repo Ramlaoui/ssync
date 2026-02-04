@@ -3,7 +3,7 @@
 import pytest
 
 from ssync.models.job import JobState
-from ssync.slurm.parser import SlurmParser
+from ssync.parsers.slurm import SlurmParser
 
 
 class TestMapSlurmState:

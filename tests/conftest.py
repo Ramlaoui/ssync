@@ -69,7 +69,7 @@ def sample_array_job_info():
 
 @pytest.fixture
 def basic_script():
-    """Basic shell script without SLURM directives."""
+    """Basic shell script without Slurm directives."""
     return """#!/bin/bash
 echo "Starting job"
 python train.py

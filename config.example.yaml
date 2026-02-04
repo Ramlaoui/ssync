@@ -65,10 +65,16 @@ cache:
   enabled: true
   cache_dir: ~/.cache/ssync  # Or use ${SSYNC_CACHE_DIR} for env var
   max_age_days: 365  # How long to keep cache entries (0 = never expire)
+  recycled_id_max_age_days: 30  # Ignore cached jobs older than this to avoid ID reuse
   script_max_age_days: 0  # Never expire scripts (important for reproducibility)
   cleanup_interval_hours: 168  # Run cleanup weekly
   max_size_mb: 1024  # Maximum cache size in MB
   auto_cleanup: false  # Whether to automatically cleanup old entries
+
+# Connection settings
+connections:
+  # Timeout (seconds) for initial SSH connection per host
+  connect_timeout: 5
 
 # API configuration (optional)
 api_key: ${SSYNC_API_KEY}  # Or set directly: "your-secret-key-here"
