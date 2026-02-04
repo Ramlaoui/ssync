@@ -6,28 +6,28 @@
  * the DOM.
  */
 
-import { vi } from 'vitest';
 import { writable } from 'svelte/store';
+import { vi } from 'vitest';
 import { JobStateManager } from '../../lib/JobStateManager';
-import { mockJobs } from './mockData';
 import type {
-  JobStateManagerDependencies,
-  IApiClient,
-  IWebSocketFactory,
-  IPreferencesStore,
-  INotificationService,
+  IAPIClient,
   IEnvironment,
+  INotificationService,
+  IPreferencesStore,
+  IWebSocketFactory,
+  JobStateManagerDependencies,
   MockWebSocket
 } from '../../lib/JobStateManager.types';
+import { mockJobs } from './mockData';
 
 /**
  * Create a mock API client with call tracking and configurable responses
  *
  * @param customResponses - Optional map of URL patterns to response data
  */
-export function createMockApiClient(
+export function createMockAPIClient(
   customResponses?: Map<string, any>
-): IApiClient & { getCallCount: () => number; clearCalls: () => void; setResponse: (url: string, data: any) => void } {
+): IAPIClient & { getCallCount: () => number; clearCalls: () => void; setResponse: (url: string, data: any) => void } {
   const calls: string[] = [];
   const responses = customResponses || new Map<string, any>();
 
@@ -211,7 +211,7 @@ export function createTestJobStateManager(
   customDeps?: Partial<JobStateManagerDependencies>
 ) {
   // Create default mocks
-  const api = customDeps?.api || createMockApiClient();
+  const api = customDeps?.api || createMockAPIClient();
   const wsFactory = customDeps?.webSocketFactory || createMockWebSocketFactory();
   const preferences = customDeps?.preferences || createMockPreferencesStore();
   const notificationService = customDeps?.notificationService || createMockNotificationService();

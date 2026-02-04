@@ -1,7 +1,7 @@
 {
   "name": "ssync-web-ui",
   "version": "1.0.0",
-  "description": "Svelte web interface for SLURM Manager",
+  "description": "Svelte web interface for Slurm Manager",
   "type": "module",
   "scripts": {
     "dev": "vite",

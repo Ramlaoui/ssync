@@ -97,7 +97,7 @@
 
       if (hosts.length === 0) {
         console.warn('No hosts available to check for script history');
-        errorMessage = 'No SLURM hosts are configured or available';
+        errorMessage = 'No Slurm hosts are configured or available';
         scripts = [];
         return;
       }
@@ -318,29 +318,43 @@
 </script>
 
 {#if isOpen}
-<!-- Overlay for mobile/desktop -->
-<div class="sidebar-overlay" onclick={stopPropagation(preventDefault(close))} onkeydown={() => {}} role="presentation" transition:fade={{ duration: 200 }}></div>
+  <!-- Overlay for mobile/desktop -->
+  <div
+    class="sidebar-overlay"
+    onclick={stopPropagation(preventDefault(close))}
+    onkeydown={() => {}}
+    role="presentation"
+    transition:fade={{ duration: 200 }}
+  ></div>
 
-<!-- Sidebar -->
-<div class="sidebar-container {isMobile ? 'mobile' : 'desktop'}" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}} role="dialog" aria-modal="true" tabindex="-1" transition:slide={{ duration: 300, axis: 'x' }}>
-  <div class="sidebar-header">
-    <div class="sidebar-title">
-      <History class="w-5 h-5" />
-      <h2>Script History</h2>
+  <!-- Sidebar -->
+  <div
+    class="sidebar-container {isMobile ? 'mobile' : 'desktop'}"
+    onclick={stopPropagation(bubble("click"))}
+    onkeydown={() => {}}
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    transition:slide={{ duration: 300, axis: "x" }}
+  >
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <History class="w-5 h-5" />
+        <h2>Script History</h2>
+      </div>
+      <button class="close-btn" onclick={close}>
+        <X class="w-5 h-5" />
+      </button>
     </div>
-    <button class="close-btn" onclick={close}>
-      <X class="w-5 h-5" />
-    </button>
-  </div>
-    
+
     <div class="sidebar-filters">
-      <input 
+      <input
         type="text"
         placeholder="Search scripts..."
         bind:value={searchTerm}
         class="search-input"
       />
-      
+
       {#if !embedded}
         <select bind:value={filterHost} class="filter-select">
           <option value="all">All Hosts</option>
@@ -349,7 +363,7 @@
           {/each}
         </select>
       {/if}
-      
+
       <select bind:value={filterState} class="filter-select">
         <option value="all">All States</option>
         <option value="CD">Completed</option>
@@ -359,8 +373,12 @@
         <option value="CA">Cancelled</option>
       </select>
     </div>
-    
-    <div class="sidebar-body" bind:this={scrollContainer} onscroll={handleScroll}>
+
+    <div
+      class="sidebar-body"
+      bind:this={scrollContainer}
+      onscroll={handleScroll}
+    >
       {#if loading}
         <div class="loading">
           <div class="spinner"></div>
@@ -377,7 +395,8 @@
           <p>No scripts found</p>
           <small>
             {#if scripts.length === 0}
-              No job scripts are available from the configured hosts. Try submitting some jobs first, or check if your hosts are accessible.
+              No job scripts are available from the configured hosts. Try
+              submitting some jobs first, or check if your hosts are accessible.
             {:else}
               Try adjusting your filters to see more results.
             {/if}
@@ -390,7 +409,12 @@
               class="script-card"
               class:selected={selectedScript?.job_id === script.job_id}
               onclick={() => selectScript(script)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectScript(script); } }}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  selectScript(script);
+                }
+              }}
               role="button"
               tabindex="0"
             >
@@ -399,25 +423,45 @@
                   <h3>{script.job_name}</h3>
                   <div class="script-meta">
                     <span class="job-id">
-                      <Hash class="w-3 h-3" style="display: inline; vertical-align: middle;"/> {script.job_id}
+                      <Hash
+                        class="w-3 h-3"
+                        style="display: inline; vertical-align: middle;"
+                      />
+                      {script.job_id}
                     </span>
                     {#if !embedded}
                       <span class="hostname">
-                        <Server class="w-3 h-3" style="display: inline; vertical-align: middle;"/> {script.hostname}
+                        <Server
+                          class="w-3 h-3"
+                          style="display: inline; vertical-align: middle;"
+                        />
+                        {script.hostname}
                       </span>
                     {/if}
                     <span
                       class="state"
                       style="color: {jobUtils.getStateColor(script.state)}"
                     >
-                      {#if script.state === 'CD'}
-                        <CheckCircle class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
-                      {:else if script.state === 'F'}
-                        <XCircle class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
-                      {:else if script.state === 'R'}
-                        <Clock class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
+                      {#if script.state === "CD"}
+                        <CheckCircle
+                          class="w-3 h-3"
+                          style="display: inline; vertical-align: middle;"
+                        />
+                      {:else if script.state === "F"}
+                        <XCircle
+                          class="w-3 h-3"
+                          style="display: inline; vertical-align: middle;"
+                        />
+                      {:else if script.state === "R"}
+                        <Clock
+                          class="w-3 h-3"
+                          style="display: inline; vertical-align: middle;"
+                        />
                       {:else}
-                        <AlertCircle class="w-3 h-3" style="display: inline; vertical-align: middle;"/>
+                        <AlertCircle
+                          class="w-3 h-3"
+                          style="display: inline; vertical-align: middle;"
+                        />
                       {/if}
                       {getStateName(script.state)}
                     </span>
@@ -429,9 +473,10 @@
                   <div class="script-badge unavailable">No Script</div>
                 {/if}
               </div>
-              
+
               <div class="script-footer">
-                <span class="submit-time">{formatDate(script.submit_time)}</span>
+                <span class="submit-time">{formatDate(script.submit_time)}</span
+                >
                 {#if script.cached_at}
                   <span class="cached">Cached</span>
                 {/if}
@@ -448,21 +493,25 @@
         {/if}
       {/if}
     </div>
-    
+
     {#if showPreview && selectedScript}
       <div class="preview-section">
         <div class="preview-header">
           <h3>Script Preview</h3>
-          <button class="collapse-btn" onclick={() => showPreview = false} aria-label="Collapse preview">
+          <button
+            class="collapse-btn"
+            onclick={() => (showPreview = false)}
+            aria-label="Collapse preview"
+          >
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M7 10l5 5 5-5z"/>
+              <path d="M7 10l5 5 5-5z" />
             </svg>
           </button>
         </div>
         <pre class="script-preview">{previewContent}</pre>
       </div>
     {/if}
-    
+
     <div class="sidebar-footer">
       <button class="cancel-btn" onclick={close}>Cancel</button>
       <button
@@ -473,7 +522,7 @@
         Use This Script
       </button>
     </div>
-</div>
+  </div>
 {/if}
 
 <style>
@@ -496,7 +545,8 @@
     width: 480px;
     max-width: 90%;
     background: var(--card);
-    box-shadow: -4px 0 24px color-mix(in srgb, var(--foreground) 10%, transparent);
+    box-shadow: -4px 0 24px
+      color-mix(in srgb, var(--foreground) 10%, transparent);
     display: flex;
     flex-direction: column;
     z-index: 1000;
@@ -607,7 +657,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .empty-state {
@@ -674,7 +726,8 @@
   .script-card:hover {
     border-color: var(--accent);
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px color-mix(in srgb, var(--foreground) 10%, transparent);
+    box-shadow: 0 4px 12px
+      color-mix(in srgb, var(--foreground) 10%, transparent);
   }
 
   .script-card.selected {
@@ -816,7 +869,7 @@
     flex: 1;
     margin: 0;
     padding: 1rem 1.5rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     font-size: 0.75rem;
     line-height: 1.5;
     color: var(--foreground);

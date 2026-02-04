@@ -650,6 +650,24 @@
                 </select>
               </div>
 
+              <div class="preference-item">
+                <div class="preference-info">
+                  <span class="preference-label">Default History Window</span>
+                  <span class="preference-description">How far back to load completed jobs</span>
+                </div>
+                <select
+                  class="select-field"
+                  value={$globalPreferences.defaultSince}
+                  onchange={(event) => preferencesActions.setDefaultSince(event.currentTarget.value)}
+                >
+                  <option value="1d">Last 1 day</option>
+                  <option value="3d">Last 3 days</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="14d">Last 14 days</option>
+                  <option value="30d">Last 30 days</option>
+                </select>
+              </div>
+
               <div class="preference-item disabled">
                 <div class="preference-info">
                   <span class="preference-label">Default Job View</span>

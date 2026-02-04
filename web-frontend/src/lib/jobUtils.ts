@@ -20,10 +20,10 @@ export interface JobState {
 }
 
 /**
- * Comprehensive SLURM job status definitions with consistent colors and labels
+ * Comprehensive Slurm job status definitions with consistent colors and labels
  * This is the single source of truth for all job status handling
  */
-export const SLURM_JOB_STATES = {
+export const Slurm_JOB_STATES = {
   // Active states
   R: { label: 'RUNNING', color: '#10b981', category: 'active' },      // emerald-500
   CG: { label: 'COMPLETING', color: '#06b6d4', category: 'active' },  // cyan-500
@@ -53,21 +53,21 @@ export const jobUtils = {
    * Get color for job state
    */
   getStateColor(state: string): string {
-    return SLURM_JOB_STATES[state as keyof typeof SLURM_JOB_STATES]?.color || '#6b7280';
+    return Slurm_JOB_STATES[state as keyof typeof Slurm_JOB_STATES]?.color || '#6b7280';
   },
 
   /**
    * Get human-readable label for job state
    */
   getStateLabel(state: string): string {
-    return SLURM_JOB_STATES[state as keyof typeof SLURM_JOB_STATES]?.label || 'UNKNOWN';
+    return Slurm_JOB_STATES[state as keyof typeof Slurm_JOB_STATES]?.label || 'UNKNOWN';
   },
 
   /**
    * Get state category (active, pending, suspended, success, failure)
    */
   getStateCategory(state: string): string {
-    return SLURM_JOB_STATES[state as keyof typeof SLURM_JOB_STATES]?.category || 'unknown';
+    return Slurm_JOB_STATES[state as keyof typeof Slurm_JOB_STATES]?.category || 'unknown';
   },
 
   /**
@@ -87,7 +87,7 @@ export const jobUtils = {
    */
   formatDuration(duration: string | null): string {
     if (!duration || duration === 'N/A') return 'N/A';
-    
+
     // Parse duration (HH:MM:SS or DD-HH:MM:SS)
     const parts = duration.split(/[-:]/);
     if (parts.length === 3) {
@@ -100,7 +100,7 @@ export const jobUtils = {
       if (d > 0) return `${d}d ${h}h`;
       return `${h}h ${m}m`;
     }
-    
+
     return duration;
   },
 
@@ -224,8 +224,8 @@ export const jobUtils = {
   /**
    * Get all available job states
    */
-  getAllStates(): Array<{state: string, label: string, color: string, category: string}> {
-    return Object.entries(SLURM_JOB_STATES).map(([state, info]) => ({
+  getAllStates(): Array<{ state: string, label: string, color: string, category: string }> {
+    return Object.entries(Slurm_JOB_STATES).map(([state, info]) => ({
       state,
       label: info.label,
       color: info.color,
@@ -234,17 +234,17 @@ export const jobUtils = {
   },
 
   /**
-   * Parse SLURM submit line parameters
+   * Parse Slurm submit line parameters
    */
   parseSubmitLine(submitLine: string): Record<string, string> {
     const params: Record<string, string> = {};
-    
+
     // Match patterns like --partition=gpu, --time=1:00:00, --mem 32G, etc.
     const patterns = [
       /--([a-z-]+)=([^\s]+)/gi,  // --key=value
       /--([a-z-]+)\s+([^\s-]+)/gi  // --key value
     ];
-    
+
     for (const pattern of patterns) {
       let match;
       while ((match = pattern.exec(submitLine)) !== null) {
@@ -254,7 +254,7 @@ export const jobUtils = {
         params[normalizedKey] = value;
       }
     }
-    
+
     return params;
   },
 
@@ -269,11 +269,11 @@ export const jobUtils = {
       const startTime = new Date(job.start_time).getTime();
       const currentTime = Date.now();
       const elapsed = currentTime - startTime;
-      
+
       // Parse time limit (could be in various formats)
       const timeLimitMs = this.parseTimeLimit(job.time_limit);
       if (!timeLimitMs) return 0;
-      
+
       return Math.min(elapsed / timeLimitMs, 1);
     } catch {
       return 0;
@@ -281,15 +281,15 @@ export const jobUtils = {
   },
 
   /**
-   * Parse SLURM time limit to milliseconds
+   * Parse Slurm time limit to milliseconds
    */
   parseTimeLimit(timeLimit: string): number | null {
     if (!timeLimit || timeLimit === 'UNLIMITED') return null;
-    
+
     // Handle formats like: 1:00:00, 1-00:00:00, 60, etc.
     const parts = timeLimit.split(/[-:]/);
     let totalMs = 0;
-    
+
     if (parts.length === 1) {
       // Just minutes
       totalMs = parseInt(parts[0]) * 60 * 1000;
@@ -306,7 +306,7 @@ export const jobUtils = {
       const [d, h, m, s] = parts.map(Number);
       totalMs = (d * 86400 + h * 3600 + m * 60 + s) * 1000;
     }
-    
+
     return totalMs || null;
   },
 
@@ -322,10 +322,10 @@ export const jobUtils = {
       const startTime = new Date(job.start_time).getTime();
       const currentTime = Date.now();
       const elapsed = currentTime - startTime;
-      
+
       const timeLimitMs = this.parseTimeLimit(job.time_limit);
       if (!timeLimitMs) return 'Unlimited';
-      
+
       const remaining = Math.max(0, timeLimitMs - elapsed);
       return this.formatDuration(this.msToTimeString(remaining));
     } catch {
@@ -350,7 +350,7 @@ export const jobUtils = {
   },
 
   /**
-   * Format memory from various SLURM formats to GB
+   * Format memory from various Slurm formats to GB
    */
   formatMemory(memory: string | null | undefined): string {
     if (!memory || memory === 'N/A') {
@@ -359,11 +359,11 @@ export const jobUtils = {
 
     // Remove any whitespace
     const cleanMemory = memory.trim();
-    
-    // Handle different SLURM memory formats
+
+    // Handle different Slurm memory formats
     // Examples: "8000M", "8G", "8000", "8Gn" (per node), "8000Mc" (per CPU)
     const match = cleanMemory.match(/^(\d+(?:\.\d+)?)\s*([KMGT]?)([nc]?)$/i);
-    
+
     if (!match) {
       // If we can't parse it, return as-is
       return cleanMemory;
@@ -371,9 +371,9 @@ export const jobUtils = {
 
     const [, value, unit, suffix] = match;
     const numValue = parseFloat(value);
-    
+
     let bytes: number;
-    
+
     // Convert to bytes based on unit
     switch (unit.toUpperCase()) {
       case 'K':
@@ -381,7 +381,7 @@ export const jobUtils = {
         break;
       case 'M':
       case '':
-        // SLURM default is MB if no unit specified
+        // Slurm default is MB if no unit specified
         bytes = numValue * 1024 * 1024;
         break;
       case 'G':
@@ -393,13 +393,13 @@ export const jobUtils = {
       default:
         bytes = numValue * 1024 * 1024; // Default to MB
     }
-    
+
     // Convert to GB
     const gb = bytes / (1024 * 1024 * 1024);
-    
+
     // Add suffix information if present
     const suffixText = suffix === 'n' ? ' per node' : suffix === 'c' ? ' per CPU' : '';
-    
+
     if (gb >= 1) {
       return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB${suffixText}`;
     } else {

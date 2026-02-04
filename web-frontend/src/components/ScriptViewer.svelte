@@ -128,7 +128,7 @@
         return `<span class="shebang">${line}</span>`;
       }
 
-      // SLURM directives
+      // Slurm directives
       if (line.match(/^#SBATCH/)) {
         return `<span class="slurm-directive">${line}</span>`;
       }
@@ -505,13 +505,23 @@
   }[fontSize]);
 </script>
 
-<div class="enhanced-script-viewer" onclick={handleClickOutside} role="presentation">
+<div
+  class="enhanced-script-viewer"
+  onclick={handleClickOutside}
+  role="presentation"
+>
   <!-- Header with Controls -->
   <div class="viewer-header">
     <div class="search-controls">
       <div class="search-input-group">
-        <svg class="search-icon text-gray-500" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+        <svg
+          class="search-icon text-gray-500"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+        >
+          <path
+            d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"
+          />
         </svg>
         <input
           type="text"
@@ -520,7 +530,9 @@
           class="search-input bg-white border-gray-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
         />
         {#if searchQuery && searchResults.length > 0}
-          <div class="search-results-info bg-white text-gray-500 border-gray-200">
+          <div
+            class="search-results-info bg-white text-gray-500 border-gray-200"
+          >
             {currentSearchIndex + 1} of {searchResults.length}
           </div>
         {/if}
@@ -535,7 +547,9 @@
             title="Previous result"
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/>
+              <path
+                d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"
+              />
             </svg>
           </button>
           <button
@@ -545,75 +559,116 @@
             title="Next result"
           >
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/>
+              <path
+                d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"
+              />
             </svg>
           </button>
         </div>
       {/if}
     </div>
-    
+
     <div class="viewer-controls">
       <span class="file-name">{fileName}</span>
-      
-      
-      
+
       <!-- Copy to Clipboard -->
-      <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={copyToClipboard} title="Copy script">
+      <button
+        class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400"
+        onclick={copyToClipboard}
+        title="Copy script"
+      >
         <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/>
+          <path
+            d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"
+          />
         </svg>
       </button>
 
       <!-- Download Script -->
       {#if onDownload}
-        <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={onDownload} title="Download script">
+        <button
+          class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400"
+          onclick={onDownload}
+          title="Download script"
+        >
           <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
+            <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
           </svg>
         </button>
       {/if}
 
       <!-- Scroll Controls -->
-      <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={handleScrollToTop} title="Scroll to top">
+      <button
+        class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400"
+        onclick={handleScrollToTop}
+        title="Scroll to top"
+      >
         <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"/>
+          <path
+            d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"
+          />
         </svg>
       </button>
 
-      <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={handleScrollToBottom} title="Scroll to bottom">
+      <button
+        class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400"
+        onclick={handleScrollToBottom}
+        title="Scroll to bottom"
+      >
         <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"/>
+          <path
+            d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"
+          />
         </svg>
       </button>
 
       <!-- Settings Menu -->
       <div class="settings-dropdown relative">
-        <button class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400" onclick={() => showSettingsMenu = !showSettingsMenu} title="View settings">
+        <button
+          class="control-btn bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:border-gray-400"
+          onclick={() => (showSettingsMenu = !showSettingsMenu)}
+          title="View settings"
+        >
           <Settings class="w-3.5 h-3.5" />
         </button>
 
         {#if showSettingsMenu}
-          <div class="settings-menu absolute right-0 top-full mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50">
+          <div
+            class="settings-menu absolute right-0 top-full mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50"
+          >
             <div class="py-1">
               <!-- Text Size -->
-              <div class="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">Text Size</div>
+              <div
+                class="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider"
+              >
+                Text Size
+              </div>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'small' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                onclick={() => setFontSize('small')}
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize ===
+                'small'
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-700'}"
+                onclick={() => setFontSize("small")}
               >
                 <Type class="w-3 h-3" />
                 Small
               </button>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'medium' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                onclick={() => setFontSize('medium')}
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize ===
+                'medium'
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-700'}"
+                onclick={() => setFontSize("medium")}
               >
                 <Type class="w-4 h-4" />
                 Medium
               </button>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize === 'large' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
-                onclick={() => setFontSize('large')}
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {fontSize ===
+                'large'
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-700'}"
+                onclick={() => setFontSize("large")}
               >
                 <Type class="w-5 h-5" />
                 Large
@@ -623,33 +678,41 @@
 
               <!-- Display Options -->
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {showLineNumbers ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {showLineNumbers
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-700'}"
                 onclick={toggleLineNumbers}
               >
                 <Hash class="w-4 h-4" />
-                {showLineNumbers ? 'Hide' : 'Show'} Line Numbers
+                {showLineNumbers ? "Hide" : "Show"} Line Numbers
               </button>
               <button
-                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {wordWrap ? 'text-blue-600 bg-blue-50' : 'text-gray-700'}"
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-100 {wordWrap
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-700'}"
                 onclick={toggleWordWrap}
               >
                 <WrapText class="w-4 h-4" />
-                {wordWrap ? 'Disable' : 'Enable'} Word Wrap
+                {wordWrap ? "Disable" : "Enable"} Word Wrap
               </button>
             </div>
           </div>
         {/if}
       </div>
-      
     </div>
   </div>
-  
+
   <!-- Floating Size Warning -->
   {#if showSizeWarning && !isLoading}
-    <div class="size-warning-floating" class:fade-out={userInteractionCount > 1}>
+    <div
+      class="size-warning-floating"
+      class:fade-out={userInteractionCount > 1}
+    >
       <div class="warning-inner">
         <svg class="warning-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          <path
+            d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"
+          />
         </svg>
         <div class="warning-content">
           <span class="warning-text">
@@ -659,22 +722,21 @@
             {/if}
           </span>
           {#if windowEnd < totalContentSize}
-            <span class="warning-subtext">
-              Loading as you scroll
-            </span>
+            <span class="warning-subtext"> Loading as you scroll </span>
           {/if}
         </div>
-        <button
-          class="dismiss-btn"
-          onclick={dismissWarning}
-          title="Dismiss"
-        >
+        <button class="dismiss-btn" onclick={dismissWarning} title="Dismiss">
           <svg viewBox="0 0 20 20" fill="currentColor">
-            <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"/>
+            <path
+              d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
+            />
           </svg>
         </button>
       </div>
-      <div class="warning-progress" style="width: {Math.min(100, (windowEnd / totalContentSize) * 100)}%"></div>
+      <div
+        class="warning-progress"
+        style="width: {Math.min(100, (windowEnd / totalContentSize) * 100)}%"
+      ></div>
     </div>
   {/if}
 
@@ -696,7 +758,10 @@
         <LoadingSpinner message="Loading script..." />
       </div>
     {:else if renderedContent}
-      <div class="script-content-wrapper" class:with-line-numbers={showLineNumbers}>
+      <div
+        class="script-content-wrapper"
+        class:with-line-numbers={showLineNumbers}
+      >
         {#if showLineNumbers}
           <div class="line-numbers" bind:this={lineNumbersElement}>
             {#each lines as _, index}
@@ -708,8 +773,7 @@
           class="script-content {fontSizeClass}"
           class:wrap={wordWrap}
           bind:this={scriptElement}
-          onscroll={() => onScriptScroll()}
-        >{@html highlightedContent}</pre>
+          onscroll={() => onScriptScroll()}>{@html highlightedContent}</pre>
       </div>
 
       {#if loadingMore}
@@ -720,7 +784,9 @@
       {:else if windowEnd < totalContentSize}
         <div class="load-more-indicator">
           <span class="indicator-text">Scroll down to load more...</span>
-          <span class="indicator-subtext">{formatBytes(totalContentSize - windowEnd)} remaining</span>
+          <span class="indicator-subtext"
+            >{formatBytes(totalContentSize - windowEnd)} remaining</span
+          >
         </div>
       {/if}
 
@@ -731,35 +797,44 @@
             <span class="dot"></span>
             <span class="dot"></span>
           </div>
-          <span class="indicator-text">{formatBytes(totalContentSize - windowEnd)} below</span>
+          <span class="indicator-text"
+            >{formatBytes(totalContentSize - windowEnd)} below</span
+          >
         </div>
       {/if}
     {:else}
       <div class="empty-state">
         <svg class="empty-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
+          <path
+            d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"
+          />
         </svg>
         <span>No script available</span>
       </div>
     {/if}
   </div>
-  
+
   <!-- Bottom Status Bar -->
   <div class="status-bar">
     <div class="status-info">
       {#if renderedContent}
         <span class="line-count">{lines.length} lines</span>
         {#if totalContentSize > 0}
-          <span class="size-info bg-sky-100 text-sky-700">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
+          <span class="size-info bg-sky-100 text-sky-700"
+            >{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(
+              totalContentSize,
+            )}</span
+          >
         {:else}
           <span class="char-count">{renderedContent.length} characters</span>
         {/if}
         {#if searchQuery && searchResults.length > 0}
-          <span class="search-status">{searchResults.length} matches found</span>
+          <span class="search-status">{searchResults.length} matches found</span
+          >
         {/if}
       {/if}
     </div>
-    
+
     <div class="file-info">
       <span class="file-type bg-sky-100 text-sky-700">Shell Script</span>
     </div>
@@ -922,7 +997,7 @@
     border-right: 1px solid #e2e8f0;
     padding: 1rem 0.75rem;
     user-select: none;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
     font-size: 0.75rem;
     line-height: 1.5;
     color: #94a3b8;
@@ -943,7 +1018,7 @@
     flex: 1;
     padding: 1rem;
     margin: 0;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
     line-height: 1.5;
     white-space: pre;
     overflow: auto;
@@ -999,7 +1074,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .loading-more {
@@ -1043,7 +1120,9 @@
     z-index: 100;
     background: white;
     border-radius: 12px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 6px 10px rgba(0, 0, 0, 0.08);
+    box-shadow:
+      0 10px 25px rgba(0, 0, 0, 0.1),
+      0 6px 10px rgba(0, 0, 0, 0.08);
     overflow: hidden;
     animation: slideIn 0.3s ease-out;
     transition: all 0.3s ease;
@@ -1198,7 +1277,9 @@
   }
 
   @keyframes pulse {
-    0%, 80%, 100% {
+    0%,
+    80%,
+    100% {
       opacity: 0.3;
     }
     40% {
@@ -1210,7 +1291,6 @@
     color: #6b7280;
     white-space: nowrap;
   }
-
 
   .empty-icon {
     width: 48px;

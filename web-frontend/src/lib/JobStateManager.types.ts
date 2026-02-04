@@ -3,13 +3,12 @@
  * Allows for better testability by injecting mocked dependencies
  */
 
-import type { AxiosInstance } from 'axios';
 import type { Readable } from 'svelte/store';
 
 /**
  * API client interface - can be mocked in tests
  */
-export interface IApiClient {
+export interface IAPIClient {
   get<T = any>(url: string): Promise<{ data: T }>;
   post<T = any>(url: string, data?: any): Promise<{ data: T }>;
 }
@@ -45,7 +44,7 @@ export interface IPreferences {
 /**
  * Preferences store interface
  */
-export interface IPreferencesStore extends Readable<IPreferences> {}
+export interface IPreferencesStore extends Readable<IPreferences> { }
 
 /**
  * Notification service interface
@@ -73,7 +72,7 @@ export interface IEnvironment {
  * All dependencies that JobStateManager needs
  */
 export interface JobStateManagerDependencies {
-  api: IApiClient;
+  api: IAPIClient;
   webSocketFactory: IWebSocketFactory;
   preferences: IPreferencesStore;
   notificationService: INotificationService;

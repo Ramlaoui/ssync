@@ -3,8 +3,6 @@
   import { push } from "svelte-spa-router";
   import { createBubbler, run } from "svelte/legacy";
   import { fade, fly, slide } from "svelte/transition";
-
-  const bubble = createBubbler();
   import Button from "../lib/components/ui/Button.svelte";
   import Card from "../lib/components/ui/Card.svelte";
   import Dropdown from "../lib/components/ui/Dropdown.svelte";
@@ -2344,7 +2342,7 @@ echo "Starting job..."
             <Settings class="w-4 h-4 inline-block mr-2" />
             Job Configuration
           </h3>
-          <p class="section-description">Basic SLURM job parameters</p>
+          <p class="section-description">Basic Slurm job parameters</p>
         </div>
 
         <div class="form-grid">
@@ -2563,7 +2561,7 @@ echo "Starting job..."
             </div>
             {#if !selectedHost}
               <p class="text-xs text-gray-500 mt-1 ml-5">
-                Choose a SLURM cluster from the dropdown above
+                Choose a Slurm cluster from the dropdown above
               </p>
             {:else if !validationDetails.isValid}
               <p class="text-xs text-gray-500 mt-1 ml-5">
@@ -3820,7 +3818,11 @@ echo "Starting job..."
   }
 
   :global(.launch-header-button) {
-    background: linear-gradient(135deg, var(--accent), var(--accent)) !important;
+    background: linear-gradient(
+      135deg,
+      var(--accent),
+      var(--accent)
+    ) !important;
     color: white !important;
     font-weight: 500 !important;
     padding: 0.5rem 1rem !important;

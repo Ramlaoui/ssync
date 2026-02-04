@@ -13,6 +13,7 @@
   import { jobStateManager } from "../lib/JobStateManager";
   import { api } from "../services/api";
   import { navigationActions } from "../stores/navigation";
+  import { preferences } from "../stores/preferences";
   import { fetchAllWatchers } from "../stores/watchers";
   import type { HostInfo, JobFilters, JobInfo } from "../types/api";
 
@@ -24,7 +25,7 @@
   let filters: JobFilters = $state({
     host: "",
     user: "",
-    since: "1d",
+    since: $preferences.defaultSince || "14d",
     limit: 50, // Default, will be overridden by preferences
     state: "",
     activeOnly: false,

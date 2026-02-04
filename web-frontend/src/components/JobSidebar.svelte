@@ -50,9 +50,7 @@
 
   // Compute recent jobs from all jobs
   let recentJobs = $derived(
-    $allJobs
-      .filter((j) => j && j.state && jobUtils.isTerminalState(j.state))
-      .slice(0, 50),
+    $allJobs.filter((j) => j && j.state && jobUtils.isTerminalState(j.state)),
   );
 
   // Create filtered arrays with optimized computation
@@ -156,6 +154,18 @@
     const baseRunning = filterOutArrayTasks($runningJobs);
     const basePending = filterOutArrayTasks($pendingJobs);
     const baseRecent = filterOutArrayTasks(recentJobs);
+    const limitCount = $preferences.jobsPerPage ?? 50;
+    
+    // Calculate completed array groups count directly to avoid circular dependency
+    const completedCount = $preferences.groupArrayJobs && $arrayJobGroups
+      ? $arrayJobGroups.filter((g) => {
+          const running = g.tasks?.filter((t: any) => t.state === 'R').length || 0;
+          const pending = g.tasks?.filter((t: any) => t.state === 'PD').length || 0;
+          return running === 0 && pending === 0;
+        }).length
+      : 0;
+    const remaining = Math.max(0, limitCount - completedCount);
+    const limitedRecent = searchQuery ? baseRecent : baseRecent.slice(0, remaining);
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -165,7 +175,7 @@
       filteredPendingJobs = basePending.filter((job) =>
         matchesSearch(job, query),
       );
-      filteredRecentJobs = baseRecent.filter((job) =>
+      filteredRecentJobs = limitedRecent.filter((job) =>
         matchesSearch(job, query),
       );
 
@@ -186,7 +196,7 @@
     } else {
       filteredRunningJobs = baseRunning;
       filteredPendingJobs = basePending;
-      filteredRecentJobs = baseRecent;
+      filteredRecentJobs = limitedRecent;
       // Only populate array groups when grouping is enabled
       filteredArrayGroups =
         $preferences.groupArrayJobs && $arrayJobGroups ? $arrayJobGroups : [];
@@ -254,6 +264,11 @@
       searchQuery = "";
       searchFocused = false;
     }
+  }
+
+  async function toggleArrayGrouping() {
+    preferencesActions.toggleArrayGrouping();
+    await loadJobs(true);
   }
 
   function clearSearch() {
@@ -352,6 +367,29 @@
   class:collapsed={actuallyCollapsed}
   class:mobile={isMobile}
 >
+  {#if !actuallyCollapsed}
+    <button
+      class="icon-btn array-toggle-float"
+      class:active={$preferences.groupArrayJobs}
+      onclick={toggleArrayGrouping}
+      aria-label="Toggle array job grouping"
+      title={$preferences.groupArrayJobs
+        ? "Disable array job grouping"
+        : "Enable array job grouping"}
+    >
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        {#if $preferences.groupArrayJobs}
+          <path
+            d="M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M5,7H19V9H5V7M5,11H19V13H5V11M5,15H19V17H5V15"
+          />
+        {:else}
+          <path
+            d="M3,3H21V5H3V3M3,7H21V9H3V7M3,11H21V13H3V11M3,15H21V17H3V15M3,19H21V21H3V19Z"
+          />
+        {/if}
+      </svg>
+    </button>
+  {/if}
   <div class="sidebar-header">
     {#if !actuallyCollapsed}
       <div class="header-actions">
@@ -367,33 +405,6 @@
             <path
               d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"
             />
-          </svg>
-        </button>
-
-        <!-- Array grouping toggle -->
-        <button
-          class="icon-btn"
-          class:active={$preferences.groupArrayJobs}
-          onclick={async () => {
-            preferencesActions.toggleArrayGrouping();
-            // Trigger a refresh to fetch data with new grouping preference
-            await loadJobs(true);
-          }}
-          aria-label="Toggle array job grouping"
-          title={$preferences.groupArrayJobs
-            ? "Disable array job grouping"
-            : "Enable array job grouping"}
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            {#if $preferences.groupArrayJobs}
-              <path
-                d="M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M5,7H19V9H5V7M5,11H19V13H5V11M5,15H19V17H5V15"
-              />
-            {:else}
-              <path
-                d="M3,3H21V5H3V3M3,7H21V9H3V7M3,11H21V13H3V11M3,15H21V17H3V15M3,19H21V21H3V19Z"
-              />
-            {/if}
           </svg>
         </button>
 
@@ -803,6 +814,18 @@
     justify-content: flex-end;
     align-items: center;
     flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--secondary);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .array-toggle-float {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 6;
   }
 
   .job-sidebar.mobile .sidebar-header {

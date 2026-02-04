@@ -1,7 +1,7 @@
 /**
  * SBATCH Script Parser and Generator
  *
- * Utilities for parsing and generating SBATCH directives in SLURM job scripts.
+ * Utilities for parsing and generating SBATCH directives in Slurm job scripts.
  */
 
 /**

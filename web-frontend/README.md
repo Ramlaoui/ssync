@@ -1,11 +1,11 @@
-# SLURM Manager Web Interface
+# Slurm Manager Web Interface
 
-A modern Svelte web interface for monitoring and managing SLURM jobs across multiple clusters.
+A modern Svelte web interface for monitoring and managing Slurm jobs across multiple clusters.
 
 ## Features
 
 - **Real-time Job Monitoring**: Live updates every 30 seconds
-- **Multi-Host Support**: Monitor jobs across multiple SLURM clusters
+- **Multi-Host Support**: Monitor jobs across multiple Slurm clusters
 - **Advanced Filtering**: Filter by user, time range, job state, etc.
 - **Job Details**: Detailed view with resource allocation, timing, and file paths
 - **Output Viewing**: View stdout and stderr directly in the browser
@@ -16,7 +16,7 @@ A modern Svelte web interface for monitoring and managing SLURM jobs across mult
 ### Prerequisites
 
 - Node.js (v16 or higher)
-- Running SLURM Manager API backend
+- Running Slurm Manager API backend
 
 ### Installation
 
@@ -33,7 +33,7 @@ npm run build
 
 ### API Configuration
 
-The frontend expects the SLURM Manager API to be running on `http://localhost:8000`. 
+The frontend expects the Slurm Manager API to be running on `http://localhost:8000`. 
 
 To start the API backend:
 
@@ -49,11 +49,11 @@ ssync-web
 1. **Start the API**: Run the FastAPI backend
 2. **Start the UI**: Run `npm run dev` 
 3. **Open browser**: Navigate to `http://localhost:5173`
-4. **Monitor jobs**: View jobs across your configured SLURM hosts
+4. **Monitor jobs**: View jobs across your configured Slurm hosts
 
 ## API Endpoints Used
 
-- `GET /hosts` - List configured SLURM hosts
+- `GET /hosts` - List configured Slurm hosts
 - `GET /status` - Get job status with filtering
 - `GET /jobs/{job_id}` - Get detailed job information
 - `GET /jobs/{job_id}/output` - Get job output files
@@ -83,4 +83,4 @@ src/
 
 The Vite development server proxies API requests to `http://localhost:8000`. 
 
-For production deployment, configure your web server to proxy `/api` requests to the SLURM Manager API backend.
+For production deployment, configure your web server to proxy `/api` requests to the Slurm Manager API backend.

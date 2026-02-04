@@ -14,6 +14,7 @@ interface UIPreferences {
   autoRefresh: boolean;
   refreshInterval: number;
   showMetrics: boolean;
+  defaultSince: string;
   websocket: WebSocketConfig;
 }
 
@@ -22,6 +23,7 @@ const defaultPreferences: UIPreferences = {
   autoRefresh: true,
   refreshInterval: 30000,  // 30 seconds
   showMetrics: false,
+  defaultSince: "14d",
   websocket: {
     initialRetryDelay: 1000,     // 1 second
     maxRetryDelay: 30000,        // 30 seconds
@@ -79,6 +81,10 @@ export const preferencesActions = {
 
   setRefreshInterval: (interval: number) => {
     preferences.update(p => ({ ...p, refreshInterval: interval }));
+  },
+
+  setDefaultSince: (since: string) => {
+    preferences.update(p => ({ ...p, defaultSince: since }));
   },
 
   toggleMetrics: () => {

@@ -23,7 +23,7 @@ export interface JobInfo {
   start_time: string | null;
   end_time: string | null;
   node_list: string | null;
-  
+
   // Additional job metadata
   exit_code?: string | null;
   account?: string | null;
@@ -169,7 +169,7 @@ export interface LaunchJobRequest {
   source_dir: string;
   host: string;
 
-  // SLURM parameters
+  // Slurm parameters
   job_name?: string;
   cpus?: number;
   mem?: number;
@@ -200,7 +200,7 @@ export interface LaunchJobResponse {
   job_id?: string;
   message: string;
   hostname: string;
-  
+
   // Directory validation information
   directory_warning?: string;
   directory_stats?: {
@@ -217,7 +217,7 @@ export type OutputData = JobOutputResponse;
 export type ScriptData = JobScriptResponse;
 
 // API client types
-export interface ApiClient {
+export interface APIClient {
   getHosts(): Promise<HostInfo[]>;
   getJobs(filters: Partial<JobFilters>): Promise<JobStatusResponse[]>;
   getJobDetails(jobId: string, hostname: string): Promise<JobInfo>;

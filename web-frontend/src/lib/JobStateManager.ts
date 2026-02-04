@@ -5,22 +5,22 @@
  * Manages WebSocket, polling, caching, and state synchronization.
  */
 
-import { writable, derived, get, type Readable } from 'svelte/store';
-import type { JobInfo, HostInfo, JobStatusResponse, ArrayJobGroup } from '../types/api';
+import { derived, get, writable, type Readable } from 'svelte/store';
 import { api, apiConfig } from '../services/api';
 import { notificationService } from '../services/notifications';
 import { preferences } from '../stores/preferences';
+import type { ArrayJobGroup, HostInfo, JobInfo, JobStatusResponse } from '../types/api';
 import type {
-  JobStateManagerDependencies,
-  IApiClient,
-  IWebSocketFactory,
-  IPreferencesStore,
+  IAPIClient,
+  IEnvironment,
   INotificationService,
-  IEnvironment
+  IPreferencesStore,
+  IWebSocketFactory,
+  JobStateManagerDependencies
 } from './JobStateManager.types';
 import {
-  ProductionWebSocketFactory,
-  ProductionEnvironment
+  ProductionEnvironment,
+  ProductionWebSocketFactory
 } from './JobStateManager.types';
 
 // ============================================================================
@@ -170,7 +170,7 @@ class JobStateManager {
       updateHistory: [],
     },
   });
-  
+
   private ws: WebSocket | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -180,7 +180,7 @@ class JobStateManager {
   private reconnectAttempts: number = 0;
 
   // Injected dependencies
-  private api: IApiClient;
+  private api: IAPIClient;
   private wsFactory: IWebSocketFactory;
   private preferences: IPreferencesStore;
   private notificationService: INotificationService;
@@ -208,14 +208,14 @@ class JobStateManager {
       this.startHealthMonitoring();
     }
   }
-  
+
   private setupEventListeners(): void {
     // Tab visibility
     document.addEventListener('visibilitychange', () => {
       this.updateState({ isTabActive: !document.hidden });
       this.adjustSyncStrategy();
     });
-    
+
     // User activity
     ['mousedown', 'keypress', 'scroll', 'touchstart'].forEach(event => {
       document.addEventListener(event, () => {
@@ -223,7 +223,7 @@ class JobStateManager {
       }, { passive: true });
     });
   }
-  
+
   private startHealthMonitoring(): void {
     this.healthCheckTimer = setInterval(() => {
       const state = get(this.state);
@@ -238,22 +238,22 @@ class JobStateManager {
           if (!wsHealthy) this.startPolling();
         }
       }
-      
+
       // Check if should pause (5 min inactive + background)
-      const shouldPause = !state.isTabActive && 
-                         now - state.lastActivity > 300000;
-      
+      const shouldPause = !state.isTabActive &&
+        now - state.lastActivity > 300000;
+
       if (shouldPause !== state.isPaused) {
         this.updateState({ isPaused: shouldPause });
         this.adjustSyncStrategy();
       }
     }, 10000); // Check every 10 seconds
   }
-  
+
   // ========================================================================
   // WebSocket Management
   // ========================================================================
-  
+
   public connectWebSocket(): void {
     console.log('[JobStateManager] 🔌 Attempting to connect WebSocket...');
 
@@ -285,7 +285,7 @@ class JobStateManager {
 
     this.ws = this.wsFactory.create(wsUrl) as WebSocket;
     console.log('[JobStateManager] 📡 WebSocket object created, waiting for connection...');
-    
+
     this.ws.onopen = () => {
       // Reset reconnect attempts on successful connection
       this.reconnectAttempts = 0;
@@ -305,7 +305,7 @@ class JobStateManager {
       console.log('[JobStateManager] ✅ WebSocket connected successfully to', wsUrl);
       console.log('[JobStateManager] WebSocket readyState:', this.ws?.readyState);
     };
-    
+
     this.ws.onmessage = (event) => {
       try {
         console.log('[JobStateManager] 📨 WebSocket message received, size:', event.data.length, 'bytes');
@@ -317,7 +317,7 @@ class JobStateManager {
         console.error('[JobStateManager] ❌ Failed to parse WebSocket message:', e);
       }
     };
-    
+
     this.ws.onclose = (event) => {
       console.log('[JobStateManager] ❌ WebSocket closed. Code:', event.code, 'Reason:', event.reason);
       this.stopPing();
@@ -537,17 +537,18 @@ class JobStateManager {
       console.log(`[JobStateManager] Queueing ${allUpdates.length} jobs for immediate processing`);
       allUpdates.forEach(update => this.queueUpdate(update, false));
       // Force immediate processing after all are queued
+      // Use setTimeout to ensure state updates from queueUpdate are applied first
       if (allUpdates.length > 0) {
         if (this.updateTimer) {
           clearTimeout(this.updateTimer);
           this.updateTimer = null;
         }
-        this.processUpdateQueue();
+        setTimeout(() => this.processUpdateQueue(), 0);
       }
     } else if (data.type === 'job_update' || data.type === 'state_change') {
       // Check if this is the currently viewed job
       const isCurrentJob = this.currentViewJobId === data.job_id &&
-                          this.currentViewHostname === data.hostname;
+        this.currentViewHostname === data.hostname;
 
       this.queueUpdate({
         jobId: data.job_id,
@@ -616,11 +617,11 @@ class JobStateManager {
       });
     }
   }
-  
+
   // ========================================================================
   // Polling Management
   // ========================================================================
-  
+
   private startPolling(): void {
     if (this.pollTimer) {
       console.log('[JobStateManager] ⚠️ Polling already running, skipping start');
@@ -637,7 +638,7 @@ class JobStateManager {
       ? CONFIG.syncIntervals.active
       : CONFIG.syncIntervals.background;
 
-    console.log(`[JobStateManager] 🔄 Starting fallback polling (${interval/1000}s interval) - tab active: ${state.isTabActive}, WS connected: ${state.wsConnected}, WS healthy: ${state.wsHealthy}`);
+    console.log(`[JobStateManager] 🔄 Starting fallback polling (${interval / 1000}s interval) - tab active: ${state.isTabActive}, WS connected: ${state.wsConnected}, WS healthy: ${state.wsHealthy}`);
 
     this.pollTimer = setInterval(() => {
       // Force sync to bypass cache during polling - we want fresh data when in fallback mode
@@ -646,7 +647,7 @@ class JobStateManager {
 
     this.updateState({ pollingActive: true });
   }
-  
+
   private stopPolling(): void {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
@@ -692,7 +693,7 @@ class JobStateManager {
   // ========================================================================
   // Data Synchronization
   // ========================================================================
-  
+
   public async syncAllHosts(forceSync = false, userInitiated = false): Promise<void> {
     const state = get(this.state);
     if (!forceSync && !userInitiated && state.isPaused) return;
@@ -704,7 +705,7 @@ class JobStateManager {
     try {
       console.log(`[JobStateManager] Starting sync for all hosts${forceSync ? ' (FORCE REFRESH - bypassing all caches)' : ''}${userInitiated ? ' (user-initiated)' : ''}`);
       if (forceSync) {
-        console.log('[JobStateManager] Force refresh will fetch directly from SLURM');
+        console.log('[JobStateManager] Force refresh will fetch directly from Slurm');
       }
       // Get list of hosts
       const hostsResponse = await this.api.get<HostInfo[]>('/api/hosts');
@@ -758,7 +759,7 @@ class JobStateManager {
       console.error('[JobStateManager] Failed to sync hosts:', error);
     }
   }
-  
+
   public async syncHost(hostname: string, forceSync = false, userInitiated = false): Promise<void> {
     const syncStartTime = Date.now();
     console.log(`[JobStateManager] 🔄 Starting sync for ${hostname}${forceSync ? ' (forced)' : ''}${userInitiated ? ' (user-initiated)' : ''}`);
@@ -844,11 +845,34 @@ class JobStateManager {
         // Prepare jobs for queueing
         const jobsToQueue: JobUpdate[] = [];
 
+        // Build set of current job IDs for cache cleanup
+        const currentJobIds = new Set<string>();
+        hostData.jobs.forEach(job => {
+          currentJobIds.add(`${hostname}:${job.job_id}`);
+        });
+
         // Update host state with job mappings and array groups
+        // Also clean up cache by removing jobs that are no longer in this host's job list
         this.state.update(s => {
           const newHostStates = new Map(s.hostStates);
+          const newJobCache = new Map(s.jobCache);
           const hs = newHostStates.get(hostname);
+          
           if (hs) {
+            // Clean up cache: remove jobs that are no longer in this host's job list
+            // This handles array jobs that have been moved to array groups
+            const oldJobIds = Array.from(hs.jobs.values());
+            let removedCount = 0;
+            oldJobIds.forEach(cacheKey => {
+              if (!currentJobIds.has(cacheKey)) {
+                newJobCache.delete(cacheKey);
+                removedCount++;
+              }
+            });
+            if (removedCount > 0) {
+              console.log(`[JobStateManager] 🧹 ${hostname} - Removed ${removedCount} stale jobs from cache (moved to array groups or completed)`);
+            }
+
             const newJobs = new Map<string, string>();
             hostData.jobs.forEach(job => {
               // Ensure hostname is set on job
@@ -882,6 +906,7 @@ class JobStateManager {
             });
           }
           s.hostStates = newHostStates;
+          s.jobCache = newJobCache;
           return s;
         });
 
@@ -966,11 +991,11 @@ class JobStateManager {
     const totalSyncDuration = Date.now() - syncStartTime;
     console.log(`[JobStateManager] 🏁 ${hostname} sync function exiting after ${totalSyncDuration}ms`);
   }
-  
+
   // ========================================================================
   // Update Queue Management
   // ========================================================================
-  
+
   private queueUpdate(update: JobUpdate, immediate = false): void {
     // Validate hostname is present
     if (!update.hostname) {
@@ -1030,7 +1055,7 @@ class JobStateManager {
       }, delay);
     }
   }
-  
+
   private processUpdateQueue(): void {
     // Safety check for undefined state
     if (!this.state) {
@@ -1074,9 +1099,9 @@ class JobStateManager {
 
         // Enhanced update logic with source priority
         const shouldUpdate = !existing ||
-                            (update.source === 'websocket' && existing.lastSource !== 'websocket') ||
-                            (update.source === existing.lastSource && update.timestamp > existing.lastUpdated) ||
-                            (existing.job?.state !== update.job.state); // Always update on state change
+          (update.source === 'websocket' && existing.lastSource !== 'websocket') ||
+          (update.source === existing.lastSource && update.timestamp > existing.lastUpdated) ||
+          (existing.job?.state !== update.job.state); // Always update on state change
 
         if (shouldUpdate) {
           // Check for new jobs appearing
@@ -1131,19 +1156,19 @@ class JobStateManager {
       s.processingUpdates = false;
       return s;
     });
-    
+
     // Track processing time
     const processingTime = performance.now() - startTime;
     this.updateProcessingTime(processingTime);
-    
+
     // Debug final cache state
     const finalState = get(this.state);
     console.log(`[JobStateManager] After processing ${batch.length} updates, cache now has ${finalState.jobCache.size} jobs`);
     console.log(`[JobStateManager] Cache keys:`, Array.from(finalState.jobCache.keys()));
-    
+
     // Clear timer
     this.updateTimer = null;
-    
+
     // Process remaining if any
     const newState = get(this.state);
     if (newState.pendingUpdates.length > 0) {
@@ -1152,11 +1177,11 @@ class JobStateManager {
       }, CONFIG.updateStrategy.batchDelay);
     }
   }
-  
+
   // ========================================================================
   // Cache Management
   // ========================================================================
-  
+
   private getCacheLifetime(job: JobInfo): number {
     switch (job.state) {
       case 'CD':
@@ -1172,44 +1197,44 @@ class JobStateManager {
         return CONFIG.cacheLifetime.error;
     }
   }
-  
+
   public isJobCacheValid(cacheKey: string): boolean {
     const state = get(this.state);
     const entry = state.jobCache.get(cacheKey);
-    
+
     if (!entry) {
       this.updateMetric('cacheMisses', 1);
       return false;
     }
-    
+
     const lifetime = this.getCacheLifetime(entry.job);
     const isValid = Date.now() - entry.lastUpdated < lifetime;
-    
+
     if (isValid) {
       this.updateMetric('cacheHits', 1);
     } else {
       this.updateMetric('cacheMisses', 1);
     }
-    
+
     return isValid;
   }
-  
+
   public async fetchJob(jobId: string, hostname: string): Promise<JobInfo | null> {
     const cacheKey = `${hostname}:${jobId}`;
     const state = get(this.state);
     const cached = state.jobCache.get(cacheKey);
-    
+
     // Return from cache if valid
     if (cached && this.isJobCacheValid(cacheKey)) {
       return cached.job;
     }
-    
+
     // Fetch from API
     try {
       this.updateMetric('apiCalls', 1);
       const response = await this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}`);
       const job = response.data;
-      
+
       // Update cache
       this.queueUpdate({
         jobId,
@@ -1219,27 +1244,27 @@ class JobStateManager {
         timestamp: Date.now(),
         priority: 'high',
       });
-      
+
       return job;
     } catch (error) {
       console.error(`[JobStateManager] Failed to fetch job ${jobId}:`, error);
       return cached?.job || null;
     }
   }
-  
+
   // ========================================================================
   // Strategy Adjustment
   // ========================================================================
-  
+
   private adjustSyncStrategy(): void {
     const state = get(this.state);
-    
+
     // Determine optimal strategy
     if (state.isPaused) {
       this.stopPolling();
       return;
     }
-    
+
     if (state.wsHealthy) {
       this.stopPolling();
       this.updateState({ dataSource: 'websocket' });
@@ -1252,19 +1277,19 @@ class JobStateManager {
       this.startPolling(); // Will use background interval
     }
   }
-  
+
   // ========================================================================
   // State Management
   // ========================================================================
-  
+
   private updateState(partial: Partial<ManagerState>): void {
     this.state.update(s => ({ ...s, ...partial }));
   }
-  
+
   // ========================================================================
   // Public API
   // ========================================================================
-  
+
   public async initialize(): Promise<void> {
     console.log('[JobStateManager] 🚀 INITIALIZING JobStateManager...');
     console.log('[JobStateManager] Current environment:', {
@@ -1291,9 +1316,18 @@ class JobStateManager {
     // the initial data. API polling will kick in as a fallback if WebSocket fails.
     this.connectWebSocket();
 
+    // Set up fallback: if WebSocket doesn't provide jobs within 5 seconds, trigger API sync
+    setTimeout(() => {
+      const state = get(this.state);
+      if (!state.wsInitialDataReceived && state.jobCache.size === 0) {
+        console.log('[JobStateManager] WebSocket provided no jobs after timeout - triggering API sync as fallback');
+        this.syncAllHosts(false, false);
+      }
+    }, 5000);
+
     console.log('[JobStateManager] ✅ Initialization complete - waiting for WebSocket initial data');
   }
-  
+
   public destroy(): void {
     this.ws?.close();
     this.stopPolling();
@@ -1301,7 +1335,7 @@ class JobStateManager {
     if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
     if (this.updateTimer) clearTimeout(this.updateTimer);
   }
-  
+
   public forceRefresh(): Promise<void> {
     return this.syncAllHosts(true);
   }
@@ -1327,7 +1361,7 @@ class JobStateManager {
     // Force sync all hosts immediately
     await this.syncAllHosts(true);
   }
-  
+
   private async fetchDirectStatus(): Promise<void> {
     try {
       console.log('[JobStateManager] Fetching jobs directly from /api/status');
@@ -1335,7 +1369,7 @@ class JobStateManager {
       if (response.data && response.data.jobs) {
         const jobs = response.data.jobs;
         console.log(`[JobStateManager] Got ${Object.keys(jobs).length} hosts from direct status`);
-        
+
         // Process jobs by hostname
         for (const [hostname, hostJobs] of Object.entries(jobs)) {
           if (Array.isArray(hostJobs)) {
@@ -1359,15 +1393,15 @@ class JobStateManager {
       console.error('[JobStateManager] Failed to fetch direct status:', error);
     }
   }
-  
+
   public getState(): Readable<ManagerState> {
     return { subscribe: this.state.subscribe };
   }
-  
+
   // ========================================================================
   // Performance Monitoring
   // ========================================================================
-  
+
   private updateMetric(metric: keyof PerformanceMetrics, value: number): void {
     this.state.update(s => {
       if (typeof s.metrics[metric] === 'number') {
@@ -1376,28 +1410,28 @@ class JobStateManager {
       return s;
     });
   }
-  
+
   private updateProcessingTime(time: number): void {
     this.state.update(s => {
       s.metrics.lastUpdateTime = time;
       s.metrics.updateHistory.push(time);
-      
+
       // Keep only last 100 measurements
       if (s.metrics.updateHistory.length > 100) {
         s.metrics.updateHistory.shift();
       }
-      
+
       // Calculate average
       s.metrics.averageUpdateTime = s.metrics.updateHistory.reduce((a, b) => a + b, 0) / s.metrics.updateHistory.length;
-      
+
       return s;
     });
   }
-  
+
   public getMetrics(): Readable<PerformanceMetrics> {
     return derived(this.state, $state => $state.metrics);
   }
-  
+
   public resetMetrics(): void {
     this.state.update(s => {
       s.metrics = {
@@ -1413,11 +1447,11 @@ class JobStateManager {
       return s;
     });
   }
-  
+
   // ========================================================================
   // Derived Stores
   // ========================================================================
-  
+
   public getAllJobs(): Readable<JobInfo[]> {
     return derived(this.state, $state => {
       // Create a Map to ensure unique jobs by hostname:job_id
@@ -1452,13 +1486,13 @@ class JobStateManager {
       return jobs;
     });
   }
-  
+
   public getJobsByState(state: JobState): Readable<JobInfo[]> {
-    return derived(this.getAllJobs(), $jobs => 
+    return derived(this.getAllJobs(), $jobs =>
       $jobs.filter(job => job.state === state)
     );
   }
-  
+
   public getHostJobs(hostname: string): Readable<JobInfo[]> {
     return derived(this.state, $state => {
       const hostState = $state.hostStates.get(hostname);
