@@ -36,8 +36,12 @@ class JobDisplay:
                 # This is an individual array task
                 array_tasks[job.array_job_id].append(job)
             # Check if this is a parent job entry (has brackets like [0-4])
-            elif (job.array_job_id and job.array_task_id and
-                  '[' in job.array_task_id and ']' in job.array_task_id):
+            elif (
+                job.array_job_id
+                and job.array_task_id
+                and "[" in job.array_task_id
+                and "]" in job.array_task_id
+            ):
                 # This is a parent job entry - store it for potential removal
                 parent_jobs[job.array_job_id] = job
             else:
@@ -160,3 +164,65 @@ class JobDisplay:
                 JobDisplay.display_jobs_simple(host_jobs)
             else:
                 JobDisplay.display_jobs_detailed(host_jobs)
+
+
+class PartitionDisplay:
+    """Handles formatting and displaying partition resource information."""
+
+    @staticmethod
+    def _format_gpu(gpus_used: int | None, gpus_total: int | None) -> str:
+        if gpus_total is None:
+            return "-"
+        if gpus_total == 0:
+            return "0"
+        if gpus_used is None:
+            return f"?/{gpus_total}"
+        return f"{gpus_used}/{gpus_total}"
+
+    @staticmethod
+    def display_partition_status(responses: List[dict]):
+        """Display partition resources grouped by hostname."""
+        for response in responses:
+            hostname = response.get("hostname", "unknown")
+            cached = response.get("cached")
+            stale = response.get("stale")
+            cache_age = response.get("cache_age_seconds")
+
+            header = f"\n=== {hostname} ==="
+            if cached:
+                cached_note = f"cached {cache_age}s" if cache_age is not None else "cached"
+                if stale:
+                    cached_note += " (stale)"
+                header += f" [{cached_note}]"
+            click.echo(header)
+
+            error = response.get("error")
+            if error:
+                click.echo(f"Error: {error}")
+                continue
+
+            partitions = response.get("partitions", [])
+            if not partitions:
+                click.echo("No partition data")
+                continue
+
+            click.echo(
+                f"{'Partition':<16} {'Avail':<6} {'CPUs a/i/t':<14} {'GPUs u/t':<10} {'Nodes':<6} {'States'}"
+            )
+            click.echo("-" * 80)
+
+            for partition in partitions:
+                name = partition.get("partition", "unknown")
+                availability = partition.get("availability") or "-"
+                states = ", ".join(partition.get("states") or [])
+                cpus_alloc = partition.get("cpus_alloc", 0)
+                cpus_idle = partition.get("cpus_idle", 0)
+                cpus_total = partition.get("cpus_total", 0)
+                gpu_str = PartitionDisplay._format_gpu(
+                    partition.get("gpus_used"), partition.get("gpus_total")
+                )
+                nodes_total = partition.get("nodes_total", 0)
+
+                click.echo(
+                    f"{name:<16} {availability:<6} {cpus_alloc}/{cpus_idle}/{cpus_total:<8} {gpu_str:<10} {nodes_total:<6} {states}"
+                )

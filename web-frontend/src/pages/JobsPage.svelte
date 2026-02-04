@@ -15,12 +15,15 @@
   import { navigationActions } from "../stores/navigation";
   import { preferences } from "../stores/preferences";
   import { fetchAllWatchers } from "../stores/watchers";
-  import type { HostInfo, JobFilters, JobInfo } from "../types/api";
+  import type { HostInfo, JobFilters, JobInfo, PartitionStatusResponse } from "../types/api";
 
   let hosts: HostInfo[] = $state([]);
   let loading = $state(false);
   let hostsLoading = false;
   let error: string | null = $state(null);
+  let partitionStates: PartitionStatusResponse[] = $state([]);
+  let partitionsLoading = $state(false);
+  let partitionsError: string | null = $state(null);
   let search = $state("");
   let filters: JobFilters = $state({
     host: "",
@@ -38,12 +41,12 @@
   );
   let searchFocused = false;
   let searchExpanded = $state(false);
-  let searchInput: HTMLInputElement = $state();
+  let searchInput: HTMLInputElement | null = $state(null);
 
   // Auto-refresh state
   let autoRefreshEnabled = $state(false);
   let autoRefreshInterval = $state(30); // seconds
-  let autoRefreshTimer: number | null = null;
+  let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   // Get reactive stores from JobStateManager
   const allJobs = jobStateManager.getAllJobs();
@@ -234,6 +237,31 @@
     })(),
   );
 
+  let totalPartitions = $derived(
+    partitionStates.reduce((sum, host) => sum + host.partitions.length, 0),
+  );
+
+  let latestPartitionUpdate = $derived(
+    (() => {
+      const timestamps = partitionStates
+        .map((h) => h.updated_at)
+        .filter((t): t is string => Boolean(t))
+        .map((t) => new Date(t).getTime());
+      if (timestamps.length === 0) return null;
+      return new Date(Math.max(...timestamps)).toISOString();
+    })(),
+  );
+
+  let partitionsSectionExpanded = $derived(
+    totalPartitions > 0 && totalPartitions <= 8,
+  );
+
+  let partitionsSubtitle = $derived(
+    latestPartitionUpdate
+      ? `Updated ${formatTimeAgo(latestPartitionUpdate)}`
+      : "",
+  );
+
   // Track active arrays for smart collapsible defaults
   let activeArrayCount = $derived(
     filteredArrayGroups.filter(
@@ -264,6 +292,17 @@
 
   function checkMobile() {
     isMobile = window.innerWidth < 768;
+  }
+
+  function formatTimeAgo(value: string | null | undefined): string {
+    if (!value) return "";
+    const ts = new Date(value).getTime();
+    if (Number.isNaN(ts)) return "";
+    const diff = Date.now() - ts;
+    if (diff < 60000) return "just now";
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return new Date(value).toLocaleDateString();
   }
 
   async function loadHosts(): Promise<void> {
@@ -303,6 +342,31 @@
     }
   }
 
+  async function loadPartitions(forceRefresh = false): Promise<void> {
+    partitionsError = null;
+    partitionsLoading = true;
+
+    try {
+      const params = new URLSearchParams();
+      if (filters.host) params.append("host", filters.host);
+      if (forceRefresh) params.append("force_refresh", "true");
+      const url = params.toString()
+        ? `/api/partitions?${params.toString()}`
+        : "/api/partitions";
+      const response = await api.get<PartitionStatusResponse[]>(url);
+      partitionStates = response.data;
+    } catch (err: unknown) {
+      const axiosError = err as AxiosError;
+      partitionsError = `Failed to load partition state: ${axiosError.message}`;
+    } finally {
+      partitionsLoading = false;
+    }
+  }
+
+  async function refreshAll(forceRefresh = false): Promise<void> {
+    await Promise.all([loadJobs(forceRefresh), loadPartitions(forceRefresh)]);
+  }
+
   function handleFilterChange(): void {
     clearTimeout(filterChangeTimeout);
     filterChangeTimeout = setTimeout(() => {
@@ -321,8 +385,8 @@
   }
 
   function handleManualRefresh(): void {
-    if (!loading) {
-      loadJobs(true);
+    if (!loading && !partitionsLoading) {
+      refreshAll(true);
     }
   }
 
@@ -336,14 +400,16 @@
     // Set up new timer if enabled
     if (autoRefreshEnabled && autoRefreshInterval > 0) {
       autoRefreshTimer = setInterval(() => {
-        if (!loading) {
-          loadJobs(false); // Gentle refresh, no cache clear
+        if (!loading && !partitionsLoading) {
+          refreshAll(false); // Gentle refresh, no cache clear
         }
       }, autoRefreshInterval * 1000);
     }
   }
 
-  function handleRefreshSettingsChanged(event: CustomEvent): void {
+  function handleRefreshSettingsChanged(
+    event: CustomEvent<{ autoRefreshEnabled: boolean; autoRefreshInterval: number }>,
+  ): void {
     const { autoRefreshEnabled: enabled, autoRefreshInterval: interval } =
       event.detail;
     autoRefreshEnabled = enabled;
@@ -357,7 +423,9 @@
     localStorage.setItem("ssync_preferences", JSON.stringify(prefs));
   }
 
-  function handleJobsPerPageChanged(event: CustomEvent): void {
+  function handleJobsPerPageChanged(
+    event: CustomEvent<{ jobsPerPage: number }>,
+  ): void {
     const { jobsPerPage } = event.detail;
     filters.limit = jobsPerPage;
   }
@@ -377,6 +445,10 @@
   onMount(async () => {
     // Load hosts first
     await loadHosts();
+
+    loadPartitions().catch((err) =>
+      console.warn("Failed to load partition state:", err),
+    );
 
     // Load watchers for eye icon display (non-blocking)
     fetchAllWatchers().catch((err) =>
@@ -658,6 +730,114 @@
         <div class="text-center text-muted-foreground">Loading jobs...</div>
       </div>
     {:else}
+      {#if totalPartitions > 0 || partitionsLoading || partitionsError}
+        <div class="mb-4">
+          <CollapsibleSection
+            title="Partition Resources"
+            badge="{totalPartitions} partitions"
+            subtitle={partitionsSubtitle}
+            defaultExpanded={partitionsSectionExpanded}
+            storageKey="jobspage-partitions-expanded"
+          >
+            {#if partitionsLoading}
+              <div class="text-sm text-muted-foreground">
+                Loading partition resources...
+              </div>
+            {:else if partitionsError}
+              <div class="text-sm text-destructive">{partitionsError}</div>
+            {:else if totalPartitions === 0}
+              <div class="text-sm text-muted-foreground">
+                No partition data available
+              </div>
+            {:else}
+              <div class="space-y-3">
+                {#each partitionStates as hostState (hostState.hostname)}
+                  <div class="rounded-lg border border-border bg-background p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-sm font-semibold text-foreground"
+                          >{hostState.hostname}</span
+                        >
+                        {#if hostState.cached}
+                          <Badge variant="secondary">Cached</Badge>
+                        {/if}
+                        {#if hostState.stale}
+                          <Badge variant="warning">Stale</Badge>
+                        {/if}
+                      </div>
+                      {#if hostState.updated_at}
+                        <span class="text-xs text-muted-foreground"
+                          >Updated {formatTimeAgo(hostState.updated_at)}</span
+                        >
+                      {/if}
+                    </div>
+
+                    {#if hostState.error}
+                      <div class="text-sm text-destructive">
+                        {hostState.error}
+                      </div>
+                    {:else}
+                      <div class="overflow-x-auto">
+                        <table class="min-w-[720px] w-full text-sm">
+                          <thead>
+                            <tr class="text-xs text-muted-foreground uppercase tracking-wide">
+                              <th class="text-left font-medium py-2 pr-4">Partition</th>
+                              <th class="text-left font-medium py-2 pr-4">Avail</th>
+                              <th class="text-left font-medium py-2 pr-4">CPUs a/i/t</th>
+                              <th class="text-left font-medium py-2 pr-4">GPUs u/t</th>
+                              <th class="text-left font-medium py-2 pr-4">Nodes</th>
+                              <th class="text-left font-medium py-2">State</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {#each hostState.partitions as partition (partition.partition)}
+                              <tr class="border-t border-border/60">
+                                <td class="py-2 pr-4 font-medium text-foreground">
+                                  {partition.partition}
+                                </td>
+                                <td class="py-2 pr-4 text-muted-foreground">
+                                  {partition.availability || "-"}
+                                </td>
+                                <td class="py-2 pr-4">
+                                  <span class="text-foreground font-medium">
+                                    {partition.cpus_alloc}/{partition.cpus_idle}/{partition.cpus_total}
+                                  </span>
+                                </td>
+                                <td class="py-2 pr-4">
+                                  {#if partition.gpus_total === null}
+                                    <span class="text-muted-foreground">-</span>
+                                  {:else if partition.gpus_total === 0}
+                                    <span class="text-muted-foreground">0</span>
+                                  {:else if partition.gpus_used === null}
+                                    <span class="text-muted-foreground"
+                                      >?/{partition.gpus_total}</span
+                                    >
+                                  {:else}
+                                    <span class="text-foreground font-medium"
+                                      >{partition.gpus_used}/{partition.gpus_total}</span
+                                    >
+                                  {/if}
+                                </td>
+                                <td class="py-2 pr-4 text-muted-foreground">
+                                  {partition.nodes_total}
+                                </td>
+                                <td class="py-2 text-muted-foreground">
+                                  {(partition.states || []).join(", ") || "-"}
+                                </td>
+                              </tr>
+                            {/each}
+                          </tbody>
+                        </table>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </CollapsibleSection>
+        </div>
+      {/if}
+
       <!-- Array job groups - Collapsible Section -->
       {#if filteredArrayGroups.length > 0}
         <div class="mb-4">

@@ -124,9 +124,15 @@ class APIClient:
                 # Get logs for debugging (server must be running to get logs via API)
                 logs = self.server_manager.get_logs(30)
                 if logs:
-                    return False, f"Failed to start API server. Recent logs:\n{chr(10).join(logs)}"
+                    return (
+                        False,
+                        f"Failed to start API server. Recent logs:\n{chr(10).join(logs)}",
+                    )
                 else:
-                    return False, "Failed to start API server. Run 'ssync api' in foreground to debug."
+                    return (
+                        False,
+                        "Failed to start API server. Run 'ssync api' in foreground to debug.",
+                    )
         except Exception as e:
             return False, f"Failed to start API server: {str(e)}"
 
@@ -233,6 +239,28 @@ class APIClient:
                 all_jobs.append(job)
 
         return all_jobs
+
+    def get_partitions(
+        self,
+        host: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """Get partition resource state from the API."""
+        params = {}
+        if host:
+            params["host"] = host
+        if force_refresh:
+            params["force_refresh"] = "true"
+
+        response = requests.get(
+            f"{self.base_url}/api/partitions",
+            params=params,
+            headers=self._get_headers(),
+            timeout=30,
+            verify=False,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def launch_job(
         self,

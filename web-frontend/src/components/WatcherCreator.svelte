@@ -35,8 +35,12 @@
   let interval = $state(30);
   let watcherOutputType: 'stdout' | 'stderr' | 'both' = $state('stdout');
 
+  interface LocalAction extends WatcherAction {
+    params: Record<string, any>;
+  }
+
   // Initialize actions based on whether we're copying or creating new
-  let actions: WatcherAction[] = $state([]);
+  let actions: LocalAction[] = $state([]);
 
   // Track whether we've already initialized from copy to prevent overwriting user edits
   let hasInitializedFromCopy = $state(false);
@@ -67,9 +71,9 @@
       // Copy actions with all their properties
       if (copiedWatcherConfig.actions && copiedWatcherConfig.actions.length > 0) {
         console.log('Copying actions:', copiedWatcherConfig.actions);
-        actions = copiedWatcherConfig.actions.map(action => ({
+        actions = copiedWatcherConfig.actions.map((action: WatcherAction) => ({
           type: action.type,
-          params: { ...action.params }
+          params: { ...(action.params || {}) }
         }));
       } else {
         // Only set default action if no actions to copy
@@ -104,10 +108,10 @@
 
   // Ensure all actions have params initialized (defensive programming)
   run(() => {
-    actions = actions.map(action => ({
+    actions = actions.map((action) => ({
       ...action,
       params: action.params || {}
-    }))
+    }));
   });
 
   // Progressive disclosure states
@@ -429,7 +433,7 @@
     }
   }
 
-  let overlayElement: HTMLElement = $state();
+  let overlayElement: HTMLElement | null = $state(null);
   let mouseDownInsideDialog = false;
 
   function close() {
@@ -696,7 +700,7 @@
                   max="1000"
                   class="form-input"
                   oninput={(e) => {
-                    const value = Number(e.target.value);
+                    const value = Number((e.target as HTMLInputElement).value);
                     if (!isNaN(value)) {
                       maxTriggers = Math.max(1, Math.min(1000, value));
                     }
@@ -736,7 +740,7 @@
                         min="1"
                         max="3600"
                         oninput={(e) => {
-                          const value = Number(e.target.value);
+                          const value = Number((e.target as HTMLInputElement).value);
                           if (!isNaN(value)) {
                             timerInterval = Math.max(1, Math.min(3600, value));
                           }
@@ -767,7 +771,7 @@
                 <div class="action-item">
                   <select
                     value={action.type}
-                    onchange={(e) => updateActionType(i, e.target.value)}
+                    onchange={(e) => updateActionType(i, (e.target as HTMLSelectElement).value)}
                     class="action-type-select">
                     <option value="log_event">Log Event</option>
                     <option value="store_metric">Store Metric</option>
@@ -855,7 +859,7 @@
                       min="0"
                       max="86400"
                       oninput={(e) => {
-                        const value = Number(e.target.value);
+                        const value = Number((e.target as HTMLInputElement).value);
                         if (!isNaN(value)) {
                           action.params.delay = Math.max(0, Math.min(86400, value));
                         }

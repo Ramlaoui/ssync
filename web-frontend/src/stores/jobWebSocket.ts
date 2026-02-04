@@ -24,8 +24,8 @@ interface AllJobsWebSocketState {
 
 let jobWebSocket: WebSocket | null = null;
 let allJobsWebSocket: WebSocket | null = null;
-let reconnectTimer: number | null = null;
-let pingInterval: number | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let pingInterval: ReturnType<typeof setInterval> | null = null;
 // Track current connections to prevent duplicates
 let currentJobConnection: string | null = null;
 
@@ -353,7 +353,9 @@ export function connectAllJobsWebSocket() {
           const mergedJobs = { ...state.jobs };
           
           // Update with new data from WebSocket
-          for (const [hostname, jobs] of Object.entries(data.jobs)) {
+          for (const [hostname, jobs] of Object.entries(
+            data.jobs as Record<string, JobInfo[]>
+          )) {
             mergedJobs[hostname] = jobs;
           }
           

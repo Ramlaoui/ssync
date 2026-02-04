@@ -602,7 +602,7 @@
       <div class="watcher-header">
         <div class="header-content">
           <h2>Watcher Details</h2>
-          <p class="watcher-subtitle">{watcher.name}</p>
+          <p class="watcher-subtitle">{watcher?.name ?? ''}</p>
         </div>
       </div>
     {/snippet}
@@ -692,7 +692,7 @@
           </div>
           <div class="detail-item">
             <span class="detail-label">Last Check:</span>
-            <span>{formatTime(watcher.last_check)}</span>
+            <span>{formatTime(watcher?.last_check ?? null)}</span>
           </div>
         </div>
       </div>
@@ -809,7 +809,7 @@
               <input
                 type="text"
                 value={capture}
-                oninput={(e) => updateCapture(i, e.target.value)}
+                oninput={(e) => updateCapture(i, (e.target as HTMLInputElement).value)}
                 placeholder="Capture name"
               />
               <button onclick={() => removeCapture(i)}>Remove</button>
@@ -837,7 +837,7 @@
                   <span class="action-number">{i + 1}</span>
                   <select
                     value={action.type}
-                    onchange={(e) => updateAction(i, "type", e.target.value)}
+                    onchange={(e) => updateAction(i, "type", (e.target as HTMLSelectElement).value)}
                   >
                     <option value="log_event">Log Event</option>
                     <option value="store_metric">Store Metric</option>
@@ -867,7 +867,7 @@
                     type="text"
                     value={action.condition || ""}
                     oninput={(e) =>
-                      updateAction(i, "condition", e.target.value)}
+                      updateAction(i, "condition", (e.target as HTMLInputElement).value)}
                     placeholder="Condition (optional, e.g., float($1) > 80)"
                   />
                 </div>
@@ -885,7 +885,7 @@
                               updateAction(
                                 i,
                                 `config.${field.name}`,
-                                e.target.checked,
+                                (e.target as HTMLInputElement).checked,
                               )}
                           />
                         {:else if field.type === "number"}
@@ -896,7 +896,7 @@
                               updateAction(
                                 i,
                                 `config.${field.name}`,
-                                e.target.value,
+                                (e.target as HTMLInputElement).value,
                               )}
                             placeholder={field.placeholder}
                             min={field.min}
@@ -912,7 +912,7 @@
                               updateAction(
                                 i,
                                 `config.${field.name}`,
-                                e.target.value,
+                                (e.target as HTMLInputElement).value,
                               )}
                             placeholder={field.placeholder}
                             pattern={field.pattern}
@@ -928,7 +928,7 @@
                               updateAction(
                                 i,
                                 `config.${field.name}`,
-                                e.target.value,
+                                (e.target as HTMLInputElement).value,
                               )}
                             placeholder={field.placeholder}
                             pattern={field.pattern}
@@ -944,7 +944,7 @@
                               updateAction(
                                 i,
                                 `config.${field.name}`,
-                                e.target.value,
+                                (e.target as HTMLInputElement).value,
                               )}
                             placeholder={field.placeholder}
                             pattern={field.pattern}

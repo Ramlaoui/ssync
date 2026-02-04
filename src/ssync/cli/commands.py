@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import List, Optional
+import json
 
 import click
 import requests
@@ -9,7 +10,7 @@ import requests
 from ..api import APIClient
 from ..manager import SlurmManager
 from ..sync import SyncManager
-from .display import JobDisplay
+from .display import JobDisplay, PartitionDisplay
 
 
 class BaseCommand:
@@ -87,7 +88,9 @@ class StatusCommand(BaseCommand):
             jobs_by_host = JobDisplay.group_jobs_by_host(jobs)
 
             # Ensure all configured hosts are shown (or just the requested one)
-            hosts_to_show = [host] if host else [h.host.hostname for h in self.slurm_hosts]
+            hosts_to_show = (
+                [host] if host else [h.host.hostname for h in self.slurm_hosts]
+            )
             for hostname in hosts_to_show:
                 if hostname not in jobs_by_host:
                     jobs_by_host[hostname] = []
@@ -107,6 +110,57 @@ class StatusCommand(BaseCommand):
             return False
         except Exception as e:
             click.echo(f"Error getting jobs: {str(e)}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return False
+
+
+class PartitionsCommand(BaseCommand):
+    """Handles the partitions command logic."""
+
+    def execute(
+        self,
+        host: Optional[str] = None,
+        force_refresh: bool = False,
+        json_output: bool = False,
+    ):
+        """Execute partitions command."""
+        # Filter hosts if specific host requested
+        if host:
+            filtered_hosts = [h for h in self.slurm_hosts if h.host.hostname == host]
+            if not filtered_hosts:
+                click.echo(f"Host '{host}' not found in configuration", err=True)
+                return False
+
+        try:
+            api_client = APIClient(verbose=self.verbose)
+
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
+                return False
+
+            responses = api_client.get_partitions(
+                host=host, force_refresh=force_refresh
+            )
+
+            if json_output:
+                click.echo(json.dumps(responses, indent=2))
+                return True
+
+            PartitionDisplay.display_partition_status(responses)
+            return True
+
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
+        except Exception as e:
+            click.echo(f"Error getting partition state: {str(e)}", err=True)
             if self.verbose:
                 import traceback
 
@@ -321,7 +375,9 @@ class CancelCommand(BaseCommand):
                 jobs = api_client.get_jobs(job_ids=[job_id])
 
                 if not jobs:
-                    click.echo(f"Job {job_id} not found on any configured host", err=True)
+                    click.echo(
+                        f"Job {job_id} not found on any configured host", err=True
+                    )
                     return False
 
                 # Use the host from the found job (JobInfo object has hostname attribute)

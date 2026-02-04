@@ -3,7 +3,7 @@
   import { createEventDispatcher } from 'svelte';
 
   const dispatch = createEventDispatcher<{
-    select: T | T[];
+    select: T | T[] | null;
     cancel: void;
   }>();
 

@@ -4,7 +4,13 @@ import click
 
 from ..utils.config import ConfigError, config
 from .auth import auth
-from .commands import CancelCommand, LaunchCommand, StatusCommand, SyncCommand
+from .commands import (
+    CancelCommand,
+    LaunchCommand,
+    PartitionsCommand,
+    StatusCommand,
+    SyncCommand,
+)
 from .watchers import watchers
 
 
@@ -82,6 +88,36 @@ def status_command(
         active_only=active_only,
         completed_only=completed_only,
         cat_output=cat_output,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="partitions")
+@click.option("--host", help="Check specific host only")
+@click.option(
+    "--force-refresh",
+    is_flag=True,
+    help="Bypass cache and fetch fresh data from Slurm",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Output raw JSON instead of formatted table",
+)
+@click.pass_context
+def partitions_command(ctx, host, force_refresh, json_output):
+    """Check partition resource availability across hosts."""
+    command = PartitionsCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        host=host, force_refresh=force_refresh, json_output=json_output
     )
 
     if not success:

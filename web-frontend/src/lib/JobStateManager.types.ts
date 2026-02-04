@@ -11,6 +11,9 @@ import type { Readable } from 'svelte/store';
 export interface IAPIClient {
   get<T = any>(url: string): Promise<{ data: T }>;
   post<T = any>(url: string, data?: any): Promise<{ data: T }>;
+  getCallCount?: () => number;
+  clearCalls?: () => void;
+  setResponse?: (url: string, data: any) => void;
 }
 
 /**
@@ -32,6 +35,8 @@ export interface MockWebSocket {
   onerror: ((event: Event) => void) | null;
   send(data: string): void;
   close(): void;
+  simulateMessage: (data: any) => void;
+  simulateClose: () => void;
 }
 
 /**
@@ -50,7 +55,18 @@ export interface IPreferencesStore extends Readable<IPreferences> { }
  * Notification service interface
  */
 export interface INotificationService {
-  notify(options: { type: string; message: string; duration?: number }): void;
+  notify(
+    options:
+      | { type: string; message: string; duration?: number }
+      | {
+          title: string;
+          body: string;
+          icon?: string;
+          tag?: string;
+          requireInteraction?: boolean;
+          silent?: boolean;
+        }
+  ): void | Promise<void>;
   notifyNewJob(jobId: string, hostname: string, state: string, name: string): void;
   notifyJobStateChange(jobId: string, hostname: string, oldState: string, newState: string): void;
 }

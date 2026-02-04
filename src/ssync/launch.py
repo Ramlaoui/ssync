@@ -8,11 +8,11 @@ from typing import List, Optional
 
 from .manager import Job, SlurmManager
 from .parsers.script_processor import ScriptProcessor
-from .sync import SyncManager
-from .utils.logging import setup_logger
 from .slurm.params import SlurmParams
 from .ssh.helpers import send_file
+from .sync import SyncManager
 from .utils.async_helpers import create_task
+from .utils.logging import setup_logger
 
 logger = setup_logger(__name__, "INFO")
 

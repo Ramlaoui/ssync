@@ -12,9 +12,8 @@
   
   // Metric state
   let selectedMetric: string | null = $state(null);
-  let chartCanvas: HTMLCanvasElement = $state();
+  let chartCanvas: HTMLCanvasElement | null = $state(null);
   let chartContext: CanvasRenderingContext2D | null = $state(null);
-  let animationFrame: number;
   
   
   interface Metric {
@@ -24,6 +23,14 @@
     job_id: string;
     watcher_name: string;
   }
+
+  // Extract metrics from events
+  let metrics = $derived(extractMetrics(events));
+  let metricNames = $derived(Array.from(new Set(metrics.map((m) => m.name))));
+  let selectedMetricData = $derived(
+    selectedMetric ? metrics.filter((m) => m.name === selectedMetric) : [],
+  );
+  let stats = $derived(selectedMetric ? getMetricStats(selectedMetricData) : null);
   
   function extractMetrics(events: WatcherEvent[]): Metric[] {
     return events
@@ -86,7 +93,7 @@
     ctx.lineWidth = 2;
     
     const data = selectedMetricData.slice(-50); // Show last 50 points
-    const values = data.map(d => d.value);
+    const values = data.map((d: Metric) => d.value);
     const minValue = Math.min(...values) * 0.9;
     const maxValue = Math.max(...values) * 1.1;
     const valueRange = maxValue - minValue || 1;
@@ -116,7 +123,7 @@
     ctx.lineWidth = 2;
     ctx.beginPath();
     
-    data.forEach((point, i) => {
+    data.forEach((point: Metric, i: number) => {
       const x = padding + ((width - 2 * padding) * i / (data.length - 1 || 1));
       const y = padding + ((maxValue - point.value) / valueRange) * (height - 2 * padding);
       
@@ -137,7 +144,7 @@
     ctx.fillStyle = gradient;
     ctx.beginPath();
     
-    data.forEach((point, i) => {
+    data.forEach((point: Metric, i: number) => {
       const x = padding + ((width - 2 * padding) * i / (data.length - 1 || 1));
       const y = padding + ((maxValue - point.value) / valueRange) * (height - 2 * padding);
       
@@ -155,7 +162,7 @@
     
     // Draw data points
     ctx.fillStyle = 'var(--accent)';
-    data.forEach((point, i) => {
+    data.forEach((point: Metric, i: number) => {
       const x = padding + ((width - 2 * padding) * i / (data.length - 1 || 1));
       const y = padding + ((maxValue - point.value) / valueRange) * (height - 2 * padding);
       
@@ -165,39 +172,33 @@
     });
   }
   
+  $effect(() => {
+    if (!selectedMetric && metricNames.length > 0) {
+      selectedMetric = metricNames[0];
+    }
+  });
+
   onMount(() => {
     if (chartCanvas) {
       // Set canvas size
       chartCanvas.width = chartCanvas.offsetWidth;
       chartCanvas.height = chartCanvas.offsetHeight;
-      
-      // Select first metric by default
-      if (metricNames.length > 0) {
-        selectedMetric = metricNames[0];
-      }
-      
       drawChart();
     }
   });
-  
+
   onDestroy(() => {
-  
-  // Extract metrics from events
-  let metrics = $derived(extractMetrics(events));
-  let metricNames = $derived(Array.from(new Set(metrics.map(m => m.name))));
-  let selectedMetricData = $derived(selectedMetric 
-    ? metrics.filter(m => m.name === selectedMetric)
-    : []);
-    // Cleanup if needed
+    // Cleanup hook reserved for future use
   });
-  
+
   // Redraw when data changes
   run(() => {
-    if (selectedMetricData && chartContext) {
+    selectedMetricData;
+    chartCanvas;
+    if (chartCanvas) {
       drawChart();
     }
   });
-  let stats = $derived(selectedMetric ? getMetricStats(selectedMetricData) : null);
 </script>
 
 <div class="metrics-container">
@@ -225,7 +226,7 @@
           >
             {name}
             <span class="metric-badge">
-              {metrics.filter(m => m.name === name).length}
+              {metrics.filter((m: Metric) => m.name === name).length}
             </span>
           </button>
         {/each}

@@ -49,6 +49,25 @@ class CachedJobData:
             self.last_updated = datetime.now()
 
 
+@dataclass
+class NotificationDevice:
+    api_key_hash: str
+    device_token: str
+    platform: str
+    bundle_id: Optional[str] = None
+    environment: Optional[str] = None
+    device_id: Optional[str] = None
+    enabled: bool = True
+    created_at: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now()
+        if self.last_seen is None:
+            self.last_seen = datetime.now()
+
+
 class JobDataCache:
     """
     Simple but powerful job data cache with SQLite persistence.
@@ -141,17 +160,17 @@ class JobDataCache:
                 conn.execute(
                     "ALTER TABLE cached_jobs ADD COLUMN stdout_fetched_after_completion BOOLEAN DEFAULT 0"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute(
                     "ALTER TABLE cached_jobs ADD COLUMN stderr_fetched_after_completion BOOLEAN DEFAULT 0"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute("ALTER TABLE cached_jobs ADD COLUMN local_source_dir TEXT")
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
 
             conn.execute("""
@@ -229,19 +248,19 @@ class JobDataCache:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN timer_mode_enabled INTEGER DEFAULT 0"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN timer_interval_seconds INTEGER DEFAULT 30"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN timer_mode_active INTEGER DEFAULT 0"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
 
             # Add array template columns if they don't exist (for migration)
@@ -249,29 +268,29 @@ class JobDataCache:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN is_array_template INTEGER DEFAULT 0"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute("ALTER TABLE job_watchers ADD COLUMN array_spec TEXT")
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN parent_watcher_id INTEGER"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN discovered_task_count INTEGER DEFAULT 0"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
             try:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN expected_task_count INTEGER"
                 )
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
 
             conn.execute("""
@@ -313,6 +332,67 @@ class JobDataCache:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON watcher_events(timestamp)"
+            )
+
+            # Notification device registrations
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notification_devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    api_key_hash TEXT NOT NULL,
+                    device_token TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    bundle_id TEXT,
+                    environment TEXT,
+                    device_id TEXT,
+                    enabled BOOLEAN NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    UNIQUE(api_key_hash, device_token)
+                )
+            """)
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_devices_key ON notification_devices(api_key_hash)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_devices_platform ON notification_devices(platform)"
+            )
+
+            # Notification preferences (per API key)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notification_preferences (
+                    api_key_hash TEXT PRIMARY KEY,
+                    enabled BOOLEAN NOT NULL DEFAULT 1,
+                    allowed_states_json TEXT,
+                    muted_job_ids_json TEXT,
+                    muted_hosts_json TEXT,
+                    muted_job_name_patterns_json TEXT,
+                    allowed_users_json TEXT,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+            # Web Push subscriptions
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS webpush_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    api_key_hash TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL,
+                    user_agent TEXT,
+                    enabled BOOLEAN NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    UNIQUE(api_key_hash, endpoint)
+                )
+            """)
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_webpush_subscriptions_key ON webpush_subscriptions(api_key_hash)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_webpush_subscriptions_enabled ON webpush_subscriptions(enabled)"
             )
 
             # Array job metadata tables for efficient grouping and querying
@@ -361,7 +441,7 @@ class JobDataCache:
             # Add array_job_id column to cached_jobs for easier filtering (migration safe)
             try:
                 conn.execute("ALTER TABLE cached_jobs ADD COLUMN array_job_id TEXT")
-            except:
+            except sqlite3.OperationalError:
                 pass  # Column already exists
 
             # Add index on array_job_id for fast task lookups
@@ -1606,6 +1686,273 @@ class JobDataCache:
                 },
             }
 
+    def upsert_notification_device(
+        self,
+        *,
+        api_key_hash: str,
+        device_token: str,
+        platform: str,
+        bundle_id: Optional[str] = None,
+        environment: Optional[str] = None,
+        device_id: Optional[str] = None,
+        enabled: bool = True,
+    ) -> None:
+        """Insert or update a notification device registration."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO notification_devices
+                (api_key_hash, device_token, platform, bundle_id, environment, device_id,
+                 enabled, created_at, last_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(api_key_hash, device_token) DO UPDATE SET
+                    platform=excluded.platform,
+                    bundle_id=excluded.bundle_id,
+                    environment=excluded.environment,
+                    device_id=excluded.device_id,
+                    enabled=excluded.enabled,
+                    last_seen=excluded.last_seen
+            """,
+                (
+                    api_key_hash,
+                    device_token,
+                    platform,
+                    bundle_id,
+                    environment,
+                    device_id,
+                    1 if enabled else 0,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def remove_notification_device(
+        self, *, api_key_hash: str, device_token: str
+    ) -> int:
+        """Remove a notification device registration."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM notification_devices
+                WHERE api_key_hash = ? AND device_token = ?
+            """,
+                (api_key_hash, device_token),
+            )
+            deleted = cursor.rowcount
+            if deleted:
+                conn.commit()
+            return deleted
+
+    def list_notification_devices(
+        self,
+        *,
+        platform: Optional[str] = None,
+        environment: Optional[str] = None,
+        bundle_id: Optional[str] = None,
+        enabled_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """List notification devices for dispatch."""
+        query = "SELECT * FROM notification_devices WHERE 1=1"
+        params: List[Any] = []
+
+        if platform:
+            query += " AND platform = ?"
+            params.append(platform)
+        if environment:
+            query += " AND (environment = ? OR environment IS NULL)"
+            params.append(environment)
+        if bundle_id:
+            query += " AND (bundle_id = ? OR bundle_id IS NULL)"
+            params.append(bundle_id)
+        if enabled_only:
+            query += " AND enabled = 1"
+
+        devices: List[Dict[str, Any]] = []
+        with self._get_connection() as conn:
+            cursor = conn.execute(query, params)
+            for row in cursor.fetchall():
+                devices.append(
+                    {
+                        "api_key_hash": row["api_key_hash"],
+                        "device_token": row["device_token"],
+                        "platform": row["platform"],
+                        "bundle_id": row["bundle_id"],
+                        "environment": row["environment"],
+                        "device_id": row["device_id"],
+                        "enabled": bool(row["enabled"]),
+                        "created_at": row["created_at"],
+                        "last_seen": row["last_seen"],
+                    }
+                )
+
+        return devices
+
+    def get_notification_preferences(self, *, api_key_hash: str) -> Dict[str, Any]:
+        """Return notification preferences for a user (API key)."""
+        defaults = {
+            "enabled": True,
+            "allowed_states": None,
+            "muted_job_ids": [],
+            "muted_hosts": [],
+            "muted_job_name_patterns": [],
+            "allowed_users": [],
+        }
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT enabled, allowed_states_json, muted_job_ids_json, muted_hosts_json,
+                       muted_job_name_patterns_json, allowed_users_json
+                FROM notification_preferences
+                WHERE api_key_hash = ?
+            """,
+                (api_key_hash,),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return defaults
+
+        try:
+            return {
+                "enabled": bool(row["enabled"]),
+                "allowed_states": json.loads(row["allowed_states_json"])
+                if row["allowed_states_json"]
+                else None,
+                "muted_job_ids": json.loads(row["muted_job_ids_json"] or "[]"),
+                "muted_hosts": json.loads(row["muted_hosts_json"] or "[]"),
+                "muted_job_name_patterns": json.loads(
+                    row["muted_job_name_patterns_json"] or "[]"
+                ),
+                "allowed_users": json.loads(row["allowed_users_json"] or "[]"),
+            }
+        except Exception:
+            return defaults
+
+    def upsert_notification_preferences(
+        self, *, api_key_hash: str, preferences: Dict[str, Any]
+    ) -> None:
+        """Insert or update notification preferences for a user."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO notification_preferences
+                (api_key_hash, enabled, allowed_states_json, muted_job_ids_json, muted_hosts_json,
+                 muted_job_name_patterns_json, allowed_users_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(api_key_hash) DO UPDATE SET
+                    enabled=excluded.enabled,
+                    allowed_states_json=excluded.allowed_states_json,
+                    muted_job_ids_json=excluded.muted_job_ids_json,
+                    muted_hosts_json=excluded.muted_hosts_json,
+                    muted_job_name_patterns_json=excluded.muted_job_name_patterns_json,
+                    allowed_users_json=excluded.allowed_users_json,
+                    updated_at=excluded.updated_at
+            """,
+                (
+                    api_key_hash,
+                    1 if preferences.get("enabled", True) else 0,
+                    json.dumps(preferences.get("allowed_states")),
+                    json.dumps(preferences.get("muted_job_ids", [])),
+                    json.dumps(preferences.get("muted_hosts", [])),
+                    json.dumps(preferences.get("muted_job_name_patterns", [])),
+                    json.dumps(preferences.get("allowed_users", [])),
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def upsert_webpush_subscription(
+        self,
+        *,
+        api_key_hash: str,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        user_agent: Optional[str] = None,
+        enabled: bool = True,
+    ) -> None:
+        """Insert or update a Web Push subscription."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO webpush_subscriptions
+                (api_key_hash, endpoint, p256dh, auth, user_agent, enabled, created_at, last_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(api_key_hash, endpoint) DO UPDATE SET
+                    p256dh=excluded.p256dh,
+                    auth=excluded.auth,
+                    user_agent=excluded.user_agent,
+                    enabled=excluded.enabled,
+                    last_seen=excluded.last_seen
+            """,
+                (
+                    api_key_hash,
+                    endpoint,
+                    p256dh,
+                    auth,
+                    user_agent,
+                    1 if enabled else 0,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def remove_webpush_subscription(self, *, api_key_hash: str, endpoint: str) -> int:
+        """Remove a Web Push subscription."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM webpush_subscriptions
+                WHERE api_key_hash = ? AND endpoint = ?
+            """,
+                (api_key_hash, endpoint),
+            )
+            deleted = cursor.rowcount
+            if deleted:
+                conn.commit()
+            return deleted
+
+    def list_webpush_subscriptions(
+        self,
+        *,
+        api_key_hash: Optional[str] = None,
+        enabled_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """List Web Push subscriptions."""
+        query = "SELECT * FROM webpush_subscriptions WHERE 1=1"
+        params: List[Any] = []
+
+        if api_key_hash:
+            query += " AND api_key_hash = ?"
+            params.append(api_key_hash)
+        if enabled_only:
+            query += " AND enabled = 1"
+
+        subscriptions: List[Dict[str, Any]] = []
+        with self._get_connection() as conn:
+            cursor = conn.execute(query, params)
+            for row in cursor.fetchall():
+                subscriptions.append(
+                    {
+                        "api_key_hash": row["api_key_hash"],
+                        "endpoint": row["endpoint"],
+                        "p256dh": row["p256dh"],
+                        "auth": row["auth"],
+                        "user_agent": row["user_agent"],
+                        "enabled": bool(row["enabled"]),
+                        "created_at": row["created_at"],
+                        "last_seen": row["last_seen"],
+                    }
+                )
+
+        return subscriptions
+
     def verify_cached_jobs(
         self, current_job_ids: Dict[str, List[str]]
     ) -> List[Tuple[str, str]]:
@@ -1663,7 +2010,6 @@ class JobDataCache:
 
             for row in cursor.fetchall():
                 # Zombie indicators: no runtime (never started) and old submit time
-                submit_time = row["submit_time"]
                 runtime = row["runtime"]
 
                 if not runtime or runtime in ("N/A", "", "0:00"):

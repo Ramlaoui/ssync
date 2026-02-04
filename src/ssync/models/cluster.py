@@ -85,6 +85,39 @@ class APISettings:
         return f"{scheme}://{self.host}:{self.port}"
 
 
+@dataclass
+class NotificationSettings:
+    """Notification configuration settings."""
+
+    enabled: bool = False
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_bundle_id: str = ""
+    apns_private_key: str = ""  # Path to .p8 or raw key
+    apns_use_sandbox: bool = True
+    apns_timeout_seconds: float = 10.0
+    webpush_enabled: bool = False
+    webpush_vapid_public_key: str = ""
+    webpush_vapid_private_key: str = ""
+    webpush_vapid_subject: str = ""
+
+    def is_apns_configured(self) -> bool:
+        return bool(
+            self.apns_key_id
+            and self.apns_team_id
+            and self.apns_bundle_id
+            and self.apns_private_key
+        )
+
+    def is_webpush_configured(self) -> bool:
+        return bool(
+            self.webpush_enabled
+            and self.webpush_vapid_public_key
+            and self.webpush_vapid_private_key
+            and self.webpush_vapid_subject
+        )
+
+
 @dataclass(frozen=True)
 class SlurmDefaults:
     # Basic job parameters

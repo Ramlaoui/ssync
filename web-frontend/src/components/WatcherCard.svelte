@@ -15,13 +15,15 @@
     jobInfo?: any;
     showJobLink?: boolean;
     lastEvent?: any; // Latest event for this watcher
+    class?: string;
   }
 
   let {
     watcher,
     jobInfo = null,
     showJobLink = true,
-    lastEvent = null
+    lastEvent = null,
+    class: className = ''
   }: Props = $props();
   
   const dispatch = createEventDispatcher();
@@ -40,7 +42,7 @@
   let pulseClass = $derived(isActive ? 'pulse' : '');
   
   // Format time like JobList component
-  function formatTime(timeStr: string | null): string {
+  function formatTime(timeStr: string | null | undefined): string {
     if (!timeStr) return 'Never';
     try {
       const date = new Date(timeStr);
@@ -146,7 +148,7 @@
       } else if (watcher.state === 'paused') {
         await resumeWatcher(watcher.id);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to toggle watcher state:', error);
     } finally {
       isPausing = false;
@@ -188,7 +190,7 @@
       if (response.data.matches || response.data.timer_mode) {
         dispatch('refresh');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to trigger watcher:', error);
       let errorMessage = '✗ Failed to trigger';
       
@@ -320,7 +322,7 @@
   }
 </script>
 
-<div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
+<div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''} {className}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 

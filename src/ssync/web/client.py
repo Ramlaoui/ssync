@@ -17,9 +17,7 @@ logger = setup_logger(__name__, "INFO")
 class AuthenticatedSlurmAPIClient:
     """API client with authentication support."""
 
-    def __init__(
-        self, base_url: Optional[str] = None, api_key: Optional[str] = None
-    ):
+    def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         """Initialize authenticated API client.
 
         Args:

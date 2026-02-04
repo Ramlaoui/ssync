@@ -26,7 +26,7 @@
   
   let editableScript = $state(script);
   let vimMode = $state(true);
-  let codeMirrorEditor: CodeMirrorEditor = $state();
+  let codeMirrorEditor: CodeMirrorEditor | null = $state(null);
   
   run(() => {
     editableScript = script;

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from typing import Awaitable, Optional
-import inspect
 
 
 def background_tasks_disabled() -> bool:
     return os.getenv("SSYNC_DISABLE_BACKGROUND_TASKS", "false").lower() == "true"
 
 
-def create_task(coro: Awaitable, *, name: Optional[str] = None) -> Optional[asyncio.Task]:
+def create_task(
+    coro: Awaitable, *, name: Optional[str] = None
+) -> Optional[asyncio.Task]:
     """Create a background task unless disabled via env.
 
     Returns the created task, or None if background tasks are disabled.

@@ -139,7 +139,7 @@
         <div class="space-y-4">
           <div class="py-2 border-b border-border/30 last:border-b-0">
             <span class="text-sm font-medium text-muted-foreground block mb-2">Runtime:</span>
-            <span class="text-sm font-semibold text-foreground">{formatDuration(job.elapsed_time)}</span>
+            <span class="text-sm font-semibold text-foreground">{formatDuration(job.runtime)}</span>
           </div>
           {#if job.time_limit && job.time_limit !== 'N/A'}
             <div class="py-2 border-b border-border/30 last:border-b-0">

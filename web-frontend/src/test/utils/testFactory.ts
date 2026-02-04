@@ -18,7 +18,7 @@ import type {
   JobStateManagerDependencies,
   MockWebSocket
 } from '../../lib/JobStateManager.types';
-import { mockJobs } from './mockData';
+import { mockJobs, mockPartitionStatusResponse } from './mockData';
 
 /**
  * Create a mock API client with call tracking and configurable responses
@@ -96,6 +96,16 @@ export function createMockAPIClient(
       });
     }
 
+    // Mock /api/partitions endpoint
+    if (pathname === '/api/partitions') {
+      const host = searchParams.get('host');
+      if (host) {
+        const hostResponse = mockPartitionStatusResponse.find(r => r.hostname === host);
+        return Promise.resolve({ data: hostResponse ? [hostResponse] : [] });
+      }
+      return Promise.resolve({ data: mockPartitionStatusResponse });
+    }
+
     // Default response
     return Promise.resolve({ data: {} });
   });
@@ -144,6 +154,12 @@ export function createMockWebSocketFactory(): IWebSocketFactory & {
             ws.onmessage(new MessageEvent('message', {
               data: JSON.stringify(data),
             }));
+          }
+        },
+        simulateClose: () => {
+          ws.readyState = 3; // CLOSED
+          if (ws.onclose) {
+            ws.onclose(new CloseEvent('close'));
           }
         },
       };
@@ -211,8 +227,12 @@ export function createTestJobStateManager(
   customDeps?: Partial<JobStateManagerDependencies>
 ) {
   // Create default mocks
-  const api = customDeps?.api || createMockAPIClient();
-  const wsFactory = customDeps?.webSocketFactory || createMockWebSocketFactory();
+  const api =
+    (customDeps?.api as ReturnType<typeof createMockAPIClient> | undefined) ||
+    createMockAPIClient();
+  const wsFactory =
+    (customDeps?.webSocketFactory as ReturnType<typeof createMockWebSocketFactory> | undefined) ||
+    createMockWebSocketFactory();
   const preferences = customDeps?.preferences || createMockPreferencesStore();
   const notificationService = customDeps?.notificationService || createMockNotificationService();
   const environment = customDeps?.environment || createMockEnvironment();

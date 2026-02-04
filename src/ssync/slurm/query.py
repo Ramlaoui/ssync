@@ -1,13 +1,16 @@
 """Slurm query operations (squeue/sacct/scontrol)."""
 
 from datetime import datetime, timedelta, timezone
+import time
 from typing import Any, List, Optional, Protocol
 
 from ..models.job import JobInfo, JobState
+from ..models.partition import PartitionResources
+from ..parsers.slurm import SlurmParser
+from ..parsers.partition import PartitionParser
 from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .output import SlurmOutput
-from ..parsers.slurm import SlurmParser
 
 
 class SSHConnection(Protocol):
@@ -26,6 +29,8 @@ class SlurmQuery:
         self.parser = SlurmParser()
         self._available_fields_cache = {}
         self._username_cache = {}
+        self._partition_cache: dict[str, tuple[float, List[PartitionResources]]] = {}
+        self._partition_cache_ttl = 20.0
         self.output = output or SlurmOutput()
 
     def get_available_sacct_fields(
@@ -145,6 +150,72 @@ class SlurmQuery:
             self._available_fields_cache[hostname] = basic_fields
             return basic_fields
 
+    def get_partition_state(
+        self,
+        conn: SSHConnection,
+        hostname: str,
+        force_refresh: bool = False,
+    ) -> tuple[List[PartitionResources], bool, float, bool]:
+        """Get partition resource state using sinfo.
+
+        Returns:
+            (partitions, cached, cache_age_seconds, stale)
+        """
+        now = time.time()
+        cache_entry = self._partition_cache.get(hostname)
+        if cache_entry:
+            cached_at, cached_data = cache_entry
+            cache_age = now - cached_at
+            if not force_refresh and cache_age < self._partition_cache_ttl:
+                return cached_data, True, cache_age, False
+
+        formats = [
+            (
+                "%P|%a|%D|%t|%C|%G|%g",
+                ["partition", "availability", "nodes", "state", "cpus", "gres", "gres_used"],
+            ),
+            (
+                "%P|%a|%D|%t|%C|%G",
+                ["partition", "availability", "nodes", "state", "cpus", "gres"],
+            ),
+            (
+                "%P|%a|%D|%t|%C",
+                ["partition", "availability", "nodes", "state", "cpus"],
+            ),
+        ]
+
+        last_error: Optional[Exception] = None
+        for fmt, fields in formats:
+            cmd = f"sinfo -a -h -o '{fmt}'"
+            try:
+                logger.debug(f"Running sinfo on {hostname}: {cmd}")
+                result = conn.run(cmd, hide=True, timeout=20, warn=True, pty=True)
+                if not result.ok or not result.stdout:
+                    logger.debug(
+                        f"sinfo command failed on {hostname} (fmt={fmt}): {result.stderr}"
+                    )
+                    continue
+
+                partitions = PartitionParser.parse_sinfo_output(result.stdout, fields)
+                partitions.sort(key=lambda p: p.name)
+                self._partition_cache[hostname] = (now, partitions)
+                return partitions, False, 0.0, False
+            except Exception as e:
+                last_error = e
+                logger.debug(f"sinfo format failed on {hostname} (fmt={fmt}): {e}")
+
+        if cache_entry:
+            cached_at, cached_data = cache_entry
+            cache_age = now - cached_at
+            logger.warning(
+                f"Returning cached partition data for {hostname} after sinfo failure"
+            )
+            return cached_data, True, cache_age, True
+
+        if last_error:
+            logger.debug(f"Failed to fetch partition state for {hostname}: {last_error}")
+        return [], False, 0.0, False
+
     def get_active_jobs(
         self,
         conn: SSHConnection,
@@ -203,48 +274,48 @@ class SlurmQuery:
                         if job_info.state in [JobState.RUNNING, JobState.PENDING]:
                             pending_ids.append(job_info.job_id)
                             if job_info.stdout_file and (
-                                    job_info.stdout_file.endswith(
-                                        (".sh", ".sbatch", ".bash", ".slurm")
+                                job_info.stdout_file.endswith(
+                                    (".sh", ".sbatch", ".bash", ".slurm")
+                                )
+                                or "/submit/" in job_info.stdout_file
+                                or "/scripts/" in job_info.stdout_file
+                                or "%" in job_info.stdout_file
+                            ):
+                                if "%" in job_info.stdout_file:
+                                    var_dict = {
+                                        "j": job_info.job_id,
+                                        "i": job_info.job_id,
+                                        "u": job_info.user or "",
+                                        "x": job_info.name or "",
+                                    }
+                                    expanded_stdout = (
+                                        SlurmParser.expand_slurm_path_vars(
+                                            job_info.stdout_file, var_dict
+                                        )
                                     )
-                                    or "/submit/" in job_info.stdout_file
-                                    or "/scripts/" in job_info.stdout_file
-                                    or "%" in job_info.stdout_file
-                                ):
-                                    if "%" in job_info.stdout_file:
-                                        var_dict = {
-                                            "j": job_info.job_id,
-                                            "i": job_info.job_id,
-                                            "u": job_info.user or "",
-                                            "x": job_info.name or "",
-                                        }
-                                        expanded_stdout = (
+                                    if expanded_stdout != job_info.stdout_file:
+                                        job_info.stdout_file = expanded_stdout
+                                        logger.debug(
+                                            f"Expanded stdout path for running job {job_info.job_id}"
+                                        )
+                                    if (
+                                        job_info.stderr_file
+                                        and "%" in job_info.stderr_file
+                                    ):
+                                        expanded_stderr = (
                                             SlurmParser.expand_slurm_path_vars(
-                                                job_info.stdout_file, var_dict
+                                                job_info.stderr_file, var_dict
                                             )
                                         )
-                                        if expanded_stdout != job_info.stdout_file:
-                                            job_info.stdout_file = expanded_stdout
+                                        if expanded_stderr != job_info.stderr_file:
+                                            job_info.stderr_file = expanded_stderr
                                             logger.debug(
-                                                f"Expanded stdout path for running job {job_info.job_id}"
+                                                f"Expanded stderr path for running job {job_info.job_id}"
                                             )
-                                        if (
-                                            job_info.stderr_file
-                                            and "%" in job_info.stderr_file
-                                        ):
-                                            expanded_stderr = (
-                                                SlurmParser.expand_slurm_path_vars(
-                                                    job_info.stderr_file, var_dict
-                                                )
-                                            )
-                                            if expanded_stderr != job_info.stderr_file:
-                                                job_info.stderr_file = expanded_stderr
-                                                logger.debug(
-                                                    f"Expanded stderr path for running job {job_info.job_id}"
-                                                )
-                                    else:
-                                        logger.warning(
-                                            f"Running job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}"
-                                        )
+                                else:
+                                    logger.warning(
+                                        f"Running job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}"
+                                    )
 
                         jobs.append(job_info)
                     except Exception as e:
@@ -318,7 +389,9 @@ class SlurmQuery:
                         fields = line.strip().split("|")
                         if len(fields) >= 3:
                             state_str = fields[2]
-                            state = self.parser.map_slurm_state(state_str, from_sacct=True)
+                            state = self.parser.map_slurm_state(
+                                state_str, from_sacct=True
+                            )
                             states[state.value] = states.get(state.value, 0) + 1
 
                     if "F" in states or "TO" in states:
@@ -464,7 +537,11 @@ class SlurmQuery:
                 cmd += f" --state={state_filter}"
 
             if since:
-                now = datetime.now() if since.tzinfo is None else datetime.now(since.tzinfo)
+                now = (
+                    datetime.now()
+                    if since.tzinfo is None
+                    else datetime.now(since.tzinfo)
+                )
                 time_range_days = (now - since).days
             else:
                 time_range_days = 0
@@ -609,18 +686,14 @@ class SlurmQuery:
                         )
                         if expanded_stdout != job.stdout_file:
                             job.stdout_file = expanded_stdout
-                            logger.debug(
-                                f"Expanded stdout path for job {job.job_id}"
-                            )
+                            logger.debug(f"Expanded stdout path for job {job.job_id}")
                     if job.stderr_file and "%" in job.stderr_file:
                         expanded_stderr = SlurmParser.expand_slurm_path_vars(
                             job.stderr_file, var_dict
                         )
                         if expanded_stderr != job.stderr_file:
                             job.stderr_file = expanded_stderr
-                            logger.debug(
-                                f"Expanded stderr path for job {job.job_id}"
-                            )
+                            logger.debug(f"Expanded stderr path for job {job.job_id}")
                     logger.debug(
                         f"Could not get paths from scontrol for completed job {job.job_id}, used placeholder expansion"
                     )
@@ -640,18 +713,14 @@ class SlurmQuery:
                         )
                         if expanded_stdout != job.stdout_file:
                             job.stdout_file = expanded_stdout
-                            logger.debug(
-                                f"Expanded stdout path for job {job.job_id}"
-                            )
+                            logger.debug(f"Expanded stdout path for job {job.job_id}")
                     if job.stderr_file and "%" in job.stderr_file:
                         expanded_stderr = SlurmParser.expand_slurm_path_vars(
                             job.stderr_file, var_dict
                         )
                         if expanded_stderr != job.stderr_file:
                             job.stderr_file = expanded_stderr
-                            logger.debug(
-                                f"Expanded stderr path for job {job.job_id}"
-                            )
+                            logger.debug(f"Expanded stderr path for job {job.job_id}")
                     logger.debug(
                         f"Could not get paths from scontrol for completed job {job.job_id}, used placeholder expansion"
                     )
@@ -754,7 +823,9 @@ class SlurmQuery:
 
         if not detected_username:
             try:
-                result = conn.run("echo $USER", hide=True, timeout=10, warn=True, pty=True)
+                result = conn.run(
+                    "echo $USER", hide=True, timeout=10, warn=True, pty=True
+                )
                 if result.ok and result.stdout.strip():
                     detected_username = result.stdout.strip()
                     logger.info(

@@ -102,7 +102,11 @@ class ActionExecutor:
                             # Fallback: old behavior using sorted capture names
                             # (For backward compatibility with named-only captures)
                             capture_names = sorted(
-                                [k for k in variables.keys() if not k.startswith("_") and not k.isdigit()]
+                                [
+                                    k
+                                    for k in variables.keys()
+                                    if not k.startswith("_") and not k.isdigit()
+                                ]
                             )
                             if group_num <= len(capture_names):
                                 capture_name = capture_names[group_num - 1]
@@ -168,11 +172,14 @@ class ActionExecutor:
                 # Stop all watchers for this job to prevent orphaned watchers
                 try:
                     from . import get_watcher_engine
+
                     engine = get_watcher_engine()
                     await engine.stop_watchers_for_job(job_id, hostname)
                     logger.info(f"Stopped all watchers for cancelled job {job_id}")
                 except Exception as e:
-                    logger.error(f"Failed to stop watchers for cancelled job {job_id}: {e}")
+                    logger.error(
+                        f"Failed to stop watchers for cancelled job {job_id}: {e}"
+                    )
 
                 return True, f"Job {job_id} cancelled: {reason}"
             else:
@@ -262,7 +269,9 @@ class ActionExecutor:
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(
                             None,
-                            lambda: conn.run(f"rm -f /tmp/resubmit_{job_id}.sh", warn=True)
+                            lambda: conn.run(
+                                f"rm -f /tmp/resubmit_{job_id}.sh", warn=True
+                            ),
                         )
 
                 try:

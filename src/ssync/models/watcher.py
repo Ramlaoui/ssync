@@ -74,7 +74,9 @@ class WatcherInstance:
     timer_mode_active: bool = False  # Whether watcher is in timer mode
     parent_watcher_id: Optional[int] = None  # Links child watchers to template parent
     discovered_task_count: int = 0  # Number of discovered array tasks (for templates)
-    expected_task_count: Optional[int] = None  # Expected number of array tasks (for templates)
+    expected_task_count: Optional[int] = (
+        None  # Expected number of array tasks (for templates)
+    )
 
 
 @dataclass

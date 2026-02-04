@@ -4,14 +4,14 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional
 
-from .ssh.manager import ConnectionManager
 from .models import JobInfo
 from .models.cluster import Host, SlurmHost
 from .slurm import SlurmClient
-from .utils.config import config
-from .utils.logging import setup_logger
 from .slurm.params import SlurmParams
 from .ssh.helpers import send_file
+from .ssh.manager import ConnectionManager
+from .utils.config import config
+from .utils.logging import setup_logger
 
 logger = setup_logger(__name__, "INFO")
 
@@ -148,14 +148,12 @@ class SlurmManager:
                 except Exception as e:
                     logger.warning(f"Failed to extract watchers: {e}")
 
-            result, _full_cmd, _cmd, submit_line = (
-                self.slurm_client.submit.run_sbatch(
-                    conn,
-                    params,
-                    remote_script_path,
-                    work_dir=None,
-                    warn=True,
-                )
+            result, _full_cmd, _cmd, submit_line = self.slurm_client.submit.run_sbatch(
+                conn,
+                params,
+                remote_script_path,
+                work_dir=None,
+                warn=True,
             )
             job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
             if job_id_match:
@@ -252,6 +250,16 @@ class SlurmManager:
         host = self.get_host_by_name(slurm_host)
         conn = self._get_connection(host.host)
         return self.slurm_client.cancel_job(conn, job_id)
+
+    def get_partition_state(
+        self, slurm_host: SlurmHost | str, force_refresh: bool = False
+    ):
+        """Get partition resource state from a Slurm host."""
+        host = self.get_host_by_name(slurm_host)
+        conn = self._get_connection(host.host)
+        return self.slurm_client.get_partition_state(
+            conn, host.host.hostname, force_refresh=force_refresh
+        )
 
     def fetch_job_output_compressed(
         self, job_id: str, hostname: str, output_type: str = "stdout"

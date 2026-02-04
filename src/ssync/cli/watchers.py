@@ -150,7 +150,15 @@ def list_watchers(job_id, host, state, output_json):
         else:
             click.echo(f"\n{BOLD}WATCHERS{RESET} ({len(watchers_list)} total)\n")
 
-            headers = ["ID", "Job ID", "Name", "Pattern", "State", "Triggers", "Last Check"]
+            headers = [
+                "ID",
+                "Job ID",
+                "Name",
+                "Pattern",
+                "State",
+                "Triggers",
+                "Last Check",
+            ]
             rows = []
 
             for w in watchers_list:
@@ -158,15 +166,17 @@ def list_watchers(job_id, host, state, output_json):
                 if len(pattern) > 30:
                     pattern = pattern[:27] + "..."
 
-                rows.append([
-                    str(w.get("id", "")),
-                    w.get("job_id", ""),
-                    w.get("name", "")[:15],
-                    pattern,
-                    format_state(w.get("state", "")),
-                    str(w.get("trigger_count", 0)),
-                    format_time_ago(w.get("last_check", "")),
-                ])
+                rows.append(
+                    [
+                        str(w.get("id", "")),
+                        w.get("job_id", ""),
+                        w.get("name", "")[:15],
+                        pattern,
+                        format_state(w.get("state", "")),
+                        str(w.get("trigger_count", 0)),
+                        format_time_ago(w.get("last_check", "")),
+                    ]
+                )
 
             click.echo(simple_table(rows, headers))
 
@@ -207,14 +217,16 @@ def show_events(job_id, watcher_id, limit, output_json):
                 if len(matched) > 25:
                     matched = matched[:22] + "..."
 
-                rows.append([
-                    format_time_ago(e.get("timestamp", "")),
-                    e.get("job_id", ""),
-                    e.get("watcher_name", "")[:12],
-                    e.get("action_type", "")[:12],
-                    format_success(e.get("success", False)),
-                    matched,
-                ])
+                rows.append(
+                    [
+                        format_time_ago(e.get("timestamp", "")),
+                        e.get("job_id", ""),
+                        e.get("watcher_name", "")[:12],
+                        e.get("action_type", "")[:12],
+                        format_success(e.get("success", False)),
+                        matched,
+                    ]
+                )
 
             click.echo(simple_table(rows, headers))
 
@@ -313,7 +325,9 @@ def monitor_watchers(job_id, interval, once):
 
         # Header
         click.echo(f"{BOLD}{CYAN}{'═' * 70}{RESET}")
-        click.echo(f"{BOLD}  WATCHER MONITOR{RESET}  {datetime.now().strftime('%H:%M:%S')}")
+        click.echo(
+            f"{BOLD}  WATCHER MONITOR{RESET}  {datetime.now().strftime('%H:%M:%S')}"
+        )
         if job_id:
             click.echo(f"  Job: {job_id}")
         click.echo(f"{BOLD}{CYAN}{'═' * 70}{RESET}")
@@ -362,7 +376,9 @@ def monitor_watchers(job_id, interval, once):
         if once:
             # Get combined data
             watchers_data = client.get("/api/watchers", params=params)
-            events_data = client.get("/api/watchers/events", params={**params, "limit": 10})
+            events_data = client.get(
+                "/api/watchers/events", params={**params, "limit": 10}
+            )
             stats_data = client.get("/api/watchers/stats")
 
             data = {
@@ -374,7 +390,9 @@ def monitor_watchers(job_id, interval, once):
         else:
             while True:
                 watchers_data = client.get("/api/watchers", params=params)
-                events_data = client.get("/api/watchers/events", params={**params, "limit": 10})
+                events_data = client.get(
+                    "/api/watchers/events", params={**params, "limit": 10}
+                )
                 stats_data = client.get("/api/watchers/stats")
 
                 data = {
@@ -399,13 +417,23 @@ def monitor_watchers(job_id, interval, once):
     type=click.Path(exists=True),
     help="JSON file with watcher definitions",
 )
-@click.option("--pattern", help="Simple pattern to watch for (alternative to watcher-file)")
+@click.option(
+    "--pattern", help="Simple pattern to watch for (alternative to watcher-file)"
+)
 @click.option(
     "--action",
-    type=click.Choice([
-        "cancel_job", "resubmit", "notify_email", "notify_slack",
-        "run_command", "store_metric", "pause_watcher", "log_event"
-    ]),
+    type=click.Choice(
+        [
+            "cancel_job",
+            "resubmit",
+            "notify_email",
+            "notify_slack",
+            "run_command",
+            "store_metric",
+            "pause_watcher",
+            "log_event",
+        ]
+    ),
     default="log_event",
     help="Action to take when pattern matches",
 )
@@ -453,7 +481,10 @@ def attach_watcher(
                 }
             ]
         else:
-            click.echo(f"{RED}Error: Must provide either --watcher-file or --pattern{RESET}", err=True)
+            click.echo(
+                f"{RED}Error: Must provide either --watcher-file or --pattern{RESET}",
+                err=True,
+            )
             sys.exit(1)
 
         client = get_client()
@@ -473,7 +504,11 @@ def attach_watcher(
 
 
 @watchers.command(name="cleanup")
-@click.option("--dry-run", is_flag=True, help="Show what would be cleaned up without making changes")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be cleaned up without making changes",
+)
 def cleanup_watchers(dry_run: bool):
     """Clean up watchers for completed or non-existent jobs.
 
@@ -493,7 +528,9 @@ def cleanup_watchers(dry_run: bool):
             if watchers_list:
                 click.echo(f"Found {len(watchers_list)} active watchers:")
                 for w in watchers_list:
-                    click.echo(f"  - Watcher {w.get('id')}: Job {w.get('job_id')} on {w.get('hostname', 'unknown')}")
+                    click.echo(
+                        f"  - Watcher {w.get('id')}: Job {w.get('job_id')} on {w.get('hostname', 'unknown')}"
+                    )
             else:
                 click.echo("No active watchers found")
         else:

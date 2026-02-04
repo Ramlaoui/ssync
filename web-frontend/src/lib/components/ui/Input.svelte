@@ -15,6 +15,16 @@
     value?: string | number | null | undefined;
   }
 
+  type $$Events = {
+    input: Event;
+    change: Event;
+    focus: FocusEvent;
+    blur: FocusEvent;
+    keydown: KeyboardEvent;
+    keyup: KeyboardEvent;
+    keypress: KeyboardEvent;
+  };
+
   let { class: className = "", value = $bindable(undefined), ...rest }: Props = $props();
 </script>
 

@@ -5,6 +5,7 @@
   import NavigationHeader from '../components/NavigationHeader.svelte';
   import SyncSettings from '../components/SyncSettings.svelte';
   import { apiConfig, setApiKey, clearApiKey, testConnection } from '../services/api';
+  import { enableWebPush, disableWebPush, isWebPushSupported } from '../services/webpush';
   import { preferences as globalPreferences, preferencesActions } from '../stores/preferences';
   import { theme } from '../stores/theme';
   import {
@@ -38,13 +39,27 @@
   let testing = $state(false);
   let testResult: 'success' | 'error' | null = $state(null);
 
+  interface LocalPreferences {
+    autoRefresh: boolean;
+    refreshInterval: number;
+    compactMode: boolean;
+    showNotifications: boolean;
+    soundAlerts: boolean;
+    webPushEnabled: boolean;
+    jobsPerPage: number;
+    defaultJobView: string;
+    showCompletedJobs: boolean;
+    groupJobsByHost: boolean;
+  }
+
   // UI Preferences (stored in localStorage) - theme now managed by theme store
-  let preferences = $state({
+  let preferences = $state<LocalPreferences>({
     autoRefresh: false,
     refreshInterval: 30,
     compactMode: false,
     showNotifications: false,
     soundAlerts: false,
+    webPushEnabled: false,
     jobsPerPage: 50,
     defaultJobView: 'table',
     showCompletedJobs: true,
@@ -73,6 +88,7 @@
 
   // WebSocket settings from global preferences
   let websocketConfig = $derived($globalPreferences.websocket);
+  let webPushSupported = $state(false);
 
   let isConfigured = $derived($apiConfig.apiKey !== '');
 
@@ -86,6 +102,14 @@
 
     // Load preferences from localStorage
     loadPreferences();
+
+    isWebPushSupported().then((supported) => {
+      webPushSupported = supported;
+      if (!supported && preferences.webPushEnabled) {
+        preferences.webPushEnabled = false;
+        savePreferences();
+      }
+    });
 
     // Apply compact mode if enabled
     if (preferences.compactMode) {
@@ -120,8 +144,8 @@
     localStorage.setItem('ssync_preferences', JSON.stringify(preferences));
   }
 
-  async function handlePreferenceChange(key: string, value: any) {
-    preferences[key] = value;
+  async function handlePreferenceChange(key: keyof LocalPreferences, value: any) {
+    preferences = { ...preferences, [key]: value } as LocalPreferences;
     savePreferences();
 
     // Apply changes immediately
@@ -143,6 +167,24 @@
           preferences.showNotifications = false;
           savePreferences();
         }
+      }
+    } else if (key === 'webPushEnabled') {
+      if (!webPushSupported) {
+        preferences.webPushEnabled = false;
+        savePreferences();
+        return;
+      }
+
+      try {
+        if (value) {
+          await enableWebPush();
+        } else {
+          await disableWebPush();
+        }
+      } catch (e) {
+        console.error('Failed to update Web Push:', e);
+        preferences.webPushEnabled = false;
+        savePreferences();
       }
     }
 
@@ -296,7 +338,7 @@
   }
 
   function getSectionTitle(section: string): string {
-    const titles = {
+    const titles: Record<string, string> = {
       'api': 'API Authentication',
       'display': 'Display Preferences',
       'sync': 'Sync Settings',
@@ -735,6 +777,22 @@
 
               <div class="preference-item">
                 <div class="preference-info">
+                  <span class="preference-label">Web Push</span>
+                  <span class="preference-description">Receive notifications even when the browser is closed</span>
+                </div>
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    bind:checked={preferences.webPushEnabled}
+                    onchange={() => handlePreferenceChange('webPushEnabled', preferences.webPushEnabled)}
+                    disabled={!webPushSupported}
+                  />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="preference-item">
+                <div class="preference-info">
                   <span class="preference-label">Sound Alerts</span>
                   <span class="preference-description">Play sound when jobs complete</span>
                 </div>
@@ -819,7 +877,7 @@
                   <input
                     type="checkbox"
                     checked={websocketConfig.autoReconnect}
-                    onchange={(e) => updateWebSocketSetting('autoReconnect', e.target.checked)}
+                    onchange={(e) => updateWebSocketSetting('autoReconnect', (e.target as HTMLInputElement).checked)}
                   />
                   <span>Auto-reconnect</span>
                 </label>
@@ -838,7 +896,7 @@
                       max="10000"
                       step="100"
                       value={websocketConfig.initialRetryDelay}
-                      oninput={(e) => updateWebSocketSetting('initialRetryDelay', parseInt(e.target.value) || 1000)}
+                      oninput={(e) => updateWebSocketSetting('initialRetryDelay', parseInt((e.target as HTMLInputElement).value) || 1000)}
                       class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <span class="text-sm text-gray-500 font-medium min-w-[30px]">ms</span>
@@ -859,7 +917,7 @@
                       max="120000"
                       step="1000"
                       value={websocketConfig.maxRetryDelay}
-                      oninput={(e) => updateWebSocketSetting('maxRetryDelay', parseInt(e.target.value) || 30000)}
+                      oninput={(e) => updateWebSocketSetting('maxRetryDelay', parseInt((e.target as HTMLInputElement).value) || 30000)}
                       class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <span class="text-sm text-gray-500 font-medium min-w-[30px]">ms</span>
@@ -879,7 +937,7 @@
                     max="3"
                     step="0.1"
                     value={websocketConfig.retryBackoffMultiplier}
-                    oninput={(e) => updateWebSocketSetting('retryBackoffMultiplier', parseFloat(e.target.value) || 1.5)}
+                    oninput={(e) => updateWebSocketSetting('retryBackoffMultiplier', parseFloat((e.target as HTMLInputElement).value) || 1.5)}
                     class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </label>
@@ -898,7 +956,7 @@
                       max="120000"
                       step="5000"
                       value={websocketConfig.timeout}
-                      oninput={(e) => updateWebSocketSetting('timeout', parseInt(e.target.value) || 45000)}
+                      oninput={(e) => updateWebSocketSetting('timeout', parseInt((e.target as HTMLInputElement).value) || 45000)}
                       class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <span class="text-sm text-gray-500 font-medium min-w-[30px]">ms</span>

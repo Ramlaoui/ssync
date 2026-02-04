@@ -33,8 +33,8 @@
     refreshing = false
   }: Props = $props();
 
-  let outputElement: HTMLPreElement = $state();
-  let lineNumbersElement: HTMLDivElement = $state();
+  let outputElement: HTMLPreElement | null = $state(null);
+  let lineNumbersElement: HTMLDivElement | null = $state(null);
   let searchQuery: string = $state('');
   let searchResults: number[] = $state([]);
   let currentSearchIndex: number = $state(-1);
@@ -219,11 +219,13 @@
   }
   
   function scrollToSearchResult(index: number) {
-    if (!outputElement || searchResults.length === 0) return;
+    const element = outputElement;
+    if (!element || searchResults.length === 0) return;
     
     // Wait for DOM to update with highlights
     setTimeout(() => {
-      const marks = outputElement.querySelectorAll('mark.search-highlight');
+      if (!element) return;
+      const marks = element.querySelectorAll('mark.search-highlight');
       if (marks.length > 0 && marks[index]) {
         const mark = marks[index] as HTMLElement;
         // Scroll the mark into view centered
@@ -315,6 +317,7 @@
 
   async function loadContentWindow(start: number, end: number, preserveScrollTop: number) {
     loadingMore = true;
+    const element = outputElement;
 
     // Calculate actual boundaries
     const newStart = Math.max(0, start - BUFFER_SIZE);
@@ -322,7 +325,7 @@
 
     // Ensure window doesn't exceed maximum size
     if (newEnd - newStart > WINDOW_SIZE) {
-      if (preserveScrollTop > outputElement.scrollHeight / 2) {
+      if (element && preserveScrollTop > element.scrollHeight / 2) {
         // User is scrolling down, prioritize content below
         start = Math.max(0, newEnd - WINDOW_SIZE);
       } else {
@@ -343,10 +346,10 @@
     await updateRenderedContent();
 
     // Restore approximate scroll position
-    if (outputElement) {
+    if (element) {
       // Calculate where we should be in the new content
-      const contentProgress = (preserveScrollTop / outputElement.scrollHeight);
-      outputElement.scrollTop = contentProgress * outputElement.scrollHeight;
+      const contentProgress = (preserveScrollTop / element.scrollHeight);
+      element.scrollTop = contentProgress * element.scrollHeight;
     }
 
     loadingMore = false;

@@ -20,7 +20,7 @@
 
   // Auto-refresh for latest events
   let autoRefresh = true;
-  let refreshInterval: number | null = null;
+  let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
   // Live event counter for dramatic effect
   let liveEventCount = $state(0);
@@ -107,7 +107,7 @@
   // Group by time periods for "Latest" view
   let eventsByTime = $derived((() => {
     const now = new Date();
-    const groups = {
+    const groups: Record<string, WatcherEvent[]> = {
       'Just now': [],
       'Last hour': [],
       'Today': [],
@@ -721,7 +721,9 @@
 
   /* Latest View Styles */
   .latest-view {
-    space-y: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
   }
 
   .time-group {
@@ -832,7 +834,9 @@
 
   /* Watcher View Styles */
   .watcher-view {
-    space-y: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
   }
 
   .watcher-group {

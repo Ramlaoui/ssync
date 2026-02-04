@@ -8,8 +8,8 @@ import logging
 from typing import Optional
 
 from ..cache import get_cache
-from .engine import get_watcher_engine
 from ..utils.async_helpers import create_task
+from .engine import get_watcher_engine
 
 logger = logging.getLogger(__name__)
 

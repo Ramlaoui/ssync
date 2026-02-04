@@ -100,7 +100,7 @@ class NativeSSH:
                 try:
                     Path(control_path).unlink()
                     logger.debug(f"Removed stale socket for {host_id}")
-                except:
+                except OSError:
                     pass
 
         # Check if we already tracked this control master
@@ -209,7 +209,9 @@ class NativeSSH:
                 # Record failure with timestamp for backoff
                 cls._failed_hosts[host_id] = time.time()
                 if result.stderr:
-                    logger.error(f"Failed to establish ControlMaster for {host_id}: {result.stderr}")
+                    logger.error(
+                        f"Failed to establish ControlMaster for {host_id}: {result.stderr}"
+                    )
                 if result.stdout:
                     logger.debug(f"SSH stdout: {result.stdout}")
                 return None
@@ -217,12 +219,14 @@ class NativeSSH:
         except subprocess.TimeoutExpired:
             # Record failure with timestamp for backoff
             import time
+
             cls._failed_hosts[host_id] = time.time()
             logger.error(f"Timeout establishing ControlMaster for {host_id}")
             return None
         except Exception as e:
             # Record failure with timestamp for backoff
             import time
+
             cls._failed_hosts[host_id] = time.time()
             logger.error(f"Error establishing ControlMaster for {host_id}: {e}")
             return None
@@ -257,7 +261,7 @@ class NativeSSH:
         try:
             result = subprocess.run(check_cmd, capture_output=True, timeout=5)
             return result.returncode == 0
-        except:
+        except (subprocess.SubprocessError, OSError):
             return False
 
     @classmethod
@@ -363,7 +367,12 @@ class NativeSSH:
                 ssh_cmd.extend(["-p", str(host_config["port"])])
 
         ssh_cmd.extend(
-            ["-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new"]  # Faster timeout
+            [
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+            ]  # Faster timeout
         )
 
         return ssh_cmd
@@ -383,13 +392,13 @@ class NativeSSH:
                 # We need the hostname for the exit command
                 exit_cmd = ["ssh", "-S", control_path, "-O", "exit", "dummy"]
                 subprocess.run(exit_cmd, capture_output=True, timeout=5)
-            except:
+            except (subprocess.SubprocessError, OSError):
                 pass
 
             # Remove socket file
             try:
                 Path(control_path).unlink()
-            except:
+            except OSError:
                 pass
 
             del cls._control_masters[host_id]

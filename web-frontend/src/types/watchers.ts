@@ -23,6 +23,7 @@ export interface Watcher {
   job_id: string;
   hostname: string;
   name: string;
+  job_name?: string | null;
   pattern: string;
   interval_seconds: number;
   captures: string[];

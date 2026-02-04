@@ -8,12 +8,12 @@ This prevents thread pool saturation when many individual job requests arrive si
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Dict, Optional
 
 from .models.job import JobInfo
-from .utils.logging import setup_logger
 from .utils.async_helpers import background_tasks_disabled, create_task
+from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -21,6 +21,7 @@ logger = setup_logger(__name__)
 @dataclass
 class JobRequest:
     """Represents a pending job fetch request."""
+
     job_id: str
     hostname: str
     future: asyncio.Future
@@ -54,7 +55,9 @@ class JobRequestCoalescer:
         self.max_batch_size = max_batch_size
 
         # Pending requests grouped by hostname
-        self.pending: Dict[str, Dict[str, JobRequest]] = defaultdict(dict)  # hostname -> {job_id -> request}
+        self.pending: Dict[str, Dict[str, JobRequest]] = defaultdict(
+            dict
+        )  # hostname -> {job_id -> request}
 
         # Batch execution tasks
         self.batch_tasks: Dict[str, asyncio.Task] = {}  # hostname -> task
@@ -64,17 +67,14 @@ class JobRequestCoalescer:
 
         # Stats
         self.stats = {
-            'total_requests': 0,
-            'batched_requests': 0,
-            'queries_saved': 0,  # Individual queries that were batched
-            'batches_executed': 0,
+            "total_requests": 0,
+            "batched_requests": 0,
+            "queries_saved": 0,  # Individual queries that were batched
+            "batches_executed": 0,
         }
 
     async def fetch_job(
-        self,
-        job_id: str,
-        hostname: str,
-        fetch_func
+        self, job_id: str, hostname: str, fetch_func
     ) -> Optional[JobInfo]:
         """
         Request a job fetch. Will be automatically coalesced with other concurrent requests.
@@ -92,11 +92,13 @@ class JobRequestCoalescer:
             return jobs[0] if jobs else None
 
         async with self.lock:
-            self.stats['total_requests'] += 1
+            self.stats["total_requests"] += 1
 
             # Check if request already pending for this job
             if job_id in self.pending[hostname]:
-                logger.debug(f"Job {job_id} on {hostname} already has pending request, reusing")
+                logger.debug(
+                    f"Job {job_id} on {hostname} already has pending request, reusing"
+                )
                 return await self.pending[hostname][job_id].future
 
             # Create new request
@@ -105,7 +107,7 @@ class JobRequestCoalescer:
                 job_id=job_id,
                 hostname=hostname,
                 future=future,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
             self.pending[hostname][job_id] = request
 
@@ -151,10 +153,10 @@ class JobRequestCoalescer:
             job_ids = list(requests.keys())
             request_count = len(job_ids)
 
-            self.stats['batches_executed'] += 1
-            self.stats['batched_requests'] += request_count
+            self.stats["batches_executed"] += 1
+            self.stats["batched_requests"] += request_count
             if request_count > 1:
-                self.stats['queries_saved'] += request_count - 1
+                self.stats["queries_saved"] += request_count - 1
 
             logger.info(
                 f"🚀 Coalescing {request_count} individual job requests into 1 bulk query for {hostname} "
@@ -187,15 +189,17 @@ class JobRequestCoalescer:
 
     def get_stats(self) -> dict:
         """Get coalescing statistics."""
-        if self.stats['total_requests'] == 0:
+        if self.stats["total_requests"] == 0:
             efficiency = 0.0
         else:
-            efficiency = (self.stats['queries_saved'] / self.stats['total_requests']) * 100
+            efficiency = (
+                self.stats["queries_saved"] / self.stats["total_requests"]
+            ) * 100
 
         return {
             **self.stats,
-            'efficiency_percent': round(efficiency, 1),
-            'pending_count': sum(len(reqs) for reqs in self.pending.values()),
+            "efficiency_percent": round(efficiency, 1),
+            "pending_count": sum(len(reqs) for reqs in self.pending.values()),
         }
 
 
@@ -208,5 +212,7 @@ def get_request_coalescer() -> JobRequestCoalescer:
     global _coalescer
     if _coalescer is None:
         _coalescer = JobRequestCoalescer(batch_window_ms=100, max_batch_size=50)
-        logger.info("Initialized global request coalescer (batch_window=100ms, max_batch=50)")
+        logger.info(
+            "Initialized global request coalescer (batch_window=100ms, max_batch=50)"
+        )
     return _coalescer

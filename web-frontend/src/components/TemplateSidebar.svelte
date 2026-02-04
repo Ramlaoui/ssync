@@ -8,9 +8,23 @@
 
   const dispatch = createEventDispatcher();
 
+  interface ScriptTemplate {
+    id: string;
+    name: string;
+    description?: string;
+    script_content: string;
+    parameters: {
+      time?: number;
+      memory?: number;
+      cpus?: number;
+      gpus?: number;
+    };
+    use_count?: number;
+  }
+
   interface Props {
     isOpen?: boolean;
-    scriptTemplates?: any;
+    scriptTemplates?: ScriptTemplate[];
   }
 
   let { isOpen = $bindable(false), scriptTemplates = [] }: Props = $props();
@@ -20,22 +34,22 @@
     dispatch('close');
   }
 
-  function selectTemplate(template) {
+  function selectTemplate(template: ScriptTemplate) {
     dispatch('select', template);
   }
 
-  function loadTemplate(template) {
+  function loadTemplate(template: ScriptTemplate) {
     dispatch('load', template);
   }
 
-  function deleteTemplate(templateId) {
+  function deleteTemplate(templateId: string) {
     dispatch('delete', templateId);
   }
 </script>
 
 <Sidebar
   open={isOpen}
-  onClose={handleClose}
+  on:close={handleClose}
   position="right"
   size="400px"
 >

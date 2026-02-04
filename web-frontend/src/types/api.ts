@@ -86,10 +86,42 @@ export interface HostInfo {
   slurm_defaults?: SlurmDefaults;
 }
 
+export interface PartitionGpuType {
+  total: number;
+  used: number;
+}
+
+export interface PartitionResources {
+  partition: string;
+  availability: string | null;
+  states: string[];
+  nodes_total: number;
+  cpus_alloc: number;
+  cpus_idle: number;
+  cpus_other: number;
+  cpus_total: number;
+  gpus_total: number | null;
+  gpus_used: number | null;
+  gpus_idle: number | null;
+  gpu_types?: Record<string, PartitionGpuType>;
+}
+
+export interface PartitionStatusResponse {
+  hostname: string;
+  partitions: PartitionResources[];
+  query_time: string;
+  cached?: boolean;
+  stale?: boolean;
+  cache_age_seconds?: number;
+  updated_at?: string;
+  error?: string | null;
+}
+
 export interface ArrayJobGroup {
   array_job_id: string;
   job_name: string;
   hostname: string;
+  user?: string | null;
   total_tasks: number;
   tasks: JobInfo[];
   pending_count: number;

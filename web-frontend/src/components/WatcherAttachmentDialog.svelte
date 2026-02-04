@@ -253,22 +253,24 @@
   }
   
   function getActionSummary(action: WatcherAction): string {
+    const config = action.config ?? {};
     switch (action.type) {
       case 'store_metric':
-        return `${action.config.metric_name}: ${action.config.value}`;
-      case 'run_command':
-        const cmd = action.config.command || '';
+        return `${config.metric_name ?? 'metric'}: ${config.value ?? ''}`;
+      case 'run_command': {
+        const cmd = config.command || '';
         return cmd.length > 50 ? cmd.substring(0, 50) + '...' : cmd;
+      }
       case 'notify_email':
-        return `To: ${action.config.to}`;
+        return `To: ${config.to ?? ''}`;
       case 'notify_slack':
-        return action.config.message || 'Slack notification';
+        return config.message || 'Slack notification';
       case 'cancel_job':
-        return action.config.reason || 'Cancel job';
+        return config.reason || 'Cancel job';
       case 'resubmit':
-        return `Delay: ${action.config.delay || 0}s`;
+        return `Delay: ${config.delay || 0}s`;
       case 'pause_watcher':
-        return action.config.name || 'Pause';
+        return config.name || 'Pause';
       default:
         return 'Log event';
     }
@@ -1165,6 +1167,7 @@
     background: #e5e7eb;
     border-radius: 3px;
     outline: none;
+    appearance: none;
     -webkit-appearance: none;
   }
   

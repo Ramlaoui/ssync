@@ -397,7 +397,7 @@
   let watchersByJob = $derived((() => {
     const groups: Record<string, {
       job_id: string;
-      job_name?: string;
+      job_name?: string | null;
       hostname: string;
       watchers: typeof sortedWatchers;
       stats: { active: number; paused: number; static: number; completed: number };
@@ -828,7 +828,7 @@
   <AttachWatchersDialog
     jobId={selectedJobId}
     hostname={selectedHostname}
-    {copiedWatcherConfig}
+    copiedConfig={copiedWatcherConfig}
     on:close={() => showAttachDialog = false}
     on:success={handleAttachSuccess}
   />

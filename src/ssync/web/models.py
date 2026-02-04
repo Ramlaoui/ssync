@@ -217,6 +217,86 @@ class HostInfoWeb(BaseModel):
     slurm_defaults: Optional[SlurmDefaultsWeb] = None
 
 
+class PartitionGpuTypeWeb(BaseModel):
+    total: int
+    used: int
+
+
+class PartitionResourcesWeb(BaseModel):
+    partition: str
+    availability: Optional[str] = None
+    states: List[str] = []
+    nodes_total: int
+    cpus_alloc: int
+    cpus_idle: int
+    cpus_other: int
+    cpus_total: int
+    gpus_total: Optional[int] = None
+    gpus_used: Optional[int] = None
+    gpus_idle: Optional[int] = None
+    gpu_types: Optional[Dict[str, PartitionGpuTypeWeb]] = None
+
+
+class PartitionStatusResponse(BaseModel):
+    hostname: str
+    partitions: List[PartitionResourcesWeb]
+    query_time: str
+    cached: bool = False
+    stale: bool = False
+    cache_age_seconds: Optional[int] = None
+    updated_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+class NotificationDeviceRegistration(BaseModel):
+    token: str
+    platform: str = "ios"
+    environment: Optional[str] = None
+    bundle_id: Optional[str] = None
+    device_id: Optional[str] = None
+    enabled: bool = True
+
+
+class NotificationTestRequest(BaseModel):
+    title: str = "Test Notification"
+    body: str = "This is a test notification from ssync"
+    token: Optional[str] = None
+
+
+class NotificationPreferences(BaseModel):
+    enabled: bool = True
+    allowed_states: Optional[List[str]] = None
+    muted_job_ids: List[str] = []
+    muted_hosts: List[str] = []
+    muted_job_name_patterns: List[str] = []
+    allowed_users: List[str] = []
+
+
+class NotificationPreferencesPatch(BaseModel):
+    enabled: Optional[bool] = None
+    allowed_states: Optional[List[str]] = None
+    muted_job_ids: Optional[List[str]] = None
+    muted_hosts: Optional[List[str]] = None
+    muted_job_name_patterns: Optional[List[str]] = None
+    allowed_users: Optional[List[str]] = None
+
+
+class WebPushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class WebPushSubscriptionRegistration(BaseModel):
+    endpoint: str
+    keys: WebPushKeys
+    user_agent: Optional[str] = None
+    enabled: bool = True
+
+
+class WebPushUnsubscribeRequest(BaseModel):
+    endpoint: str
+
+
 class ArrayJobGroup(BaseModel):
     """Group of array job tasks."""
 

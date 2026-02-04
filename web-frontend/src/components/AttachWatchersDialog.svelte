@@ -30,6 +30,13 @@
   
   // Wizard state - simplified for mobile
   type WizardStep = 'template' | 'pattern' | 'actions' | 'review';
+  const wizardSteps: WizardStep[] = ['template', 'pattern', 'actions', 'review'];
+  const stepLabels: Record<WizardStep, string> = {
+    template: 'Choose Template',
+    pattern: 'Define Pattern',
+    actions: 'Configure Actions',
+    review: 'Review & Submit'
+  };
   let currentStep: WizardStep = $state('template');
   let completedSteps: Set<WizardStep> = new Set();
   
@@ -341,7 +348,7 @@
           fullMatch: firstMatch[0],
           groups: firstMatch.slice(1),
           capturedVars: captures.reduce((acc, name, i) => {
-            acc[name] = firstMatch[i + 1] || null;
+            acc[name] = firstMatch[i + 1] ?? '';
             return acc;
           }, {} as Record<string, string>),
           totalMatches: matches.length,
@@ -511,7 +518,7 @@
     pattern: nameValid && patternValid ? 100 : (nameValid ? 50 : (patternValid ? 50 : 0)),
     actions: actionsValid ? 100 : (actions.length > 0 ? 50 : 0),
     review: 100
-  });
+  } as Record<WizardStep, number>);
 </script>
 
 <Dialog
@@ -533,22 +540,16 @@
     {#if !isMobile}
     <div class="wizard-progress">
       <div class="progress-track">
-        {#each ['template', 'pattern', 'actions', 'review'] as step, i}
+        {#each wizardSteps as step, i}
           {@const isActive = step === currentStep}
           {@const isCompleted = completedSteps.has(step)}
-          {@const stepLabels = {
-            template: 'Choose Template',
-            pattern: 'Define Pattern',
-            actions: 'Configure Actions',
-            review: 'Review & Submit'
-          }}
           
           <button
             class="progress-step"
             class:active={isActive}
             class:completed={isCompleted}
             onclick={() => goToStep(step)}
-            disabled={i > 0 && !completedSteps.has(['template', 'pattern', 'actions', 'review'][i - 1])}
+            disabled={i > 0 && !completedSteps.has(wizardSteps[i - 1])}
           >
             <div class="step-number">
               {#if isCompleted}

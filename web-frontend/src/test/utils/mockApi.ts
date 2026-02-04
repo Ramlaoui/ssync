@@ -4,8 +4,9 @@
 
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import { mockHosts, mockJobs, mockJobStatusResponse } from './mockData';
-import type { JobInfo, HostInfo, JobStatusResponse } from '../../types/api';
+import { afterAll, afterEach, beforeAll } from 'vitest';
+import { mockHosts, mockJobs, mockJobStatusResponse, mockPartitionStatusResponse } from './mockData';
+import type { JobInfo, HostInfo, JobStatusResponse, PartitionStatusResponse } from '../../types/api';
 
 // Match whatever baseURL the api service uses (empty string by default)
 const baseURL = '';
@@ -31,7 +32,7 @@ export const handlers = [
       const response: JobStatusResponse = {
         hostname: host,
         jobs,
-        timestamp: new Date().toISOString(),
+        total_jobs: jobs.length,
         query_time: forceRefresh ? '0.450s' : '0.123s',
         array_groups: [],
       };
@@ -85,6 +86,19 @@ export const handlers = [
       content: `Mock ${outputType} content for job ${jobId}`,
       size: 100,
     });
+  }),
+
+  // GET /api/partitions
+  http.get('/api/partitions', ({ request }) => {
+    const url = new URL(request.url);
+    const host = url.searchParams.get('host');
+
+    if (host) {
+      const hostResponse = mockPartitionStatusResponse.find(r => r.hostname === host);
+      return HttpResponse.json(hostResponse ? [hostResponse] : []);
+    }
+
+    return HttpResponse.json(mockPartitionStatusResponse as PartitionStatusResponse[]);
   }),
 ];
 

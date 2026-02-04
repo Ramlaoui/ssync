@@ -19,7 +19,7 @@
     maxHeight = '400px'
   }: Props = $props();
   
-  let container: HTMLDivElement = $state();
+  let container: HTMLDivElement | null = $state(null);
   let isCollapsed = $state(collapsible);
   let lines: string[] = $state([]);
   let searchTerm = $state('');
@@ -155,7 +155,7 @@
               <span class="line-number">{index + 1}</span>
             {/if}
             <span class="line-content">
-              {@html highlightSyntax(line) || '<span class="empty-line">&nbsp;</span>'}
+              {@html highlightSyntax(line) || '&nbsp;'}
             </span>
           </div>
         {/each}
@@ -309,11 +309,6 @@
     white-space: pre;
     overflow-x: auto;
     color: #e4e8f1;
-  }
-  
-  .empty-line {
-    display: inline-block;
-    min-height: 1.6rem;
   }
   
   /* Syntax highlighting */

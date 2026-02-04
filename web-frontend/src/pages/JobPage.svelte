@@ -525,10 +525,6 @@
     }
   }
 
-  .page-layout.sidebar-collapsed {
-    /* Styles for collapsed sidebar state */
-  }
-
   /* Tab navigation container */
   .tab-navigation {
     border-bottom: 1px solid var(--border);

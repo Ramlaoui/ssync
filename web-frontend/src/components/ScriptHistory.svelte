@@ -49,7 +49,7 @@
   
   // Infinite scroll
   let displayCount = $state(20);
-  let scrollContainer: HTMLElement = $state();
+  let scrollContainer: HTMLElement | null = $state(null);
   let displayedScripts = $derived(filteredScripts.slice(0, displayCount));
 
   function handleScroll(event: Event) {
@@ -76,14 +76,14 @@
     errorMessage = '';
     try {
       // Fetch available hosts dynamically
-      let hosts = [];
+      let hosts: string[] = [];
       if (currentHost) {
         hosts = [currentHost];
       } else {
         try {
           console.log('Fetching available hosts...');
           const hostsResponse = await api.get('/api/hosts');
-          hosts = hostsResponse.data.map(host => host.hostname);
+          hosts = hostsResponse.data.map((host: { hostname: string }) => host.hostname);
           console.log('Available hosts:', hosts);
         } catch (e) {
           console.error('Failed to fetch hosts:', e);
@@ -173,8 +173,10 @@
         console.log(`Found ${localHistory.length} scripts in localStorage`);
 
         // Add localStorage scripts that aren't already in allScripts
-        const existingIds = new Set(allScripts.map(s => s.job_id));
-        const newScripts = localHistory.filter(s => !existingIds.has(s.job_id));
+        const existingIds = new Set(allScripts.map((s) => s.job_id));
+        const newScripts = (localHistory as ScriptHistoryItem[]).filter(
+          (s) => !existingIds.has(s.job_id),
+        );
         console.log(`Adding ${newScripts.length} unique scripts from localStorage`);
         allScripts.push(...newScripts);
       } catch (e) {
@@ -199,9 +201,10 @@
       filterScripts();
       console.log('After filtering, filteredScripts:', filteredScripts);
       console.log('Displayed scripts:', displayedScripts);
-    } catch (err) {
-      console.error('Failed to load script history:', err);
-      errorMessage = `Failed to load script history: ${err.message || 'Unknown error'}`;
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error('Unknown error');
+      console.error('Failed to load script history:', error);
+      errorMessage = `Failed to load script history: ${error.message || 'Unknown error'}`;
       scripts = [];
     } finally {
       loading = false;
@@ -306,7 +309,10 @@
   
   // Re-filter whenever search or filters change
   run(() => {
-    searchTerm, filterHost, filterState, filterScripts();
+    searchTerm;
+    filterHost;
+    filterState;
+    filterScripts();
   });
 
   // Reset display count when filters change

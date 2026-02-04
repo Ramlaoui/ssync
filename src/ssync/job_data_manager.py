@@ -20,8 +20,8 @@ from typing import Any, Dict, List, Optional, Set
 
 from .cache import get_cache
 from .models.job import JobInfo, JobState
-from .utils.logging import setup_logger
 from .utils.async_helpers import create_task
+from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
 

@@ -8,9 +8,9 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from ..cache import get_cache
+from ..utils.async_helpers import create_task
 from ..utils.logging import setup_logger
 from .models import JobInfoWeb, JobOutputResponse, JobStatusResponse
-from ..utils.async_helpers import create_task
 
 logger = setup_logger(__name__)
 
@@ -41,6 +41,7 @@ class CacheMiddleware:
         # ⚡ PERFORMANCE: Rate limit cache verification
         # Don't verify more than once every N seconds (configurable via env)
         import os
+
         self._last_verify_time: float = 0
         self._verify_cooldown_seconds: float = float(
             os.environ.get("SSYNC_CACHE_VERIFY_COOLDOWN", "30")
@@ -133,7 +134,7 @@ class CacheMiddleware:
                     query_time=response.query_time,
                     group_array_jobs=response.group_array_jobs,
                     array_groups=response.array_groups,
-                    cached=response.cached if hasattr(response, 'cached') else False,
+                    cached=response.cached if hasattr(response, "cached") else False,
                 )
             )
 
@@ -369,7 +370,6 @@ class CacheMiddleware:
         Args:
             current_job_ids: Dict mapping hostname to current job IDs
         """
-        import asyncio
         import time
 
         current_time = time.time()
@@ -395,7 +395,9 @@ class CacheMiddleware:
         # ⚡ Run verification in background (don't block the request)
         create_task(self._run_verification_in_background(current_job_ids))
 
-    async def _run_verification_in_background(self, current_job_ids: Dict[str, List[str]]):
+    async def _run_verification_in_background(
+        self, current_job_ids: Dict[str, List[str]]
+    ):
         """Run cache verification in background without blocking requests."""
         try:
             logger.info("🔄 Starting background cache verification")
@@ -407,14 +409,18 @@ class CacheMiddleware:
                 logger.debug("No jobs to mark as completed")
                 return
 
-            logger.info(f"Found {len(to_mark_completed)} jobs to verify and mark as completed")
+            logger.info(
+                f"Found {len(to_mark_completed)} jobs to verify and mark as completed"
+            )
 
             # For jobs being marked as completed:
             # 1. Fetch final state from sacct (ONE LAST TIME)
             # 2. Preserve scripts if possible
             # 3. Mark as inactive (won't be queried again)
 
-            successfully_updated = await self._fetch_final_states_and_preserve(to_mark_completed)
+            successfully_updated = await self._fetch_final_states_and_preserve(
+                to_mark_completed
+            )
 
             # CRITICAL: Only mark jobs as completed if we successfully fetched their final state
             # Jobs that couldn't be updated should remain active so we can retry later
@@ -519,9 +525,7 @@ class CacheMiddleware:
 
             # ⚡ PERFORMANCE FIX: Fetch all job states in parallel using asyncio.gather
             tasks = [
-                self._fetch_single_job_final_state(
-                    manager, conn, hostname, job_id
-                )
+                self._fetch_single_job_final_state(manager, conn, hostname, job_id)
                 for job_id in job_ids
             ]
 
@@ -569,8 +573,9 @@ class CacheMiddleware:
                 return None
 
             # Use thread pool to run blocking Slurm commands
-            from .app import executor
             import asyncio
+
+            from .app import executor
 
             loop = asyncio.get_event_loop()
 
@@ -607,7 +612,9 @@ class CacheMiddleware:
                 )
 
                 # Get existing cached job to preserve script if already cached
-                cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+                cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(
+                    job_id
+                )
                 script_content = cached_job.script_content if cached_job else None
 
                 # Try to fetch script if not already cached
@@ -634,6 +641,7 @@ class CacheMiddleware:
             else:
                 # ⚡ PERFORMANCE FIX: Track failed attempts and give up after max retries
                 import time
+
                 job_key = (job_id, hostname)
 
                 if job_key in self._failed_sacct_attempts:
@@ -648,23 +656,34 @@ class CacheMiddleware:
                 self._failed_sacct_attempts[job_key] = (attempts, first_attempt)
 
                 # Give up after max retries or max time
-                if attempts >= self._MAX_SACCT_RETRIES or time_elapsed >= self._MAX_SACCT_RETRY_TIME:
+                if (
+                    attempts >= self._MAX_SACCT_RETRIES
+                    or time_elapsed >= self._MAX_SACCT_RETRY_TIME
+                ):
                     logger.warning(
                         f"Giving up on job {job_id} after {attempts} failed sacct attempts "
                         f"({time_elapsed:.0f}s elapsed). Marking as completed with UNKNOWN state."
                     )
                     # Mark as completed anyway to stop retrying
                     # Use the cached job info if available, otherwise create minimal entry
-                    cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+                    cached_job = self.cache.get_cached_jobs_by_ids(
+                        [job_id], hostname
+                    ).get(job_id)
                     if cached_job and cached_job.job_info:
                         # Update to UNKNOWN state
                         from ..models.job import JobState
+
                         cached_job.job_info.state = JobState.UNKNOWN
-                        self.cache.cache_job(cached_job.job_info, script_content=cached_job.script_content)
+                        self.cache.cache_job(
+                            cached_job.job_info,
+                            script_content=cached_job.script_content,
+                        )
 
                     # Clean up retry tracking
                     self._failed_sacct_attempts.pop(job_key, None)
-                    return True  # Mark as successfully handled so it gets marked completed
+                    return (
+                        True  # Mark as successfully handled so it gets marked completed
+                    )
                 else:
                     logger.warning(
                         f"Could not fetch final state for job {job_id} from sacct "
@@ -754,18 +773,21 @@ class CacheMiddleware:
         stats = self.cache.get_cache_stats()
 
         # Add middleware-specific stats
-        stats['middleware'] = {
-            'failed_sacct_retries': len(self._failed_sacct_attempts),
-            'unknown_state_retries': len(self._unknown_retry_attempts),
-            'failed_jobs': [
+        stats["middleware"] = {
+            "failed_sacct_retries": len(self._failed_sacct_attempts),
+            "unknown_state_retries": len(self._unknown_retry_attempts),
+            "failed_jobs": [
                 {
-                    'job_id': job_id,
-                    'hostname': hostname,
-                    'attempts': attempts,
-                    'elapsed_seconds': int(__import__('time').time() - first_attempt),
+                    "job_id": job_id,
+                    "hostname": hostname,
+                    "attempts": attempts,
+                    "elapsed_seconds": int(__import__("time").time() - first_attempt),
                 }
-                for (job_id, hostname), (attempts, first_attempt) in self._failed_sacct_attempts.items()
-            ]
+                for (job_id, hostname), (
+                    attempts,
+                    first_attempt,
+                ) in self._failed_sacct_attempts.items()
+            ],
         }
 
         return stats

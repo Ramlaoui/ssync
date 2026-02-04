@@ -24,8 +24,8 @@
     fileName = 'script.sh'
   }: Props = $props();
 
-  let scriptElement: HTMLPreElement = $state();
-  let lineNumbersElement: HTMLDivElement = $state();
+  let scriptElement: HTMLPreElement | null = $state(null);
+  let lineNumbersElement: HTMLDivElement | null = $state(null);
   let searchQuery: string = $state('');
   let searchResults: number[] = $state([]);
   let currentSearchIndex: number = $state(-1);
@@ -294,11 +294,13 @@
   }
   
   function scrollToSearchResult(index: number) {
-    if (!scriptElement || searchResults.length === 0) return;
+    const element = scriptElement;
+    if (!element || searchResults.length === 0) return;
     
     // Wait for DOM to update with highlights
     setTimeout(() => {
-      const marks = scriptElement.querySelectorAll('mark.search-highlight');
+      if (!element) return;
+      const marks = element.querySelectorAll('mark.search-highlight');
       if (marks.length > 0 && marks[index]) {
         const mark = marks[index] as HTMLElement;
         // Scroll the mark into view centered

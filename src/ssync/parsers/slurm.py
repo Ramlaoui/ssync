@@ -30,10 +30,22 @@ class SlurmParser:
             elif state_clean in ["TIMEOUT"]:
                 return JobState.TIMEOUT
             # Active running states (COMPLETING, CONFIGURING, STAGE_OUT are variants of running)
-            elif state_clean in ["RUNNING", "COMPLETING", "CONFIGURING", "STAGE_OUT", "SIGNALING"]:
+            elif state_clean in [
+                "RUNNING",
+                "COMPLETING",
+                "CONFIGURING",
+                "STAGE_OUT",
+                "SIGNALING",
+            ]:
                 return JobState.RUNNING
             # Pending/queued states
-            elif state_clean in ["PENDING", "REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD", "RESV_DEL_HOLD"]:
+            elif state_clean in [
+                "PENDING",
+                "REQUEUED",
+                "REQUEUE_FED",
+                "REQUEUE_HOLD",
+                "RESV_DEL_HOLD",
+            ]:
                 return JobState.PENDING
             # Suspended states (temporarily stopped but not terminated)
             elif state_clean in ["SUSPENDED", "STOPPED", "RESIZING", "REVOKED"]:

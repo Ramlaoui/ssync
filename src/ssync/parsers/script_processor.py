@@ -290,7 +290,7 @@ class ScriptProcessor:
                     if value.startswith("["):
                         try:
                             watcher.captures = json.loads(value)
-                        except:
+                        except json.JSONDecodeError:
                             watcher.captures = [
                                 v.strip() for v in value.strip("[]").split(",")
                             ]

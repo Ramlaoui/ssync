@@ -3,7 +3,7 @@
   import type { JobInfo } from "../types/api";
   import Button from "../lib/components/ui/Button.svelte";
   import { ArrowLeft, Menu, Play, Square, Trash2, Plus, MoreHorizontal, RefreshCw, RotateCcw, Download, FileText } from 'lucide-svelte';
-  import { resubmitStore } from '../stores/resubmit.ts';
+  import { resubmitStore } from '../stores/resubmit';
   import { api } from '../services/api';
 
   interface Props {
@@ -106,11 +106,11 @@
       resubmitStore.setResubmitData({
         scriptContent: scriptData.script_content,
         hostname: job.hostname,
-        workDir: job.work_dir,
-        localSourceDir: scriptData.local_source_dir,  // Use the local source dir from the API
+        workDir: job.work_dir ?? undefined,
+        localSourceDir: scriptData.local_source_dir ?? undefined,  // Use the local source dir from the API
         originalJobId: job.job_id,
         jobName: job.name,
-        submitLine: job.submit_line,
+        submitLine: job.submit_line ?? undefined,
         watcherVariables: Object.keys(watcherVariables).length > 0 ? watcherVariables : undefined,
         watchers: watcherConfigs.length > 0 ? watcherConfigs : undefined
       });

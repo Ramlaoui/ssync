@@ -14,8 +14,8 @@ from ..models.watcher import (
     WatcherInstance,
     WatcherState,
 )
-from ..utils.logging import setup_logger
 from ..utils.async_helpers import create_task
+from ..utils.logging import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -86,7 +86,7 @@ class HostCommandThrottler:
         for hostname in self._semaphores:
             sem = self._semaphores[hostname]
             # Semaphore._value gives available slots (internal but useful for debugging)
-            available = getattr(sem, '_value', self.max_concurrent)
+            available = getattr(sem, "_value", self.max_concurrent)
             stats[hostname] = {
                 "max_concurrent": self.max_concurrent,
                 "available_slots": available,
@@ -118,8 +118,11 @@ class WatcherEngine:
         self._pattern_cache: Dict[str, re.Pattern] = {}  # Cache compiled regex patterns
 
     async def start_watchers_for_job(
-        self, job_id: str, hostname: str, watchers: List[WatcherDefinition],
-        parent_watcher_id: Optional[int] = None
+        self,
+        job_id: str,
+        hostname: str,
+        watchers: List[WatcherDefinition],
+        parent_watcher_id: Optional[int] = None,
     ) -> List[int]:
         """
         Start watchers for a newly submitted job.
@@ -137,16 +140,23 @@ class WatcherEngine:
 
         for definition in watchers:
             # Store watcher in database
-            watcher_id = self._store_watcher(job_id, hostname, definition, parent_watcher_id)
+            watcher_id = self._store_watcher(
+                job_id, hostname, definition, parent_watcher_id
+            )
             if watcher_id:
                 watcher_ids.append(watcher_id)
 
                 # Update expected task count for array templates
                 if definition.is_array_template and definition.array_spec:
                     from ..parsers.script_processor import ScriptProcessor
-                    expected_tasks = ScriptProcessor.parse_array_spec(definition.array_spec)
+
+                    expected_tasks = ScriptProcessor.parse_array_spec(
+                        definition.array_spec
+                    )
                     if expected_tasks:
-                        self._update_watcher_expected_task_count(watcher_id, expected_tasks)
+                        self._update_watcher_expected_task_count(
+                            watcher_id, expected_tasks
+                        )
 
                 # Only start monitoring for non-template watchers
                 # Templates will spawn child watchers for discovered tasks
@@ -251,20 +261,32 @@ class WatcherEngine:
             # Get template watcher
             template = self._get_watcher(template_watcher_id)
             if not template or not template.definition.is_array_template:
-                logger.warning(f"Watcher {template_watcher_id} is not an array template")
+                logger.warning(
+                    f"Watcher {template_watcher_id} is not an array template"
+                )
                 return 0
 
             # Get base job ID (remove any task suffix if present)
-            base_job_id = template.job_id.split("_")[0] if "_" in template.job_id else template.job_id
+            base_job_id = (
+                template.job_id.split("_")[0]
+                if "_" in template.job_id
+                else template.job_id
+            )
 
             # Discover array tasks by querying jobs with pattern base_job_id_*
-            discovered_tasks = await self._discover_array_task_jobs(base_job_id, template.hostname)
+            discovered_tasks = await self._discover_array_task_jobs(
+                base_job_id, template.hostname
+            )
 
             # Get already spawned tasks
             existing_task_ids = self._get_spawned_task_ids(template_watcher_id)
 
             # Spawn watchers for new tasks
-            new_tasks = [task_id for task_id in discovered_tasks if task_id not in existing_task_ids]
+            new_tasks = [
+                task_id
+                for task_id in discovered_tasks
+                if task_id not in existing_task_ids
+            ]
 
             if new_tasks:
                 logger.info(
@@ -298,18 +320,26 @@ class WatcherEngine:
 
                 # Update discovered task count
                 total_discovered = len(existing_task_ids) + len(new_tasks)
-                self._update_watcher_discovered_task_count(template_watcher_id, total_discovered)
+                self._update_watcher_discovered_task_count(
+                    template_watcher_id, total_discovered
+                )
 
                 return len(new_tasks)
             else:
-                logger.debug(f"No new array tasks found for watcher {template_watcher_id}")
+                logger.debug(
+                    f"No new array tasks found for watcher {template_watcher_id}"
+                )
                 return 0
 
         except Exception as e:
-            logger.error(f"Error discovering array tasks for watcher {template_watcher_id}: {e}")
+            logger.error(
+                f"Error discovering array tasks for watcher {template_watcher_id}: {e}"
+            )
             return 0
 
-    async def _discover_array_task_jobs(self, base_job_id: str, hostname: str) -> List[str]:
+    async def _discover_array_task_jobs(
+        self, base_job_id: str, hostname: str
+    ) -> List[str]:
         """
         Discover array task job IDs by querying Slurm.
 
@@ -327,7 +357,9 @@ class WatcherEngine:
 
             # Fetch all jobs for this hostname
             # Slurm will show array tasks as separate jobs with IDs like "12345_0", "12345_1"
-            all_jobs = await manager.fetch_all_jobs(hostname=hostname, force_refresh=True)
+            all_jobs = await manager.fetch_all_jobs(
+                hostname=hostname, force_refresh=True
+            )
 
             # Filter for jobs that match the array pattern
             array_tasks = []
@@ -372,7 +404,9 @@ class WatcherEngine:
             if not templates:
                 return
 
-            logger.debug(f"Checking {len(templates)} array template watchers for new tasks")
+            logger.debug(
+                f"Checking {len(templates)} array template watchers for new tasks"
+            )
 
             # Check each template for new tasks
             for row in templates:
@@ -384,13 +418,22 @@ class WatcherEngine:
 
                 if not job_info:
                     # Parent job not found, mark template as completed
-                    logger.info(f"Parent job {job_id} not found, completing template {template_id}")
+                    logger.info(
+                        f"Parent job {job_id} not found, completing template {template_id}"
+                    )
                     self._update_watcher_state(template_id, WatcherState.COMPLETED)
                     continue
 
-                if job_info.state in [JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.TIMEOUT]:
+                if job_info.state in [
+                    JobState.COMPLETED,
+                    JobState.FAILED,
+                    JobState.CANCELLED,
+                    JobState.TIMEOUT,
+                ]:
                     # Parent job finished, mark template as completed
-                    logger.info(f"Parent job {job_id} finished, completing template {template_id}")
+                    logger.info(
+                        f"Parent job {job_id} finished, completing template {template_id}"
+                    )
                     self._update_watcher_state(template_id, WatcherState.COMPLETED)
                     continue
 
@@ -957,8 +1000,11 @@ class WatcherEngine:
     # Database helper methods
 
     def _store_watcher(
-        self, job_id: str, hostname: str, definition: WatcherDefinition,
-        parent_watcher_id: Optional[int] = None
+        self,
+        job_id: str,
+        hostname: str,
+        definition: WatcherDefinition,
+        parent_watcher_id: Optional[int] = None,
     ) -> Optional[int]:
         """Store watcher in database."""
         try:
@@ -1201,7 +1247,9 @@ class WatcherEngine:
                 )
                 conn.commit()
         except Exception as e:
-            logger.error(f"Failed to update watcher {watcher_id} discovered task count: {e}")
+            logger.error(
+                f"Failed to update watcher {watcher_id} discovered task count: {e}"
+            )
 
     def _update_watcher_expected_task_count(self, watcher_id: int, count: int):
         """Update expected task count for array template watchers."""
@@ -1213,7 +1261,9 @@ class WatcherEngine:
                 )
                 conn.commit()
         except Exception as e:
-            logger.error(f"Failed to update watcher {watcher_id} expected task count: {e}")
+            logger.error(
+                f"Failed to update watcher {watcher_id} expected task count: {e}"
+            )
 
     def _get_watcher_variables(self, watcher_id: int) -> Dict[str, Any]:
         """Get watcher variables from database."""

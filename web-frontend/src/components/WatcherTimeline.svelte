@@ -13,7 +13,7 @@
   let { events = [], maxEvents = 50, autoScroll = $bindable(true) }: Props = $props();
   
   // Timeline state
-  let timelineElement: HTMLDivElement = $state();
+  let timelineElement: HTMLDivElement | null = $state(null);
   let hoveredEvent: WatcherEvent | null = $state(null);
   let selectedTimeRange = $state('1h'); // 1h, 6h, 24h, all
   let tooltipX = $state(0);
@@ -206,6 +206,8 @@
             "
             onmouseenter={(e) => handleMouseEnter(e, event)}
             onmouseleave={() => hoveredEvent = null}
+            role="presentation"
+            aria-hidden="true"
           >
             <span class="event-icon">{getEventIcon(event)}</span>
           </div>

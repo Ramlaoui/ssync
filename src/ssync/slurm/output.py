@@ -2,8 +2,8 @@
 
 from typing import Any, Optional, Protocol
 
-from ..utils.logging import setup_logger
 from ..parsers.slurm import SlurmParser
+from ..utils.logging import setup_logger
 
 
 class SSHConnection(Protocol):
@@ -236,7 +236,9 @@ class SlurmOutput:
                         "compression": "gzip",
                     }
             else:
-                result = conn.run(f"cat '{file_path}'", hide=True, timeout=30, warn=True)
+                result = conn.run(
+                    f"cat '{file_path}'", hide=True, timeout=30, warn=True
+                )
 
                 if result.ok:
                     encoded = base64.b64encode(result.stdout.encode("utf-8")).decode(

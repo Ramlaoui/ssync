@@ -117,7 +117,7 @@
     }
   });
 
-  onMount(async () => {
+  onMount(() => {
     checkMobile();
     window.addEventListener('resize', checkMobile);
 
@@ -127,7 +127,7 @@
     if (!$apiConfig.apiKey) {
     }
 
-    testConnection().then((connected) => {
+    void testConnection().then((connected) => {
       if (connected) {
         loadHosts();
         // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - JobStateManager handles WebSocket now

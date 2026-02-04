@@ -64,9 +64,7 @@ class SlurmSubmit:
         warn: bool = True,
     ) -> tuple[Any, str, list[str], str]:
         """Run sbatch on the remote host and return result, command, and submit_line."""
-        cmd, submit_line = self.build_sbatch_command(
-            slurm_params, remote_script_path
-        )
+        cmd, submit_line = self.build_sbatch_command(slurm_params, remote_script_path)
         full_cmd = submit_line
         if work_dir:
             full_cmd = f"cd {work_dir} && {submit_line}"

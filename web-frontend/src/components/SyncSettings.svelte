@@ -17,9 +17,15 @@
     excludePatterns?: string[];
     includePatterns?: string[];
     noGitignore?: boolean;
+    class?: string;
   }
 
-  let { excludePatterns = $bindable(['*.log', '*.tmp', '__pycache__/']), includePatterns = $bindable([]), noGitignore = $bindable(false) }: Props = $props();
+  let {
+    excludePatterns = $bindable(['*.log', '*.tmp', '__pycache__/']),
+    includePatterns = $bindable([]),
+    noGitignore = $bindable(false),
+    class: className = ''
+  }: Props = $props();
 
   // UI state
   let currentExcludePattern = $state('');
@@ -140,7 +146,7 @@
   let includeGroups = $derived(groupPresetsByCategory(presetIncludePatterns));
 </script>
 
-<div class="sync-settings">
+<div class={`sync-settings ${className}`.trim()}>
   <!-- Action Buttons -->
   <div class="action-buttons">
     <Button
@@ -222,7 +228,7 @@
         bind:value={currentExcludePattern}
         placeholder="e.g., *.log, node_modules/, __pycache__/"
         class="pattern-field"
-        on:keypress={(e) => handleKeyPress(e, addExcludePattern)}
+        on:keydown={(e) => handleKeyPress(e, addExcludePattern)}
       />
       <Button
         on:click={addExcludePattern}
@@ -324,7 +330,7 @@
         bind:value={currentIncludePattern}
         placeholder="e.g., *.py, *.js, *.md"
         class="pattern-field"
-        on:keypress={(e) => handleKeyPress(e, addIncludePattern)}
+        on:keydown={(e) => handleKeyPress(e, addIncludePattern)}
       />
       <Button
         on:click={addIncludePattern}

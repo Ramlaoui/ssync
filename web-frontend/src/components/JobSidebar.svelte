@@ -10,6 +10,7 @@
   import { jobUtils } from "../lib/jobUtils";
   import { navigationActions } from "../stores/navigation";
   import { preferences, preferencesActions } from "../stores/preferences";
+  import { sidebarOpen } from "../stores/sidebar";
   import { watchersByJob } from "../stores/watchers";
   import type { JobInfo } from "../types/api";
   import ArrayJobCard from "./ArrayJobCard.svelte";
@@ -649,7 +650,7 @@
           <div class="job-section">
             <CollapsibleSection
               title="Completed Array Jobs"
-              badge={completedArrayGroups.length}
+              badge={String(completedArrayGroups.length)}
               defaultExpanded={false}
               storageKey="sidebar-completed-arrays-expanded"
             >
@@ -1057,6 +1058,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
+    line-clamp: 2;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }

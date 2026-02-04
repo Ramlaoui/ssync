@@ -9,6 +9,7 @@ from ..models.cluster import (
     APISettings,
     CacheSettings,
     Host,
+    NotificationSettings,
     PathRestrictions,
     SlurmDefaults,
     SlurmHost,
@@ -35,6 +36,7 @@ class Config:
         self.api_settings = self.load_api_settings()
         self.path_restrictions = self.load_path_restrictions()
         self.connection_settings = self.load_connection_settings()
+        self.notification_settings = self.load_notification_settings()
 
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
@@ -392,6 +394,97 @@ class Config:
                 "1",
                 "yes",
             )
+
+        return settings
+
+    def load_notification_settings(self) -> NotificationSettings:
+        """Load notification settings from config file or environment variables."""
+        settings = NotificationSettings()
+
+        config_path = Path(self.config_path)
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    content = f.read()
+                    content = re.sub(
+                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
+                    )
+                    data = yaml.safe_load(content)
+
+                if data and "notifications" in data:
+                    notifications = data["notifications"]
+                    settings = NotificationSettings(
+                        enabled=notifications.get("enabled", settings.enabled),
+                        apns_key_id=notifications.get(
+                            "apns_key_id", settings.apns_key_id
+                        ),
+                        apns_team_id=notifications.get(
+                            "apns_team_id", settings.apns_team_id
+                        ),
+                        apns_bundle_id=notifications.get(
+                            "apns_bundle_id", settings.apns_bundle_id
+                        ),
+                        apns_private_key=notifications.get(
+                            "apns_private_key", settings.apns_private_key
+                        ),
+                        apns_use_sandbox=notifications.get(
+                            "apns_use_sandbox", settings.apns_use_sandbox
+                        ),
+                        apns_timeout_seconds=notifications.get(
+                            "apns_timeout_seconds", settings.apns_timeout_seconds
+                        ),
+                        webpush_enabled=notifications.get(
+                            "webpush_enabled", settings.webpush_enabled
+                        ),
+                        webpush_vapid_public_key=notifications.get(
+                            "webpush_vapid_public_key",
+                            settings.webpush_vapid_public_key,
+                        ),
+                        webpush_vapid_private_key=notifications.get(
+                            "webpush_vapid_private_key",
+                            settings.webpush_vapid_private_key,
+                        ),
+                        webpush_vapid_subject=notifications.get(
+                            "webpush_vapid_subject", settings.webpush_vapid_subject
+                        ),
+                    )
+            except Exception:
+                pass
+
+        if os.getenv("SSYNC_NOTIFICATIONS_ENABLED"):
+            settings.enabled = os.getenv(
+                "SSYNC_NOTIFICATIONS_ENABLED", "false"
+            ).lower() in ("true", "1", "yes")
+        if os.getenv("SSYNC_APNS_KEY_ID"):
+            settings.apns_key_id = os.getenv("SSYNC_APNS_KEY_ID")
+        if os.getenv("SSYNC_APNS_TEAM_ID"):
+            settings.apns_team_id = os.getenv("SSYNC_APNS_TEAM_ID")
+        if os.getenv("SSYNC_APNS_BUNDLE_ID"):
+            settings.apns_bundle_id = os.getenv("SSYNC_APNS_BUNDLE_ID")
+        if os.getenv("SSYNC_APNS_PRIVATE_KEY"):
+            settings.apns_private_key = os.getenv("SSYNC_APNS_PRIVATE_KEY")
+        if os.getenv("SSYNC_APNS_USE_SANDBOX"):
+            settings.apns_use_sandbox = os.getenv(
+                "SSYNC_APNS_USE_SANDBOX", "true"
+            ).lower() in ("true", "1", "yes")
+        if os.getenv("SSYNC_APNS_TIMEOUT_SECONDS"):
+            settings.apns_timeout_seconds = float(
+                os.getenv("SSYNC_APNS_TIMEOUT_SECONDS")
+            )
+        if os.getenv("SSYNC_WEBPUSH_ENABLED"):
+            settings.webpush_enabled = os.getenv(
+                "SSYNC_WEBPUSH_ENABLED", "false"
+            ).lower() in ("true", "1", "yes")
+        if os.getenv("SSYNC_WEBPUSH_VAPID_PUBLIC_KEY"):
+            settings.webpush_vapid_public_key = os.getenv(
+                "SSYNC_WEBPUSH_VAPID_PUBLIC_KEY"
+            )
+        if os.getenv("SSYNC_WEBPUSH_VAPID_PRIVATE_KEY"):
+            settings.webpush_vapid_private_key = os.getenv(
+                "SSYNC_WEBPUSH_VAPID_PRIVATE_KEY"
+            )
+        if os.getenv("SSYNC_WEBPUSH_VAPID_SUBJECT"):
+            settings.webpush_vapid_subject = os.getenv("SSYNC_WEBPUSH_VAPID_SUBJECT")
 
         return settings
 

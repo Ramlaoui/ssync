@@ -29,6 +29,7 @@
     wordWrap?: boolean;
     tabSize?: number;
     autoIndent?: boolean;
+    class?: string;
   }
 
   let {
@@ -41,7 +42,8 @@
     lineNumbers = true,
     wordWrap = false,
     tabSize = 2,
-    autoIndent = true
+    autoIndent = true,
+    class: className = ''
   }: Props = $props();
 
   let editorElement: HTMLDivElement | undefined = $state();
@@ -444,7 +446,7 @@
 </script>
 
 <div class="codemirror-container">
-  <div class="codemirror-editor" bind:this={editorElement}></div>
+  <div class={`codemirror-editor ${className}`.trim()} bind:this={editorElement}></div>
 </div>
 
 <style>

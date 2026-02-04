@@ -15,6 +15,7 @@ interface UIPreferences {
   refreshInterval: number;
   showMetrics: boolean;
   defaultSince: string;
+  jobsPerPage: number;
   websocket: WebSocketConfig;
 }
 
@@ -24,6 +25,7 @@ const defaultPreferences: UIPreferences = {
   refreshInterval: 30000,  // 30 seconds
   showMetrics: false,
   defaultSince: "14d",
+  jobsPerPage: 50,
   websocket: {
     initialRetryDelay: 1000,     // 1 second
     maxRetryDelay: 30000,        // 30 seconds

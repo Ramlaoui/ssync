@@ -11,6 +11,12 @@ interface NotificationOptions {
   silent?: boolean;
 }
 
+type NotificationMessageOptions = {
+  type: string;
+  message: string;
+  duration?: number;
+};
+
 class NotificationService {
   private enabled: boolean = false;
   private soundEnabled: boolean = false;
@@ -81,7 +87,10 @@ class NotificationService {
     return await Notification.requestPermission();
   }
 
-  public async notify(options: NotificationOptions): Promise<void> {
+  public async notify(
+    options: NotificationOptions | NotificationMessageOptions
+  ): Promise<void> {
+    const normalizedOptions = this.normalizeOptions(options);
     if (!this.enabled) return;
 
     if (!('Notification' in window)) {
@@ -95,21 +104,21 @@ class NotificationService {
     }
 
     try {
-      const notification = new Notification(options.title, {
-        body: options.body,
-        icon: options.icon || '/favicon.ico',
-        tag: options.tag,
-        requireInteraction: options.requireInteraction || false,
-        silent: options.silent || !this.soundEnabled,
+      const notification = new Notification(normalizedOptions.title, {
+        body: normalizedOptions.body,
+        icon: normalizedOptions.icon || '/favicon.ico',
+        tag: normalizedOptions.tag,
+        requireInteraction: normalizedOptions.requireInteraction || false,
+        silent: normalizedOptions.silent || !this.soundEnabled,
       });
 
       // Play sound if enabled and not silent
-      if (this.soundEnabled && !options.silent) {
+      if (this.soundEnabled && !normalizedOptions.silent) {
         await this.playNotificationSound();
       }
 
       // Auto-close after 10 seconds unless requireInteraction is true
-      if (!options.requireInteraction) {
+      if (!normalizedOptions.requireInteraction) {
         setTimeout(() => notification.close(), 10000);
       }
 
@@ -121,6 +130,28 @@ class NotificationService {
     } catch (e) {
       console.error('Failed to show notification:', e);
     }
+  }
+
+  private normalizeOptions(
+    options: NotificationOptions | NotificationMessageOptions
+  ): NotificationOptions {
+    if ('title' in options) {
+      return options;
+    }
+
+    const title =
+      options.type === 'error'
+        ? 'Error'
+        : options.type === 'warning'
+          ? 'Warning'
+          : options.type === 'success'
+            ? 'Success'
+            : 'Notification';
+
+    return {
+      title,
+      body: options.message,
+    };
   }
 
   public notifyNewJob(jobId: string, hostname: string, state: string, jobName: string) {

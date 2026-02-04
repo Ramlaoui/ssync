@@ -2,5 +2,6 @@
 
 from .script_processor import ScriptProcessor
 from .slurm import SlurmParser
+from .partition import PartitionParser
 
-__all__ = ["SlurmParser", "ScriptProcessor"]
+__all__ = ["SlurmParser", "ScriptProcessor", "PartitionParser"]

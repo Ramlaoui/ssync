@@ -71,6 +71,8 @@
     Zap,
   } from "lucide-svelte";
 
+  const bubble = createBubbler();
+
   const dispatch = createEventDispatcher();
 
   // Component state (not props since this is used standalone)
@@ -522,11 +524,12 @@ echo "Starting job..."
       isDefault: editingPreset?.isDefault,
     };
 
-    if (editingPreset) {
+    const currentPreset = editingPreset;
+    if (currentPreset) {
       // Check if editing a default preset
-      if (editingPreset.isDefault) {
+      if (currentPreset.isDefault) {
         const index = defaultPresets.findIndex(
-          (p) => p.id === editingPreset.id,
+          (p) => p.id === currentPreset.id,
         );
         if (index >= 0) {
           defaultPresets[index] = preset;
@@ -535,7 +538,7 @@ echo "Starting job..."
         }
       } else {
         // Update existing custom preset
-        const index = customPresets.findIndex((p) => p.id === editingPreset.id);
+        const index = customPresets.findIndex((p) => p.id === currentPreset.id);
         if (index >= 0) {
           customPresets[index] = preset;
           customPresets = [...customPresets];
@@ -621,6 +624,14 @@ echo "Starting job..."
       // Save script to localStorage for history
       saveScriptToLocalHistory();
 
+      const sourceDir = parameters.sourceDir?.trim();
+      if (!sourceDir) {
+        throw new Error("Source directory is required");
+      }
+      if (!selectedHost) {
+        throw new Error("Host is required");
+      }
+
       // Define proper interface for launch data
       interface LaunchData {
         script_content: string;
@@ -644,7 +655,7 @@ echo "Starting job..."
       // Prepare the launch request with correct field names for API
       const launchData: LaunchData = {
         script_content: originalScript,
-        source_dir: parameters.sourceDir,
+        source_dir: sourceDir,
         host: selectedHost,
         job_name: parameters.jobName || "Unnamed Job",
       };
@@ -932,82 +943,84 @@ echo "Starting job..."
   }
 
   // Initialize component - ensure FileBrowser uses persisted directory
-  onMount(async () => {
-    // Load hosts if not provided or empty
-    if (!hosts || hosts.length === 0) {
-      try {
-        const response = await api.get("/api/hosts");
-        hosts = response.data;
+  onMount(() => {
+    const initialize = async () => {
+      // Load hosts if not provided or empty
+      if (!hosts || hosts.length === 0) {
+        try {
+          const response = await api.get("/api/hosts");
+          hosts = response.data;
 
-        // Auto-select first host if none selected
-        if (hosts.length > 0 && !selectedHost) {
-          selectedHost = hosts[0].hostname;
+          // Auto-select first host if none selected
+          if (hosts.length > 0 && !selectedHost) {
+            selectedHost = hosts[0].hostname;
+          }
+          // Fetch recent watchers for the selected host
+          if (selectedHost) {
+            await fetchRecentWatchers();
+          }
+        } catch (error) {
+          console.error("Failed to load hosts:", error);
         }
-        // Fetch recent watchers for the selected host
-        if (selectedHost) {
-          await fetchRecentWatchers();
+      }
+
+      // Check for resubmit data and populate fields
+      const resubmitData = resubmitStore.consumeResubmitData();
+      if (resubmitData) {
+        console.log("Loading resubmit data:", resubmitData);
+
+        // Set resubmit flags and data
+        isResubmit = true;
+        originalJobId = resubmitData.originalJobId;
+
+        // Set captured variables if available
+        if (resubmitData.watcherVariables) {
+          watcherVariables = resubmitData.watcherVariables;
+          console.log("Loaded captured variables:", watcherVariables);
         }
-      } catch (error) {
-        console.error("Failed to load hosts:", error);
-      }
-    }
 
-    // Check for resubmit data and populate fields
-    const resubmitData = resubmitStore.consumeResubmitData();
-    if (resubmitData) {
-      console.log("Loading resubmit data:", resubmitData);
+        // Set watcher configurations if available
+        if (resubmitData.watchers) {
+          watchers = resubmitData.watchers;
+          console.log("Loaded watcher configurations:", watchers);
+        }
 
-      // Set resubmit flags and data
-      isResubmit = true;
-      originalJobId = resubmitData.originalJobId;
+        // Set script content
+        script = resubmitData.scriptContent;
 
-      // Set captured variables if available
-      if (resubmitData.watcherVariables) {
-        watcherVariables = resubmitData.watcherVariables;
-        console.log("Loaded captured variables:", watcherVariables);
-      }
+        // Set hostname
+        selectedHost = resubmitData.hostname;
 
-      // Set watcher configurations if available
-      if (resubmitData.watchers) {
-        watchers = resubmitData.watchers;
-        console.log("Loaded watcher configurations:", watchers);
-      }
+        // Use the local source directory if available (not the remote work dir)
+        if (resubmitData.localSourceDir) {
+          parameters.sourceDir = resubmitData.localSourceDir;
+        } else {
+          // Clear source dir so user has to select a new one
+          parameters.sourceDir = "";
+        }
 
-      // Set script content
-      script = resubmitData.scriptContent;
+        // Set job name if available
+        if (resubmitData.jobName && resubmitData.jobName !== "N/A") {
+          parameters.jobName = resubmitData.jobName;
+        }
 
-      // Set hostname
-      selectedHost = resubmitData.hostname;
-
-      // Use the local source directory if available (not the remote work dir)
-      if (resubmitData.localSourceDir) {
-        parameters.sourceDir = resubmitData.localSourceDir;
-      } else {
-        // Clear source dir so user has to select a new one
-        parameters.sourceDir = "";
+        // Parse the script to extract SBATCH parameters
+        parseSbatchFromScript(resubmitData.scriptContent);
       }
 
-      // Set job name if available
-      if (resubmitData.jobName && resubmitData.jobName !== "N/A") {
-        parameters.jobName = resubmitData.jobName;
+      // If we have a persisted sourceDir but FileBrowser isn't showing it, update the initialPath
+      if (parameters.sourceDir && parameters.sourceDir.trim()) {
+        // The FileBrowser will use the initialPath from the parameters.sourceDir automatically
+        // No additional action needed as the store already loads from localStorage
       }
 
-      // Parse the script to extract SBATCH parameters
-      parseSbatchFromScript(resubmitData.scriptContent);
-    }
+      // Parse initial script if provided
+      if (script) {
+        parseSbatchFromScript(script);
+      }
+    };
 
-    // If we have a persisted sourceDir but FileBrowser isn't showing it, update the initialPath
-    if (parameters.sourceDir && parameters.sourceDir.trim()) {
-      // The FileBrowser will use the initialPath from the parameters.sourceDir automatically
-      // No additional action needed as the store already loads from localStorage
-    }
-
-    // Parse initial script if provided
-    if (script) {
-      parseSbatchFromScript(script);
-    }
-
-    // Apply host defaults if host is selected (removed - no longer using store)
+    void initialize();
 
     // Check if mobile
     checkMobile();

@@ -70,7 +70,7 @@
 
 <Dialog
   open={isOpen}
-  onClose={handleClose}
+  on:close={handleClose}
   title="Save as Template"
   description="Save this script configuration for quick reuse"
   size="md"

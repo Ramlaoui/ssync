@@ -3,8 +3,8 @@
 from typing import Dict
 
 from ..models.cluster import Host
-from .connection import SSHConnection
 from ..utils.logging import setup_logger
+from .connection import SSHConnection
 
 logger = setup_logger(__name__, "INFO")
 

@@ -117,9 +117,7 @@ class SlurmClient:
         hostname: str,
         output_type: str = "stdout",
     ) -> Optional[str]:
-        return self.output.read_job_output_content(
-            conn, job_id, hostname, output_type
-        )
+        return self.output.read_job_output_content(conn, job_id, hostname, output_type)
 
     def get_job_batch_script(
         self, conn: SSHConnection, job_id: str, hostname: str
@@ -128,3 +126,8 @@ class SlurmClient:
 
     def check_slurm_availability(self, conn: SSHConnection, hostname: str) -> bool:
         return self.query.check_slurm_availability(conn, hostname)
+
+    def get_partition_state(
+        self, conn: SSHConnection, hostname: str, force_refresh: bool = False
+    ):
+        return self.query.get_partition_state(conn, hostname, force_refresh=force_refresh)

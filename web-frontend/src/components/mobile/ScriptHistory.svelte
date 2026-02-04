@@ -178,6 +178,14 @@
           <div 
             class="script-card"
             onclick={() => selectScript(script)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectScript(script);
+              }
+            }}
+            role="button"
+            tabindex="0"
             in:fly={{ y: 20, delay: i * 50, duration: 300 }}
           >
             <div class="card-header">

@@ -2,10 +2,13 @@
 
 import asyncio
 import fnmatch
+import hashlib
 import ipaddress
 import json
 import os
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,8 +25,8 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -32,9 +35,14 @@ from .. import config
 from ..cache import get_cache
 from ..manager import SlurmManager
 from ..models.job import JobState
-from ..utils.logging import setup_logger
+from ..notifications import get_notification_service
+from ..notifications.monitor import (
+    start_notification_monitor,
+    stop_notification_monitor,
+)
 from ..slurm.params import SlurmParams
 from ..utils.async_helpers import create_task
+from ..utils.logging import setup_logger
 from .cache_middleware import get_cache_middleware
 from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
 from .models import (
@@ -46,9 +54,17 @@ from .models import (
     JobOutputResponse,
     JobStateWeb,
     JobStatusResponse,
+    PartitionResourcesWeb,
+    PartitionStatusResponse,
     LaunchJobRequest,
     LaunchJobResponse,
+    NotificationDeviceRegistration,
+    NotificationPreferences,
+    NotificationPreferencesPatch,
+    NotificationTestRequest,
     SlurmDefaultsWeb,
+    WebPushSubscriptionRegistration,
+    WebPushUnsubscribeRequest,
 )
 from .security import (
     APIKeyManager,
@@ -76,6 +92,7 @@ def group_array_job_tasks(
         - List of array job groups
     """
     from collections import defaultdict
+
     from ..cache import get_cache
 
     # Separate array tasks from regular jobs
@@ -327,6 +344,12 @@ async def startup_event():
     create_task(periodic_connection_health_check())
     logger.info("Started periodic connection health check")
 
+    try:
+        await start_notification_monitor()
+        logger.info("Notification monitor started")
+    except Exception as e:
+        logger.warning(f"Failed to start notification monitor: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -349,6 +372,12 @@ async def shutdown_event():
     try:
         await stop_cache_scheduler()
         logger.info("Cache scheduler stopped")
+    except Exception:
+        pass
+
+    try:
+        await stop_notification_monitor()
+        logger.info("Notification monitor stopped")
     except Exception:
         pass
 
@@ -459,7 +488,7 @@ if ALLOWED_ORIGINS:
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["X-API-Key", "Content-Type"],
         max_age=3600,
     )
@@ -512,6 +541,27 @@ async def verify_api_key(
         raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 
     return True
+
+
+async def get_api_key(
+    request: Request, api_key: Optional[str] = Depends(api_key_header)
+) -> str:
+    """Return validated API key for endpoints that need to bind data to it."""
+    if not REQUIRE_API_KEY:
+        return ""
+
+    if request.url.path == "/health":
+        return ""
+
+    if not api_key:
+        raise HTTPException(
+            status_code=401, detail="API key required. Please provide X-API-Key header."
+        )
+
+    if not api_key_manager.validate_key(api_key):
+        raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+    return api_key
 
 
 async def verify_api_key_flexible(
@@ -579,6 +629,56 @@ async def verify_websocket_api_key(websocket: WebSocket):
 
     logger.info(f"WebSocket auth successful for {websocket.url.path}")
     return True
+
+
+def _normalize_device_token(token: str) -> str:
+    token = re.sub(r"[^0-9a-fA-F]", "", token or "")
+    if len(token) < 32:
+        raise HTTPException(status_code=400, detail="Invalid device token")
+    return token.lower()
+
+
+def _normalize_environment(environment: Optional[str]) -> Optional[str]:
+    if environment is None:
+        return None
+    env = environment.lower()
+    if env not in {"sandbox", "production"}:
+        raise HTTPException(status_code=400, detail="Invalid environment value")
+    return env
+
+
+def _sanitize_notification_preferences(data: dict) -> dict:
+    allowed_states = data.get("allowed_states")
+    if allowed_states is not None:
+        valid_states = {state.value for state in JobState}
+        for state in allowed_states:
+            if state not in valid_states:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid job state: {state}"
+                )
+
+    def _sanitize_list(values, sanitizer):
+        if values is None:
+            return None
+        return [sanitizer(value) for value in values]
+
+    data["muted_job_ids"] = _sanitize_list(
+        data.get("muted_job_ids"), InputSanitizer.sanitize_job_id
+    )
+    data["muted_hosts"] = _sanitize_list(
+        data.get("muted_hosts"), InputSanitizer.sanitize_hostname
+    )
+    data["allowed_users"] = _sanitize_list(
+        data.get("allowed_users"), InputSanitizer.sanitize_username
+    )
+    patterns = data.get("muted_job_name_patterns")
+    if patterns is not None:
+        data["muted_job_name_patterns"] = [
+            InputSanitizer.sanitize_text(pattern, max_length=200)
+            for pattern in patterns
+        ]
+
+    return data
 
 
 _slurm_manager: Optional[SlurmManager] = None
@@ -1020,6 +1120,12 @@ def _format_time_delta(delta: timedelta) -> str:
         return f"{days} day{'s' if days != 1 else ''}"
 
 
+async def _run_in_executor(func, *args, **kwargs):
+    """Run blocking functions in the shared thread pool."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+
+
 @app.get("/api/hosts", response_model=List[HostInfoWeb])
 async def get_hosts(authenticated: bool = Depends(verify_api_key)):
     """Get list of configured Slurm hosts."""
@@ -1046,6 +1152,107 @@ async def get_hosts(authenticated: bool = Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"Error getting hosts: {e}")
         raise HTTPException(status_code=500, detail=sanitize_error_message(e))
+
+
+@app.get("/api/partitions", response_model=List[PartitionStatusResponse])
+async def get_partitions(
+    host: Optional[str] = Query(None, description="Specific host to query"),
+    force_refresh: bool = Query(
+        False, description="Force refresh from Slurm, bypassing cache"
+    ),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Get partition resource state across hosts."""
+    try:
+        manager = get_slurm_manager()
+
+        if host:
+            host = InputSanitizer.sanitize_hostname(host)
+            slurm_hosts = [h for h in manager.slurm_hosts if h.host.hostname == host]
+            if not slurm_hosts:
+                raise HTTPException(status_code=404, detail="Host not found")
+        else:
+            slurm_hosts = manager.slurm_hosts
+
+        start = time.perf_counter()
+
+        async def fetch_host_partitions(slurm_host):
+            hostname = slurm_host.host.hostname
+            try:
+                conn = await _run_in_executor(
+                    manager._get_connection, slurm_host.host
+                )
+                partitions, cached, cache_age, stale = await _run_in_executor(
+                    manager.slurm_client.get_partition_state,
+                    conn,
+                    hostname,
+                    force_refresh,
+                )
+
+                partition_web = []
+                for partition in partitions:
+                    gpu_types = None
+                    if partition.gpu_types:
+                        gpu_types = {
+                            k: {"total": v["total"], "used": v["used"]}
+                            for k, v in partition.gpu_types.items()
+                        }
+
+                    partition_web.append(
+                        PartitionResourcesWeb(
+                            partition=partition.name,
+                            availability=partition.availability,
+                            states=sorted(partition.states),
+                            nodes_total=partition.nodes_total,
+                            cpus_alloc=partition.cpus_alloc,
+                            cpus_idle=partition.cpus_idle,
+                            cpus_other=partition.cpus_other,
+                            cpus_total=partition.cpus_total,
+                            gpus_total=partition.gpus_total,
+                            gpus_used=partition.gpus_used,
+                            gpus_idle=partition.gpus_idle,
+                            gpu_types=gpu_types,
+                        )
+                    )
+
+                updated_at = None
+                cache_age_seconds = None
+                if cached:
+                    cache_age_seconds = int(cache_age)
+                    updated_at = (
+                        datetime.now(timezone.utc) - timedelta(seconds=cache_age)
+                    ).isoformat()
+                else:
+                    updated_at = datetime.now(timezone.utc).isoformat()
+
+                return PartitionStatusResponse(
+                    hostname=hostname,
+                    partitions=partition_web,
+                    query_time=f"{time.perf_counter() - start:.3f}s",
+                    cached=cached,
+                    stale=stale,
+                    cache_age_seconds=cache_age_seconds,
+                    updated_at=updated_at,
+                )
+            except Exception as e:
+                logger.error(f"Failed to fetch partitions for {hostname}: {e}")
+                return PartitionStatusResponse(
+                    hostname=hostname,
+                    partitions=[],
+                    query_time=f"{time.perf_counter() - start:.3f}s",
+                    error=sanitize_error_message(e),
+                )
+
+        tasks = [fetch_host_partitions(slurm_host) for slurm_host in slurm_hosts]
+        return await asyncio.gather(*tasks)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting partition state: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve partition state"
+        )
 
 
 @app.get("/api/status", response_model=List[JobStatusResponse])
@@ -1093,7 +1300,7 @@ async def get_job_status(
                 f"⚠️ SECURITY ALERT: Special user value '{user}' detected - attempting to fetch ALL users' jobs"
             )
             logger.warning(
-                f"This will fetch jobs from ALL users on the cluster, which may be slow and cause cache pollution"
+                "This will fetch jobs from ALL users on the cluster, which may be slow and cause cache pollution"
             )
             logger.warning(
                 f"Request from: {request.client.host if request and hasattr(request, 'client') else 'unknown'}"
@@ -1296,17 +1503,7 @@ async def get_job_status(
                             )
                             # Trigger async refresh without awaiting
                             asyncio.create_task(
-                                fetch_host_jobs_async(
-                                    slurm_host,
-                                    user,
-                                    since,
-                                    None,
-                                    state,
-                                    active_only,
-                                    completed_only,
-                                    skip_user_detection,
-                                    True,
-                                )
+                                fetch_host_jobs(slurm_host)
                             )
 
                     # Apply state filter if provided
@@ -2952,6 +3149,163 @@ async def get_watcher_stats(
         raise HTTPException(status_code=500, detail="Failed to get watcher statistics")
 
 
+@app.post("/api/notifications/devices")
+async def register_notification_device(
+    payload: NotificationDeviceRegistration,
+    api_key: str = Depends(get_api_key),
+):
+    """Register or update a device token for push notifications."""
+    try:
+        token = _normalize_device_token(payload.token)
+        platform = payload.platform.lower()
+        if platform not in {"ios"}:
+            raise HTTPException(status_code=400, detail="Unsupported platform")
+
+        environment = _normalize_environment(payload.environment)
+        api_key_hash = (
+            hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
+        )
+
+        cache = get_cache()
+        cache.upsert_notification_device(
+            api_key_hash=api_key_hash,
+            device_token=token,
+            platform=platform,
+            bundle_id=payload.bundle_id
+            or config.notification_settings.apns_bundle_id
+            or None,
+            environment=environment,
+            device_id=payload.device_id,
+            enabled=payload.enabled,
+        )
+
+        return {"success": True, "token": token}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to register notification device: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register device")
+
+
+@app.delete("/api/notifications/devices/{token}")
+async def unregister_notification_device(
+    token: str,
+    api_key: str = Depends(get_api_key),
+):
+    """Unregister a device token."""
+    try:
+        normalized_token = _normalize_device_token(token)
+        api_key_hash = (
+            hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
+        )
+        cache = get_cache()
+        deleted = cache.remove_notification_device(
+            api_key_hash=api_key_hash, device_token=normalized_token
+        )
+        return {"success": True, "deleted": deleted}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to unregister device: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unregister device")
+
+
+@app.post("/api/notifications/test")
+async def test_notification(
+    payload: NotificationTestRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Send a test notification to registered devices or a specific token."""
+    service = get_notification_service()
+    if not service.enabled:
+        raise HTTPException(status_code=400, detail="Notifications not configured")
+
+    token = _normalize_device_token(payload.token) if payload.token else None
+    sent = await service.send_test_notification(
+        title=payload.title, body=payload.body, token=token
+    )
+    return {"success": True, "sent": sent}
+
+
+@app.get("/api/notifications/preferences")
+async def get_notification_preferences(
+    api_key: str = Depends(get_api_key),
+):
+    """Get notification preferences for the current API key."""
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
+    cache = get_cache()
+    preferences = cache.get_notification_preferences(api_key_hash=api_key_hash)
+    return NotificationPreferences(**preferences)
+
+
+@app.patch("/api/notifications/preferences")
+async def update_notification_preferences(
+    payload: NotificationPreferencesPatch,
+    api_key: str = Depends(get_api_key),
+):
+    """Update notification preferences for the current API key."""
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
+    cache = get_cache()
+    current = cache.get_notification_preferences(api_key_hash=api_key_hash)
+    updates = payload.model_dump(exclude_unset=True)
+    updates = _sanitize_notification_preferences(updates)
+
+    merged = {**current, **updates}
+    cache.upsert_notification_preferences(api_key_hash=api_key_hash, preferences=merged)
+    return NotificationPreferences(**merged)
+
+
+@app.get("/api/notifications/webpush/vapid")
+async def get_webpush_vapid(authenticated: bool = Depends(verify_api_key)):
+    """Return Web Push VAPID public key for browser registration."""
+    settings = config.notification_settings
+    return {
+        "enabled": settings.webpush_enabled,
+        "public_key": settings.webpush_vapid_public_key,
+    }
+
+
+@app.post("/api/notifications/webpush/subscribe")
+async def register_webpush_subscription(
+    payload: WebPushSubscriptionRegistration,
+    api_key: str = Depends(get_api_key),
+):
+    """Register a Web Push subscription."""
+    endpoint = InputSanitizer.sanitize_text(payload.endpoint, max_length=2048)
+    if not endpoint.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Invalid endpoint")
+
+    p256dh = InputSanitizer.sanitize_text(payload.keys.p256dh, max_length=512)
+    auth = InputSanitizer.sanitize_text(payload.keys.auth, max_length=512)
+
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
+    cache = get_cache()
+    cache.upsert_webpush_subscription(
+        api_key_hash=api_key_hash,
+        endpoint=endpoint,
+        p256dh=p256dh,
+        auth=auth,
+        user_agent=payload.user_agent,
+        enabled=payload.enabled,
+    )
+    return {"success": True, "endpoint": endpoint}
+
+
+@app.post("/api/notifications/webpush/unsubscribe")
+async def unregister_webpush_subscription(
+    payload: WebPushUnsubscribeRequest,
+    api_key: str = Depends(get_api_key),
+):
+    """Unregister a Web Push subscription."""
+    endpoint = InputSanitizer.sanitize_text(payload.endpoint, max_length=2048)
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
+    cache = get_cache()
+    deleted = cache.remove_webpush_subscription(
+        api_key_hash=api_key_hash, endpoint=endpoint
+    )
+    return {"success": True, "deleted": deleted}
+
+
 @app.post("/api/watchers/cleanup")
 async def cleanup_orphaned_watchers(
     dry_run: bool = Query(default=False, description="Only list what would be cleaned"),
@@ -4435,7 +4789,6 @@ async def monitor_all_jobs_singleton():
         get_slurm_manager()
         job_data_manager = get_job_data_manager()
         job_states = {}
-
         # ⚡ PERFORMANCE: Use different intervals for different update types
         last_full_update = 0
         FAST_INTERVAL = 15  # Fast updates for running jobs every 15 seconds
@@ -4457,7 +4810,6 @@ async def monitor_all_jobs_singleton():
 
                 current_time = asyncio.get_event_loop().time()
                 time_since_full = current_time - last_full_update
-
                 # Determine if we should do a full update (including completed jobs)
                 # or just active jobs (faster)
                 if time_since_full >= FULL_INTERVAL:
@@ -4506,6 +4858,16 @@ async def monitor_all_jobs_singleton():
                     if is_new or state_changed or is_running:
                         old_state = job_states.get(job_key)
                         job_states[job_key] = job.state
+                        new_state_value = (
+                            job.state.value
+                            if hasattr(job.state, "value")
+                            else job.state
+                        )
+                        old_state_value = (
+                            old_state.value
+                            if old_state is not None and hasattr(old_state, "value")
+                            else old_state
+                        )
 
                         # Capture job_id BEFORE any processing to detect mutations
                         original_job_id = job.job_id
@@ -4541,8 +4903,8 @@ async def monitor_all_jobs_singleton():
                                 "type": "job_update",
                                 "job_id": original_job_id,  # Use captured value
                                 "hostname": original_hostname,  # Use captured value
-                                "old_state": old_state.value if old_state else None,
-                                "new_state": job.state.value,
+                                "old_state": old_state_value,
+                                "new_state": new_state_value,
                                 "job": job_dict_copy,
                             }
                         )
@@ -4557,16 +4919,19 @@ async def monitor_all_jobs_singleton():
                             hostname=hostname, job_ids=[job_id], limit=1
                         )
                         if completed_job_data:
+                            completed_job = completed_job_data[0]
+
                             updates.append(
                                 {
                                     "type": "job_completed",
                                     "job_id": job_id,
                                     "hostname": hostname,
                                     "job": JobInfoWeb.from_job_info(
-                                        completed_job_data[0]
+                                        completed_job
                                     ).model_dump(mode="json"),
                                 }
                             )
+
                         else:
                             # Skip sending update if we can't get job data
                             # Frontend will handle job removal via periodic sync
@@ -4643,8 +5008,8 @@ async def websocket_all_jobs(websocket: WebSocket):
 
         # Send initial job list
         try:
-            from ..job_data_manager import get_job_data_manager
             from ..cache import get_cache
+            from ..job_data_manager import get_job_data_manager
 
             manager = get_slurm_manager()
             job_data_manager = get_job_data_manager()

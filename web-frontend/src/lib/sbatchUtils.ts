@@ -3,16 +3,16 @@ export interface JobParameters {
   memory?: number;
   timeLimit?: number;
   nodes?: number;
-  partition: string;
-  account: string;
-  jobName: string;
-  constraint: string;
+  partition?: string;
+  account?: string;
+  jobName?: string;
+  constraint?: string;
   ntasksPerNode?: number;
   gpusPerNode?: number;
-  gres: string;
-  outputFile: string;
-  errorFile: string;
-  sourceDir: string;
+  gres?: string;
+  outputFile?: string;
+  errorFile?: string;
+  sourceDir?: string;
 }
 
 export interface ValidationDetails {

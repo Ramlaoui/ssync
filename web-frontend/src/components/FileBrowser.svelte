@@ -15,13 +15,26 @@
   interface Props {
     sourceDir?: string;
     initialPath?: string;
+    class?: string;
   }
 
-  let { sourceDir = $bindable(""), initialPath = "/" }: Props = $props();
+  let { sourceDir = $bindable(""), initialPath = "/", class: className = "" }: Props = $props();
+
+  interface MatchResult {
+    score: number;
+    matches: number[];
+  }
+
+  interface LocalEntry {
+    name: string;
+    path: string;
+    is_dir: boolean;
+    matchResult?: MatchResult;
+  }
 
   // Browser state
-  let localEntries: { name: string; path: string; is_dir: boolean }[] = $state([]);
-  let filteredEntries: { name: string; path: string; is_dir: boolean }[] = $state([]);
+  let localEntries: LocalEntry[] = $state([]);
+  let filteredEntries: LocalEntry[] = $state([]);
   let currentLocalPath = $state("/");
   let maxEntries = 100;
   let showHiddenFiles = $state(false);
@@ -156,7 +169,8 @@
       if (axiosError.response?.status === 401) {
         error = "Authentication required. Please configure your API key in settings.";
       } else if (axiosError.response?.status === 403) {
-        const responseText = axiosError.response?.data?.detail || '';
+        const responseData = axiosError.response?.data as { detail?: string } | undefined;
+        const responseText = responseData?.detail || '';
         if (responseText.includes('Access denied') || responseText.includes('Path must be under')) {
           error = `Access denied. For security, only these directories are allowed: /home, /Users, /opt, /mnt, /tmp, /var/tmp, and your user directory.`;
         } else {
@@ -208,7 +222,7 @@
   const quickPaths = [];
 </script>
 
-<div class="flex flex-col h-full bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border">
+<div class={`flex flex-col h-full bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border ${className}`.trim()}>
   <!-- Simplified Header -->
   <div class="flex-shrink-0 p-4 border-b border-gray-200 dark:border-border bg-gray-50 dark:bg-secondary rounded-t-lg">
     <!-- Search and Navigation bar -->

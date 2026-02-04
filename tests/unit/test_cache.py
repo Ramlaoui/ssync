@@ -54,6 +54,9 @@ class TestCacheInitialization:
             "job_watchers",
             "watcher_events",
             "watcher_variables",
+            "notification_devices",
+            "notification_preferences",
+            "webpush_subscriptions",
             "array_jobs",
             "array_task_stats",
         }
@@ -79,6 +82,10 @@ class TestCacheInitialization:
             "idx_completed_jobs",
             "idx_watchers_job",
             "idx_watchers_state",
+            "idx_notification_devices_key",
+            "idx_notification_devices_platform",
+            "idx_webpush_subscriptions_key",
+            "idx_webpush_subscriptions_enabled",
             "idx_array_jobs_hostname",
         }
 
@@ -183,6 +190,122 @@ class TestBasicJobCaching:
 
         cached = cache.get_cached_job("123", "test.host")
         assert cached.is_active is False
+        cache.close()
+
+
+class TestNotificationDevices:
+    """Tests for notification device storage."""
+
+    @pytest.mark.unit
+    def test_upsert_and_list_notification_device(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+
+        cache.upsert_notification_device(
+            api_key_hash="hash1",
+            device_token="token1",
+            platform="ios",
+            bundle_id="com.example.app",
+            environment="sandbox",
+            device_id="device-1",
+            enabled=True,
+        )
+
+        devices = cache.list_notification_devices(platform="ios")
+        assert len(devices) == 1
+        assert devices[0]["device_token"] == "token1"
+        assert devices[0]["environment"] == "sandbox"
+        cache.close()
+
+    @pytest.mark.unit
+    def test_remove_notification_device(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+
+        cache.upsert_notification_device(
+            api_key_hash="hash2",
+            device_token="token2",
+            platform="ios",
+            enabled=True,
+        )
+
+        deleted = cache.remove_notification_device(
+            api_key_hash="hash2", device_token="token2"
+        )
+        assert deleted == 1
+        assert cache.list_notification_devices(platform="ios") == []
+        cache.close()
+
+
+class TestNotificationPreferences:
+    """Tests for notification preferences."""
+
+    @pytest.mark.unit
+    def test_default_preferences(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+        prefs = cache.get_notification_preferences(api_key_hash="missing")
+        assert prefs["enabled"] is True
+        assert prefs["muted_job_ids"] == []
+        cache.close()
+
+    @pytest.mark.unit
+    def test_upsert_preferences(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+        cache.upsert_notification_preferences(
+            api_key_hash="hash",
+            preferences={
+                "enabled": False,
+                "allowed_states": ["F", "TO"],
+                "muted_job_ids": ["123"],
+                "muted_hosts": ["host1"],
+                "muted_job_name_patterns": ["debug"],
+                "allowed_users": ["alice"],
+            },
+        )
+        prefs = cache.get_notification_preferences(api_key_hash="hash")
+        assert prefs["enabled"] is False
+        assert prefs["allowed_states"] == ["F", "TO"]
+        assert prefs["muted_job_ids"] == ["123"]
+        assert prefs["muted_hosts"] == ["host1"]
+        assert prefs["muted_job_name_patterns"] == ["debug"]
+        assert prefs["allowed_users"] == ["alice"]
+        cache.close()
+
+
+class TestWebPushSubscriptions:
+    """Tests for Web Push subscriptions."""
+
+    @pytest.mark.unit
+    def test_upsert_and_list_subscription(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+        cache.upsert_webpush_subscription(
+            api_key_hash="hash",
+            endpoint="https://example.com/endpoint",
+            p256dh="p256",
+            auth="auth",
+            user_agent="test",
+            enabled=True,
+        )
+        subs = cache.list_webpush_subscriptions(api_key_hash="hash")
+        assert len(subs) == 1
+        assert subs[0]["endpoint"] == "https://example.com/endpoint"
+        cache.close()
+
+    @pytest.mark.unit
+    def test_remove_subscription(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+        cache.upsert_webpush_subscription(
+            api_key_hash="hash",
+            endpoint="https://example.com/endpoint",
+            p256dh="p256",
+            auth="auth",
+            user_agent="test",
+            enabled=True,
+        )
+        deleted = cache.remove_webpush_subscription(
+            api_key_hash="hash",
+            endpoint="https://example.com/endpoint",
+        )
+        assert deleted == 1
+        assert cache.list_webpush_subscriptions(api_key_hash="hash") == []
         cache.close()
 
     @pytest.mark.unit
