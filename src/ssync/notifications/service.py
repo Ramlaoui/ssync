@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import TYPE_CHECKING, Iterable, List, Optional
 
 from ..cache import get_cache
 from ..models.job import JobState
 from ..utils.config import config
 from ..utils.logging import setup_logger
-from .apns import APNsClient
-from .webpush import WebPushClient
+
+if TYPE_CHECKING:
+    from .apns import APNsClient
+    from .webpush import WebPushClient
 
 logger = setup_logger(__name__)
 
@@ -43,20 +45,35 @@ class NotificationService:
         self._send_semaphore = asyncio.Semaphore(10)
 
         if self.settings.enabled and self.settings.is_apns_configured():
-            self._apns_client = APNsClient(
-                key_id=self.settings.apns_key_id,
-                team_id=self.settings.apns_team_id,
-                bundle_id=self.settings.apns_bundle_id,
-                private_key=self.settings.apns_private_key,
-                use_sandbox=self.settings.apns_use_sandbox,
-                timeout_seconds=self.settings.apns_timeout_seconds,
-            )
+            try:
+                from .apns import APNsClient
+
+                self._apns_client = APNsClient(
+                    key_id=self.settings.apns_key_id,
+                    team_id=self.settings.apns_team_id,
+                    bundle_id=self.settings.apns_bundle_id,
+                    private_key=self.settings.apns_private_key,
+                    use_sandbox=self.settings.apns_use_sandbox,
+                    timeout_seconds=self.settings.apns_timeout_seconds,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"APNs provider unavailable; disabling APNs notifications: {exc}"
+                )
+
         if self.settings.enabled and self.settings.is_webpush_configured():
-            self._webpush_client = WebPushClient(
-                vapid_public_key=self.settings.webpush_vapid_public_key,
-                vapid_private_key=self.settings.webpush_vapid_private_key,
-                vapid_subject=self.settings.webpush_vapid_subject,
-            )
+            try:
+                from .webpush import WebPushClient
+
+                self._webpush_client = WebPushClient(
+                    vapid_public_key=self.settings.webpush_vapid_public_key,
+                    vapid_private_key=self.settings.webpush_vapid_private_key,
+                    vapid_subject=self.settings.webpush_vapid_subject,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Web Push provider unavailable; disabling Web Push notifications: {exc}"
+                )
         if self.settings.enabled and not (self._apns_client or self._webpush_client):
             logger.warning("Notifications enabled but no providers are configured")
 

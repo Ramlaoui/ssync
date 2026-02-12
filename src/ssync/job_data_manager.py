@@ -14,6 +14,7 @@ DESIGN PRINCIPLE: One fetcher, one source of truth, one data flow.
 
 import asyncio
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -63,7 +64,55 @@ class JobDataManager:
 
     def __init__(self):
         self.cache = get_cache()
-        self._fetching_hosts: Set[str] = set()  # Prevent concurrent fetching per host
+        # Track in-flight host fetches to prevent duplicate expensive queries.
+        self._fetching_hosts: Set[str] = set()
+        self._fetching_hosts_lock = asyncio.Lock()
+
+        # Hard timeout for response-path fetches. Timed-out host tasks keep running
+        # in background and release reservation when done.
+        self._host_fetch_timeout_seconds = float(
+            os.getenv("SSYNC_HOST_FETCH_TIMEOUT_SECONDS", "45")
+        )
+
+        # If a host is already in-flight, wait briefly before serving cache so we
+        # can return fresher data when the in-flight request completes quickly.
+        self._busy_host_wait_seconds = float(
+            os.getenv("SSYNC_BUSY_HOST_WAIT_SECONDS", "1.5")
+        )
+        # Back off temporarily after host-level failures to avoid repeated
+        # connection timeouts on every incoming request.
+        self._host_failure_backoff_seconds = float(
+            os.getenv("SSYNC_HOST_FAILURE_BACKOFF_SECONDS", "20")
+        )
+        self._host_failure_until: Dict[str, float] = {}
+        self._host_failure_lock = asyncio.Lock()
+        self._profile_timings_enabled = (
+            os.getenv("SSYNC_PROFILE_TIMINGS", "0").lower() in {"1", "true", "yes"}
+        )
+        self._profile_request_counter = 0
+
+    def _next_profile_request_id(self) -> str:
+        """Generate a stable local ID for profiling correlation."""
+        self._profile_request_counter += 1
+        return f"r{self._profile_request_counter}"
+
+    def _log_profile(
+        self,
+        scope: str,
+        request_id: str,
+        timings_ms: Dict[str, float],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit a compact profiling line for operational debugging."""
+        if not timings_ms:
+            return
+        timing_text = ", ".join(
+            f"{name}={duration:.1f}ms" for name, duration in timings_ms.items()
+        )
+        meta_text = ""
+        if metadata:
+            meta_text = " ".join(f"{k}={v}" for k, v in metadata.items()) + " "
+        logger.info(f"PROFILE {scope} [{request_id}] {meta_text}{timing_text}")
 
     async def _run_in_executor(self, func, *args, **kwargs):
         """Run a blocking function in the thread pool if available."""
@@ -92,6 +141,7 @@ class JobDataManager:
         completed_only: bool = False,
         skip_user_detection: bool = False,
         force_refresh: bool = False,
+        profile: bool = False,
     ) -> List[JobInfo]:
         """
         THE MAIN JOB FETCHER - replaces manager.py get_all_jobs().
@@ -118,6 +168,15 @@ class JobDataManager:
         Returns:
             List of JobInfo objects with comprehensive data
         """
+        profile_enabled = profile or self._profile_timings_enabled
+        profile_request_id = self._next_profile_request_id() if profile_enabled else ""
+        profile_start = time.perf_counter()
+        profile_timings: Dict[str, float] = {}
+
+        def mark_timing(name: str, section_start: float) -> None:
+            if profile_enabled:
+                profile_timings[name] = (time.perf_counter() - section_start) * 1000
+
         try:
             from .web.app import get_slurm_manager
 
@@ -133,65 +192,118 @@ class JobDataManager:
                 else manager.slurm_hosts
             )
 
-            # Filter out hosts that are already being fetched to avoid conflicts
-            # For hosts already being fetched, return cached data instead of empty results
-            available_hosts = []
-            cached_jobs_from_busy_hosts = []
+            # Temporarily skip hosts that recently failed and serve cache instead.
+            section_start = time.perf_counter()
+            eligible_hosts, backed_off_hosts = await self._split_hosts_by_backoff(
+                hosts_to_query
+            )
+            mark_timing("split_backoff", section_start)
 
-            for slurm_host in hosts_to_query:
-                host_name = slurm_host.host.hostname
-                if host_name not in self._fetching_hosts:
-                    available_hosts.append(slurm_host)
-                else:
-                    # Host is already being fetched - return cached data for this host
-                    logger.info(
-                        f"Host {host_name} is already being fetched, returning cached data"
-                    )
-                    # If specific job_ids requested, only get those from cache
-                    if job_ids:
-                        cached_job_data = self.cache.get_cached_jobs_by_ids(
-                            job_ids, host_name
+            cached_jobs_from_backed_off_hosts: List[JobInfo] = []
+            if backed_off_hosts:
+                section_start = time.perf_counter()
+                backed_off_results = await asyncio.gather(
+                    *[
+                        self._get_cached_jobs_for_backed_off_host(
+                            slurm_host.host.hostname, job_ids, limit
                         )
-                        cached_jobs = [
-                            cjd.job_info
-                            for cjd in cached_job_data.values()
-                            if cjd.job_info
-                        ]
-                    else:
-                        cached_job_data = self.cache.get_cached_jobs(
-                            hostname=host_name, limit=limit or 1000
-                        )
-                        cached_jobs = [
-                            cjd.job_info for cjd in cached_job_data if cjd.job_info
-                        ]
-                    if cached_jobs:
-                        logger.info(
-                            f"Returning {len(cached_jobs)} cached jobs for busy host {host_name}"
-                        )
-                        cached_jobs_from_busy_hosts.extend(cached_jobs)
-                    else:
-                        logger.debug(
-                            f"No cached jobs available for busy host {host_name}"
-                        )
-
-            # If all hosts are busy, return cached data only
-            if not available_hosts:
-                logger.info(
-                    f"All hosts are busy, returning {len(cached_jobs_from_busy_hosts)} cached jobs"
+                        for slurm_host in backed_off_hosts
+                    ]
                 )
-                return cached_jobs_from_busy_hosts
+                for jobs_for_host in backed_off_results:
+                    cached_jobs_from_backed_off_hosts.extend(jobs_for_host)
+                mark_timing("backed_off_cache", section_start)
 
-            # Mark all hosts as being fetched
-            for slurm_host in available_hosts:
-                self._fetching_hosts.add(slurm_host.host.hostname)
+            # Atomically reserve hosts that are not already being fetched.
+            section_start = time.perf_counter()
+            available_hosts, busy_hosts = await self._reserve_hosts(eligible_hosts)
+            mark_timing("reserve_hosts", section_start)
 
+            cached_jobs_from_busy_hosts: List[JobInfo] = []
+
+            # If all hosts are busy/backed-off, prefer a global cache lookup to
+            # avoid expensive per-host cache fan-out under high concurrency.
+            if not available_hosts:
+                section_start = time.perf_counter()
+                if hostname:
+                    cached_jobs = self._get_cached_jobs_for_host(
+                        hostname, job_ids, limit
+                    )
+                elif job_ids:
+                    cached_job_data = self.cache.get_cached_jobs_by_ids(job_ids)
+                    cached_jobs = [
+                        cjd.job_info for cjd in cached_job_data.values() if cjd.job_info
+                    ]
+                elif limit:
+                    cached_job_data = self.cache.get_cached_jobs(limit=limit)
+                    cached_jobs = [cjd.job_info for cjd in cached_job_data if cjd.job_info]
+                else:
+                    if busy_hosts:
+                        busy_results = await asyncio.gather(
+                            *[
+                                self._get_cached_jobs_for_busy_host(
+                                    slurm_host.host.hostname, job_ids, limit
+                                )
+                                for slurm_host in busy_hosts
+                            ]
+                        )
+                        for jobs_for_host in busy_results:
+                            cached_jobs_from_busy_hosts.extend(jobs_for_host)
+                    cached_jobs = (
+                        cached_jobs_from_busy_hosts + cached_jobs_from_backed_off_hosts
+                    )
+
+                filtered_jobs = self._apply_filters(
+                    cached_jobs, state_filter, limit, job_ids
+                )
+                mark_timing("cache_only_filter", section_start)
+                if profile_enabled:
+                    profile_timings["total"] = (
+                        time.perf_counter() - profile_start
+                    ) * 1000
+                    self._log_profile(
+                        "fetch_all_jobs",
+                        profile_request_id,
+                        profile_timings,
+                        metadata={
+                            "hosts_total": len(hosts_to_query),
+                            "hosts_available": len(available_hosts),
+                            "hosts_busy": len(busy_hosts),
+                            "hosts_backed_off": len(backed_off_hosts),
+                            "result_jobs": len(filtered_jobs),
+                            "path": "cache_only",
+                        },
+                    )
+                logger.info(
+                    f"No hosts eligible for live fetch, returning {len(filtered_jobs)} cached jobs"
+                )
+                return filtered_jobs
+
+            # Busy hosts: wait briefly for in-flight fetch to complete, then use cache.
+            if busy_hosts:
+                section_start = time.perf_counter()
+                busy_results = await asyncio.gather(
+                    *[
+                        self._get_cached_jobs_for_busy_host(
+                            slurm_host.host.hostname, job_ids, limit
+                        )
+                        for slurm_host in busy_hosts
+                    ]
+                )
+                for jobs_for_host in busy_results:
+                    cached_jobs_from_busy_hosts.extend(jobs_for_host)
+                mark_timing("busy_host_cache", section_start)
+
+            host_tasks: Dict[str, asyncio.Task] = {}
             try:
-                # Fetch from all hosts concurrently using asyncio.gather()
+                # Fetch from all available hosts concurrently with bounded response time,
+                # so one slow cluster does not stall the full request.
                 logger.info(
                     f"Fetching jobs concurrently from {len(available_hosts)} hosts with limit={limit} per host"
                 )
-                host_results = await asyncio.gather(
-                    *[
+                for slurm_host in available_hosts:
+                    host_name = slurm_host.host.hostname
+                    host_tasks[host_name] = asyncio.create_task(
                         self._fetch_host_jobs(
                             manager,
                             slurm_host,
@@ -204,32 +316,97 @@ class JobDataManager:
                             skip_user_detection,
                             force_refresh,
                             limit,
-                        )
-                        for slurm_host in available_hosts
-                    ],
-                    return_exceptions=True,  # Don't fail all if one host fails
-                )
+                            profile_enabled=profile_enabled,
+                            profile_request_id=profile_request_id,
+                        ),
+                        name=f"fetch_jobs_{host_name}",
+                    )
 
-                # Collect successful results
-                all_jobs = []
-                # Include cached jobs from busy hosts first
+                task_to_host = {task: host for host, task in host_tasks.items()}
+                all_tasks = set(host_tasks.values())
+
+                section_start = time.perf_counter()
+                if self._host_fetch_timeout_seconds > 0:
+                    done_tasks, pending_tasks = await asyncio.wait(
+                        all_tasks,
+                        timeout=self._host_fetch_timeout_seconds,
+                        return_when=asyncio.ALL_COMPLETED,
+                    )
+                else:
+                    done_tasks, pending_tasks = await asyncio.wait(
+                        all_tasks, return_when=asyncio.ALL_COMPLETED
+                    )
+                mark_timing("wait_host_tasks", section_start)
+
+                all_jobs: List[JobInfo] = []
+                all_jobs.extend(cached_jobs_from_backed_off_hosts)
                 all_jobs.extend(cached_jobs_from_busy_hosts)
 
-                for i, result in enumerate(host_results):
-                    if isinstance(result, Exception):
+                section_start = time.perf_counter()
+                for done_task in done_tasks:
+                    host_name = task_to_host[done_task]
+                    try:
+                        result = done_task.result()
+                    except Exception as exc:
                         logger.error(
-                            f"Error fetching from {available_hosts[i].host.hostname}: {result}"
+                            f"Error fetching from {host_name}: {exc}. Falling back to cache."
                         )
-                    else:
-                        all_jobs.extend(result)
+                        result = self._get_cached_jobs_for_host(
+                            host_name, job_ids, limit
+                        )
+                    all_jobs.extend(result)
+                mark_timing("collect_done_tasks", section_start)
+
+                # Slow hosts: serve cache now, keep refresh running.
+                section_start = time.perf_counter()
+                for pending_task in pending_tasks:
+                    host_name = task_to_host[pending_task]
+                    logger.warning(
+                        f"Host {host_name} exceeded fetch timeout ({self._host_fetch_timeout_seconds:.1f}s); "
+                        "returning cached data for this cycle"
+                    )
+                    all_jobs.extend(
+                        self._get_cached_jobs_for_host(host_name, job_ids, limit)
+                    )
+                mark_timing("pending_cache_fallback", section_start)
+
+                completed_hosts = {task_to_host[task] for task in done_tasks}
+                if completed_hosts:
+                    await self._release_hosts(completed_hosts)
 
             finally:
-                # Clean up fetching state for all hosts
-                for slurm_host in available_hosts:
-                    self._fetching_hosts.discard(slurm_host.host.hostname)
+                # Safety cleanup: release any tasks that are done and attach callbacks
+                # for those still running.
+                releasable_hosts = {
+                    host_name for host_name, task in host_tasks.items() if task.done()
+                }
+                if releasable_hosts:
+                    await self._release_hosts(releasable_hosts)
+
+                for host_name, task in host_tasks.items():
+                    if not task.done():
+                        task.add_done_callback(self._make_release_callback(host_name))
 
             # Apply final filtering (limit already applied per-host)
-            filtered_jobs = self._apply_filters(all_jobs, state_filter, None, job_ids)
+            section_start = time.perf_counter()
+            filtered_jobs = self._apply_filters(all_jobs, state_filter, limit, job_ids)
+            mark_timing("final_filter", section_start)
+
+            if profile_enabled:
+                profile_timings["total"] = (time.perf_counter() - profile_start) * 1000
+                self._log_profile(
+                    "fetch_all_jobs",
+                    profile_request_id,
+                    profile_timings,
+                    metadata={
+                        "hosts_total": len(hosts_to_query),
+                        "hosts_available": len(available_hosts),
+                        "hosts_busy": len(busy_hosts),
+                        "hosts_backed_off": len(backed_off_hosts),
+                        "result_jobs": len(filtered_jobs),
+                        "path": "mixed",
+                    },
+                )
 
             logger.info(
                 f"Fetched {len(filtered_jobs)} jobs from {len(hosts_to_query)} hosts"
@@ -239,6 +416,192 @@ class JobDataManager:
         except Exception as e:
             logger.error(f"Error in fetch_all_jobs: {e}")
             return []
+
+    async def _split_hosts_by_backoff(self, hosts_to_query: list) -> tuple[list, list]:
+        """Split hosts into eligible/backed-off groups based on recent failures."""
+        if self._host_failure_backoff_seconds <= 0:
+            return hosts_to_query, []
+
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        eligible_hosts = []
+        backed_off_hosts = []
+
+        async with self._host_failure_lock:
+            expired_hosts = [
+                host
+                for host, backoff_until in self._host_failure_until.items()
+                if backoff_until <= now
+            ]
+            for host in expired_hosts:
+                self._host_failure_until.pop(host, None)
+
+            for slurm_host in hosts_to_query:
+                host_name = slurm_host.host.hostname
+                backoff_until = self._host_failure_until.get(host_name)
+                if backoff_until and backoff_until > now:
+                    backed_off_hosts.append(slurm_host)
+                else:
+                    eligible_hosts.append(slurm_host)
+
+        return eligible_hosts, backed_off_hosts
+
+    async def _mark_host_fetch_failure(self, host_name: str, reason: str) -> None:
+        """Mark a host as failed and temporarily back it off from live fetches."""
+        if self._host_failure_backoff_seconds <= 0:
+            return
+
+        loop = asyncio.get_running_loop()
+        backoff_until = loop.time() + self._host_failure_backoff_seconds
+        async with self._host_failure_lock:
+            self._host_failure_until[host_name] = backoff_until
+
+        logger.warning(
+            f"Host {host_name} fetch failed ({reason}); backing off for "
+            f"{self._host_failure_backoff_seconds:.1f}s"
+        )
+
+    async def _clear_host_fetch_failure(self, host_name: str) -> None:
+        """Clear host failure backoff after a successful live fetch."""
+        if self._host_failure_backoff_seconds <= 0:
+            return
+
+        async with self._host_failure_lock:
+            self._host_failure_until.pop(host_name, None)
+
+    async def _get_host_backoff_remaining_seconds(self, host_name: str) -> float:
+        """Return remaining backoff time for a host."""
+        if self._host_failure_backoff_seconds <= 0:
+            return 0.0
+
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        async with self._host_failure_lock:
+            backoff_until = self._host_failure_until.get(host_name)
+            if not backoff_until:
+                return 0.0
+            remaining = backoff_until - now
+            return max(0.0, remaining)
+
+    async def _reserve_hosts(self, hosts_to_query: list) -> tuple[list, list]:
+        """Atomically reserve hosts that are not currently in-flight."""
+        available_hosts = []
+        busy_hosts = []
+
+        async with self._fetching_hosts_lock:
+            for slurm_host in hosts_to_query:
+                host_name = slurm_host.host.hostname
+                if host_name in self._fetching_hosts:
+                    busy_hosts.append(slurm_host)
+                else:
+                    self._fetching_hosts.add(host_name)
+                    available_hosts.append(slurm_host)
+
+        return available_hosts, busy_hosts
+
+    async def _release_hosts(self, hostnames: Set[str]) -> None:
+        """Release reserved hosts."""
+        if not hostnames:
+            return
+
+        async with self._fetching_hosts_lock:
+            for host_name in hostnames:
+                self._fetching_hosts.discard(host_name)
+
+    def _make_release_callback(self, host_name: str):
+        """Create task callback to release host reservation after completion."""
+
+        def _on_done(task: asyncio.Task) -> None:
+            try:
+                if task.cancelled():
+                    logger.debug(f"In-flight fetch task for {host_name} was cancelled")
+                else:
+                    exc = task.exception()
+                    if exc:
+                        logger.debug(
+                            f"In-flight fetch task for {host_name} ended with error: {exc}"
+                        )
+            except Exception:
+                # Ignore callback inspection failures.
+                pass
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._release_hosts({host_name}))
+            except RuntimeError:
+                # Loop may already be closing; fallback best effort.
+                self._fetching_hosts.discard(host_name)
+
+        return _on_done
+
+    def _get_cached_jobs_for_host(
+        self,
+        host_name: str,
+        job_ids: Optional[List[str]],
+        limit: Optional[int],
+    ) -> List[JobInfo]:
+        """Return cached jobs for a host."""
+        if job_ids:
+            cached_job_data = self.cache.get_cached_jobs_by_ids(job_ids, host_name)
+            return [cjd.job_info for cjd in cached_job_data.values() if cjd.job_info]
+
+        cached_job_data = self.cache.get_cached_jobs(hostname=host_name, limit=limit or 1000)
+        return [cjd.job_info for cjd in cached_job_data if cjd.job_info]
+
+    async def _wait_for_host_idle(self, host_name: str, timeout_seconds: float) -> None:
+        """Wait briefly for a host to leave in-flight state."""
+        if timeout_seconds <= 0:
+            return
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+
+        while loop.time() < deadline:
+            async with self._fetching_hosts_lock:
+                if host_name not in self._fetching_hosts:
+                    return
+            await asyncio.sleep(0.05)
+
+    async def _get_cached_jobs_for_busy_host(
+        self,
+        host_name: str,
+        job_ids: Optional[List[str]],
+        limit: Optional[int],
+    ) -> List[JobInfo]:
+        """Return cache fallback for busy hosts after short freshness wait."""
+        logger.info(f"Host {host_name} is already being fetched, using cache fallback")
+        await self._wait_for_host_idle(host_name, self._busy_host_wait_seconds)
+
+        cached_jobs = self._get_cached_jobs_for_host(host_name, job_ids, limit)
+        if cached_jobs:
+            logger.info(
+                f"Returning {len(cached_jobs)} cached jobs for busy host {host_name}"
+            )
+        else:
+            logger.debug(f"No cached jobs available for busy host {host_name}")
+
+        return cached_jobs
+
+    async def _get_cached_jobs_for_backed_off_host(
+        self,
+        host_name: str,
+        job_ids: Optional[List[str]],
+        limit: Optional[int],
+    ) -> List[JobInfo]:
+        """Return cache fallback for hosts currently in failure backoff."""
+        remaining_seconds = await self._get_host_backoff_remaining_seconds(host_name)
+        logger.info(
+            f"Host {host_name} is in failure backoff ({remaining_seconds:.1f}s remaining), "
+            "using cache fallback"
+        )
+        cached_jobs = self._get_cached_jobs_for_host(host_name, job_ids, limit)
+        if cached_jobs:
+            logger.info(
+                f"Returning {len(cached_jobs)} cached jobs for backed-off host {host_name}"
+            )
+        else:
+            logger.debug(f"No cached jobs available for backed-off host {host_name}")
+        return cached_jobs
 
     async def _fetch_host_jobs(
         self,
@@ -253,10 +616,19 @@ class JobDataManager:
         skip_user_detection: bool,
         force_refresh: bool,
         limit: Optional[int] = None,
+        profile_enabled: bool = False,
+        profile_request_id: Optional[str] = None,
     ) -> List[JobInfo]:
         """Fetch jobs from a single host with comprehensive data capture."""
         hostname = slurm_host.host.hostname
         jobs = []
+        host_profile_timings: Dict[str, float] = {}
+        host_profile_start = time.perf_counter()
+
+        def mark_host_timing(name: str, section_start: float) -> None:
+            if profile_enabled:
+                host_profile_timings[name] = (time.perf_counter() - section_start) * 1000
+
         logger.info(
             f"_fetch_host_jobs called for {hostname} with limit={limit}, job_ids={job_ids}"
         )
@@ -270,24 +642,32 @@ class JobDataManager:
                 config.connection_settings.get("connect_timeout", 10)
             )
             try:
+                section_start = time.perf_counter()
                 conn = await asyncio.wait_for(
                     self._run_in_executor(manager._get_connection, slurm_host.host),
                     timeout=connect_timeout,
                 )
+                mark_host_timing("connect", section_start)
             except asyncio.TimeoutError:
                 logger.warning(
                     f"Connection to {hostname} timed out after {connect_timeout:.0f}s, skipping host for this cycle"
                 )
                 # Don't retry - just skip this host and try again next cycle
                 # This prevents cascading timeouts that block other operations
+                await self._mark_host_fetch_failure(hostname, "connection timeout")
                 return []
 
             # Check Slurm availability - run in thread pool
+            section_start = time.perf_counter()
             slurm_available = await self._run_in_executor(
                 manager.slurm_client.check_slurm_availability, conn, hostname
             )
+            mark_host_timing("check_slurm", section_start)
             if not slurm_available:
                 logger.warning(f"Slurm not available on {hostname}")
+                await self._mark_host_fetch_failure(
+                    hostname, "slurm availability check failed"
+                )
                 return []
 
             # Parse since parameter - each host gets its own parsing to ensure proper timezone handling
@@ -308,6 +688,9 @@ class JobDataManager:
                     )
                     logger.error(
                         "Refusing to fetch jobs without user filter to prevent performance issues"
+                    )
+                    await self._mark_host_fetch_failure(
+                        hostname, "failed to detect current user"
                     )
                     return []  # Fail safe: don't fetch anything if we can't determine user
             elif skip_user_detection and not effective_user:
@@ -342,10 +725,14 @@ class JobDataManager:
                         logger.error(
                             f"Could not detect current user on {hostname}: {e}"
                         )
+                        await self._mark_host_fetch_failure(
+                            hostname, "failed to detect current user in fallback"
+                        )
                         return []
 
             # 1. GET ACTIVE JOBS (unless completed_only) - OPTIMIZED with thread pool
             if not completed_only:
+                section_start = time.perf_counter()
                 active_jobs = await self._run_in_executor(
                     manager.slurm_client.get_active_jobs,
                     conn,
@@ -366,15 +753,18 @@ class JobDataManager:
                     )
 
                 jobs.extend(active_jobs)
+                mark_host_timing("fetch_active", section_start)
 
             # 2. GET COMPLETED JOBS (unless active_only) - OPTIMIZED with thread pool
             if not active_only:
                 active_job_ids = [job.job_id for job in jobs]
 
                 # Use intelligent since time (incremental fetching) - host-specific
+                section_start = time.perf_counter()
                 effective_since = await self._determine_effective_since(
                     hostname, since_dt
                 )
+                mark_host_timing("determine_since", section_start)
 
                 # NEW: Get cached completed job IDs to skip re-querying
                 cached_completed_ids = set()
@@ -390,6 +780,7 @@ class JobDataManager:
                             f"will skip re-querying these from Slurm"
                         )
 
+                section_start = time.perf_counter()
                 completed_jobs = await self._run_in_executor(
                     manager.slurm_client.get_completed_jobs,
                     conn,
@@ -403,8 +794,10 @@ class JobDataManager:
                     None,
                     cached_completed_ids,  # NEW: Pass cached IDs to skip
                 )
+                mark_host_timing("fetch_completed", section_start)
 
                 # CACHE COMPLETED JOBS AND FETCH OUTPUTS
+                section_start = time.perf_counter()
                 cached_completed_map = self.cache.get_cached_jobs_by_ids(
                     [job.job_id for job in completed_jobs], hostname
                 )
@@ -432,9 +825,12 @@ class JobDataManager:
                             except Exception:
                                 pass
                 jobs.extend(completed_jobs)
+                mark_host_timing("cache_completed", section_start)
 
                 # UPDATE FETCH STATE
+                section_start = time.perf_counter()
                 await self._update_fetch_state(hostname, conn)
+                mark_host_timing("update_fetch_state", section_start)
 
             # 3. ENHANCE WITH CACHED JOBS (filtered by user and respecting active_only/completed_only)
             # Special case: When querying specific job_ids, ALWAYS check cache if not found in Slurm
@@ -459,6 +855,7 @@ class JobDataManager:
 
             # Regular case: merge with cached completed jobs for bulk queries
             elif not active_only and not job_ids:
+                section_start = time.perf_counter()
                 cached_jobs = self.cache.get_cached_completed_jobs(
                     hostname, since=since_dt
                 )
@@ -478,6 +875,7 @@ class JobDataManager:
                                 user_cached_jobs.append(cached_job)
 
                 jobs = self._merge_with_cached_jobs(jobs, user_cached_jobs)
+                mark_host_timing("merge_cached_completed", section_start)
 
             # Apply per-host limit if specified
             if limit:
@@ -489,12 +887,34 @@ class JobDataManager:
                     f"Applied per-host limit of {limit} to {hostname}, reduced from {original_count} to {len(jobs)} jobs"
                 )
 
+            await self._clear_host_fetch_failure(hostname)
+            if profile_enabled:
+                host_profile_timings["total"] = (
+                    time.perf_counter() - host_profile_start
+                ) * 1000
+                self._log_profile(
+                    "fetch_host_jobs",
+                    profile_request_id or "host",
+                    host_profile_timings,
+                    metadata={"host": hostname, "result_jobs": len(jobs)},
+                )
             logger.info(
                 f"Returning {len(jobs)} jobs for user {effective_user} from {hostname} (limit={limit})"
             )
             return jobs
 
         except Exception as e:
+            if profile_enabled:
+                host_profile_timings["total"] = (
+                    time.perf_counter() - host_profile_start
+                ) * 1000
+                self._log_profile(
+                    "fetch_host_jobs",
+                    profile_request_id or "host",
+                    host_profile_timings,
+                    metadata={"host": hostname, "error": "true"},
+                )
+            await self._mark_host_fetch_failure(hostname, f"unexpected error: {e}")
             logger.error(f"Error fetching jobs from {hostname}: {e}")
             return []
 
