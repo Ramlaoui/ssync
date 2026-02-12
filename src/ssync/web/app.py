@@ -381,6 +381,11 @@ async def shutdown_event():
     except Exception:
         pass
 
+    try:
+        api_key_manager.flush_usage_stats()
+    except Exception:
+        pass
+
     executor.shutdown(wait=True, cancel_futures=True)
     logger.info("Thread pool shutdown complete")
 
@@ -1286,6 +1291,10 @@ async def get_job_status(
     force_refresh: bool = Query(
         False, description="Force refresh from Slurm, bypassing all caches"
     ),
+    profile: bool = Query(
+        False,
+        description="Enable server-side timing profile logs for this request",
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get job status across hosts."""
@@ -1363,6 +1372,7 @@ async def get_job_status(
                     completed_only=completed_only,
                     skip_user_detection=skip_user_detection,
                     force_refresh=force_refresh,
+                    profile=profile,
                 )
 
                 # Group jobs by hostname and create responses

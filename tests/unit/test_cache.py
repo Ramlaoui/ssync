@@ -396,6 +396,38 @@ class TestJobRetrieval:
         cache.close()
 
     @pytest.mark.unit
+    def test_get_cached_jobs_by_ids_max_age_validation(self, tmp_path):
+        """Test batch lookup filters stale jobs while keeping fresh ones."""
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+
+        old_submit = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        fresh_submit = datetime.now(timezone.utc).isoformat()
+        old_job = JobInfo(
+            job_id="old",
+            name="old_job",
+            state=JobState.COMPLETED,
+            hostname="test.host",
+            submit_time=old_submit,
+        )
+        fresh_job = JobInfo(
+            job_id="fresh",
+            name="fresh_job",
+            state=JobState.COMPLETED,
+            hostname="test.host",
+            submit_time=fresh_submit,
+        )
+        cache.cache_job(old_job)
+        cache.cache_job(fresh_job)
+
+        cached_map = cache.get_cached_jobs_by_ids(
+            ["old", "fresh"], "test.host", max_age_days=30
+        )
+
+        assert "old" not in cached_map
+        assert "fresh" in cached_map
+        cache.close()
+
+    @pytest.mark.unit
     def test_get_cached_jobs_all(self, tmp_path):
         """Test getting all cached jobs."""
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)

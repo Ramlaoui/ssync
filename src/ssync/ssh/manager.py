@@ -1,5 +1,6 @@
 """SSH connection management using native SSH with ControlMaster."""
 
+import threading
 from typing import Dict
 
 from ..models.cluster import Host
@@ -21,6 +22,7 @@ class ConnectionManager:
         """
         self.connection_timeout = connection_timeout
         self._connections: Dict[str, SSHConnection] = {}
+        self._lock = threading.RLock()
         logger.info("ConnectionManager initialized with native SSH")
 
     def get_connection(self, host: Host, force_refresh: bool = False):
@@ -35,35 +37,42 @@ class ConnectionManager:
         """
         host_string = self._get_host_string(host)
 
-        # Force refresh: close existing connection and create new one
-        if force_refresh and host_string in self._connections:
-            try:
-                # Try to close the existing connection gracefully
-                logger.info(f"Force refreshing connection to {host_string}")
-                del self._connections[host_string]
-            except Exception as e:
-                logger.warning(f"Error closing connection to {host_string}: {e}")
+        with self._lock:
+            # Force refresh: close existing connection and create new one
+            if force_refresh and host_string in self._connections:
+                try:
+                    logger.info(f"Force refreshing connection to {host_string}")
+                    del self._connections[host_string]
+                except Exception as e:
+                    logger.warning(f"Error closing connection to {host_string}: {e}")
 
-        # One connection per host (shared for all purposes)
-        if host_string not in self._connections:
-            host_config = self._host_to_config(host)
-            self._connections[host_string] = SSHConnection(host_config, host_string)
-            logger.debug(f"Created SSH connection for {host_string}")
-        else:
-            # Test existing connection health
-            try:
-                self._connections[host_string].run("echo 'test'", hide=True, timeout=5)
-            except Exception as e:
-                logger.warning(
-                    f"Existing connection to {host_string} is unhealthy: {e}"
-                )
-                # Remove bad connection and create new one
-                del self._connections[host_string]
+            # One connection per host (shared for all purposes)
+            connection = self._connections.get(host_string)
+            if connection is None:
                 host_config = self._host_to_config(host)
-                self._connections[host_string] = SSHConnection(host_config, host_string)
-                logger.info(f"Recreated SSH connection for {host_string}")
+                connection = SSHConnection(host_config, host_string)
+                self._connections[host_string] = connection
+                logger.debug(f"Created SSH connection for {host_string}")
+                return connection
 
-        return self._connections[host_string]
+        # Validate connection health outside lock so other threads can proceed.
+        try:
+            connection.run("echo 'test'", hide=True, timeout=5)
+            return connection
+        except Exception as e:
+            logger.warning(f"Existing connection to {host_string} is unhealthy: {e}")
+
+        with self._lock:
+            current = self._connections.get(host_string)
+            if current is not connection and current is not None:
+                # Another thread already refreshed this connection.
+                return current
+
+            host_config = self._host_to_config(host)
+            refreshed_connection = SSHConnection(host_config, host_string)
+            self._connections[host_string] = refreshed_connection
+            logger.info(f"Recreated SSH connection for {host_string}")
+            return refreshed_connection
 
     def _get_host_string(self, host: Host) -> str:
         """Build host string for identification."""
@@ -138,7 +147,8 @@ class ConnectionManager:
 
     def refresh_all_connections(self) -> int:
         """Note: ControlMasters persist, this just returns count."""
-        count = len(self._connections)
+        with self._lock:
+            count = len(self._connections)
         logger.info(
             f"Have {count} connections (ControlMasters persist between sessions)"
         )
@@ -149,15 +159,19 @@ class ConnectionManager:
         from .native import NativeSSH
 
         NativeSSH.cleanup_all()
-        self._connections.clear()
+        with self._lock:
+            self._connections.clear()
         logger.info("All connections closed")
 
     def get_stats(self) -> Dict:
         """Get connection statistics."""
         from .native import NativeSSH
 
+        with self._lock:
+            connection_count = len(self._connections)
+
         return {
-            "connections": len(self._connections),
+            "connections": connection_count,
             "control_masters": len(NativeSSH._control_masters),
         }
 
@@ -170,22 +184,28 @@ class ConnectionManager:
         unhealthy_count = 0
         to_remove = []
 
-        for host_string, connection in self._connections.items():
+        with self._lock:
+            connection_items = list(self._connections.items())
+
+        for host_string, connection in connection_items:
             try:
                 # Try a simple command to test connection with shorter timeout
                 connection.run("echo 'health check'", hide=True, timeout=5)
             except Exception as e:
                 logger.debug(f"Connection to {host_string} appears unhealthy: {e}")
-                to_remove.append(host_string)
+                to_remove.append((host_string, connection))
                 unhealthy_count += 1
 
         # Remove unhealthy connections (they'll be recreated on next use)
-        for host_string in to_remove:
-            try:
-                del self._connections[host_string]
-                logger.info(f"Removed unhealthy connection to {host_string}")
-            except Exception as e:
-                logger.warning(f"Error removing connection {host_string}: {e}")
+        with self._lock:
+            for host_string, old_connection in to_remove:
+                try:
+                    current = self._connections.get(host_string)
+                    if current is old_connection:
+                        del self._connections[host_string]
+                        logger.info(f"Removed unhealthy connection to {host_string}")
+                except Exception as e:
+                    logger.warning(f"Error removing connection {host_string}: {e}")
 
         return unhealthy_count
 

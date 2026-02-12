@@ -898,50 +898,35 @@ class JobDataCache:
         Returns:
             CachedJobData if found and not too old, None otherwise
         """
+        if max_age_days is None:
+            max_age_days = self.cache_settings.recycled_id_max_age_days
+
+        cache_cutoff = self._get_cache_cutoff_iso(max_age_days)
+        submit_time_cutoff = self._get_submit_time_cutoff(max_age_days)
+
         with self._get_connection() as conn:
+            query = "SELECT * FROM cached_jobs WHERE job_id = ?"
+            params: List[Any] = [job_id]
             if hostname:
-                cursor = conn.execute(
-                    "SELECT * FROM cached_jobs WHERE job_id = ? AND hostname = ?",
-                    (job_id, hostname),
-                )
-            else:
-                cursor = conn.execute(
-                    "SELECT * FROM cached_jobs WHERE job_id = ?", (job_id,)
-                )
+                query += " AND hostname = ?"
+                params.append(hostname)
+            if cache_cutoff:
+                query += " AND cached_at >= ?"
+                params.append(cache_cutoff)
+            cursor = conn.execute(query, params)
 
             row = cursor.fetchone()
             if row:
                 cached_data = self._row_to_cached_data(row)
-                if max_age_days is None:
-                    max_age_days = self.cache_settings.recycled_id_max_age_days
 
                 # Validate that the cached job isn't too old (likely a recycled ID)
                 if cached_data.job_info and cached_data.job_info.submit_time:
-                    from datetime import datetime, timezone
-
-                    # Handle both timezone-aware and naive datetimes
-                    now = datetime.now(timezone.utc)
-                    submit_time = cached_data.job_info.submit_time
-
-                    # Convert string to datetime if needed
-                    if isinstance(submit_time, str):
-                        # Parse ISO format datetime string
-                        submit_time = datetime.fromisoformat(
-                            submit_time.replace("Z", "+00:00")
-                        )
-
-                    # Convert to timezone-aware if needed
-                    if submit_time.tzinfo is None:
-                        submit_time = submit_time.replace(tzinfo=timezone.utc)
-                    if now.tzinfo is None:
-                        now = now.replace(tzinfo=timezone.utc)
-
-                    age_days = (now - submit_time).days
-
-                    if age_days > max_age_days:
-                        logger.info(
-                            f"Cached job {job_id} on {hostname} is {age_days} days old "
-                            f"(> {max_age_days} days), likely a recycled ID - ignoring cache"
+                    if self._is_submit_time_older_than_cutoff(
+                        cached_data.job_info.submit_time, submit_time_cutoff
+                    ):
+                        logger.debug(
+                            f"Ignoring stale cached job {job_id} on {hostname} "
+                            f"(>{max_age_days} days old)"
                         )
                         return None
 
@@ -965,9 +950,12 @@ class JobDataCache:
         results: Dict[str, CachedJobData] = {}
         if max_age_days is None:
             max_age_days = self.cache_settings.recycled_id_max_age_days
+        cache_cutoff = self._get_cache_cutoff_iso(max_age_days)
+        submit_time_cutoff = self._get_submit_time_cutoff(max_age_days)
 
         # SQLite has a limit on variables; chunk to stay under it.
         chunk_size = 500
+        skipped_stale: List[str] = []
         with self._get_connection() as conn:
             for i in range(0, len(job_ids), chunk_size):
                 chunk = job_ids[i : i + chunk_size]
@@ -983,6 +971,9 @@ class JobDataCache:
                         f"SELECT * FROM cached_jobs WHERE job_id IN ({placeholders})"
                     )
                     params = [*chunk]
+                if cache_cutoff:
+                    query += " AND cached_at >= ?"
+                    params.append(cache_cutoff)
 
                 cursor = conn.execute(query, params)
                 rows = cursor.fetchall()
@@ -992,30 +983,64 @@ class JobDataCache:
 
                     # Validate age to avoid recycled IDs
                     if cached_data.job_info and cached_data.job_info.submit_time:
-                        from datetime import datetime, timezone
-
-                        now = datetime.now(timezone.utc)
-                        submit_time = cached_data.job_info.submit_time
-                        if isinstance(submit_time, str):
-                            submit_time = datetime.fromisoformat(
-                                submit_time.replace("Z", "+00:00")
-                            )
-                        if submit_time.tzinfo is None:
-                            submit_time = submit_time.replace(tzinfo=timezone.utc)
-                        if now.tzinfo is None:
-                            now = now.replace(tzinfo=timezone.utc)
-
-                        age_days = (now - submit_time).days
-                        if age_days > max_age_days:
-                            logger.info(
-                                f"Cached job {job_id} on {cached_data.hostname} is {age_days} days old "
-                                f"(> {max_age_days} days), likely a recycled ID - ignoring cache"
-                            )
+                        if self._is_submit_time_older_than_cutoff(
+                            cached_data.job_info.submit_time, submit_time_cutoff
+                        ):
+                            skipped_stale.append(job_id)
                             continue
 
                     results[job_id] = cached_data
 
+        if skipped_stale:
+            logger.debug(
+                f"Skipped {len(skipped_stale)} stale cached jobs (>{max_age_days} days old)"
+            )
+
         return results
+
+    def _get_cache_cutoff_iso(self, max_age_days: Optional[int]) -> Optional[str]:
+        """Return cached_at cutoff (local time) for quick stale row filtering."""
+        if max_age_days is None or max_age_days <= 0:
+            return None
+        return (datetime.now() - timedelta(days=max_age_days)).isoformat()
+
+    def _get_submit_time_cutoff(self, max_age_days: Optional[int]) -> Optional[datetime]:
+        """Return submit_time cutoff (UTC) for recycled-ID validation."""
+        if max_age_days is None or max_age_days <= 0:
+            return None
+        from datetime import timezone
+
+        return datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+    def _is_submit_time_older_than_cutoff(
+        self, submit_time: Any, cutoff: Optional[datetime]
+    ) -> bool:
+        """Check whether submit_time is older than the provided UTC cutoff."""
+        if not submit_time or cutoff is None:
+            return False
+
+        from datetime import timezone
+
+        parsed_submit_time: Optional[datetime]
+        if isinstance(submit_time, str):
+            try:
+                parsed_submit_time = datetime.fromisoformat(
+                    submit_time.replace("Z", "+00:00")
+                )
+            except ValueError:
+                logger.debug(f"Failed to parse cached submit_time: {submit_time}")
+                return False
+        elif isinstance(submit_time, datetime):
+            parsed_submit_time = submit_time
+        else:
+            return False
+
+        if parsed_submit_time.tzinfo is None:
+            parsed_submit_time = parsed_submit_time.replace(tzinfo=timezone.utc)
+        else:
+            parsed_submit_time = parsed_submit_time.astimezone(timezone.utc)
+
+        return parsed_submit_time < cutoff
 
     def get_cached_jobs(
         self,

@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from ssync.web.security import (
+    APIKeyManager,
     InputSanitizer,
     PathValidator,
     RateLimiter,
@@ -543,6 +544,84 @@ class TestRateLimiter:
 
         result = await limiter.check_rate_limit(mock_request)
         assert result is True
+
+
+class TestAPIKeyManager:
+    """Tests for APIKeyManager usage-stat persistence behavior."""
+
+    @pytest.mark.unit
+    def test_validate_key_batches_usage_stat_writes(self, tmp_path):
+        key_file = tmp_path / ".api_key"
+        manager = APIKeyManager(
+            key_file=key_file,
+            usage_save_interval_seconds=3600,
+            usage_save_batch_size=3,
+        )
+        test_key = "batched-key"
+        manager.keys[test_key] = {
+            "name": "default",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "expires_at": "2999-01-01T00:00:00",
+            "last_used": None,
+            "usage_count": 0,
+        }
+
+        assert manager.validate_key(test_key) is True
+        assert manager.validate_key(test_key) is True
+        assert key_file.exists() is False
+
+        # Third request hits the batch threshold and persists.
+        assert manager.validate_key(test_key) is True
+        assert key_file.exists() is True
+
+        reloaded = APIKeyManager(key_file=key_file)
+        assert reloaded.keys[test_key]["usage_count"] == 3
+
+    @pytest.mark.unit
+    def test_flush_usage_stats_persists_pending_updates(self, tmp_path):
+        key_file = tmp_path / ".api_key"
+        manager = APIKeyManager(
+            key_file=key_file,
+            usage_save_interval_seconds=3600,
+            usage_save_batch_size=1000,
+        )
+        test_key = "flush-key"
+        manager.keys[test_key] = {
+            "name": "default",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "expires_at": "2999-01-01T00:00:00",
+            "last_used": None,
+            "usage_count": 0,
+        }
+
+        assert manager.validate_key(test_key) is True
+        assert key_file.exists() is False
+
+        manager.flush_usage_stats()
+        assert key_file.exists() is True
+
+        reloaded = APIKeyManager(key_file=key_file)
+        assert reloaded.keys[test_key]["usage_count"] == 1
+
+    @pytest.mark.unit
+    def test_validate_key_flushes_immediately_when_interval_is_zero(self, tmp_path):
+        key_file = tmp_path / ".api_key"
+        manager = APIKeyManager(
+            key_file=key_file,
+            usage_save_interval_seconds=0,
+            usage_save_batch_size=1000,
+        )
+        test_key = "immediate-key"
+        manager.keys[test_key] = {
+            "name": "default",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "expires_at": "2999-01-01T00:00:00",
+            "last_used": None,
+            "usage_count": 0,
+        }
+
+        assert manager.validate_key(test_key) is True
+        assert key_file.exists() is True
 
 
 class TestSanitizeErrorMessage:

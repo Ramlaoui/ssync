@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import secrets
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -379,92 +380,152 @@ class InputSanitizer:
 class APIKeyManager:
     """Manage API keys with secure storage and rotation."""
 
-    def __init__(self, key_file: Optional[Path] = None):
+    def __init__(
+        self,
+        key_file: Optional[Path] = None,
+        usage_save_interval_seconds: Optional[float] = None,
+        usage_save_batch_size: Optional[int] = None,
+    ):
         # Use the same location as CLI for consistency
         self.key_file = key_file or Path.home() / ".config" / "ssync" / ".api_key"
         self.keys: Dict[str, Dict] = {}
         self.simple_key: Optional[str] = None
+        self._lock = threading.RLock()
+        self._usage_save_interval_seconds = (
+            usage_save_interval_seconds
+            if usage_save_interval_seconds is not None
+            else float(os.getenv("SSYNC_API_KEY_SAVE_INTERVAL_SECONDS", "30"))
+        )
+        self._usage_save_batch_size = (
+            usage_save_batch_size
+            if usage_save_batch_size is not None
+            else int(os.getenv("SSYNC_API_KEY_SAVE_BATCH_SIZE", "100"))
+        )
+        self._pending_usage_updates = 0
+        self._last_save_monotonic = time.monotonic()
         self._load_keys()
 
     def _load_keys(self):
         """Load API keys from secure storage."""
-        if self.key_file.exists():
-            # Set restrictive permissions
-            try:
-                self.key_file.chmod(0o600)
-            except Exception:
-                pass
+        with self._lock:
+            if self.key_file.exists():
+                # Set restrictive permissions
+                try:
+                    self.key_file.chmod(0o600)
+                except Exception:
+                    pass
 
-            try:
-                # First try to read as simple text (single key)
-                with open(self.key_file, "r") as f:
-                    content = f.read().strip()
+                try:
+                    # First try to read as simple text (single key)
+                    with open(self.key_file, "r") as f:
+                        content = f.read().strip()
 
-                # If it looks like JSON, parse it
-                if content.startswith("{"):
-                    import json
+                    # If it looks like JSON, parse it
+                    if content.startswith("{"):
+                        import json
 
-                    self.keys = json.loads(content)
-                else:
-                    # Simple key file - just the key itself
-                    self.simple_key = content
-                    # Also add to keys dict for compatibility
-                    self.keys[content] = {
-                        "name": "default",
-                        "created_at": datetime.now().isoformat(),
-                        "expires_at": (
-                            datetime.now() + timedelta(days=365)
-                        ).isoformat(),
-                        "last_used": None,
-                        "usage_count": 0,
-                    }
-            except Exception as e:
-                logger.error(f"Failed to load API keys: {e}")
-                self.keys = {}
+                        self.keys = json.loads(content)
+                    else:
+                        # Simple key file - just the key itself
+                        self.simple_key = content
+                        # Also add to keys dict for compatibility
+                        self.keys[content] = {
+                            "name": "default",
+                            "created_at": datetime.now().isoformat(),
+                            "expires_at": (
+                                datetime.now() + timedelta(days=365)
+                            ).isoformat(),
+                            "last_used": None,
+                            "usage_count": 0,
+                        }
+                except Exception as e:
+                    logger.error(f"Failed to load API keys: {e}")
+                    self.keys = {}
+
+            self._pending_usage_updates = 0
+            self._last_save_monotonic = time.monotonic()
 
     def generate_key(self, name: str, expires_days: int = 90) -> str:
         """Generate a new API key."""
-        key = secrets.token_urlsafe(32)
-        expires_at = datetime.now() + timedelta(days=expires_days)
+        with self._lock:
+            key = secrets.token_urlsafe(32)
+            expires_at = datetime.now() + timedelta(days=expires_days)
 
-        self.keys[key] = {
-            "name": name,
-            "created_at": datetime.now().isoformat(),
-            "expires_at": expires_at.isoformat(),
-            "last_used": None,
-            "usage_count": 0,
-        }
+            self.keys[key] = {
+                "name": name,
+                "created_at": datetime.now().isoformat(),
+                "expires_at": expires_at.isoformat(),
+                "last_used": None,
+                "usage_count": 0,
+            }
 
-        self._save_keys()
+            self._save_keys_locked()
         return key
 
     def validate_key(self, key: str) -> bool:
         """Validate an API key."""
-        if key not in self.keys:
-            return False
+        should_persist = False
+        now = datetime.now()
 
-        key_data = self.keys[key]
+        with self._lock:
+            if key not in self.keys:
+                return False
 
-        # Check expiration
-        expires_at = datetime.fromisoformat(key_data["expires_at"])
-        if datetime.now() > expires_at:
-            return False
+            key_data = self.keys[key]
 
-        # Update usage stats
-        key_data["last_used"] = datetime.now().isoformat()
-        key_data["usage_count"] += 1
-        self._save_keys()
+            # Check expiration
+            expires_at = datetime.fromisoformat(key_data["expires_at"])
+            if now > expires_at:
+                return False
+
+            # Update usage stats in memory; persist batched to avoid per-request I/O.
+            key_data["last_used"] = now.isoformat()
+            key_data["usage_count"] = int(key_data.get("usage_count", 0)) + 1
+            self._pending_usage_updates += 1
+            should_persist = self._should_persist_usage_stats_locked()
+
+        if should_persist:
+            self._save_keys()
 
         return True
 
     def revoke_key(self, key: str):
         """Revoke an API key."""
-        if key in self.keys:
-            del self.keys[key]
-            self._save_keys()
+        with self._lock:
+            if key in self.keys:
+                del self.keys[key]
+                self._save_keys_locked()
+
+    def flush_usage_stats(self):
+        """Persist pending in-memory usage stats immediately."""
+        with self._lock:
+            if self._pending_usage_updates > 0:
+                self._save_keys_locked()
+
+    def _should_persist_usage_stats_locked(self) -> bool:
+        """Return True when batched usage stats should be flushed to disk."""
+        if self._pending_usage_updates <= 0:
+            return False
+
+        if self._usage_save_batch_size <= 1:
+            return True
+
+        if self._usage_save_interval_seconds <= 0:
+            return True
+
+        if self._pending_usage_updates >= self._usage_save_batch_size:
+            return True
+
+        elapsed = time.monotonic() - self._last_save_monotonic
+        return elapsed >= self._usage_save_interval_seconds
 
     def _save_keys(self):
         """Save API keys to secure storage."""
+        with self._lock:
+            self._save_keys_locked()
+
+    def _save_keys_locked(self):
+        """Save API keys to secure storage (requires caller to hold lock)."""
         import json
 
         self.key_file.parent.mkdir(parents=True, exist_ok=True)
@@ -474,6 +535,8 @@ class APIKeyManager:
 
         # Set restrictive permissions
         self.key_file.chmod(0o600)
+        self._pending_usage_updates = 0
+        self._last_save_monotonic = time.monotonic()
 
 
 def sanitize_error_message(error: Exception) -> str:
