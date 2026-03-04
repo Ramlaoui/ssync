@@ -588,6 +588,46 @@ class TestJobStateManagement:
         assert to_complete[0] == ("2", "test.host")
         cache.close()
 
+    @pytest.mark.unit
+    def test_verify_cached_jobs_only_checks_hosts_in_snapshot(self, tmp_path):
+        """Partial host snapshots must not complete jobs on hosts not queried."""
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+
+        jobs = [
+            JobInfo(job_id="1", name="job_1", state=JobState.RUNNING, hostname="host.a"),
+            JobInfo(job_id="2", name="job_2", state=JobState.RUNNING, hostname="host.a"),
+            JobInfo(job_id="3", name="job_3", state=JobState.RUNNING, hostname="host.b"),
+        ]
+        for job in jobs:
+            cache.cache_job(job)
+
+        # Snapshot only covers host.a
+        to_complete = cache.verify_cached_jobs({"host.a": ["1"]})
+
+        assert ("2", "host.a") in to_complete
+        assert ("3", "host.b") not in to_complete
+        cache.close()
+
+    @pytest.mark.unit
+    def test_inactive_active_state_normalized_to_unknown(self, tmp_path):
+        """Inactive cache entries should never surface as RUNNING/PENDING."""
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+
+        job = JobInfo(
+            job_id="123",
+            name="test_job",
+            state=JobState.RUNNING,
+            hostname="host.a",
+        )
+        cache.cache_job(job)
+        cache.mark_job_completed(job.job_id, job.hostname)
+
+        cached = cache.get_cached_job(job.job_id, job.hostname)
+        assert cached is not None
+        assert cached.is_active is False
+        assert cached.job_info.state == JobState.UNKNOWN
+        cache.close()
+
 
 class TestArrayJobMetadata:
     """Tests for array job metadata management."""
