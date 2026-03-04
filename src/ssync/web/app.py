@@ -2151,6 +2151,9 @@ async def get_job_output(
     force_refresh: bool = Query(
         False, description="Force refresh from SSH even if cached"
     ),
+    force: bool = Query(
+        False, description="Legacy alias for force_refresh", alias="force"
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get output files content for a specific job."""
@@ -2158,6 +2161,9 @@ async def get_job_output(
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
+
+        # Backward compatibility for older UI clients using `force=true`.
+        force_refresh = force_refresh or force
 
         # Get cache middleware early as it's used in multiple branches
         cache_middleware = get_cache_middleware()
