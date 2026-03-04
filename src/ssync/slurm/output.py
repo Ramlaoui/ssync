@@ -70,37 +70,35 @@ class SlurmOutput:
                 logger.debug(
                     f"scontrol show job batch failed for {hostname}: {result.stderr}"
                 )
-                return details
-
-            # scontrol prints blocks separated by blank lines
-            blocks = result.stdout.strip().split("\n\n")
-            for block in blocks:
-                if "JobId=" not in block:
-                    continue
-
-                stdout_path = None
-                stderr_path = None
-                submit_line = None
-                job_id = None
-
-                for token in block.replace("\n", " ").split():
-                    if token.startswith("JobId="):
-                        job_id = token.split("=", 1)[1]
-                    elif token.startswith("StdOut="):
-                        stdout_path = token.split("=", 1)[1]
-                    elif token.startswith("StdErr="):
-                        stderr_path = token.split("=", 1)[1]
-                    elif token.startswith("Command="):
-                        submit_line = token.split("=", 1)[1]
-
-                if job_id:
-                    stdout_path, stderr_path = self._expand_paths(
-                        job_id, stdout_path, stderr_path
+            else:
+                parsed = self._parse_scontrol_show_job_output(result.stdout)
+                for parsed_job_id, (
+                    stdout_path,
+                    stderr_path,
+                    submit_line,
+                ) in parsed.items():
+                    expanded_stdout, expanded_stderr = self._expand_paths(
+                        parsed_job_id, stdout_path, stderr_path
                     )
-                    details[job_id] = (stdout_path, stderr_path, submit_line)
+                    details[parsed_job_id] = (
+                        expanded_stdout,
+                        expanded_stderr,
+                        submit_line,
+                    )
 
         except Exception as e:
             logger.debug(f"Failed batch scontrol for {hostname}: {e}")
+
+        # Some clusters reject multi-job scontrol queries with:
+        # "too many arguments for keyword:show".
+        # Fallback to per-job queries for any missing details.
+        missing_job_ids = [job_id for job_id in job_ids if job_id not in details]
+        for job_id in missing_job_ids:
+            stdout_path, stderr_path, submit_line = self.get_job_details_from_scontrol(
+                conn, job_id, hostname
+            )
+            if stdout_path or stderr_path or submit_line:
+                details[job_id] = (stdout_path, stderr_path, submit_line)
 
         return details
 
@@ -123,27 +121,14 @@ class SlurmOutput:
                 logger.debug(f"scontrol show job failed for {job_id}: {result.stderr}")
                 return None, None, None
 
-            stdout_path = None
-            stderr_path = None
-            submit_line = None
-
-            for line in result.stdout.split("\n"):
-                line = line.strip()
-                if "StdOut=" in line:
-                    for part in line.split():
-                        if part.startswith("StdOut="):
-                            stdout_path = part.split("=", 1)[1]
-                            break
-                elif "StdErr=" in line:
-                    for part in line.split():
-                        if part.startswith("StdErr="):
-                            stderr_path = part.split("=", 1)[1]
-                            break
-                elif "Command=" in line:
-                    for part in line.split():
-                        if part.startswith("Command="):
-                            submit_line = part.split("=", 1)[1]
-                            break
+            parsed = self._parse_scontrol_show_job_output(result.stdout)
+            # Prefer exact JobId match, but fallback to first parsed block if needed.
+            stdout_path, stderr_path, submit_line = parsed.get(
+                job_id, (None, None, None)
+            )
+            if stdout_path is None and stderr_path is None and submit_line is None:
+                if parsed:
+                    stdout_path, stderr_path, submit_line = next(iter(parsed.values()))
 
             stdout_path, stderr_path = self._expand_paths(
                 job_id, stdout_path, stderr_path
@@ -156,6 +141,37 @@ class SlurmOutput:
         except Exception as e:
             logger.debug(f"Failed to get job details for job {job_id}: {e}")
             return None, None, None
+
+    def _parse_scontrol_show_job_output(
+        self, raw_output: str
+    ) -> dict[str, tuple[Optional[str], Optional[str], Optional[str]]]:
+        """Parse `scontrol show job` output into a job details mapping."""
+        details: dict[str, tuple[Optional[str], Optional[str], Optional[str]]] = {}
+        current_job_id: Optional[str] = None
+        stdout_path: Optional[str] = None
+        stderr_path: Optional[str] = None
+        submit_line: Optional[str] = None
+
+        def flush_current() -> None:
+            if current_job_id:
+                details[current_job_id] = (stdout_path, stderr_path, submit_line)
+
+        for token in raw_output.replace("\n", " ").split():
+            if token.startswith("JobId="):
+                flush_current()
+                current_job_id = token.split("=", 1)[1]
+                stdout_path = None
+                stderr_path = None
+                submit_line = None
+            elif token.startswith("StdOut="):
+                stdout_path = token.split("=", 1)[1]
+            elif token.startswith("StdErr="):
+                stderr_path = token.split("=", 1)[1]
+            elif token.startswith("Command="):
+                submit_line = token.split("=", 1)[1]
+
+        flush_current()
+        return details
 
     def get_job_output_files(
         self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None

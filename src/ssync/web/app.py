@@ -3650,6 +3650,14 @@ async def trigger_watcher_manually(
         matches_found = engine._check_patterns(watcher, content)
 
         if matches_found:
+            # Keep behavior consistent with background watcher loop:
+            # a successful pattern match should activate timer mode when enabled.
+            if watcher.definition.timer_mode_enabled and not watcher.timer_mode_active:
+                engine._update_watcher_timer_mode(watcher_id, True)
+                logger.info(
+                    f"Watcher {watcher_id} switched to timer mode after manual pattern match"
+                )
+
             # Count how many matches
             pattern = watcher.definition.pattern
             if pattern in engine._pattern_cache:

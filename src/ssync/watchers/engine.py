@@ -911,6 +911,27 @@ class WatcherEngine:
 
     async def _get_job_info(self, job_id: str, hostname: str) -> Optional[JobInfo]:
         """Get job information."""
+        # Prefer a live single-job lookup so watchers don't rely on stale cached
+        # stdout/stderr paths when multi-job cache refreshes fail.
+        try:
+            from ..web.app import get_slurm_manager
+
+            slurm_manager = get_slurm_manager()
+            if slurm_manager:
+                live_job_info = slurm_manager.get_job_info(hostname, job_id)
+                if live_job_info:
+                    try:
+                        # Keep cache warm with corrected paths.
+                        self.cache.cache_job(live_job_info, script_content=None)
+                    except Exception as cache_error:
+                        logger.debug(
+                            f"Failed to refresh cache for job {job_id}: {cache_error}"
+                        )
+                    return live_job_info
+        except Exception as live_error:
+            logger.debug(f"Live job info lookup failed for {job_id}: {live_error}")
+
+        # Fallback to cached job data if live lookup fails.
         try:
             from ..job_data_manager import get_job_data_manager
 
