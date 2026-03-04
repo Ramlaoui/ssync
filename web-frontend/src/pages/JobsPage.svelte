@@ -325,14 +325,25 @@
     loading = true;
 
     try {
+      const syncFilters = {
+        user: filters.user || undefined,
+        since: filters.since || undefined,
+        limit: filters.limit,
+        state: filters.state || undefined,
+        activeOnly: filters.activeOnly,
+        completedOnly: filters.completedOnly,
+        search: search || undefined,
+        groupArrayJobs: $preferences.groupArrayJobs,
+      };
+
       if (forceRefresh) {
-        await jobStateManager.forceRefresh();
+        await jobStateManager.forceRefresh(syncFilters);
       } else if (filters.host) {
         // Sync specific host
-        await jobStateManager.syncHost(filters.host);
+        await jobStateManager.syncHost(filters.host, false, true, syncFilters);
       } else {
         // Sync all hosts
-        await jobStateManager.syncAllHosts();
+        await jobStateManager.syncAllHosts(false, true, syncFilters);
       }
     } catch (err: unknown) {
       const axiosError = err as AxiosError;

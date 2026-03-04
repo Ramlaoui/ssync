@@ -30,6 +30,18 @@ import {
 type DataSource = 'websocket' | 'api' | 'cache' | 'manual';
 type JobState = 'PD' | 'R' | 'CD' | 'F' | 'CA' | 'TO' | 'UNKNOWN';
 type UpdatePriority = 'realtime' | 'high' | 'normal' | 'low';
+type StatusStateFilter = string;
+
+interface StatusSyncFilters {
+  user?: string;
+  since?: string;
+  limit?: number;
+  state?: StatusStateFilter;
+  activeOnly?: boolean;
+  completedOnly?: boolean;
+  search?: string;
+  groupArrayJobs?: boolean;
+}
 
 interface JobUpdate {
   jobId: string;
@@ -694,7 +706,11 @@ class JobStateManager {
   // Data Synchronization
   // ========================================================================
 
-  public async syncAllHosts(forceSync = false, userInitiated = false): Promise<void> {
+  public async syncAllHosts(
+    forceSync = false,
+    userInitiated = false,
+    filters: StatusSyncFilters = {}
+  ): Promise<void> {
     const state = get(this.state);
     if (!forceSync && !userInitiated && state.isPaused) return;
 
@@ -743,7 +759,7 @@ class JobStateManager {
 
       // Sync each host in parallel
       const results = await Promise.allSettled(
-        hosts.map(host => this.syncHost(host.hostname, forceSync, userInitiated))
+        hosts.map(host => this.syncHost(host.hostname, forceSync, userInitiated, filters))
       );
 
       console.log('[JobStateManager] ✅ All host syncs completed');
@@ -760,7 +776,12 @@ class JobStateManager {
     }
   }
 
-  public async syncHost(hostname: string, forceSync = false, userInitiated = false): Promise<void> {
+  public async syncHost(
+    hostname: string,
+    forceSync = false,
+    userInitiated = false,
+    filters: StatusSyncFilters = {}
+  ): Promise<void> {
     const syncStartTime = Date.now();
     console.log(`[JobStateManager] 🔄 Starting sync for ${hostname}${forceSync ? ' (forced)' : ''}${userInitiated ? ' (user-initiated)' : ''}`);
 
@@ -799,30 +820,45 @@ class JobStateManager {
     try {
       this.updateMetric('apiCalls', 1);
 
-      // ⚡ PERFORMANCE: Reduced timeout for faster failure detection and UI responsiveness
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Request timeout')), 10000); // 10s timeout (reduced from 30s)
-      });
-
       // Build URL with array grouping parameter
       const params = new URLSearchParams();
       params.append('host', hostname);
       // Use the user's preference for array job grouping
-      params.append('group_array_jobs', String(get(this.preferences).groupArrayJobs));
+      const groupArrayJobs = filters.groupArrayJobs ?? get(this.preferences).groupArrayJobs;
+      params.append('group_array_jobs', String(groupArrayJobs));
+
+      if (filters.user && filters.user.trim()) {
+        params.append('user', filters.user.trim());
+      }
+      if (filters.since && filters.since.trim()) {
+        params.append('since', filters.since.trim());
+      }
+      if (typeof filters.limit === 'number' && Number.isFinite(filters.limit) && filters.limit > 0) {
+        params.append('limit', String(Math.floor(filters.limit)));
+      }
+      if (filters.state) {
+        params.append('state', filters.state);
+      }
+      if (filters.activeOnly) {
+        params.append('active_only', 'true');
+      }
+      if (filters.completedOnly) {
+        params.append('completed_only', 'true');
+      }
+      if (filters.search && filters.search.trim()) {
+        params.append('search', filters.search.trim());
+      }
 
       // Pass force_refresh parameter when forceSync is true
       if (forceSync) {
         params.append('force_refresh', 'true');
       }
 
-      // The API might return either an array or a single object depending on the endpoint
-      // Race between API call and timeout
-      const response = await Promise.race([
-        this.api.get<JobStatusResponse | JobStatusResponse[]>(
-          `/api/status?${params.toString()}`
-        ),
-        timeoutPromise
-      ]);
+      // The API might return either an array or a single object depending on the endpoint.
+      // Rely on the API client's request timeout so slower hosts can still update UI state.
+      const response = await this.api.get<JobStatusResponse | JobStatusResponse[]>(
+        `/api/status?${params.toString()}`
+      );
 
       // Handle both array and single object responses
       let hostData: JobStatusResponse;
@@ -986,6 +1022,9 @@ class JobStateManager {
           duration: 5000,
         });
       }
+
+      // Propagate failure so syncAllHosts allSettled reports per-host errors correctly.
+      throw error;
     }
 
     const totalSyncDuration = Date.now() - syncStartTime;
@@ -1336,8 +1375,8 @@ class JobStateManager {
     if (this.updateTimer) clearTimeout(this.updateTimer);
   }
 
-  public forceRefresh(): Promise<void> {
-    return this.syncAllHosts(true);
+  public forceRefresh(filters: StatusSyncFilters = {}): Promise<void> {
+    return this.syncAllHosts(true, true, filters);
   }
 
   public hasRecentData(maxAge: number = 30000): boolean {

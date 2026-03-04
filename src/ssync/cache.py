@@ -1105,6 +1105,12 @@ class JobDataCache:
                 job_info_dict["state"] = JobState.UNKNOWN
 
         job_info = JobInfo(**job_info_dict)
+        is_active = bool(row["is_active"])
+
+        # Defensive normalization for historical cache corruption:
+        # inactive entries should never retain active PD/R states.
+        if (not is_active) and job_info.state in [JobState.PENDING, JobState.RUNNING]:
+            job_info.state = JobState.UNKNOWN
 
         # Handle optional local_source_dir column for existing DBs
         local_source_dir = None
@@ -1128,7 +1134,7 @@ class JobDataCache:
             stderr_compression=row["stderr_compression"],
             cached_at=datetime.fromisoformat(row["cached_at"]),
             last_updated=datetime.fromisoformat(row["last_updated"]),
-            is_active=bool(row["is_active"]),
+            is_active=is_active,
         )
 
     def update_job_outputs_compressed(
@@ -2001,6 +2007,10 @@ class JobDataCache:
             ]
 
         for job_id, hostname in active_cached_jobs:
+            # Only verify hosts included in the current snapshot.
+            # This prevents partial host queries from completing jobs on other hosts.
+            if hostname not in current_job_ids:
+                continue
             current_ids_for_host = current_job_ids.get(hostname, [])
             if job_id not in current_ids_for_host:
                 to_mark_completed.append((job_id, hostname))

@@ -163,6 +163,7 @@ export interface JobScriptResponse {
   hostname: string;
   script_content: string;
   content_length: number;
+  local_source_dir?: string | null;
 }
 
 export interface ApiError {

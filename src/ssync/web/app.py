@@ -979,18 +979,20 @@ async def get_complete_job_data(
             # Basic metadata
             if stdout_content:
                 response.stdout_metadata = FileMetadata(
-                    size=len(stdout_content),
-                    line_count=len(stdout_content.split("\n")),
+                    path=complete_data.job_info.stdout_file or "",
+                    exists=True,
+                    size_bytes=len(stdout_content),
                     last_modified=None,
-                    access_path=complete_data.job_info.stdout_file,
+                    access_path=f"/api/jobs/{complete_data.job_info.job_id}/output/download?host={complete_data.job_info.hostname}&output_type=stdout",
                 )
 
             if stderr_content:
                 response.stderr_metadata = FileMetadata(
-                    size=len(stderr_content),
-                    line_count=len(stderr_content.split("\n")),
+                    path=complete_data.job_info.stderr_file or "",
+                    exists=True,
+                    size_bytes=len(stderr_content),
                     last_modified=None,
-                    access_path=complete_data.job_info.stderr_file,
+                    access_path=f"/api/jobs/{complete_data.job_info.job_id}/output/download?host={complete_data.job_info.hostname}&output_type=stderr",
                 )
 
         return response
@@ -1334,6 +1336,20 @@ async def get_job_status(
         else:
             job_id_list = None
 
+        # Cache verification is only safe with full, unfiltered host snapshots.
+        # Any partial query (limit, state/search filters, grouping, since window, etc.)
+        # can hide active jobs and cause false "completed" transitions.
+        safe_for_cache_verification = (
+            not job_id_list
+            and not search
+            and not state
+            and not active_only
+            and not completed_only
+            and not group_array_jobs
+            and since is None
+            and limit is None
+        )
+
         manager = get_slurm_manager()
 
         # Filter hosts
@@ -1439,17 +1455,9 @@ async def get_job_status(
                     f"Concurrent fetch completed: {sum(len(r.jobs) for r in results)} total jobs from {len(slurm_hosts)} hosts"
                 )
 
-                # Verify and update cache to mark completed jobs
-                current_job_ids = {}
-                for job in all_jobs:
-                    if job.hostname not in current_job_ids:
-                        current_job_ids[job.hostname] = []
-                    current_job_ids[job.hostname].append(job.job_id)
-                await cache_middleware._verify_and_update_cache(current_job_ids)
-
                 # Cache results and return
                 cached_results = await cache_middleware.cache_job_status_response(
-                    results
+                    results, verify_active_jobs=safe_for_cache_verification
                 )
                 return cached_results
 
@@ -1481,21 +1489,37 @@ async def get_job_status(
                 )
 
                 if cached_jobs is not None:
-                    # ⚡ FIX: Filter out jobs that are already marked as completed in cache
-                    # This prevents showing stale completed jobs while background refresh runs
-                    active_cached_jobs = []
+                    # Build a map once so we can safely apply active/completed filters
+                    # and correct inconsistent stale states from cache.
+                    cached_state_map = cache_middleware.cache.get_cached_jobs_by_ids(
+                        [job.job_id for job in cached_jobs], hostname
+                    )
+                    filtered_cached_jobs = []
                     for job in cached_jobs:
-                        # Check if job is marked as completed in cache
-                        cached = cache_middleware.cache.get_cached_jobs_by_ids(
-                            [job.job_id], hostname
-                        ).get(job.job_id)
-                        if cached and not cached.is_active:
-                            # Job is completed, skip it
-                            logger.debug(
-                                f"Filtering out completed job {job.job_id} from cache results"
-                            )
+                        cached = cached_state_map.get(job.job_id)
+                        is_active_cached = cached.is_active if cached else True
+
+                        if active_only and not is_active_cached:
                             continue
-                        active_cached_jobs.append(job)
+
+                        if completed_only and job.state not in [
+                            JobStateWeb.COMPLETED,
+                            JobStateWeb.FAILED,
+                            JobStateWeb.CANCELLED,
+                            JobStateWeb.TIMEOUT,
+                            JobStateWeb.UNKNOWN,
+                        ]:
+                            continue
+
+                        # If cache marks a job inactive but its stored state is still active,
+                        # normalize to UNKNOWN to avoid stale "pending/running" display.
+                        if (not is_active_cached) and job.state in [
+                            JobStateWeb.PENDING,
+                            JobStateWeb.RUNNING,
+                        ]:
+                            job = job.model_copy(update={"state": JobStateWeb.UNKNOWN})
+
+                        filtered_cached_jobs.append(job)
 
                     # ⚡ FIX: Trigger background cache refresh if cache is getting stale
                     # This fetches fresh data and properly marks completed jobs
@@ -1519,12 +1543,12 @@ async def get_job_status(
                     # Apply state filter if provided
                     # Note: State filter is applied here because cached jobs may have stale state data
                     if state:
-                        active_cached_jobs = [
-                            job for job in active_cached_jobs if job.state == state
+                        filtered_cached_jobs = [
+                            job for job in filtered_cached_jobs if job.state == state
                         ]
 
                     # Apply search filter if provided
-                    web_jobs = active_cached_jobs
+                    web_jobs = filtered_cached_jobs
                     if search:
                         search_lower = search.lower()
                         filtered_jobs = []
@@ -1635,15 +1659,6 @@ async def get_job_status(
             *[fetch_host_jobs(slurm_host) for slurm_host in slurm_hosts]
         )
 
-        # Verify and update cache to mark completed jobs
-        current_job_ids = {}
-        for response in results:
-            if response.jobs:
-                current_job_ids[response.hostname] = [
-                    job.job_id for job in response.jobs
-                ]
-        await cache_middleware._verify_and_update_cache(current_job_ids)
-
         # Cache the results with date range info if applicable
         if host and since and not job_id_list:
             cache_filters = {
@@ -1653,10 +1668,16 @@ async def get_job_status(
                 "completed_only": completed_only,
             }
             cached_results = await cache_middleware.cache_job_status_response(
-                results, hostname=host, filters=cache_filters, since=since
+                results,
+                hostname=host,
+                filters=cache_filters,
+                since=since,
+                verify_active_jobs=safe_for_cache_verification,
             )
         else:
-            cached_results = await cache_middleware.cache_job_status_response(results)
+            cached_results = await cache_middleware.cache_job_status_response(
+                results, verify_active_jobs=safe_for_cache_verification
+            )
 
         return cached_results
 
@@ -2191,17 +2212,19 @@ async def get_job_output(
                     stderr=stderr_content if not metadata_only else None,
                     stdout_metadata=FileMetadata(
                         path=job_data.job_info.stdout_file,
-                        size=len(stdout_content) if stdout_content else 0,
-                        modified=None,
+                        size_bytes=len(stdout_content) if stdout_content else 0,
+                        last_modified=None,
                         exists=bool(stdout_content),
+                        access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type=stdout",
                     )
                     if job_data.job_info.stdout_file
                     else None,
                     stderr_metadata=FileMetadata(
                         path=job_data.job_info.stderr_file,
-                        size=len(stderr_content) if stderr_content else 0,
-                        modified=None,
+                        size_bytes=len(stderr_content) if stderr_content else 0,
+                        last_modified=None,
                         exists=bool(stderr_content),
+                        access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type=stderr",
                     )
                     if job_data.job_info.stderr_file
                     else None,
@@ -2322,17 +2345,19 @@ async def get_job_output(
                     stderr=None,
                     stdout_metadata=FileMetadata(
                         path=cached_job.job_info.stdout_file,
-                        size=0,
-                        modified=None,
+                        size_bytes=0,
+                        last_modified=None,
                         exists=False,
+                        access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type=stdout",
                     )
                     if cached_job.job_info.stdout_file
                     else None,
                     stderr_metadata=FileMetadata(
                         path=cached_job.job_info.stderr_file,
-                        size=0,
-                        modified=None,
+                        size_bytes=0,
+                        last_modified=None,
                         exists=False,
+                        access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type=stderr",
                     )
                     if cached_job.job_info.stderr_file
                     else None,
@@ -2348,17 +2373,19 @@ async def get_job_output(
                 stderr=stderr_content if not metadata_only else None,
                 stdout_metadata=FileMetadata(
                     path=cached_job.job_info.stdout_file,
-                    size=len(stdout_content) if stdout_content else 0,
-                    modified=None,
+                    size_bytes=len(stdout_content) if stdout_content else 0,
+                    last_modified=None,
                     exists=bool(stdout_content),
+                    access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type=stdout",
                 )
                 if cached_job.job_info.stdout_file
                 else None,
                 stderr_metadata=FileMetadata(
                     path=cached_job.job_info.stderr_file,
-                    size=len(stderr_content) if stderr_content else 0,
-                    modified=None,
+                    size_bytes=len(stderr_content) if stderr_content else 0,
+                    last_modified=None,
                     exists=bool(stderr_content),
+                    access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type=stderr",
                 )
                 if cached_job.job_info.stderr_file
                 else None,

@@ -58,6 +58,7 @@ class CacheMiddleware:
         hostname: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
         since: Optional[str] = None,
+        verify_active_jobs: bool = False,
     ) -> List[JobStatusResponse]:
         """
         Cache job status responses and enhance with cached data.
@@ -67,6 +68,8 @@ class CacheMiddleware:
             hostname: Optional hostname for date range caching
             filters: Optional filters for date range caching
             since: Optional since parameter for date range caching
+            verify_active_jobs: If True, verify active cache entries against these responses.
+                This must only be enabled for full, unfiltered host snapshots.
 
         Returns:
             Enhanced responses with cached data when appropriate
@@ -138,7 +141,8 @@ class CacheMiddleware:
                 )
             )
 
-        await self._verify_and_update_cache(current_job_ids)
+        if verify_active_jobs and current_job_ids:
+            await self._verify_and_update_cache(current_job_ids)
 
         return enhanced_responses
 

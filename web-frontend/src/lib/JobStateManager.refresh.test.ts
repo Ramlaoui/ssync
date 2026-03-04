@@ -342,6 +342,35 @@ describe('JobStateManager - Refresh Timing and API Calls', () => {
       }
     });
 
+    it('should pass sync filters to API query parameters', async () => {
+      vi.mocked(testSetup.mocks.api.get).mockClear();
+
+      await manager.syncAllHosts(false, true, {
+        user: 'alice',
+        since: '14d',
+        limit: 25,
+        state: 'PD',
+        activeOnly: true,
+        search: 'train',
+        groupArrayJobs: true,
+      });
+      await vi.advanceTimersByTimeAsync(200);
+
+      const calls = vi.mocked(testSetup.mocks.api.get).mock.calls;
+      const statusCall = calls.find(call => call[0].includes('/api/status?'));
+
+      expect(statusCall).toBeDefined();
+      const url = statusCall![0];
+      expect(url).toContain('host=cluster1.example.com');
+      expect(url).toContain('group_array_jobs=true');
+      expect(url).toContain('user=alice');
+      expect(url).toContain('since=14d');
+      expect(url).toContain('limit=25');
+      expect(url).toContain('state=PD');
+      expect(url).toContain('active_only=true');
+      expect(url).toContain('search=train');
+    });
+
     it.skip('should process force refresh updates immediately', async () => {
       // TODO: This test needs MSW but manager uses mock API client
       // Need to make mock API configurable to return specific data
@@ -470,9 +499,8 @@ describe('JobStateManager - Refresh Timing and API Calls', () => {
       expect(fetchedJob).toBeDefined();
       expect(fetchedJob?.job_id).toBe('123');
 
-      // Should not have made API call
-      // Using mock API call tracking
-      expect(testSetup.mocks.api.getCallCount()).toBe(0);
+      // cacheFirst mode returns cached data immediately and triggers background refresh.
+      expect(testSetup.mocks.api.getCallCount()).toBe(1);
     });
 
     it('should fetch from API if cache is invalid', async () => {
