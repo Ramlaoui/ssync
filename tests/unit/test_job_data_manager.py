@@ -15,6 +15,7 @@ from ssync.models.job import JobInfo, JobState
 class _FakeManager:
     def __init__(self, slurm_hosts):
         self.slurm_hosts = slurm_hosts
+        self.slurm_client = None
 
     def get_host_by_name(self, hostname: str):
         for slurm_host in self.slurm_hosts:
@@ -276,3 +277,55 @@ async def test_fetch_all_jobs_profile_mode_passes_flags_to_host_fetch(
     assert [job.job_id for job in result] == ["6001"]
     assert captured_kwargs.get("profile_enabled") is True
     assert isinstance(captured_kwargs.get("profile_request_id"), str)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_all_jobs_merges_recent_cached_active_jobs_when_live_query_misses(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-recent-cache.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    _install_fake_web_app(monkeypatch, manager)
+
+    class _FakeConnection:
+        def run(self, command: str, **kwargs):
+            raise AssertionError(f"Unexpected command execution: {command}")
+
+    class _FakeSlurmClient:
+        def check_slurm_availability(self, conn, hostname_arg):
+            assert hostname_arg == hostname
+            return True
+
+        def get_username(self, conn, _unused=None, hostname=None):
+            assert hostname == hostname
+            return "testuser"
+
+        def get_active_jobs(
+            self,
+            conn,
+            hostname_arg,
+            user,
+            job_ids,
+            state_filter,
+            skip_user_detection,
+        ):
+            assert hostname_arg == hostname
+            assert user == "testuser"
+            return []
+
+    manager.slurm_client = _FakeSlurmClient()
+    manager._get_connection = lambda host: _FakeConnection()
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    cached_job = _make_job("6002", hostname, JobState.PENDING)
+    cached_job.user = None  # Launch-time cache can precede user enrichment from Slurm.
+    test_cache.cache_job(cached_job)
+
+    jobs = await job_data_manager.fetch_all_jobs(hostname=hostname, active_only=True)
+
+    assert [job.job_id for job in jobs] == ["6002"]
+    assert jobs[0].state == JobState.PENDING

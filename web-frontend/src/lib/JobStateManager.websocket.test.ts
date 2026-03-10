@@ -246,6 +246,44 @@ describe('JobStateManager - WebSocket', () => {
       expect(allJobs.length).toBeGreaterThanOrEqual(3);
     });
 
+    it('should preserve early state changes in large batch_update payloads', async () => {
+      const ws = testSetup.mocks.wsFactory.getLastInstance();
+
+      manager['queueUpdate']({
+        jobId: 'target',
+        hostname: 'test.com',
+        job: createMockJob({ job_id: 'target', hostname: 'test.com', state: 'PD' }),
+        source: 'api',
+        timestamp: Date.now() - 1000,
+        priority: 'normal',
+      }, true);
+
+      const updates = [
+        {
+          job_id: 'target',
+          hostname: 'test.com',
+          job: createMockJob({ job_id: 'target', hostname: 'test.com', state: 'R' }),
+        },
+        ...Array.from({ length: 250 }, (_, i) => ({
+          job_id: `bulk-${i}`,
+          hostname: 'bulk.com',
+          job: createMockJob({ job_id: `bulk-${i}`, hostname: 'bulk.com', state: 'R' }),
+        })),
+      ];
+
+      ws?.simulateMessage({
+        type: 'batch_update',
+        updates,
+      });
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      const allJobs = get(manager.getAllJobs());
+      const targetJob = allJobs.find(j => j.job_id === 'target' && j.hostname === 'test.com');
+      expect(targetJob?.state).toBe('R');
+      expect(allJobs.filter(j => j.hostname === 'bulk.com')).toHaveLength(250);
+    });
+
     it('should handle array of jobs directly', async () => {
       const ws = testSetup.mocks.wsFactory.getLastInstance();
 

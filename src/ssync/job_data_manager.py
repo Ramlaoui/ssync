@@ -41,6 +41,20 @@ class CompleteJobData:
 
 class JobDataManager:
     @staticmethod
+    def _is_suspicious_output_path(path: Optional[str]) -> bool:
+        """Return True when a path looks like a submitted script, not a log file."""
+        if not path:
+            return False
+        return (
+            path.endswith(".sh")
+            or path.endswith(".sbatch")
+            or path.endswith(".bash")
+            or path.endswith(".slurm")
+            or "/submit/" in path
+            or "/scripts/" in path
+        )
+
+    @staticmethod
     def _decompress_output(compressed_data: bytes, compression: str) -> str:
         """Decompress output data based on compression type."""
         import gzip
@@ -90,6 +104,11 @@ class JobDataManager:
             os.getenv("SSYNC_PROFILE_TIMINGS", "0").lower() in {"1", "true", "yes"}
         )
         self._profile_request_counter = 0
+        # Freshly launched jobs can take a short time to appear in squeue.
+        # Keep recently cached active jobs visible during that window.
+        self._recent_active_cache_ttl_seconds = float(
+            os.getenv("SSYNC_RECENT_ACTIVE_CACHE_TTL_SECONDS", "300")
+        )
 
     def _next_profile_request_id(self) -> str:
         """Generate a stable local ID for profiling correlation."""
@@ -877,6 +896,17 @@ class JobDataManager:
                 jobs = self._merge_with_cached_jobs(jobs, user_cached_jobs)
                 mark_host_timing("merge_cached_completed", section_start)
 
+            # Freshly submitted jobs are cached immediately at launch time, but
+            # can lag in squeue for a short period. Merge recent cached active
+            # jobs so the UI can surface them before Slurm propagation catches up.
+            if not completed_only:
+                section_start = time.perf_counter()
+                recent_cached_active_jobs = self._get_recent_cached_active_jobs_for_host(
+                    hostname, effective_user, limit
+                )
+                jobs = self._merge_with_cached_jobs(jobs, recent_cached_active_jobs)
+                mark_host_timing("merge_recent_cached_active", section_start)
+
             # Apply per-host limit if specified
             if limit:
                 # Sort by submit time (newest first) before limiting
@@ -1166,30 +1196,47 @@ class JobDataManager:
                     return stdout, stderr
                 return None, None
 
+            # Self-heal stale/incorrect cached output paths by asking scontrol directly.
+            needs_stdout_path_refresh = should_fetch_stdout and (
+                not job_info.stdout_file
+                or self._is_suspicious_output_path(job_info.stdout_file)
+            )
+            needs_stderr_path_refresh = should_fetch_stderr and (
+                not job_info.stderr_file
+                or self._is_suspicious_output_path(job_info.stderr_file)
+            )
+            if needs_stdout_path_refresh or needs_stderr_path_refresh:
+                try:
+                    refreshed_stdout, refreshed_stderr = await self._run_in_executor(
+                        manager.slurm_client.get_job_output_files,
+                        conn,
+                        job_info.job_id,
+                        job_info.hostname,
+                    )
+                    if refreshed_stdout:
+                        job_info.stdout_file = refreshed_stdout
+                    if refreshed_stderr:
+                        job_info.stderr_file = refreshed_stderr
+                    # Persist corrected paths for future calls.
+                    self.cache.cache_job(job_info, script_content=None)
+                except Exception as e:
+                    logger.debug(
+                        f"Could not refresh output paths for job {job_info.job_id}: {e}"
+                    )
+
             stdout_content = None
             stderr_content = None
 
             # Try to fetch stdout if needed
             if should_fetch_stdout:
                 try:
-                    # For completed jobs, check if the path looks like a script file (common Slurm bug)
-                    # For running jobs, we've already corrected this in get_active_jobs
-                    if (
-                        is_completed
-                        and job_info.stdout_file
-                        and (
-                            job_info.stdout_file.endswith(".sh")
-                            or job_info.stdout_file.endswith(".sbatch")
-                            or job_info.stdout_file.endswith(".bash")
-                            or job_info.stdout_file.endswith(".slurm")
-                            or "/submit/"
-                            in job_info.stdout_file  # Common pattern for script directories
-                            or "/scripts/" in job_info.stdout_file
-                        )
+                    # Never treat a submission script path as output content.
+                    if job_info.stdout_file and self._is_suspicious_output_path(
+                        job_info.stdout_file
                     ):
                         logger.warning(
-                            f"Completed job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
-                            "This is likely a Slurm bug. scontrol may not work for completed jobs, skipping fetch."
+                            f"Job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
+                            "Skipping stdout fetch to avoid returning script content."
                         )
                         stdout_content = None
                         should_fetch_stdout = False
@@ -1260,24 +1307,13 @@ class JobDataManager:
             # Try to fetch stderr if needed
             if should_fetch_stderr:
                 try:
-                    # For completed jobs, check if the path looks like a script file (common Slurm bug)
-                    # For running jobs, we've already corrected this in get_active_jobs
-                    if (
-                        is_completed
-                        and job_info.stderr_file
-                        and (
-                            job_info.stderr_file.endswith(".sh")
-                            or job_info.stderr_file.endswith(".sbatch")
-                            or job_info.stderr_file.endswith(".bash")
-                            or job_info.stderr_file.endswith(".slurm")
-                            or "/submit/"
-                            in job_info.stderr_file  # Common pattern for script directories
-                            or "/scripts/" in job_info.stderr_file
-                        )
+                    # Never treat a submission script path as output content.
+                    if job_info.stderr_file and self._is_suspicious_output_path(
+                        job_info.stderr_file
                     ):
                         logger.warning(
-                            f"Completed job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
-                            "This is likely a Slurm bug. scontrol may not work for completed jobs, skipping fetch."
+                            f"Job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
+                            "Skipping stderr fetch to avoid returning script content."
                         )
                         stderr_content = None
                         should_fetch_stderr = False
@@ -1609,6 +1645,42 @@ class JobDataManager:
                 slurm_jobs.append(cached_job)
 
         return slurm_jobs
+
+    def _get_recent_cached_active_jobs_for_host(
+        self,
+        hostname: str,
+        effective_user: Optional[str],
+        limit: Optional[int],
+    ) -> List[JobInfo]:
+        """Return recently updated cached active jobs for a host.
+
+        This covers the short propagation window after job launch where the
+        submission is cached locally but Slurm's active query has not yet
+        surfaced it in `squeue`.
+        """
+        recent_cutoff = datetime.now() - timedelta(
+            seconds=self._recent_active_cache_ttl_seconds
+        )
+        cached_job_data = self.cache.get_cached_jobs(
+            hostname=hostname,
+            active_only=True,
+            limit=limit or 1000,
+        )
+
+        recent_jobs: List[JobInfo] = []
+        for cached_job in cached_job_data:
+            if not cached_job.job_info:
+                continue
+            if cached_job.last_updated < recent_cutoff:
+                continue
+
+            cached_user = cached_job.job_info.user
+            if effective_user and cached_user and cached_user != effective_user:
+                continue
+
+            recent_jobs.append(cached_job.job_info)
+
+        return recent_jobs
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get comprehensive cache statistics."""

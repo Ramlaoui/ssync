@@ -10,68 +10,82 @@ class SlurmParser:
     @staticmethod
     def map_slurm_state(state_str: str, from_sacct: bool = False) -> JobState:
         """Map Slurm state string to JobState enum."""
-        if from_sacct:
-            state_clean = state_str.split()[0]
-            # Terminal success states
-            if state_clean in ["COMPLETED"]:
-                return JobState.COMPLETED
-            # Terminal failure states
-            elif state_clean in [
-                "FAILED",
-                "BOOT_FAIL",
-                "DEADLINE",
-                "NODE_FAIL",
-                "OUT_OF_MEMORY",
-                "PREEMPTED",
-            ]:
-                return JobState.FAILED
-            elif state_clean in ["CANCELLED"]:
-                return JobState.CANCELLED
-            elif state_clean in ["TIMEOUT"]:
-                return JobState.TIMEOUT
-            # Active running states (COMPLETING, CONFIGURING, STAGE_OUT are variants of running)
-            elif state_clean in [
-                "RUNNING",
-                "COMPLETING",
-                "CONFIGURING",
-                "STAGE_OUT",
-                "SIGNALING",
-            ]:
-                return JobState.RUNNING
-            # Pending/queued states
-            elif state_clean in [
-                "PENDING",
-                "REQUEUED",
-                "REQUEUE_FED",
-                "REQUEUE_HOLD",
-                "RESV_DEL_HOLD",
-            ]:
-                return JobState.PENDING
-            # Suspended states (temporarily stopped but not terminated)
-            elif state_clean in ["SUSPENDED", "STOPPED", "RESIZING", "REVOKED"]:
-                # Map suspended states to PENDING since they're queued to resume
-                return JobState.PENDING
-            else:
+        if not state_str or not state_str.strip():
+            return JobState.UNKNOWN
+
+        state_clean = state_str.split()[0].upper().strip()
+
+        if state_clean in {"COMPLETED", "CD"}:
+            return JobState.COMPLETED
+
+        if state_clean in {
+            "FAILED",
+            "F",
+            "BOOT_FAIL",
+            "BF",
+            "DEADLINE",
+            "DL",
+            "NODE_FAIL",
+            "NF",
+            "OUT_OF_MEMORY",
+            "OOM",
+            "PREEMPTED",
+            "PR",
+        }:
+            return JobState.FAILED
+
+        if state_clean in {"CANCELLED", "CANCELED", "CA"}:
+            return JobState.CANCELLED
+
+        if state_clean in {"TIMEOUT", "TO"}:
+            return JobState.TIMEOUT
+
+        # `squeue` can report active jobs in transitional states such as
+        # CONFIGURING/CF or COMPLETING/CG. Treat them as running so the UI
+        # stays live while the allocation comes up or drains down.
+        if state_clean in {
+            "RUNNING",
+            "R",
+            "COMPLETING",
+            "CG",
+            "CONFIGURING",
+            "CF",
+            "STAGE_OUT",
+            "SO",
+            "SIGNALING",
+            "SI",
+        }:
+            return JobState.RUNNING
+
+        if state_clean in {
+            "PENDING",
+            "PD",
+            "REQUEUED",
+            "RQ",
+            "REQUEUE_FED",
+            "RF",
+            "REQUEUE_HOLD",
+            "RH",
+            "RESV_DEL_HOLD",
+            "RD",
+            "SUSPENDED",
+            "S",
+            "STOPPED",
+            "ST",
+            "RESIZING",
+            "RS",
+            "REVOKED",
+            "RV",
+        }:
+            return JobState.PENDING
+
+        if not from_sacct:
+            try:
+                return JobState(state_str)
+            except ValueError:
                 return JobState.UNKNOWN
-        else:
-            state_upper = state_str.upper().strip()
-            if state_upper == "PENDING":
-                return JobState.PENDING
-            elif state_upper == "RUNNING":
-                return JobState.RUNNING
-            elif state_upper == "COMPLETED":
-                return JobState.COMPLETED
-            elif state_upper in ["FAILED", "BOOT_FAIL", "NODE_FAIL", "OUT_OF_MEMORY"]:
-                return JobState.FAILED
-            elif state_upper in ["CANCELLED", "CANCELED"]:
-                return JobState.CANCELLED
-            elif state_upper == "TIMEOUT":
-                return JobState.TIMEOUT
-            else:
-                try:
-                    return JobState(state_str)
-                except ValueError:
-                    return JobState.UNKNOWN
+
+        return JobState.UNKNOWN
 
     @staticmethod
     def create_var_dict(fields: list[str], field_names: list[str] = None) -> dict:

@@ -131,7 +131,7 @@
     outputError = null;
 
     try {
-      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}&force=true`);
+      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}&force_refresh=true`);
       outputData = response.data;
     } catch (err: unknown) {
       const axiosError = err as AxiosError;

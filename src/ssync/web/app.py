@@ -10,6 +10,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -725,6 +726,62 @@ async def periodic_connection_health_check():
 
 
 _cache_middleware = get_cache_middleware()
+
+
+def _cache_job_state(
+    job_id: str,
+    hostname: str,
+    state: JobState,
+    *,
+    job_name: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> tuple["JobInfo", Optional[JobState]]:
+    """Persist an immediate job state transition in cache.
+
+    This keeps UI state coherent while Slurm accounting catches up.
+    """
+    from ..models.job import JobInfo
+
+    cached_job = _cache_middleware.cache.get_cached_job(job_id, hostname)
+    previous_state = cached_job.job_info.state if cached_job and cached_job.job_info else None
+
+    if cached_job and cached_job.job_info:
+        job_info = replace(cached_job.job_info, state=state)
+    else:
+        job_info = JobInfo(
+            job_id=job_id,
+            name=job_name or f"job_{job_id}",
+            state=state,
+            hostname=hostname,
+            submit_time=datetime.now(timezone.utc).isoformat(),
+        )
+
+    if job_name:
+        job_info.name = job_name
+    if reason:
+        job_info.reason = reason
+    if state in [JobState.CANCELLED, JobState.COMPLETED, JobState.FAILED, JobState.TIMEOUT]:
+        job_info.end_time = job_info.end_time or datetime.now(timezone.utc).isoformat()
+
+    _cache_middleware.cache.cache_job(job_info)
+    if state not in [JobState.PENDING, JobState.RUNNING]:
+        _cache_middleware.cache.mark_job_completed(job_id, hostname)
+
+    return job_info, previous_state
+
+
+async def _broadcast_job_state(job_info, previous_state: Optional[JobState] = None) -> None:
+    """Broadcast a single realtime job update to websocket clients."""
+    await job_manager.broadcast_job_update(
+        job_info.job_id,
+        job_info.hostname,
+        {
+            "type": "job_update",
+            "old_state": previous_state.value if previous_state else None,
+            "new_state": job_info.state.value,
+            "job": JobInfoWeb.from_job_info(job_info).model_dump(mode="json"),
+        },
+    )
 
 frontend_dist = Path(__file__).parent.parent.parent.parent / "web-frontend" / "dist"
 if frontend_dist.exists():
@@ -2151,6 +2208,9 @@ async def get_job_output(
     force_refresh: bool = Query(
         False, description="Force refresh from SSH even if cached"
     ),
+    force: bool = Query(
+        False, description="Legacy alias for force_refresh", alias="force"
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get output files content for a specific job."""
@@ -2158,6 +2218,9 @@ async def get_job_output(
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
+
+        # Backward compatibility for older UI clients using `force=true`.
+        force_refresh = force_refresh or force
 
         # Get cache middleware early as it's used in multiple branches
         cache_middleware = get_cache_middleware()
@@ -2687,6 +2750,21 @@ async def launch_job(
                 except Exception as e:
                     logger.warning(f"Failed to cache script: {e}")
 
+                # Publish the launch immediately so the UI does not have to wait
+                # for squeue/cache propagation before showing the new job.
+                try:
+                    pending_job_info, previous_state = _cache_job_state(
+                        job.job_id,
+                        request.host,
+                        JobState.PENDING,
+                        job_name=request.job_name,
+                    )
+                    await _broadcast_job_state(pending_job_info, previous_state)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to broadcast launched job {job.job_id}: {e}"
+                    )
+
                 return LaunchJobResponse(
                     success=True,
                     job_id=job.job_id,
@@ -2787,9 +2865,29 @@ async def cancel_job(
         # Try to cancel on each host - scancel will fail gracefully if job doesn't exist
         for slurm_host in slurm_hosts:
             try:
+                previous_state = None
+                cached_job = _cache_middleware.cache.get_cached_job(
+                    job_id, slurm_host.host.hostname
+                )
+                if cached_job and cached_job.job_info:
+                    previous_state = cached_job.job_info.state
+
                 success = manager.cancel_job(slurm_host, job_id)
                 if success:
                     logger.info(f"Cancelled job {job_id} on {slurm_host.host.hostname}")
+
+                    try:
+                        cancelled_job_info, previous_state = _cache_job_state(
+                            job_id,
+                            slurm_host.host.hostname,
+                            JobState.CANCELLED,
+                            reason="Cancelled via API",
+                        )
+                        await _broadcast_job_state(cancelled_job_info, previous_state)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to cache/broadcast cancelled job {job_id}: {e}"
+                        )
 
                     # Try to stop any watchers for this job (don't fail the whole operation if this fails)
                     try:
@@ -3650,6 +3748,14 @@ async def trigger_watcher_manually(
         matches_found = engine._check_patterns(watcher, content)
 
         if matches_found:
+            # Keep behavior consistent with background watcher loop:
+            # a successful pattern match should activate timer mode when enabled.
+            if watcher.definition.timer_mode_enabled and not watcher.timer_mode_active:
+                engine._update_watcher_timer_mode(watcher_id, True)
+                logger.info(
+                    f"Watcher {watcher_id} switched to timer mode after manual pattern match"
+                )
+
             # Count how many matches
             pattern = watcher.definition.pattern
             if pattern in engine._pattern_cache:
