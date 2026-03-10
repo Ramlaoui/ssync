@@ -671,6 +671,33 @@ describe('JobStateManager - Refresh Timing and API Calls', () => {
       // The key is that it's still better than no batching at all
       expect(updateCount).toBeLessThan(60);
     });
+
+    it('should retain large API sync batches instead of dropping early jobs', async () => {
+      const jobs = Array.from({ length: 180 }, (_, i) =>
+        createMockJob({
+          job_id: `${1000 + i}`,
+          hostname: 'cluster1.example.com',
+          state: i === 0 ? 'R' : 'PD',
+        })
+      );
+
+      testSetup.mocks.api.setResponse('/api/status', {
+        hostname: 'cluster1.example.com',
+        jobs,
+        timestamp: new Date().toISOString(),
+        query_time: '0.123s',
+        array_groups: [],
+      });
+
+      await manager.syncAllHosts(true, true);
+      await vi.advanceTimersByTimeAsync(250);
+
+      const allJobs = get(manager.getAllJobs());
+      expect(allJobs.filter(j => j.hostname === 'cluster1.example.com')).toHaveLength(180);
+      expect(
+        allJobs.find(j => j.job_id === '1000' && j.hostname === 'cluster1.example.com')?.state
+      ).toBe('R');
+    });
   });
 
   describe('Timeout Handling', () => {

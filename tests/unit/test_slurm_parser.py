@@ -15,16 +15,25 @@ class TestMapSlurmState:
         [
             ("PENDING", JobState.PENDING),
             ("pending", JobState.PENDING),
+            ("PD", JobState.PENDING),
+            ("CONFIGURING", JobState.RUNNING),
+            ("CF", JobState.RUNNING),
             ("RUNNING", JobState.RUNNING),
             ("running", JobState.RUNNING),
+            ("COMPLETING", JobState.RUNNING),
+            ("CG", JobState.RUNNING),
             ("COMPLETED", JobState.COMPLETED),
             ("completed", JobState.COMPLETED),
+            ("CD", JobState.COMPLETED),
             ("FAILED", JobState.FAILED),
             ("failed", JobState.FAILED),
+            ("F", JobState.FAILED),
             ("CANCELLED", JobState.CANCELLED),
             ("CANCELED", JobState.CANCELLED),  # Alternative spelling
+            ("CA", JobState.CANCELLED),
             ("TIMEOUT", JobState.TIMEOUT),
             ("timeout", JobState.TIMEOUT),
+            ("TO", JobState.TIMEOUT),
         ],
     )
     def test_map_squeue_states(self, state_str, expected):
@@ -51,20 +60,35 @@ class TestMapSlurmState:
         "state_str,expected",
         [
             ("COMPLETED", JobState.COMPLETED),
+            ("CD", JobState.COMPLETED),
             ("FAILED", JobState.FAILED),
+            ("F", JobState.FAILED),
             ("BOOT_FAIL", JobState.FAILED),
             ("DEADLINE", JobState.FAILED),
             ("NODE_FAIL", JobState.FAILED),
             ("OUT_OF_MEMORY", JobState.FAILED),
             ("PREEMPTED", JobState.FAILED),
             ("CANCELLED", JobState.CANCELLED),
+            ("CA", JobState.CANCELLED),
             ("TIMEOUT", JobState.TIMEOUT),
+            ("TO", JobState.TIMEOUT),
+            ("RUNNING", JobState.RUNNING),
+            ("COMPLETING", JobState.RUNNING),
+            ("CONFIGURING", JobState.RUNNING),
+            ("PENDING", JobState.PENDING),
         ],
     )
     def test_map_sacct_states(self, state_str, expected):
         """Test mapping of sacct state strings."""
         result = SlurmParser.map_slurm_state(state_str, from_sacct=True)
         assert result == expected
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("state_str", ["CONFIGURING", "CF", "COMPLETING", "CG"])
+    def test_map_active_transition_states_as_running(self, state_str):
+        """Transient squeue states should remain active for realtime UI updates."""
+        result = SlurmParser.map_slurm_state(state_str, from_sacct=False)
+        assert result == JobState.RUNNING
 
     @pytest.mark.unit
     def test_map_unknown_state_squeue(self):

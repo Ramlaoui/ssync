@@ -212,6 +212,7 @@ class JobStateManager {
     // Bind methods to ensure proper context
     this.processUpdateQueue = this.processUpdateQueue.bind(this);
     this.queueUpdate = this.queueUpdate.bind(this);
+    this.queueUpdates = this.queueUpdates.bind(this);
     this.handleWebSocketMessage = this.handleWebSocketMessage.bind(this);
 
     // Only setup event listeners and monitoring if in browser environment
@@ -547,16 +548,7 @@ class JobStateManager {
 
       // Queue all updates at once for immediate batch processing
       console.log(`[JobStateManager] Queueing ${allUpdates.length} jobs for immediate processing`);
-      allUpdates.forEach(update => this.queueUpdate(update, false));
-      // Force immediate processing after all are queued
-      // Use setTimeout to ensure state updates from queueUpdate are applied first
-      if (allUpdates.length > 0) {
-        if (this.updateTimer) {
-          clearTimeout(this.updateTimer);
-          this.updateTimer = null;
-        }
-        setTimeout(() => this.processUpdateQueue(), 0);
-      }
+      this.queueUpdates(allUpdates, false);
     } else if (data.type === 'job_update' || data.type === 'state_change') {
       // Check if this is the currently viewed job
       const isCurrentJob = this.currentViewJobId === data.job_id &&
@@ -572,8 +564,7 @@ class JobStateManager {
         messageType: data.type,
       }, isCurrentJob); // Immediate for current job, normal delay for others
     } else if (data.type === 'batch_update') {
-      data.updates.forEach((update: any) => {
-        this.queueUpdate({
+      const updates: JobUpdate[] = data.updates.map((update: any) => ({
           jobId: update.job_id,
           hostname: update.hostname,
           job: update.job,
@@ -581,8 +572,8 @@ class JobStateManager {
           timestamp: Date.now(),
           priority: 'high',
           messageType: 'batch_update',
-        }, false); // Normal delay for batch updates
-      });
+        }));
+      this.queueUpdates(updates, false);
     } else if (Array.isArray(data)) {
       // Handle array of jobs directly
       console.log(`[JobStateManager] WebSocket sent array of ${data.length} jobs`);
@@ -952,20 +943,8 @@ class JobStateManager {
         // When forceSync=true and there are many jobs, calling queueUpdate with immediate=true
         // causes synchronous processUpdateQueue() for EACH job, which can hang the browser.
         // Instead, queue all jobs first, then trigger a single batch process at the end.
-        jobsToQueue.forEach(update => this.queueUpdate(update, false));
-        console.log(`[JobStateManager] 📥 ${hostname} - Finished queueing ${jobsToQueue.length} jobs, forcing batch process...`);
-
-        // Force immediate batch processing of all queued jobs
-        if (jobsToQueue.length > 0) {
-          // Clear any pending timer and process immediately
-          if (this.updateTimer) {
-            clearTimeout(this.updateTimer);
-            this.updateTimer = null;
-          }
-          console.log(`[JobStateManager] 🔄 ${hostname} - Triggering immediate batch processing...`);
-          this.processUpdateQueue();
-          console.log(`[JobStateManager] ✓ ${hostname} - Batch processing complete`);
-        }
+        this.queueUpdates(jobsToQueue, false);
+        console.log(`[JobStateManager] 📥 ${hostname} - Finished queueing ${jobsToQueue.length} jobs`);
 
         const syncDuration = Date.now() - syncStartTime;
         console.log(`[JobStateManager] ✅ ${hostname} sync completed in ${syncDuration}ms (${jobsToQueue.length} jobs)`);
@@ -1036,18 +1015,39 @@ class JobStateManager {
   // ========================================================================
 
   private queueUpdate(update: JobUpdate, immediate = false): void {
-    // Validate hostname is present
-    if (!update.hostname) {
-      console.error(`[JobStateManager] Cannot queue update for job ${update.jobId} - missing hostname`);
+    this.queueUpdates([update], immediate);
+  }
+
+  private queueUpdates(updates: JobUpdate[], immediate = false): void {
+    if (updates.length === 0) {
       return;
     }
 
-    // Update state with new pending update
-    this.state.update(s => {
-      // Add to queue
-      s.pendingUpdates.push(update);
+    const validUpdates = updates.filter((update) => {
+      if (!update.hostname) {
+        console.error(`[JobStateManager] Cannot queue update for job ${update.jobId} - missing hostname`);
+        return false;
+      }
+      return true;
+    });
 
-      // Enhanced deduplication within window
+    if (validUpdates.length === 0) {
+      return;
+    }
+
+    const newestUpdates = new Map<string, JobUpdate>();
+    validUpdates.forEach((update) => {
+      const key = `${update.hostname}:${update.jobId}`;
+      const existing = newestUpdates.get(key);
+      if (!existing || this.shouldReplacePendingUpdate(existing, update)) {
+        newestUpdates.set(key, update);
+      }
+    });
+
+    // Validate hostname is present
+    this.state.update(s => {
+      s.pendingUpdates.push(...newestUpdates.values());
+
       if (s.pendingUpdates.length > 1) {
         const cutoff = Date.now() - CONFIG.updateStrategy.deduplicateWindow;
         const recent = s.pendingUpdates.filter(u => u.timestamp > cutoff);
@@ -1060,12 +1060,7 @@ class JobStateManager {
 
           // WebSocket updates take priority over API updates, except when forcing refresh
           // For same source, newer timestamp wins
-          const shouldReplace = !existing ||
-            (u.source === 'websocket' && existing.source === 'api' && u.timestamp >= existing.timestamp) ||
-            (u.source === existing.source && u.timestamp > existing.timestamp) ||
-            (u.priority === 'realtime' && existing.priority !== 'realtime');
-
-          if (shouldReplace) {
+          if (!existing || this.shouldReplacePendingUpdate(existing, u)) {
             latestByJob.set(key, u);
           }
         });
@@ -1093,6 +1088,14 @@ class JobStateManager {
         this.processUpdateQueue();
       }, delay);
     }
+  }
+
+  private shouldReplacePendingUpdate(existing: JobUpdate, incoming: JobUpdate): boolean {
+    return (
+      (incoming.source === 'websocket' && existing.source === 'api' && incoming.timestamp >= existing.timestamp) ||
+      (incoming.source === existing.source && incoming.timestamp >= existing.timestamp) ||
+      (incoming.priority === 'realtime' && existing.priority !== 'realtime')
+    );
   }
 
   private processUpdateQueue(): void {
@@ -1521,7 +1524,6 @@ class JobStateManager {
           return timeB - timeA;
         });
 
-      console.log(`[JobStateManager] getAllJobs returning ${jobs.length} unique jobs from cache of ${$state.jobCache.size}`);
       return jobs;
     });
   }
