@@ -12,6 +12,11 @@ class JobDisplay:
     """Handles formatting and displaying job information."""
 
     @staticmethod
+    def _get_array_base_job_ids(jobs: List[JobInfo]) -> set[str]:
+        """Return base array job IDs represented in the current job list."""
+        return {job.array_job_id for job in jobs if job.array_job_id}
+
+    @staticmethod
     def filter_array_jobs(jobs: List[JobInfo]) -> List[JobInfo]:
         """Filter out array parent entries when individual tasks exist.
 
@@ -25,6 +30,8 @@ class JobDisplay:
         Returns:
             Filtered list with array parent entries removed when tasks exist
         """
+        array_base_ids = JobDisplay._get_array_base_job_ids(jobs)
+
         # Separate array tasks from regular jobs
         array_tasks = defaultdict(list)
         parent_jobs = {}
@@ -45,6 +52,8 @@ class JobDisplay:
                 # This is a parent job entry - store it for potential removal
                 parent_jobs[job.array_job_id] = job
             else:
+                if job.job_id in array_base_ids:
+                    continue
                 # Regular non-array job
                 regular_jobs.append(job)
 

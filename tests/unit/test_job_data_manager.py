@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import types
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -329,3 +330,216 @@ async def test_fetch_all_jobs_merges_recent_cached_active_jobs_when_live_query_m
 
     assert [job.job_id for job in jobs] == ["6002"]
     assert jobs[0].state == JobState.PENDING
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_all_jobs_skips_stale_active_cache_for_missing_specific_job(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-stale-cache.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    _install_fake_web_app(monkeypatch, manager)
+
+    class _FakeConnection:
+        def run(self, command: str, **kwargs):
+            raise AssertionError(f"Unexpected command execution: {command}")
+
+    class _FakeSlurmClient:
+        def check_slurm_availability(self, conn, hostname_arg):
+            assert hostname_arg == hostname
+            return True
+
+        def get_username(self, conn, _unused=None, hostname=None):
+            assert hostname == hostname
+            return "testuser"
+
+        def get_active_jobs(
+            self,
+            conn,
+            hostname_arg,
+            user,
+            job_ids,
+            state_filter,
+            skip_user_detection,
+        ):
+            assert hostname_arg == hostname
+            assert job_ids == ["6003"]
+            return []
+
+        def get_completed_jobs(
+            self,
+            conn,
+            hostname_arg,
+            since,
+            user,
+            job_ids,
+            state_filter,
+            exclude_job_ids,
+            skip_user_detection,
+            limit,
+            cached_completed_ids,
+        ):
+            assert hostname_arg == hostname
+            assert job_ids == ["6003"]
+            return []
+
+    manager.slurm_client = _FakeSlurmClient()
+    manager._get_connection = lambda host: _FakeConnection()
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+    job_data_manager._recent_active_cache_ttl_seconds = 60
+
+    cached_job = _make_job("6003", hostname, JobState.RUNNING)
+    test_cache.cache_job(cached_job)
+
+    stale_time = (datetime.now() - timedelta(minutes=10)).isoformat()
+    with test_cache._get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE cached_jobs
+            SET last_updated = ?
+            WHERE job_id = ? AND hostname = ?
+            """,
+            (stale_time, "6003", hostname),
+        )
+        conn.commit()
+
+    jobs = await job_data_manager.fetch_all_jobs(hostname=hostname, job_ids=["6003"])
+
+    assert jobs == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_all_jobs_returns_inactive_cache_for_missing_specific_job(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-inactive-cache.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    _install_fake_web_app(monkeypatch, manager)
+
+    class _FakeConnection:
+        def run(self, command: str, **kwargs):
+            raise AssertionError(f"Unexpected command execution: {command}")
+
+    class _FakeSlurmClient:
+        def check_slurm_availability(self, conn, hostname_arg):
+            assert hostname_arg == hostname
+            return True
+
+        def get_username(self, conn, _unused=None, hostname=None):
+            assert hostname == hostname
+            return "testuser"
+
+        def get_active_jobs(
+            self,
+            conn,
+            hostname_arg,
+            user,
+            job_ids,
+            state_filter,
+            skip_user_detection,
+        ):
+            return []
+
+        def get_completed_jobs(
+            self,
+            conn,
+            hostname_arg,
+            since,
+            user,
+            job_ids,
+            state_filter,
+            exclude_job_ids,
+            skip_user_detection,
+            limit,
+            cached_completed_ids,
+        ):
+            return []
+
+    manager.slurm_client = _FakeSlurmClient()
+    manager._get_connection = lambda host: _FakeConnection()
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    cached_job = _make_job("6004", hostname, JobState.FAILED)
+    test_cache.cache_job(cached_job)
+
+    jobs = await job_data_manager.fetch_all_jobs(hostname=hostname, job_ids=["6004"])
+
+    assert [job.job_id for job in jobs] == ["6004"]
+    assert jobs[0].state == JobState.FAILED
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_all_jobs_skips_old_launch_placeholders_from_recent_active_merge(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-placeholder.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    _install_fake_web_app(monkeypatch, manager)
+
+    class _FakeConnection:
+        def run(self, command: str, **kwargs):
+            raise AssertionError(f"Unexpected command execution: {command}")
+
+    class _FakeSlurmClient:
+        def check_slurm_availability(self, conn, hostname_arg):
+            assert hostname_arg == hostname
+            return True
+
+        def get_username(self, conn, _unused=None, hostname=None):
+            assert hostname == hostname
+            return "testuser"
+
+        def get_active_jobs(
+            self,
+            conn,
+            hostname_arg,
+            user,
+            job_ids,
+            state_filter,
+            skip_user_detection,
+        ):
+            return []
+
+    manager.slurm_client = _FakeSlurmClient()
+    manager._get_connection = lambda host: _FakeConnection()
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+    job_data_manager._recent_active_cache_ttl_seconds = 600
+    job_data_manager._placeholder_active_cache_ttl_seconds = 30
+
+    placeholder_job = JobInfo(
+        job_id="6005",
+        name="array-launch",
+        state=JobState.PENDING,
+        hostname=hostname,
+        submit_line="sbatch --array=0-3 /tmp/job.sbatch",
+        user=None,
+    )
+    test_cache.cache_job(placeholder_job)
+
+    old_cached_at = (datetime.now() - timedelta(minutes=5)).isoformat()
+    with test_cache._get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE cached_jobs
+            SET cached_at = ?, last_updated = ?
+            WHERE job_id = ? AND hostname = ?
+            """,
+            (old_cached_at, datetime.now().isoformat(), "6005", hostname),
+        )
+        conn.commit()
+
+    jobs = await job_data_manager.fetch_all_jobs(hostname=hostname, active_only=True)
+
+    assert jobs == []

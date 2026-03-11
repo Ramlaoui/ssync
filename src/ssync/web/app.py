@@ -44,6 +44,7 @@ from ..notifications.monitor import (
 from ..slurm.params import SlurmParams
 from ..utils.async_helpers import create_task
 from ..utils.logging import setup_logger
+from ..utils.slurm_arrays import looks_like_array_submission
 from .cache_middleware import get_cache_middleware
 from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
 from .models import (
@@ -79,6 +80,50 @@ from .security import (
 logger = setup_logger(__name__, "INFO")
 
 
+def _get_array_base_job_ids(jobs: List[JobInfoWeb]) -> Set[str]:
+    """Return base array job IDs represented in the current job list."""
+    array_base_ids: Set[str] = set()
+    for job in jobs:
+        if job.array_job_id:
+            array_base_ids.add(job.array_job_id)
+    return array_base_ids
+
+
+def _filter_ws_initial_cached_jobs(job_data_manager, cached_job_data) -> list:
+    """Filter raw cache rows before sending initial all-jobs websocket state.
+
+    The websocket initial payload uses a cache-first fast path. That path must
+    not resurrect stale launch placeholders that `/api/status` would already
+    hide, especially old synthetic array parent submissions with no real Slurm
+    metadata.
+    """
+    if not cached_job_data:
+        return []
+
+    placeholder_ttl = float(
+        getattr(job_data_manager, "_placeholder_active_cache_ttl_seconds", 90)
+    )
+    placeholder_cutoff = datetime.now() - timedelta(seconds=placeholder_ttl)
+    filtered_jobs = []
+
+    for cached_data in cached_job_data:
+        job_info = getattr(cached_data, "job_info", None)
+        if not job_info:
+            continue
+
+        is_placeholder = job_data_manager._is_launch_placeholder_job(job_info)
+        if is_placeholder:
+            if not getattr(cached_data, "is_active", False):
+                continue
+            cached_at = getattr(cached_data, "cached_at", None)
+            if cached_at and cached_at < placeholder_cutoff:
+                continue
+
+        filtered_jobs.append(job_info)
+
+    return filtered_jobs
+
+
 def group_array_job_tasks(
     jobs: List[JobInfoWeb], use_cache: bool = True
 ) -> tuple[List[JobInfoWeb], List[ArrayJobGroup]]:
@@ -95,6 +140,8 @@ def group_array_job_tasks(
     from collections import defaultdict
 
     from ..cache import get_cache
+
+    array_base_ids = _get_array_base_job_ids(jobs)
 
     # Separate array tasks from regular jobs
     array_tasks = defaultdict(list)
@@ -133,6 +180,8 @@ def group_array_job_tasks(
             array_hostnames[job.array_job_id] = job.hostname
             # DO NOT add to regular_jobs - this will be represented by the array group
         else:
+            if job.job_id in array_base_ids:
+                continue
             # Regular non-array job
             regular_jobs.append(job)
 
@@ -184,6 +233,7 @@ def deduplicate_array_jobs(jobs: List[JobInfoWeb]) -> List[JobInfoWeb]:
         List of jobs with array job parent entries filtered out
     """
     deduplicated_jobs = []
+    array_base_ids = _get_array_base_job_ids(jobs)
 
     for job in jobs:
         # Skip parent array job entries (those with brackets like [0-4])
@@ -194,6 +244,8 @@ def deduplicate_array_jobs(jobs: List[JobInfoWeb]) -> List[JobInfoWeb]:
             and "]" in job.array_task_id
         ):
             # This is a parent entry - skip it
+            continue
+        if job.job_id in array_base_ids:
             continue
         else:
             # Keep regular jobs and individual array tasks
@@ -735,6 +787,7 @@ def _cache_job_state(
     *,
     job_name: Optional[str] = None,
     reason: Optional[str] = None,
+    array_submission: bool = False,
 ) -> tuple["JobInfo", Optional[JobState]]:
     """Persist an immediate job state transition in cache.
 
@@ -755,6 +808,9 @@ def _cache_job_state(
             hostname=hostname,
             submit_time=datetime.now(timezone.utc).isoformat(),
         )
+        if array_submission:
+            job_info.array_job_id = job_id
+            job_info.array_task_id = "[submission]"
 
     if job_name:
         job_info.name = job_name
@@ -1818,6 +1874,12 @@ async def get_job_details(
         False,
         description="Return cached data immediately if available, then refresh in background",
     ),
+    force_refresh: bool = Query(
+        False, description="Fetch directly from Slurm and skip cache fallback"
+    ),
+    force: bool = Query(
+        False, description="Legacy alias for force_refresh", alias="force"
+    ),
     authenticated: bool = Depends(verify_api_key),
 ):
     """Get detailed information for a specific job."""
@@ -1825,11 +1887,12 @@ async def get_job_details(
         job_id = InputSanitizer.sanitize_job_id(job_id)
         if host:
             host = InputSanitizer.sanitize_hostname(host)
+        force_refresh = force_refresh or force
 
         # If cache_first is requested, return cached data immediately and trigger background refresh
-        if cache_first:
+        if cache_first and not force_refresh:
             cached_job = await _cache_middleware.get_job_with_cache_fallback(
-                job_id, host
+                job_id, host, allow_stale_active=True
             )
             if cached_job:
                 logger.info(
@@ -1882,10 +1945,13 @@ async def get_job_details(
                 continue
 
         # Try cache fallback
-        cached_job = await _cache_middleware.get_job_with_cache_fallback(job_id, host)
-        if cached_job:
-            logger.info(f"Returning cached job {job_id}")
-            return cached_job
+        if not force_refresh:
+            cached_job = await _cache_middleware.get_job_with_cache_fallback(
+                job_id, host
+            )
+            if cached_job:
+                logger.info(f"Returning cached job {job_id}")
+                return cached_job
 
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -2758,6 +2824,9 @@ async def launch_job(
                         request.host,
                         JobState.PENDING,
                         job_name=request.job_name,
+                        array_submission=looks_like_array_submission(
+                            request.script_content
+                        ),
                     )
                     await _broadcast_job_state(pending_job_info, previous_state)
                 except Exception as e:
@@ -4921,6 +4990,25 @@ _all_jobs_websockets: Set[WebSocket] = set()
 _all_jobs_monitor_lock = asyncio.Lock()
 
 
+async def _verify_active_snapshot_cache(
+    all_jobs, manager: SlurmManager, active_fetch_limit: Optional[int]
+):
+    """Verify cached active jobs against a full active snapshot."""
+    if active_fetch_limit and len(all_jobs) >= active_fetch_limit:
+        logger.debug(
+            "Skipping active snapshot cache verification because the result hit the fetch limit"
+        )
+        return
+
+    current_job_ids = {
+        slurm_host.host.hostname: [] for slurm_host in manager.slurm_hosts
+    }
+    for job in all_jobs:
+        current_job_ids.setdefault(job.hostname, []).append(job.job_id)
+
+    await _cache_middleware._verify_and_update_cache(current_job_ids)
+
+
 async def monitor_all_jobs_singleton():
     """Single background task that broadcasts to all connected WebSocket clients."""
     global _all_jobs_websockets
@@ -4929,13 +5017,14 @@ async def monitor_all_jobs_singleton():
     try:
         from ..job_data_manager import get_job_data_manager
 
-        get_slurm_manager()
+        manager = get_slurm_manager()
         job_data_manager = get_job_data_manager()
         job_states = {}
         # ⚡ PERFORMANCE: Use different intervals for different update types
         last_full_update = 0
         FAST_INTERVAL = 15  # Fast updates for running jobs every 15 seconds
         FULL_INTERVAL = 60  # Full updates including completed jobs every 60 seconds
+        ACTIVE_FETCH_LIMIT = 500
 
         while True:
             await asyncio.sleep(FAST_INTERVAL)
@@ -4962,21 +5051,28 @@ async def monitor_all_jobs_singleton():
                     )
                     all_jobs = await job_data_manager.fetch_all_jobs(
                         hostname=None,
-                        limit=500,
+                        limit=ACTIVE_FETCH_LIMIT,
                         active_only=False,
                         since="1d",  # Only check jobs from last day
                     )
                     last_full_update = current_time
+                    did_fetch_active_snapshot = False
                 else:
                     # Fast update every 15 seconds: only fetch active jobs
                     logger.debug("Performing fast job update (active only)")
                     all_jobs = await job_data_manager.fetch_all_jobs(
                         hostname=None,
-                        limit=500,
+                        limit=ACTIVE_FETCH_LIMIT,
                         active_only=True,  # ⚡ Only fetch running/pending jobs for speed
                     )
+                    did_fetch_active_snapshot = True
 
                 logger.debug(f"Monitor task fetched {len(all_jobs)} jobs")
+
+                if did_fetch_active_snapshot:
+                    await _verify_active_snapshot_cache(
+                        all_jobs, manager, ACTIVE_FETCH_LIMIT
+                    )
 
                 current_job_ids = set()
                 updates = []
@@ -5171,19 +5267,29 @@ async def websocket_all_jobs(websocket: WebSocket):
             )
 
             if cached_job_data and len(cached_job_data) > 0:
-                # Convert CachedJobData to JobInfo
-                logger.info(
-                    f"Using {len(cached_job_data)} cached jobs (since {since_dt}) for WebSocket initial data"
+                filtered_cached_jobs = _filter_ws_initial_cached_jobs(
+                    job_data_manager, cached_job_data
                 )
-                all_jobs = [
-                    cached_data.job_info
-                    for cached_data in cached_job_data
-                    if cached_data.job_info
-                ]
-            else:
-                # No cache available, fetch from Slurm (may return empty if hosts are locked)
+                if filtered_cached_jobs:
+                    logger.info(
+                        "Using %s filtered cached jobs (from %s raw rows since %s) for "
+                        "WebSocket initial data",
+                        len(filtered_cached_jobs),
+                        len(cached_job_data),
+                        since_dt,
+                    )
+                    all_jobs = filtered_cached_jobs
+                else:
+                    logger.info(
+                        "Raw cache had %s rows but none were suitable for initial "
+                        "WebSocket data; fetching from Slurm instead",
+                        len(cached_job_data),
+                    )
+
+            if not all_jobs:
+                # No suitable cached jobs available, fetch from Slurm
                 logger.info(
-                    "No cache available, fetching jobs for WebSocket initial data"
+                    "No suitable cache available, fetching jobs for WebSocket initial data"
                 )
                 all_jobs = await job_data_manager.fetch_all_jobs(
                     hostname=None,

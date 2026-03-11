@@ -13,6 +13,7 @@ from .ssh.helpers import send_file
 from .sync import SyncManager
 from .utils.async_helpers import create_task
 from .utils.logging import setup_logger
+from .utils.slurm_arrays import looks_like_array_submission
 
 logger = setup_logger(__name__, "INFO")
 
@@ -463,6 +464,9 @@ class LaunchManager:
                         submit_line=submit_line,
                         user=None,  # Will be updated when job is queried
                     )
+                    if looks_like_array_submission(script_content, submit_line):
+                        job_info.array_job_id = job_id
+                        job_info.array_task_id = "[submission]"
                     cache.cache_job(job_info)
                 except Exception as e:
                     logger.warning(f"Failed to cache submit line for job {job_id}: {e}")

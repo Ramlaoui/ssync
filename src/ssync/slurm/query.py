@@ -344,6 +344,79 @@ class SlurmQuery:
 
         return jobs
 
+    @staticmethod
+    def _normalize_sacct_job_id(job_id: str) -> str:
+        """Normalize a sacct JobID by stripping step suffixes."""
+        return job_id.split(".", 1)[0]
+
+    @staticmethod
+    def _split_array_task_job_id(job_id: str) -> tuple[Optional[str], Optional[str]]:
+        """Return (array_job_id, array_task_id) for a concrete array task ID."""
+        if "_" not in job_id:
+            return None, None
+
+        array_job_id, array_task_id = job_id.split("_", 1)
+        if not array_task_id.isdigit():
+            return None, None
+
+        return array_job_id, array_task_id
+
+    def _run_sacct_job_query(
+        self,
+        conn: SSHConnection,
+        hostname: str,
+        available_fields: list[str],
+        query_job_id: str,
+        *,
+        user: Optional[str] = None,
+        expand_array: bool = False,
+    ) -> list[str]:
+        """Run a sacct query for a specific job identifier."""
+        format_str = ",".join(available_fields)
+        cmd = f"sacct -X --format={format_str} --parsable2 --noheader --jobs={query_job_id}"
+        if expand_array:
+            cmd += " --array"
+        if user:
+            cmd += f" --user={user}"
+
+        logger.debug(f"Running sacct job query on {hostname}: {cmd}")
+        result = conn.run(cmd, hide=True, timeout=30, warn=True, pty=True)
+        if not result.ok or not result.stdout.strip():
+            return []
+
+        return [line for line in result.stdout.strip().split("\n") if line.strip()]
+
+    def _select_sacct_job_info(
+        self,
+        lines: list[str],
+        hostname: str,
+        available_fields: list[str],
+        *,
+        expected_job_id: Optional[str] = None,
+        allow_first_non_step: bool = False,
+    ) -> Optional[JobInfo]:
+        """Select the desired job row from sacct output."""
+        first_non_step: Optional[JobInfo] = None
+
+        for line in lines:
+            fields = line.strip().split("|")
+            if len(fields) < len(available_fields):
+                continue
+
+            normalized_job_id = self._normalize_sacct_job_id(fields[0])
+            if "." in fields[0]:
+                continue
+
+            if expected_job_id and normalized_job_id == expected_job_id:
+                return self.parser.from_sacct_fields(fields, hostname, available_fields)
+
+            if allow_first_non_step and first_non_step is None:
+                first_non_step = self.parser.from_sacct_fields(
+                    fields, hostname, available_fields
+                )
+
+        return first_non_step
+
     def get_job_final_state(
         self,
         conn: SSHConnection,
@@ -353,10 +426,9 @@ class SlurmQuery:
         """Get final state of a specific job from sacct."""
         try:
             available_fields = self.get_available_sacct_fields(conn, hostname)
-            format_str = ",".join(available_fields)
-
             query_job_id = job_id
             is_array_parent = False
+            array_job_id, _array_task_id = self._split_array_task_job_id(job_id)
             if "_[" in job_id and "]" in job_id:
                 query_job_id = job_id.split("_[")[0]
                 is_array_parent = True
@@ -364,16 +436,10 @@ class SlurmQuery:
                     f"Array parent job detected: {job_id}, querying base ID: {query_job_id}"
                 )
 
-            cmd = f"sacct -X --format={format_str} --parsable2 --noheader --jobs={query_job_id}"
-
             logger.debug(f"Fetching final state for job {job_id} on {hostname}")
-            result = conn.run(cmd, hide=True, timeout=30, warn=True, pty=True)
-
-            if not result.ok or not result.stdout.strip():
-                logger.debug(f"No sacct data found for job {job_id} on {hostname}")
-                return None
-
-            lines = result.stdout.strip().split("\n")
+            lines = self._run_sacct_job_query(
+                conn, hostname, available_fields, query_job_id
+            )
 
             if is_array_parent and len(lines) > 1:
                 first_line = lines[0].strip().split("|")
@@ -406,23 +472,44 @@ class SlurmQuery:
                         f"(task states: {states})"
                     )
                     return job_info
-            else:
-                line = lines[0]
-                fields = line.strip().split("|")
 
-                if len(fields) >= len(available_fields):
-                    job_info = self.parser.from_sacct_fields(
-                        fields, hostname, available_fields
-                    )
+            job_info = self._select_sacct_job_info(
+                lines,
+                hostname,
+                available_fields,
+                expected_job_id=job_id,
+                allow_first_non_step=not is_array_parent and array_job_id is None,
+            )
+            if job_info:
+                logger.info(
+                    f"Retrieved final state for job {job_id}: {job_info.state.value}"
+                )
+                return job_info
+
+            # Some Slurm deployments only surface finished array tasks when querying
+            # the base array ID with --array expansion.
+            if array_job_id:
+                lines = self._run_sacct_job_query(
+                    conn,
+                    hostname,
+                    available_fields,
+                    array_job_id,
+                    expand_array=True,
+                )
+                job_info = self._select_sacct_job_info(
+                    lines,
+                    hostname,
+                    available_fields,
+                    expected_job_id=job_id,
+                )
+                if job_info:
                     logger.info(
-                        f"Retrieved final state for job {job_id}: {job_info.state.value}"
+                        f"Retrieved final state for array task {job_id}: {job_info.state.value}"
                     )
                     return job_info
-                else:
-                    logger.warning(
-                        f"Invalid sacct output for job {job_id}: got {len(fields)} fields, expected {len(available_fields)}"
-                    )
-                    return None
+
+            logger.debug(f"No sacct data found for job {job_id} on {hostname}")
+            return None
 
         except Exception as e:
             logger.error(f"Error fetching final state for job {job_id}: {e}")
@@ -852,6 +939,7 @@ class SlurmQuery:
             job_info = None
 
             user = user or self.get_username(conn, hostname=hostname)
+            array_job_id, _array_task_id = self._split_array_task_job_id(job_id)
 
             format_str = "|".join(SQUEUE_FIELDS)
             result = conn.run(
@@ -868,26 +956,28 @@ class SlurmQuery:
 
             if not job_info:
                 available_fields = self.get_available_sacct_fields(conn, hostname)
-                format_str = ",".join(available_fields)
-                result = conn.run(
-                    f"sacct -X -j {job_id} --format={format_str} --parsable2 --noheader --user {user}",
-                    hide=True,
-                    timeout=30,
-                    warn=True,
-                )
+                sacct_queries = [(job_id, False)]
+                if array_job_id:
+                    sacct_queries.append((array_job_id, True))
 
-                if result.ok and result.stdout.strip():
-                    lines = result.stdout.strip().split("\n")
-                    for line in lines:
-                        fields = line.strip().split("|")
-                        if (
-                            len(fields) >= len(available_fields)
-                            and "." not in fields[0]
-                        ):
-                            job_info = self.parser.from_sacct_fields(
-                                fields, hostname, available_fields
-                            )
-                            break
+                for query_job_id, expand_array in sacct_queries:
+                    lines = self._run_sacct_job_query(
+                        conn,
+                        hostname,
+                        available_fields,
+                        query_job_id,
+                        user=user,
+                        expand_array=expand_array,
+                    )
+                    job_info = self._select_sacct_job_info(
+                        lines,
+                        hostname,
+                        available_fields,
+                        expected_job_id=job_id,
+                        allow_first_non_step=not expand_array and array_job_id is None,
+                    )
+                    if job_info:
+                        break
 
             if job_info:
                 try:

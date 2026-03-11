@@ -109,11 +109,44 @@ class JobDataManager:
         self._recent_active_cache_ttl_seconds = float(
             os.getenv("SSYNC_RECENT_ACTIVE_CACHE_TTL_SECONDS", "300")
         )
+        # Minimal launch placeholders should expire quickly if Slurm never
+        # enriches them into real jobs.
+        self._placeholder_active_cache_ttl_seconds = float(
+            os.getenv("SSYNC_PLACEHOLDER_ACTIVE_CACHE_TTL_SECONDS", "90")
+        )
 
     def _next_profile_request_id(self) -> str:
         """Generate a stable local ID for profiling correlation."""
         self._profile_request_counter += 1
         return f"r{self._profile_request_counter}"
+
+    def _can_use_cached_job_for_missing_lookup(self, cached_job) -> bool:
+        """Return True when a cache fallback is still trustworthy for a missing job."""
+        if not cached_job or not cached_job.job_info:
+            return False
+
+        if not cached_job.is_active:
+            return True
+
+        recent_cutoff = datetime.now() - timedelta(
+            seconds=self._recent_active_cache_ttl_seconds
+        )
+        return cached_job.last_updated >= recent_cutoff
+
+    @staticmethod
+    def _is_launch_placeholder_job(job_info: Optional[JobInfo]) -> bool:
+        """Return True for synthetic launch-time cache entries awaiting Slurm data."""
+        if not job_info:
+            return False
+
+        return (
+            job_info.user is None
+            and not job_info.partition
+            and not job_info.nodes
+            and not job_info.cpus
+            and not job_info.memory
+            and bool(job_info.submit_line)
+        )
 
     def _log_profile(
         self,
@@ -866,11 +899,15 @@ class JobDataManager:
                     list(missing_job_ids), hostname
                 )
                 for missing_id, cached_job in cached_missing_map.items():
-                    if cached_job and cached_job.job_info:
+                    if self._can_use_cached_job_for_missing_lookup(cached_job):
                         # When specific job IDs are requested, don't filter by user
                         # The user explicitly asked for these jobs, so return them
                         jobs.append(cached_job.job_info)
                         logger.debug(f"Found missing job {missing_id} in cache")
+                    else:
+                        logger.debug(
+                            f"Skipping stale active cache fallback for missing job {missing_id}"
+                        )
 
             # Regular case: merge with cached completed jobs for bulk queries
             elif not active_only and not job_ids:
@@ -1661,6 +1698,9 @@ class JobDataManager:
         recent_cutoff = datetime.now() - timedelta(
             seconds=self._recent_active_cache_ttl_seconds
         )
+        placeholder_cutoff = datetime.now() - timedelta(
+            seconds=self._placeholder_active_cache_ttl_seconds
+        )
         cached_job_data = self.cache.get_cached_jobs(
             hostname=hostname,
             active_only=True,
@@ -1672,6 +1712,11 @@ class JobDataManager:
             if not cached_job.job_info:
                 continue
             if cached_job.last_updated < recent_cutoff:
+                continue
+            if (
+                self._is_launch_placeholder_job(cached_job.job_info)
+                and cached_job.cached_at < placeholder_cutoff
+            ):
                 continue
 
             cached_user = cached_job.job_info.user

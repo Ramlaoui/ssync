@@ -5,6 +5,8 @@ This middleware transparently caches job data without modifying existing logic.
 """
 
 import asyncio
+from datetime import datetime, timedelta
+import os
 from typing import Any, Dict, List, Optional
 
 from ..cache import get_cache
@@ -40,11 +42,12 @@ class CacheMiddleware:
 
         # ⚡ PERFORMANCE: Rate limit cache verification
         # Don't verify more than once every N seconds (configurable via env)
-        import os
-
         self._last_verify_time: float = 0
         self._verify_cooldown_seconds: float = float(
             os.environ.get("SSYNC_CACHE_VERIFY_COOLDOWN", "30")
+        )
+        self._recent_active_cache_ttl_seconds: float = float(
+            os.environ.get("SSYNC_RECENT_ACTIVE_CACHE_TTL_SECONDS", "300")
         )
         self._verify_in_progress: bool = False
         logger.info(
@@ -181,7 +184,11 @@ class CacheMiddleware:
         return None
 
     async def get_job_with_cache_fallback(
-        self, job_id: str, hostname: Optional[str] = None
+        self,
+        job_id: str,
+        hostname: Optional[str] = None,
+        *,
+        allow_stale_active: bool = False,
     ) -> Optional[JobInfoWeb]:
         """
         Get job info with cache fallback.
@@ -195,11 +202,31 @@ class CacheMiddleware:
         """
         cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
 
-        if cached_job:
+        if cached_job and self._can_return_cached_job(
+            cached_job, allow_stale_active=allow_stale_active
+        ):
             logger.debug(f"Found cached job {job_id}")
             return JobInfoWeb.from_job_info(cached_job.job_info)
 
         return None
+
+    def _can_return_cached_job(
+        self, cached_job, *, allow_stale_active: bool = False
+    ) -> bool:
+        """Decide whether a cached job is safe to serve as fallback."""
+        if not cached_job or not cached_job.job_info:
+            return False
+
+        if not cached_job.is_active:
+            return True
+
+        if allow_stale_active:
+            return True
+
+        recent_cutoff = datetime.now() - timedelta(
+            seconds=self._recent_active_cache_ttl_seconds
+        )
+        return cached_job.last_updated >= recent_cutoff
 
     async def cache_job_output(
         self, job_id: str, hostname: str, response: JobOutputResponse
