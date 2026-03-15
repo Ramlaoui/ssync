@@ -21,6 +21,11 @@ class WatcherDaemon:
     LOG_FILE = Path.home() / ".config" / "ssync" / "watcher-daemon.log"
 
     @classmethod
+    def script_path(cls) -> Path:
+        """Return the watcher runner entrypoint path."""
+        return Path(__file__).resolve().parents[3] / "utils" / "run_watchers.py"
+
+    @classmethod
     def is_running(cls) -> bool:
         """Check if daemon is already running."""
         if not cls.PID_FILE.exists():
@@ -47,7 +52,7 @@ class WatcherDaemon:
         cls.PID_FILE.parent.mkdir(parents=True, exist_ok=True)
 
         # Start daemon in background
-        script_path = Path(__file__).parent.parent.parent.parent / "run_watchers.py"
+        script_path = cls.script_path()
 
         cmd = [sys.executable, str(script_path)]
 
