@@ -347,6 +347,163 @@ class LaunchCommand(BaseCommand):
             return False
 
 
+class CopyOutputCommand(BaseCommand):
+    """Handles copying job output files via the API."""
+
+    def execute(
+        self,
+        job_id: str,
+        destination: Path,
+        host: Optional[str] = None,
+        output_type: str = "both",
+        compressed: bool = False,
+        overwrite: bool = False,
+    ):
+        """Execute output copy command."""
+        try:
+            api_client = APIClient(verbose=self.verbose)
+
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
+                return False
+
+            if not host:
+                if self.verbose:
+                    click.echo(f"No host specified, searching for job {job_id}...")
+
+                jobs = api_client.get_jobs(job_ids=[job_id])
+                if not jobs:
+                    click.echo(
+                        f"Job {job_id} not found on any configured host", err=True
+                    )
+                    return False
+
+                matching_hosts = sorted({job.hostname for job in jobs if job.hostname})
+                if len(matching_hosts) > 1:
+                    click.echo(
+                        (
+                            f"Job {job_id} was found on multiple hosts: "
+                            f"{', '.join(matching_hosts)}. Specify --host."
+                        ),
+                        err=True,
+                    )
+                    return False
+
+                host = matching_hosts[0]
+                if self.verbose:
+                    click.echo(f"Found job {job_id} on host {host}")
+
+            host_exists = any(h.host.hostname == host for h in self.slurm_hosts)
+            if not host_exists:
+                click.echo(f"Host '{host}' not found in configuration", err=True)
+                return False
+
+            output_metadata = api_client.get_job_output(
+                job_id=job_id,
+                host=host,
+                metadata_only=True,
+            )
+
+            requested_outputs = ["stdout", "stderr"]
+            if output_type != "both":
+                requested_outputs = [output_type]
+
+            available_outputs = []
+            missing_outputs = []
+            for current_output in requested_outputs:
+                metadata = output_metadata.get(f"{current_output}_metadata")
+                if metadata and metadata.get("exists"):
+                    available_outputs.append(current_output)
+                else:
+                    missing_outputs.append(current_output)
+
+            if not available_outputs:
+                requested_summary = ", ".join(requested_outputs)
+                click.echo(
+                    f"No {requested_summary} output available for job {job_id} on {host}",
+                    err=True,
+                )
+                return False
+
+            destination = destination.expanduser()
+            if destination.exists() and not destination.is_dir():
+                click.echo(
+                    f"Destination must be a directory: {destination}", err=True
+                )
+                return False
+
+            downloads = []
+            for current_output in available_outputs:
+                filename, content = api_client.download_job_output(
+                    job_id=job_id,
+                    host=host,
+                    output_type=current_output,
+                    compressed=compressed,
+                )
+                downloads.append((current_output, destination / filename, content))
+
+            existing_paths = [
+                str(target_path)
+                for _, target_path, _ in downloads
+                if target_path.exists() and not overwrite
+            ]
+            if existing_paths:
+                click.echo(
+                    (
+                        "Refusing to overwrite existing output file(s): "
+                        + ", ".join(existing_paths)
+                        + ". Use --overwrite to replace them."
+                    ),
+                    err=True,
+                )
+                return False
+
+            destination.mkdir(parents=True, exist_ok=True)
+            for current_output, target_path, content in downloads:
+                target_path.write_bytes(content)
+                click.echo(f"Copied {current_output} to {target_path}")
+
+            if missing_outputs:
+                click.echo(
+                    (
+                        f"Skipped unavailable output(s) for job {job_id}: "
+                        + ", ".join(missing_outputs)
+                    ),
+                    err=True,
+                )
+
+            return True
+
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
+        except requests.exceptions.HTTPError as e:
+            message = None
+            response = getattr(e, "response", None)
+            if response is not None:
+                try:
+                    payload = response.json()
+                    message = payload.get("detail")
+                except ValueError:
+                    message = response.text.strip() or None
+            click.echo(
+                f"Error copying job output: {message or str(e)}",
+                err=True,
+            )
+            return False
+        except Exception as e:
+            click.echo(f"Error copying job output: {e}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return False
+
+
 class CancelCommand(BaseCommand):
     """Handles the cancel command logic."""
 

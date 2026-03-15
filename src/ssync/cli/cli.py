@@ -6,6 +6,7 @@ from ..utils.config import ConfigError, config
 from .auth import auth
 from .commands import (
     CancelCommand,
+    CopyOutputCommand,
     LaunchCommand,
     PartitionsCommand,
     StatusCommand,
@@ -142,6 +143,61 @@ def cancel_command(ctx, job_id, host):
     success = command.execute(
         job_id=job_id,
         host=host,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="copy-output")
+@click.argument("job_id")
+@click.argument("destination", type=click.Path(path_type=Path))
+@click.option("--host", help="Target host (auto-detected if not specified)")
+@click.option(
+    "--output-type",
+    type=click.Choice(["stdout", "stderr", "both"]),
+    default="both",
+    show_default=True,
+    help="Which output stream to copy",
+)
+@click.option(
+    "--compressed",
+    is_flag=True,
+    help="Save compressed .gz output instead of plain text",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Overwrite existing local files if they already exist",
+)
+@click.pass_context
+def copy_output_command(
+    ctx,
+    job_id,
+    destination,
+    host,
+    output_type,
+    compressed,
+    overwrite,
+):
+    """Copy job output files into a local destination directory.
+
+    JOB_ID: Slurm job ID to fetch outputs for
+    DESTINATION: Local directory where output files will be written
+    """
+    command = CopyOutputCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        job_id=job_id,
+        destination=destination,
+        host=host,
+        output_type=output_type,
+        compressed=compressed,
+        overwrite=overwrite,
     )
 
     if not success:

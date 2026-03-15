@@ -1,8 +1,9 @@
 """API client for communicating with ssync web API."""
 
+import re
 import warnings
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -95,6 +96,67 @@ class APIClient:
         response = requests.post(
             f"{self.base_url}{endpoint}",
             json=data,
+            params=params,
+            headers=self._get_headers(),
+            timeout=timeout,
+            verify=False,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def download_job_output(
+        self,
+        job_id: str,
+        host: str,
+        output_type: str = "stdout",
+        compressed: bool = False,
+        timeout: int = 60,
+    ) -> tuple[str, bytes]:
+        """Download a job output file from the API.
+
+        Returns:
+            tuple of (filename, content bytes)
+        """
+        response = requests.get(
+            f"{self.base_url}/api/jobs/{job_id}/output/download",
+            params={
+                "host": host,
+                "output_type": output_type,
+                "compressed": "true" if compressed else "false",
+            },
+            headers=self._get_headers(),
+            timeout=timeout,
+            verify=False,
+        )
+        response.raise_for_status()
+
+        disposition = response.headers.get("Content-Disposition", "")
+        match = re.search(r'filename="?([^";]+)"?', disposition)
+        suffix = ".log.gz" if compressed else ".log"
+        filename = (
+            match.group(1)
+            if match
+            else f"job_{job_id}_{output_type}{suffix}"
+        )
+        return filename, response.content
+
+    def get_job_output(
+        self,
+        job_id: str,
+        host: str,
+        metadata_only: bool = False,
+        force_refresh: bool = False,
+        timeout: int = 60,
+    ) -> dict[str, Any]:
+        """Get job output data or metadata from the API."""
+        params = {"host": host}
+        if metadata_only:
+            params["metadata_only"] = "true"
+        if force_refresh:
+            params["force_refresh"] = "true"
+
+        response = requests.get(
+            f"{self.base_url}/api/jobs/{job_id}/output",
             params=params,
             headers=self._get_headers(),
             timeout=timeout,
