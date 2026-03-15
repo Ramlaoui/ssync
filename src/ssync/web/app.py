@@ -874,6 +874,50 @@ else:
         }
 
 
+_FRONTEND_RESERVED_PREFIXES = (
+    "api",
+    "assets",
+    "docs",
+    "redoc",
+    "ws",
+    "health",
+)
+
+
+def _resolve_frontend_request_path(full_path: str) -> Optional[Path]:
+    """Resolve a frontend deep-link or static file request.
+
+    Returns:
+        - concrete file path when the requested frontend file exists
+        - index.html for SPA routes
+        - None when the path should not be handled by the frontend fallback
+    """
+    if not frontend_dist.exists():
+        return None
+
+    normalized = full_path.strip("/")
+    if not normalized:
+        return frontend_dist / "index.html"
+
+    first_segment = normalized.split("/", 1)[0]
+    if first_segment in _FRONTEND_RESERVED_PREFIXES or normalized == "openapi.json":
+        return None
+
+    requested_path = (frontend_dist / normalized).resolve()
+    try:
+        requested_path.relative_to(frontend_dist.resolve())
+    except ValueError:
+        return None
+
+    if requested_path.is_file():
+        return requested_path
+
+    if requested_path.suffix:
+        return None
+
+    return frontend_dist / "index.html"
+
+
 def get_slurm_manager() -> SlurmManager:
     """Get or create persistent Slurm manager instance with connection reuse."""
     global _slurm_manager, _config_last_modified
@@ -5461,6 +5505,17 @@ async def websocket_watchers(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         if websocket in watcher_manager.active_connections:
             watcher_manager.disconnect(websocket)
+
+
+if frontend_dist.exists():
+
+    @app.get("/{full_path:path}", response_class=FileResponse)
+    async def serve_frontend_spa_fallback(full_path: str):
+        """Serve SPA routes and root-level frontend files on direct navigation."""
+        resolved_path = _resolve_frontend_request_path(full_path)
+        if resolved_path is None:
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(str(resolved_path))
 
 
 def main():
