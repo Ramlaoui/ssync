@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .manager import SlurmManager
 from .models.cluster import PathRestrictions, SlurmHost
+from .ssh.native import NativeSSH
 from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -268,11 +269,23 @@ class SyncManager:
                 logger.debug("Running rsync with password authentication")
                 result = subprocess.run(rsync_cmd, env=env, capture_output=False)
             else:
-                # Use rsync directly for key-based auth
-                rsync_cmd = (
-                    ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
+                # Use the existing ControlMaster socket to avoid a new SSH handshake
+                control_path = NativeSSH.ensure_control_master(
+                    conn.host_config, conn.host_id
                 )
-                logger.debug(f"Running rsync command: {' '.join(rsync_cmd)}")
+                if control_path:
+                    ssh_cmd = f"ssh -S {control_path} -o ControlMaster=no"
+                    rsync_cmd = (
+                        ["rsync", "-avz", "-e", ssh_cmd]
+                        + exclude_args
+                        + [f"{self.source_dir}/", target]
+                    )
+                    logger.debug(f"Running rsync via ControlMaster: {control_path}")
+                else:
+                    rsync_cmd = (
+                        ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
+                    )
+                    logger.debug(f"Running rsync without ControlMaster")
                 result = subprocess.run(rsync_cmd, capture_output=False)
 
             if result.returncode == 0:
