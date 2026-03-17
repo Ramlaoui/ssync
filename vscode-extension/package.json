@@ -1,0 +1,177 @@
+{
+  "name": "ssync-vscode",
+  "displayName": "ssync",
+  "description": "SLURM job management: sync, submit, and monitor HPC jobs via ssync",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ssync.syncWorkspace",
+        "title": "Sync Workspace to Host",
+        "category": "ssync",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "ssync.submitScript",
+        "title": "Submit to Host",
+        "category": "ssync",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ssync.refreshJobs",
+        "title": "Refresh",
+        "category": "ssync",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ssync.viewLogs",
+        "title": "View Logs",
+        "category": "ssync",
+        "icon": "$(output)"
+      },
+      {
+        "command": "ssync.cancelJob",
+        "title": "Cancel Job",
+        "category": "ssync",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "ssync.startServer",
+        "title": "Start ssync Server",
+        "category": "ssync",
+        "icon": "$(server-process)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ssync-sidebar",
+          "title": "ssync",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ssync-sidebar": [
+        {
+          "id": "ssync.jobsView",
+          "name": "Jobs"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "ssync.refreshJobs",
+          "when": "view == ssync.jobsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ssync.syncWorkspace",
+          "when": "view == ssync.jobsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ssync.startServer",
+          "when": "view == ssync.jobsView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ssync.viewLogs",
+          "when": "viewItem =~ /^job/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ssync.cancelJob",
+          "when": "viewItem == job-running || viewItem == job-pending",
+          "group": "inline@2"
+        },
+        {
+          "command": "ssync.viewLogs",
+          "when": "viewItem =~ /^job/",
+          "group": "1_job@1"
+        },
+        {
+          "command": "ssync.cancelJob",
+          "when": "viewItem == job-running || viewItem == job-pending",
+          "group": "1_job@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "ssync.submitScript",
+          "when": "resourceExtname == .sh",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "ssync.submitScript",
+          "when": "resourceExtname == .sh",
+          "group": "ssync"
+        },
+        {
+          "command": "ssync.syncWorkspace",
+          "when": "explorerResourceIsFolder",
+          "group": "ssync"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ssync",
+      "properties": {
+        "ssync.apiUrl": {
+          "type": "string",
+          "default": "https://localhost:8042",
+          "description": "URL of the ssync API server"
+        },
+        "ssync.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the ssync server (also readable from ~/.config/ssync/.api_key)"
+        },
+        "ssync.pollInterval": {
+          "type": "number",
+          "default": 10,
+          "minimum": 3,
+          "description": "Job list polling interval in seconds"
+        },
+        "ssync.showCompletedJobs": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show recently completed/failed jobs in the tree"
+        },
+        "ssync.completedJobsWindow": {
+          "type": "string",
+          "default": "3d",
+          "description": "How far back to show completed jobs (e.g. 1h, 3d, 1w)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "node esbuild.js --minify",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}
