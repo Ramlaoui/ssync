@@ -34,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(treeView);
 
-  const pollInterval = vscode.workspace.getConfiguration('ssync').get<number>('pollInterval', 10);
+  const pollInterval = vscode.workspace.getConfiguration('ssync').get<number>('pollInterval', 120);
   tree.start(pollInterval);
 
   // ── Update status bar on tree refresh ─────────────────────────────────────

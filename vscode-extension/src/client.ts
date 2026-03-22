@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { URL } from 'url';
+import WebSocket from 'ws';
 
 // Allow self-signed certs for localhost
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
@@ -83,6 +84,19 @@ export interface LaunchResponse {
   requires_confirmation?: boolean;
 }
 
+export interface WebSocketHandlers {
+  onInitial: (data: { jobs: Record<string, JobInfo[]>; total: number }) => void;
+  onUpdate: (updates: Array<{ type: string; job_id: string; hostname: string; job: JobInfo }>) => void;
+  onConnect: () => void;
+  onClose: () => void;
+  onError: (err: Error) => void;
+}
+
+export interface WebSocketConnection {
+  close: () => void;
+  ping: () => void;
+}
+
 export class SsyncClient {
   constructor(private apiUrl: string, private apiKey: string) {}
 
@@ -92,7 +106,6 @@ export class SsyncClient {
     const keyFile = path.join(os.homedir(), '.config', 'ssync', '.api_key');
     try {
       const raw = fs.readFileSync(keyFile, 'utf8').trim();
-      // File is JSON: { "key": { name, ... } } — first key is the api key string
       const parsed = JSON.parse(raw);
       return Object.keys(parsed)[0] ?? '';
     } catch {
@@ -178,29 +191,36 @@ export class SsyncClient {
     await this.request('POST', `/api/jobs/${encodeURIComponent(jobId)}/cancel?host=${encodeURIComponent(hostname)}`);
   }
 
-  /** Stream output lines via SSE. Returns an async generator of text chunks. */
-  streamOutput(jobId: string, hostname: string, tailLines = 50): { stop: () => void; readable: NodeJS.ReadableStream } {
-    const parsed = new URL(
-      `/api/jobs/${encodeURIComponent(jobId)}/output/stream?host=${encodeURIComponent(hostname)}&tail_lines=${tailLines}`,
-      this.apiUrl
-    );
-    const isHttps = parsed.protocol === 'https:';
-    const options: https.RequestOptions = {
-      hostname: parsed.hostname,
-      port: parsed.port || (isHttps ? '443' : '80'),
-      path: parsed.pathname + parsed.search,
-      method: 'GET',
-      headers: { 'X-API-Key': this.apiKey },
-      ...(isHttps ? { agent: httpsAgent } : {}),
-    };
-    const mod = isHttps ? https : http;
-    const req = mod.request(options);
-    req.end();
-    let responseStream: NodeJS.ReadableStream | null = null;
-    req.on('response', (res) => { responseStream = res; });
+  /** Connect to the WebSocket endpoint for real-time job updates. */
+  connectWebSocket(handlers: WebSocketHandlers): WebSocketConnection {
+    const wsUrl = this.apiUrl.replace(/^http/, 'ws') + '/ws/jobs';
+    const url = new URL(wsUrl);
+    if (this.apiKey) url.searchParams.set('api_key', this.apiKey);
+
+    const ws = new WebSocket(url.toString(), { rejectUnauthorized: false });
+
+    ws.on('open', () => handlers.onConnect());
+
+    ws.on('message', (raw) => {
+      try {
+        const data = JSON.parse(raw.toString());
+        if (data.type === 'pong') return;
+        if (data.type === 'initial') {
+          handlers.onInitial(data);
+        } else if (data.type === 'batch_update' && Array.isArray(data.updates)) {
+          handlers.onUpdate(data.updates);
+        } else if (data.type === 'job_update' || data.type === 'state_change' || data.type === 'job_completed') {
+          handlers.onUpdate([data]);
+        }
+      } catch { /* ignore parse errors */ }
+    });
+
+    ws.on('close', () => handlers.onClose());
+    ws.on('error', (err) => handlers.onError(err));
+
     return {
-      stop: () => req.destroy(),
-      get readable() { return responseStream!; },
+      close: () => ws.close(),
+      ping: () => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' })); },
     };
   }
 }
