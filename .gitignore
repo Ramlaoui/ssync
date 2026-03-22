@@ -47,3 +47,13 @@ node_modules/
 vscode-extension/out/
 vscode-extension/*.vsix
 vscode-extension/package-lock.json
+
+# iOS / Xcode local artifacts
+DerivedData/
+.derivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+.build/
+ios-app/ssyncApp/build/
+ios-app/ssyncApp/Config/Local.xcconfig

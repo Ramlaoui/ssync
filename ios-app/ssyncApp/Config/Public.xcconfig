@@ -1,0 +1,6 @@
+#include? "Local.xcconfig"
+
+SSYNC_DEVELOPMENT_TEAM =
+SSYNC_APP_BUNDLE_IDENTIFIER = com.example.ssyncApp
+SSYNC_TEST_BUNDLE_IDENTIFIER = com.example.ssyncAppTests
+SSYNC_UI_TEST_BUNDLE_IDENTIFIER = com.example.ssyncAppUITests

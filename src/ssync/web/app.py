@@ -2071,22 +2071,192 @@ async def stream_job_output(
     host = InputSanitizer.sanitize_hostname(host)
 
     manager = get_slurm_manager()
+    slurm_host = manager.get_host_by_name(host)
+    conn = manager._get_connection(slurm_host.host)
+
+    max_initial_bytes = 1024 * 1024
+    max_live_chunk_bytes = min(chunk_size, 256 * 1024)
 
     async def generate():
         """Generate Server-Sent Events stream."""
         import json
 
-        # First check cache
         cache = get_cache()
         cached_job = cache.get_cached_job(job_id, host)
 
-        # Send initial metadata event
+        async def send_event(payload: dict) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        async def resolve_job_info():
+            nonlocal cached_job
+
+            try:
+                job_info = await asyncio.to_thread(
+                    manager.slurm_client.get_job_details,
+                    conn,
+                    job_id,
+                    host,
+                )
+                if job_info:
+                    return job_info
+            except Exception as e:
+                logger.debug(f"Failed to refresh job info for output stream {job_id}: {e}")
+
+            if cached_job and cached_job.job_info:
+                return cached_job.job_info
+
+            return None
+
+        def output_path_for(job_info):
+            if not job_info:
+                return None
+            if output_type == "stderr":
+                return job_info.stderr_file
+            return job_info.stdout_file
+
+        async def stat_file(file_path: Optional[str]) -> int:
+            if not file_path:
+                return 0
+
+            result = await asyncio.to_thread(
+                conn.run,
+                f"stat -c %s '{file_path}' 2>/dev/null || echo 0",
+                hide=True,
+                warn=True,
+            )
+
+            try:
+                return int((result.stdout or "0").strip() or "0")
+            except ValueError:
+                return 0
+
+        async def read_file_chunk_base64(
+            file_path: Optional[str], start_offset: int, max_bytes: int
+        ) -> Optional[str]:
+            if not file_path or max_bytes <= 0:
+                return None
+
+            result = await asyncio.to_thread(
+                conn.run,
+                f"tail -c +{start_offset + 1} '{file_path}' 2>/dev/null | head -c {max_bytes} | base64 -w0",
+                hide=True,
+                warn=True,
+                timeout=30,
+            )
+
+            encoded = (result.stdout or "").strip()
+            return encoded or None
+
         metadata = {
             "type": "metadata",
             "output_type": output_type,
             "job_id": job_id,
             "host": host,
         }
+
+        job_info = await resolve_job_info()
+
+        if job_info and job_info.state == JobState.RUNNING:
+            file_path = output_path_for(job_info)
+            current_size = await stat_file(file_path)
+            start_offset = max(0, current_size - max_initial_bytes)
+            chunk_index = 0
+            position = current_size
+            last_heartbeat_at = time.monotonic()
+            last_refresh_at = 0.0
+
+            metadata.update(
+                {
+                    "original_size": current_size,
+                    "compression": "none",
+                    "truncated": start_offset > 0,
+                    "source": "live",
+                }
+            )
+            yield await send_event(metadata)
+
+            if start_offset > 0:
+                yield await send_event(
+                    {
+                        "type": "truncation_notice",
+                        "original_size": current_size,
+                    }
+                )
+
+            initial_payload = await read_file_chunk_base64(
+                file_path, start_offset, max_initial_bytes
+            )
+            if initial_payload:
+                for i in range(0, len(initial_payload), chunk_size):
+                    yield await send_event(
+                        {
+                            "type": "chunk",
+                            "index": chunk_index,
+                            "data": initial_payload[i : i + chunk_size],
+                            "compressed": False,
+                        }
+                    )
+                    chunk_index += 1
+                    await asyncio.sleep(0)
+
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                now = time.monotonic()
+                if now - last_refresh_at >= 2.0:
+                    refreshed_job_info = await resolve_job_info()
+                    if refreshed_job_info:
+                        job_info = refreshed_job_info
+                    last_refresh_at = now
+
+                file_path = output_path_for(job_info)
+                current_size = await stat_file(file_path)
+
+                if current_size < position:
+                    position = 0
+
+                while file_path and current_size > position:
+                    read_size = min(current_size - position, max_live_chunk_bytes)
+                    payload = await read_file_chunk_base64(file_path, position, read_size)
+                    if not payload:
+                        break
+
+                    for i in range(0, len(payload), chunk_size):
+                        yield await send_event(
+                            {
+                                "type": "chunk",
+                                "index": chunk_index,
+                                "data": payload[i : i + chunk_size],
+                                "compressed": False,
+                            }
+                        )
+                        chunk_index += 1
+                        await asyncio.sleep(0)
+
+                    position += read_size
+                    current_size = await stat_file(file_path)
+                    last_heartbeat_at = now
+
+                if job_info and job_info.state != JobState.RUNNING and current_size <= position:
+                    yield await send_event({"type": "complete"})
+                    break
+
+                if now - last_heartbeat_at >= 10.0:
+                    yield await send_event(
+                        {
+                            "type": "chunk",
+                            "index": chunk_index,
+                            "data": "",
+                            "compressed": False,
+                        }
+                    )
+                    chunk_index += 1
+                    last_heartbeat_at = now
+
+                await asyncio.sleep(1)
+
+            return
 
         if cached_job:
             # Stream from cache
@@ -2146,9 +2316,9 @@ async def stream_job_output(
                 # Send completion event
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
             else:
-                # No cached output
-                yield f"data: {json.dumps({'type': 'error', 'message': 'No cached output available'})}\n\n"
-        else:
+                cached_job = None
+
+        if not cached_job:
             # Fetch fresh with compression
             try:
                 # Get connection through thread pool

@@ -1,0 +1,7 @@
+// Copy this file to Local.xcconfig and replace the placeholders with your
+// Apple Developer Team ID and your real bundle identifiers for local builds.
+
+SSYNC_DEVELOPMENT_TEAM = YOUR_TEAM_ID
+SSYNC_APP_BUNDLE_IDENTIFIER = com.yourcompany.ssyncApp
+SSYNC_TEST_BUNDLE_IDENTIFIER = com.yourcompany.ssyncAppTests
+SSYNC_UI_TEST_BUNDLE_IDENTIFIER = com.yourcompany.ssyncAppUITests

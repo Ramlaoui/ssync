@@ -1,16 +1,16 @@
 #!/bin/bash
 
-# Setup script for SlurmManager iOS app Xcode project
+# Setup script for ssync iOS app Xcode project
 # This script helps create a proper Xcode project with existing Swift files
 
-echo "🚀 SlurmManager iOS App - Xcode Project Setup"
+echo "🚀 ssync iOS App - Xcode Project Setup"
 echo "=============================================="
 
 # Check if we're in the right directory
-if [ ! -d "SlurmManager" ]; then
+if [ ! -d "ssync" ]; then
     echo "❌ Error: Please run this script from the ios-app directory"
     echo "   Current directory: $(pwd)"
-    echo "   Expected: ios-app directory containing SlurmManager folder"
+    echo "   Expected: ios-app directory containing ssync folder"
     exit 1
 fi
 
@@ -21,13 +21,13 @@ if ! command -v xcodebuild &> /dev/null; then
     exit 1
 fi
 
-echo "✅ Found SlurmManager directory"
+echo "✅ Found ssync directory"
 echo ""
 
 # Remove the placeholder project file
-if [ -f "SlurmManager/SlurmManager.xcodeproj/project.pbxproj" ]; then
+if [ -f "ssync/ssync.xcodeproj/project.pbxproj" ]; then
     echo "🗑  Removing placeholder project file..."
-    rm -rf SlurmManager/SlurmManager.xcodeproj
+    rm -rf ssync/ssync.xcodeproj
 fi
 
 echo "📱 Creating Xcode project..."
@@ -41,7 +41,7 @@ echo "   • Choose: iOS → App"
 echo "   • Click 'Next'"
 echo ""
 echo "2️⃣  PROJECT CONFIGURATION:"
-echo "   • Product Name: SlurmManager"
+echo "   • Product Name: ssync"
 echo "   • Team: Select your Apple ID"
 echo "   • Organization Identifier: com.yourname (or your company)"
 echo "   • Bundle Identifier: (will auto-fill)"
@@ -54,8 +54,8 @@ echo ""
 echo "3️⃣  SAVE LOCATION:"
 echo "   ⚠️  IMPORTANT: Save in THIS directory:"
 echo "   📁 $(pwd)"
-echo "   • The project name should be 'SlurmManager'"
-echo "   • This will create SlurmManager.xcodeproj here"
+echo "   • The project name should be 'ssync'"
+echo "   • This will create ssync.xcodeproj here"
 echo ""
 echo "4️⃣  AFTER PROJECT CREATES:"
 echo "   a) Delete these default files (right-click → Delete → Move to Trash):"
@@ -63,13 +63,13 @@ echo "      • ContentView.swift"
 echo "      • Assets.xcassets (optional, keep if you want)"
 echo ""
 echo "   b) Add our Swift files:"
-echo "      • Right-click on the SlurmManager folder in Xcode"
-echo "      • Choose 'Add Files to \"SlurmManager\"...'"
-echo "      • Navigate to: $(pwd)/SlurmManager"
+echo "      • Right-click on the ssync folder in Xcode"
+echo "      • Choose 'Add Files to \"ssync\"...'"
+echo "      • Navigate to: $(pwd)/ssync/ssync"
 echo "      • Select ALL folders (Models, Services, Views, etc.)"
 echo "      • ✅ Copy items if needed: UNCHECKED"
 echo "      • ✅ Create groups: CHECKED"
-echo "      • ✅ Add to targets: SlurmManager CHECKED"
+echo "      • ✅ Add to targets: ssync CHECKED"
 echo "      • Click 'Add'"
 echo ""
 echo "5️⃣  ADD PACKAGE DEPENDENCIES:"
@@ -89,7 +89,7 @@ echo "      URL: https://github.com/kishikawakatsumi/KeychainAccess"
 echo "      Version: Up to Next Major Version 4.2.0"
 echo ""
 echo "6️⃣  CONFIGURE INFO.PLIST:"
-echo "   • Select project → SlurmManager target → Info tab"
+echo "   • Select project → ssync target → Info tab"
 echo "   • Add these keys:"
 echo "     - App Transport Security Settings"
 echo "       → Exception Domains"
@@ -103,8 +103,8 @@ echo "7️⃣  RUN THE APP:"
 echo "   • Select target device (iPhone 15 Pro simulator recommended)"
 echo "   • Press Cmd+R or click ▶️ Play button"
 echo ""
-echo "📝 Files to add from SlurmManager folder:"
-ls -la SlurmManager/ | grep -E "swift$|/$" | grep -v "^\."
+echo "📝 Files to add from ssync/ssync folder:"
+ls -la ssync/ssync/ | grep -E "swift$|/$" | grep -v "^\."
 echo ""
 echo "🎯 Quick command to open Xcode:"
 echo "   open -a Xcode"
@@ -113,7 +113,7 @@ echo "📚 Need help? Check the README:"
 echo "   cat $(pwd)/../README.md"
 echo ""
 echo "✨ Once setup is complete, your app will:"
-echo "   • Connect to your SLURM Manager API"
+echo "   • Connect to your ssync API"
 echo "   • Show real-time job updates"
 echo "   • Support Face ID/Touch ID"
 echo "   • Provide haptic feedback"
