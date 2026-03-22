@@ -43,7 +43,7 @@ from ..notifications.monitor import (
 )
 from ..slurm.params import SlurmParams
 from ..utils.async_helpers import create_task
-from ..utils.logging import setup_logger
+from ..utils.logging import configure_logging, setup_logger
 from ..utils.slurm_arrays import looks_like_array_submission
 from .cache_middleware import get_cache_middleware
 from .cache_scheduler import start_cache_scheduler, stop_cache_scheduler
@@ -369,10 +369,7 @@ logger.info(f"Initialized thread pool with {THREAD_POOL_SIZE} workers")
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup."""
-    # Enable memory logging for API access
-    from ..utils.logging import enable_memory_logging
-
-    enable_memory_logging()
+    configure_logging(memory=True)
 
     logger.info(f"Starting Slurm Manager API with {THREAD_POOL_SIZE} worker threads")
 
@@ -2369,7 +2366,7 @@ async def get_job_output(
                 )
 
                 # Update cache with fresh content (but don't mark as final for running jobs)
-                is_running = job_data.job_info.state in ["R"]
+                is_running = job_data.job_info.state == JobState.RUNNING
                 cache_middleware.cache.update_job_outputs(
                     job_id=job_id,
                     hostname=host,
@@ -2421,9 +2418,9 @@ async def get_job_output(
 
         # Check if we should fetch from SSH
         if cached_job and cached_job.job_info:
-            is_running = cached_job.job_info.state in ["R"]  # Running jobs
-            is_pending = cached_job.job_info.state in ["PD"]  # Pending jobs
-            is_completed = cached_job.job_info.state not in ["PD", "R"]
+            is_running = cached_job.job_info.state == JobState.RUNNING
+            is_pending = cached_job.job_info.state == JobState.PENDING
+            is_completed = cached_job.job_info.state not in [JobState.PENDING, JobState.RUNNING]
 
             # Initialize output variables - will be set based on job state
             stdout_content = None
@@ -5136,7 +5133,7 @@ async def monitor_all_jobs_singleton():
                     # 3. Job is RUNNING (to update elapsed_time in UI)
                     is_new = job_key not in job_states
                     state_changed = not is_new and job_states[job_key] != job.state
-                    is_running = job.state == "R"
+                    is_running = job.state == JobState.RUNNING
 
                     if is_new or state_changed or is_running:
                         old_state = job_states.get(job_key)

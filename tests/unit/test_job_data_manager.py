@@ -131,24 +131,43 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_comp
     job_data_manager.cache = test_cache
     job_data_manager._host_fetch_timeout_seconds = 0.01
     job_data_manager._busy_host_wait_seconds = 0.0
+    job_data_manager._host_failure_backoff_seconds = 60.0
 
     cached_job = _make_job("3001", hostname)
     live_job = _make_job("3002", hostname)
     test_cache.cache_job(cached_job)
 
     release = asyncio.Event()
+    fetch_calls = {"count": 0}
+    busy_cache_calls = {"count": 0}
 
     async def slow_fetch_host_jobs(*args, **kwargs):
+        fetch_calls["count"] += 1
         await release.wait()
+        await job_data_manager._clear_host_fetch_failure(hostname)
         return [live_job]
 
+    async def fail_if_busy_host_cache(*args, **kwargs):
+        busy_cache_calls["count"] += 1
+        raise AssertionError("timed-out host should use failure backoff, not busy-host cache")
+
     monkeypatch.setattr(job_data_manager, "_fetch_host_jobs", slow_fetch_host_jobs)
+    monkeypatch.setattr(
+        job_data_manager, "_get_cached_jobs_for_busy_host", fail_if_busy_host_cache
+    )
 
     result = await job_data_manager.fetch_all_jobs(hostname=hostname)
 
     # Fast response with cached data while slow fetch continues in background.
     assert [job.job_id for job in result] == ["3001"]
     assert hostname in job_data_manager._fetching_hosts
+    assert hostname in job_data_manager._host_failure_until
+    assert fetch_calls["count"] == 1
+
+    second_result = await job_data_manager.fetch_all_jobs(hostname=hostname)
+    assert [job.job_id for job in second_result] == ["3001"]
+    assert fetch_calls["count"] == 1
+    assert busy_cache_calls["count"] == 0
 
     release.set()
 
@@ -159,6 +178,7 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_comp
         await asyncio.sleep(0.01)
 
     assert hostname not in job_data_manager._fetching_hosts
+    assert hostname not in job_data_manager._host_failure_until
 
 
 @pytest.mark.unit

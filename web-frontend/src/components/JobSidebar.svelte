@@ -156,17 +156,7 @@
     const basePending = filterOutArrayTasks($pendingJobs);
     const baseRecent = filterOutArrayTasks(recentJobs);
     const limitCount = $preferences.jobsPerPage ?? 50;
-    
-    // Calculate completed array groups count directly to avoid circular dependency
-    const completedCount = $preferences.groupArrayJobs && $arrayJobGroups
-      ? $arrayJobGroups.filter((g) => {
-          const running = g.tasks?.filter((t: any) => t.state === 'R').length || 0;
-          const pending = g.tasks?.filter((t: any) => t.state === 'PD').length || 0;
-          return running === 0 && pending === 0;
-        }).length
-      : 0;
-    const remaining = Math.max(0, limitCount - completedCount);
-    const limitedRecent = searchQuery ? baseRecent : baseRecent.slice(0, remaining);
+    const limitedRecent = searchQuery ? baseRecent : baseRecent.slice(0, limitCount);
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase();

@@ -314,14 +314,13 @@ class LaunchManager:
                         )
 
             logger.info("Submitting job to Slurm...")
-            logger.info(f"Changing to working directory: {remote_work_dir}")
-
-            await loop.run_in_executor(executor, conn.run, f"cd {remote_work_dir}")
+            logger.info(f"Using working directory: {remote_work_dir}")
 
             try:
                 job = await loop.run_in_executor(
                     executor,
                     self._submit_script_in_workdir,
+                    conn,
                     slurm_host,
                     slurm_params,
                     remote_script_path,
@@ -372,6 +371,7 @@ class LaunchManager:
 
     def _submit_script_in_workdir(
         self,
+        conn,
         slurm_host,
         slurm_params: SlurmParams,
         remote_script_path: str,
@@ -388,8 +388,6 @@ class LaunchManager:
         Returns:
             Job object if successful, None otherwise
         """
-        conn = self.slurm_manager._get_connection(slurm_host.host)
-
         try:
             result, full_cmd, cmd, submit_line = (
                 self.slurm_manager.slurm_client.submit.run_sbatch(

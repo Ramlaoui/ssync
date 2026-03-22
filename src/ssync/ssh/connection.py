@@ -1,5 +1,6 @@
 """SSH connection wrapper with Fabric-compatible API."""
 
+from pathlib import Path
 from typing import Any, Optional
 
 from ..utils.logging import setup_logger
@@ -210,6 +211,27 @@ class SSHConnection:
             # Return a failed result
             failed = SSHResult(success=False, stdout="", stderr=str(e), return_code=255)
             return SSHCommandResult(failed)
+
+    def is_healthy(self, timeout: Optional[float] = None) -> bool:
+        """Check whether this connection can be reused safely.
+
+        For key-based hosts, prefer checking the existing ControlMaster socket
+        instead of opening a remote session just to validate the connection.
+        For password-based hosts, fall back to a lightweight remote command.
+        """
+        password = None
+        if isinstance(self.host_config, dict):
+            connect_kwargs = self.host_config.get("connect_kwargs", {})
+            password = connect_kwargs.get("password")
+
+        if not password:
+            control_path = NativeSSH.get_control_path(self.host_id)
+            return Path(control_path).exists() and NativeSSH._check_control_master(
+                control_path, self.host_config
+            )
+
+        result = self.run("echo 'health check'", hide=True, timeout=timeout or 5)
+        return result.ok
 
     def put(self, local, remote=None, preserve_mode=True, **kwargs):
         """Upload file matching Fabric's put() signature.

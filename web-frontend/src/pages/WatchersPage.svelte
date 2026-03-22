@@ -109,7 +109,7 @@
         fetchAllWatchers()
       ]);
       // Always fetch events to populate the latest events for each watcher
-      await fetchWatcherEvents();
+      await fetchWatcherEvents(undefined, undefined, 200);
     } catch (err) {
       console.error('Failed to refresh watcher data:', err);
       error = 'Failed to refresh watcher data. Please try again.';

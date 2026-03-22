@@ -51,7 +51,11 @@ class SlurmOutput:
         return stdout_path, stderr_path
 
     def get_job_details_from_scontrol_batch(
-        self, conn: SSHConnection, job_ids: list[str], hostname: str
+        self,
+        conn: SSHConnection,
+        job_ids: list[str],
+        hostname: str,
+        max_single_job_fallbacks: Optional[int] = None,
     ) -> dict[str, tuple[Optional[str], Optional[str], Optional[str]]]:
         """Fetch job details for multiple jobs in a single scontrol call.
 
@@ -93,7 +97,18 @@ class SlurmOutput:
         # "too many arguments for keyword:show".
         # Fallback to per-job queries for any missing details.
         missing_job_ids = [job_id for job_id in job_ids if job_id not in details]
-        for job_id in missing_job_ids:
+        if max_single_job_fallbacks is not None and max_single_job_fallbacks >= 0:
+            fallback_job_ids = missing_job_ids[:max_single_job_fallbacks]
+            skipped_count = len(missing_job_ids) - len(fallback_job_ids)
+            if skipped_count > 0:
+                logger.info(
+                    f"Skipping {skipped_count} per-job scontrol fallback queries on {hostname} "
+                    f"(cap={max_single_job_fallbacks})"
+                )
+        else:
+            fallback_job_ids = missing_job_ids
+
+        for job_id in fallback_job_ids:
             stdout_path, stderr_path, submit_line = self.get_job_details_from_scontrol(
                 conn, job_id, hostname
             )

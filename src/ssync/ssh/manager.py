@@ -55,10 +55,11 @@ class ConnectionManager:
                 logger.debug(f"Created SSH connection for {host_string}")
                 return connection
 
-        # Validate connection health outside lock so other threads can proceed.
+        # Validate connection health outside the lock so other threads can proceed.
         try:
-            connection.run("echo 'test'", hide=True, timeout=5)
-            return connection
+            if connection.is_healthy(timeout=5):
+                return connection
+            logger.warning(f"Existing connection to {host_string} is unhealthy")
         except Exception as e:
             logger.warning(f"Existing connection to {host_string} is unhealthy: {e}")
 
@@ -189,8 +190,11 @@ class ConnectionManager:
 
         for host_string, connection in connection_items:
             try:
-                # Try a simple command to test connection with shorter timeout
-                connection.run("echo 'health check'", hide=True, timeout=5)
+                if connection.is_healthy(timeout=5):
+                    continue
+                logger.debug(f"Connection to {host_string} appears unhealthy")
+                to_remove.append((host_string, connection))
+                unhealthy_count += 1
             except Exception as e:
                 logger.debug(f"Connection to {host_string} appears unhealthy: {e}")
                 to_remove.append((host_string, connection))

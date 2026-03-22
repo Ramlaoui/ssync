@@ -100,6 +100,9 @@ class JobDataManager:
         )
         self._host_failure_until: Dict[str, float] = {}
         self._host_failure_lock = asyncio.Lock()
+        # Deduplicate concurrent SSH output fetches for the same (job_id, host).
+        # Maps key -> asyncio.Future with the result of the in-flight fetch.
+        self._output_fetch_futures: Dict[str, "asyncio.Future[tuple[Optional[str], Optional[str]]]"] = {}
         self._profile_timings_enabled = (
             os.getenv("SSYNC_PROFILE_TIMINGS", "0").lower() in {"1", "true", "yes"}
         )
@@ -416,6 +419,9 @@ class JobDataManager:
                     logger.warning(
                         f"Host {host_name} exceeded fetch timeout ({self._host_fetch_timeout_seconds:.1f}s); "
                         "returning cached data for this cycle"
+                    )
+                    await self._mark_host_fetch_failure(
+                        host_name, "request timeout"
                     )
                     all_jobs.extend(
                         self._get_cached_jobs_for_host(host_name, job_ids, limit)
@@ -1147,10 +1153,49 @@ class JobDataManager:
         For completed jobs: Always tries to fetch from SSH unless already fetched after completion.
         For running jobs: Always fetches latest output.
 
+        Concurrent callers for the same completed job share a single SSH fetch via future dedup.
+
         Args:
             job_info: Job information including output file paths
             force_fetch: If True, always fetch from SSH regardless of cache state
         """
+        # For completed jobs, deduplicate concurrent SSH fetches so only one
+        # SSH round-trip happens even when multiple requests arrive simultaneously.
+        is_completed_state = job_info.state in [
+            JobState.COMPLETED,
+            JobState.FAILED,
+            JobState.CANCELLED,
+            JobState.TIMEOUT,
+        ]
+        if is_completed_state and not force_fetch:
+            dedup_key = f"{job_info.hostname}:{job_info.job_id}"
+            existing: "asyncio.Future[tuple[Optional[str], Optional[str]]] | None" = (
+                self._output_fetch_futures.get(dedup_key)
+            )
+            if existing is not None:
+                logger.debug(
+                    f"[output-dedup] Waiting for in-flight fetch for job {job_info.job_id}"
+                )
+                return await existing
+
+            future: "asyncio.Future[tuple[Optional[str], Optional[str]]]" = asyncio.get_running_loop().create_future()
+            self._output_fetch_futures[dedup_key] = future
+            try:
+                result = await self._do_fetch_outputs(job_info, force_fetch=False)
+                future.set_result(result)
+                return result
+            except Exception as exc:
+                future.set_exception(exc)
+                raise
+            finally:
+                self._output_fetch_futures.pop(dedup_key, None)
+
+        return await self._do_fetch_outputs(job_info, force_fetch=force_fetch)
+
+    async def _do_fetch_outputs(
+        self, job_info: JobInfo, force_fetch: bool = False
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Internal implementation of output fetching (no dedup logic)."""
         try:
             from .web.app import get_slurm_manager
 

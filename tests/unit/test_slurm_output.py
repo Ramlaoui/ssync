@@ -73,3 +73,21 @@ class TestSlurmOutput:
         assert conn.calls[0] == "scontrol show job 123 456"
         assert "scontrol show job 123" in conn.calls
         assert "scontrol show job 456" in conn.calls
+
+    @pytest.mark.unit
+    def test_batch_respects_single_job_fallback_cap(self):
+        output = SlurmOutput()
+        conn = _FakeConn()
+
+        details = output.get_job_details_from_scontrol_batch(
+            conn=conn,
+            job_ids=["123", "456"],
+            hostname="cluster.example.com",
+            max_single_job_fallbacks=1,
+        )
+
+        assert details["123"][0] == "/work/slurm-123.out"
+        assert "456" not in details
+        assert conn.calls[0] == "scontrol show job 123 456"
+        assert "scontrol show job 123" in conn.calls
+        assert "scontrol show job 456" not in conn.calls

@@ -39,7 +39,7 @@ class ActionExecutor:
                 return await self._cancel_job(job_id, hostname, params)
 
             elif action_type == ActionType.RESUBMIT:
-                return await self._resubmit_job(job_id, hostname, params)
+                return await self._resubmit_job(job_id, hostname, params, variables)
 
             elif action_type == ActionType.NOTIFY_EMAIL:
                 return await self._notify_email(job_id, hostname, params, variables)
@@ -190,7 +190,11 @@ class ActionExecutor:
             return False, str(e)
 
     async def _resubmit_job(
-        self, job_id: str, hostname: str, params: Dict[str, Any]
+        self,
+        job_id: str,
+        hostname: str,
+        params: Dict[str, Any],
+        variables: Dict[str, Any] | None = None,
     ) -> Tuple[bool, str]:
         """Resubmit a job with modified parameters and per-host throttling."""
         try:
@@ -216,6 +220,51 @@ class ActionExecutor:
                 pattern = f"#SBATCH --{key}=.*"
                 replacement = f"#SBATCH --{key}={value}"
                 script_content = re.sub(pattern, replacement, script_content)
+
+            # Interpolate captured variables into the script body
+            # Supports ${var} and ${var:-default} syntax
+            all_vars = {"JOB_ID": job_id, "HOSTNAME": hostname, **(variables or {})}
+            logger.info(
+                f"Interpolating variables into script: {all_vars}"
+            )
+            for var_name, var_value in all_vars.items():
+                if var_name.startswith("_") or var_name.isdigit():
+                    continue
+                # ${var:+word} — "if set, substitute word (with ${var} expanded inside)"
+                # e.g. ${ckpt_path:+checkpoint.resume_from=${ckpt_path}}
+                # On resubmit: expands inner ${var} refs within word
+                # On first launch (bash): unset var → expands to nothing
+                # Allow nested ${...} inside the word by matching balanced braces
+                cond_pattern = re.compile(
+                    re.escape("${" + var_name + ":+")
+                    + r"((?:[^{}]|\$\{[^}]*\})*)"
+                    + re.escape("}")
+                )
+                def _expand_conditional(m: re.Match) -> str:
+                    word = m.group(1)
+                    # Expand ${var} references within the word
+                    for vn, vv in all_vars.items():
+                        if not vn.startswith("_") and not vn.isdigit():
+                            word = word.replace(f"${{{vn}}}", str(vv))
+                    return word
+                before = script_content
+                script_content = cond_pattern.sub(_expand_conditional, script_content)
+                if script_content != before:
+                    logger.info(f"Expanded ${{${var_name}:+...}}")
+
+                # ${var:-default} — replace with captured value (ignore default)
+                default_pattern = re.compile(
+                    re.escape("${" + var_name + ":-") + r"[^}]*" + re.escape("}")
+                )
+                before = script_content
+                script_content = default_pattern.sub(str(var_value), script_content)
+                if script_content != before:
+                    logger.info(f"Replaced ${{${var_name}:-...}} with {var_value}")
+
+                # Plain ${var}
+                script_content = script_content.replace(
+                    f"${{{var_name}}}", str(var_value)
+                )
 
             # Cancel previous job first if requested (already throttled)
             if params.get("cancel_previous", True):

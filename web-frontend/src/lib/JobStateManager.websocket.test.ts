@@ -123,7 +123,7 @@ describe('JobStateManager - WebSocket', () => {
       expect(allJobs.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('should clear cache for hosts in initial data', async () => {
+    it('should merge initial data into existing cache without clearing', async () => {
       const ws = testSetup.mocks.wsFactory.getLastInstance();
 
       // Add some jobs first via API
@@ -155,8 +155,9 @@ describe('JobStateManager - WebSocket', () => {
       await vi.advanceTimersByTimeAsync(200);
 
       const state = get(manager.getState());
-      // Old job should be cleared, only new job remains
-      expect(state.jobCache.has('cluster1.example.com:old')).toBe(false);
+      // WebSocket initial data merges — old job should persist, new job added
+      expect(state.jobCache.has('cluster1.example.com:old')).toBe(true);
+      expect(state.jobCache.has('cluster1.example.com:new')).toBe(true);
     });
 
     it('should handle job_update message', async () => {

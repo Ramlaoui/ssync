@@ -42,3 +42,8 @@ monitor_*.py
 .ruff_cache/
 
 node_modules/
+
+# VSCode extension build artifacts
+vscode-extension/out/
+vscode-extension/*.vsix
+vscode-extension/package-lock.json

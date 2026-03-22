@@ -32,7 +32,6 @@ class MemoryLogHandler(logging.Handler):
         self.max_entries = max_entries
         self._logs: deque = deque(maxlen=max_entries)
         self._lock = Lock()
-        # Use a plain formatter without colors for API output
         self.setFormatter(
             logging.Formatter(
                 fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
@@ -73,47 +72,47 @@ def get_memory_handler() -> MemoryLogHandler:
 
 
 def setup_logger(name: str, level: Optional[str] = None) -> logging.Logger:
+    """Return a named logger. Handlers are configured once via configure_logging()."""
+    return logging.getLogger(name)
+
+
+def configure_logging(level: Optional[str] = None, memory: bool = False) -> None:
+    """Set up ssync logging. Call once at application startup.
+
+    Attaches a console handler to the top-level 'ssync' logger with
+    propagate=False so all ssync.* child loggers share one handler without
+    leaking records to the root logger (e.g. uvicorn's handler).
     """
-    Set up and return a logger with colored console output.
-
-    Args:
-        name: The name of the logger (typically __name__)
-        level: The logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-              If None, defaults to INFO
-
-    Returns:
-        logging.Logger: Configured logger instance
-    """
-    logger = logging.getLogger(name)
-
+    ssync_logger = logging.getLogger("ssync")
     log_level = getattr(logging, level.upper()) if level else logging.INFO
-    logger.setLevel(log_level)
+    ssync_logger.setLevel(log_level)
+    ssync_logger.propagate = False
 
-    if not logger.handlers:
+    has_console = any(
+        isinstance(h, logging.StreamHandler) and not isinstance(h, MemoryLogHandler)
+        for h in ssync_logger.handlers
+    )
+    if not has_console:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(log_level)
-
-        formatter = ColoredFormatter(
-            fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
+        console_handler.setFormatter(
+            ColoredFormatter(
+                fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
         )
+        ssync_logger.addHandler(console_handler)
 
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-
-    return logger
+    if memory:
+        enable_memory_logging(level)
 
 
 def enable_memory_logging(level: Optional[str] = None) -> None:
-    """Enable memory logging for API access.
-
-    Call this when starting the API server to capture logs in memory.
-    """
+    """Attach the memory handler to the ssync logger for API log access."""
     memory_handler = get_memory_handler()
     log_level = getattr(logging, level.upper()) if level else logging.INFO
     memory_handler.setLevel(log_level)
 
-    # Add to root logger to capture all logs
-    root_logger = logging.getLogger()
-    if memory_handler not in root_logger.handlers:
-        root_logger.addHandler(memory_handler)
+    ssync_logger = logging.getLogger("ssync")
+    if memory_handler not in ssync_logger.handlers:
+        ssync_logger.addHandler(memory_handler)

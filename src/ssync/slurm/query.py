@@ -1,6 +1,7 @@
 """Slurm query operations (squeue/sacct/scontrol)."""
 
 from datetime import datetime, timedelta, timezone
+import os
 import time
 from typing import Any, List, Optional, Protocol
 
@@ -32,6 +33,9 @@ class SlurmQuery:
         self._partition_cache: dict[str, tuple[float, List[PartitionResources]]] = {}
         self._partition_cache_ttl = 20.0
         self.output = output or SlurmOutput()
+        self._completed_job_scontrol_fallback_cap = int(
+            os.getenv("SSYNC_SCONTROL_FALLBACK_MAX_JOBS", "5")
+        )
 
     def get_available_sacct_fields(
         self, conn: SSHConnection, hostname: str
@@ -745,7 +749,10 @@ class SlurmQuery:
         if needs_path_fix:
             try:
                 details = self.output.get_job_details_from_scontrol_batch(
-                    conn, needs_path_fix, hostname
+                    conn,
+                    needs_path_fix,
+                    hostname,
+                    max_single_job_fallbacks=self._completed_job_scontrol_fallback_cap,
                 )
                 for job in jobs:
                     if job.job_id not in needs_path_fix:

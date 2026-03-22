@@ -633,6 +633,116 @@ describe('JobStateManager - Refresh Timing and API Calls', () => {
       expect(testSetup.mocks.api.getCallCount()).toBeLessThan(5); // Allow some calls for host list
     });
 
+    it('should coalesce overlapping all-host sync requests', async () => {
+      const apiGet = vi.mocked(testSetup.mocks.api.get);
+      let releaseHosts!: () => void;
+
+      apiGet.mockImplementation((url: string) => {
+        if (url === '/api/hosts') {
+          return new Promise(resolve => {
+            releaseHosts = () => {
+              resolve({
+                data: [
+                  { hostname: 'cluster1.example.com', display_name: 'Cluster 1' },
+                  { hostname: 'cluster2.example.com', display_name: 'Cluster 2' },
+                ],
+              });
+            };
+          });
+        }
+
+        if (url.startsWith('/api/status?')) {
+          const parsed = new URL(url, 'http://localhost');
+          const host = parsed.searchParams.get('host') || 'cluster1.example.com';
+          return Promise.resolve({
+            data: {
+              hostname: host,
+              jobs: [],
+              total_jobs: 0,
+              query_time: '0.123s',
+              array_groups: [],
+            },
+          });
+        }
+
+        return Promise.resolve({ data: {} });
+      });
+
+      const firstSync = manager.syncAllHosts(false, true);
+      await Promise.resolve();
+      const secondSync = manager.syncAllHosts(false, true);
+
+      expect(apiGet.mock.calls.filter(call => call[0] === '/api/hosts')).toHaveLength(1);
+
+      releaseHosts();
+      await Promise.all([firstSync, secondSync]);
+
+      expect(
+        apiGet.mock.calls.filter(call => call[0].startsWith('/api/status?'))
+      ).toHaveLength(2);
+    });
+
+    it('should coalesce overlapping host sync requests', async () => {
+      const apiGet = vi.mocked(testSetup.mocks.api.get);
+      let releaseStatus!: () => void;
+
+      manager['state'].update(s => ({
+        ...s,
+        hostStates: new Map([
+          [
+            'cluster1.example.com',
+            {
+              hostname: 'cluster1.example.com',
+              status: 'idle',
+              lastSync: 0,
+              errorCount: 0,
+              jobs: new Map(),
+              arrayGroups: [],
+            },
+          ],
+        ]),
+      }));
+
+      apiGet.mockImplementation((url: string) => {
+        if (url.startsWith('/api/status?')) {
+          return new Promise(resolve => {
+            releaseStatus = () => {
+              resolve({
+                data: {
+                  hostname: 'cluster1.example.com',
+                  jobs: [],
+                  total_jobs: 0,
+                  query_time: '0.123s',
+                  array_groups: [],
+                },
+              });
+            };
+          });
+        }
+
+        if (url === '/api/hosts') {
+          return Promise.resolve({ data: mockHosts });
+        }
+
+        return Promise.resolve({ data: {} });
+      });
+
+      const firstSync = manager.syncHost('cluster1.example.com', false, true);
+      await Promise.resolve();
+      const secondSync = manager.syncHost('cluster1.example.com', false, true);
+
+      expect(
+        apiGet.mock.calls.filter(call => call[0].startsWith('/api/status?'))
+      ).toHaveLength(1);
+
+      releaseStatus();
+      await Promise.all([firstSync, secondSync]);
+
+      expect(
+        apiGet.mock.calls.filter(call => call[0].startsWith('/api/status?'))
+      ).toHaveLength(1);
+    });
+
     it('should batch updates to reduce reactive updates', async () => {
       // Using manager from main beforeEach
       // Manager already initialized with DI pattern

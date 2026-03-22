@@ -3,6 +3,7 @@ from pathlib import Path
 import click
 
 from ..utils.config import ConfigError, config
+from ..utils.logging import configure_logging
 from .auth import auth
 from .commands import (
     CancelCommand,
@@ -25,6 +26,7 @@ from .watchers import watchers
 @click.pass_context
 def cli(ctx, no_ssh_config, verbose):
     """Sync files and manage Slurm jobs across multiple clusters."""
+    configure_logging("DEBUG" if verbose else "INFO")
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     ctx.obj["use_ssh_config"] = not no_ssh_config

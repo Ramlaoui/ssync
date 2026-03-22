@@ -229,6 +229,33 @@ class TestSSHConnection:
         # Should not raise exception
         conn.close()
 
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH._check_control_master")
+    @patch("pathlib.Path.exists")
+    @patch.object(SSHConnection, "run")
+    def test_is_healthy_prefers_control_master_for_key_auth(
+        self, mock_run, mock_exists, mock_check
+    ):
+        conn = SSHConnection("myhost", "user@myhost")
+        mock_exists.return_value = True
+        mock_check.return_value = True
+
+        assert conn.is_healthy(timeout=5) is True
+        mock_run.assert_not_called()
+        mock_check.assert_called_once()
+
+    @pytest.mark.unit
+    @patch.object(SSHConnection, "run")
+    def test_is_healthy_uses_remote_probe_for_password_auth(self, mock_run):
+        conn = SSHConnection(
+            {"hostname": "example.com", "connect_kwargs": {"password": "secret"}},
+            "example.com",
+        )
+        mock_run.return_value = Mock(ok=True)
+
+        assert conn.is_healthy(timeout=5) is True
+        mock_run.assert_called_once_with("echo 'health check'", hide=True, timeout=5)
+
 
 class TestConnectionManager:
     """Tests for ConnectionManager class."""
@@ -326,10 +353,10 @@ class TestConnectionManager:
         assert config["hostname"] == "example.com"
 
     @pytest.mark.unit
-    @patch.object(SSHConnection, "run")
-    def test_get_connection_creates_new(self, mock_run):
+    @patch.object(SSHConnection, "is_healthy")
+    def test_get_connection_creates_new(self, mock_is_healthy):
         """Test get_connection creates new connection."""
-        mock_run.return_value = Mock(ok=True)
+        mock_is_healthy.return_value = True
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
@@ -339,10 +366,10 @@ class TestConnectionManager:
         assert "testuser@example.com" in manager._connections
 
     @pytest.mark.unit
-    @patch.object(SSHConnection, "run")
-    def test_get_connection_reuses_existing(self, mock_run):
+    @patch.object(SSHConnection, "is_healthy")
+    def test_get_connection_reuses_existing(self, mock_is_healthy):
         """Test get_connection reuses existing connection."""
-        mock_run.return_value = Mock(ok=True)
+        mock_is_healthy.return_value = True
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
@@ -352,10 +379,10 @@ class TestConnectionManager:
         assert conn1 is conn2
 
     @pytest.mark.unit
-    @patch.object(SSHConnection, "run")
-    def test_get_connection_force_refresh(self, mock_run):
+    @patch.object(SSHConnection, "is_healthy")
+    def test_get_connection_force_refresh(self, mock_is_healthy):
         """Test get_connection with force_refresh."""
-        mock_run.return_value = Mock(ok=True)
+        mock_is_healthy.return_value = True
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
@@ -366,21 +393,18 @@ class TestConnectionManager:
         assert conn1 is not conn2
 
     @pytest.mark.unit
-    @patch.object(SSHConnection, "run")
-    def test_get_connection_recreates_unhealthy(self, mock_run):
+    @patch.object(SSHConnection, "is_healthy")
+    def test_get_connection_recreates_unhealthy(self, mock_is_healthy):
         """Test get_connection recreates unhealthy connection."""
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
         # First call succeeds
-        mock_run.return_value = Mock(ok=True)
+        mock_is_healthy.return_value = True
         conn1 = manager.get_connection(host)
 
         # Second call - existing connection health check fails
-        mock_run.side_effect = [
-            Exception("Connection lost"),  # Health check fails
-            Mock(ok=True),  # New connection succeeds
-        ]
+        mock_is_healthy.return_value = False
         conn2 = manager.get_connection(host)
 
         assert conn1 is not conn2
@@ -408,30 +432,28 @@ class TestConnectionManager:
         assert len(manager._connections) == 0
 
     @pytest.mark.unit
-    @patch.object(SSHConnection, "run")
-    def test_check_connection_health(self, mock_run):
+    @patch.object(SSHConnection, "is_healthy")
+    def test_check_connection_health(self, mock_is_healthy):
         """Test checking connection health."""
         manager = ConnectionManager()
 
         # Create some connections
-        mock_run.return_value = Mock(ok=True)
+        mock_is_healthy.return_value = True
         host1 = Host(hostname="host1.com", username="user1")
         host2 = Host(hostname="host2.com", username="user2")
         manager.get_connection(host1)
         manager.get_connection(host2)
 
         # Make one unhealthy
-        def side_effect(*args, **kwargs):
-            if "host1" in str(args):
-                raise Exception("Connection failed")
-            return Mock(ok=True)
-
-        mock_run.side_effect = side_effect
+        states = {"user1@host1.com": False, "user2@host2.com": True}
+        for host_string, connection in manager._connections.items():
+            connection.is_healthy = Mock(return_value=states[host_string])
 
         unhealthy = manager.check_connection_health()
 
         # One connection should be removed
-        assert unhealthy >= 0  # Can be 0 if both checked as healthy
+        assert unhealthy == 1
+        assert "user1@host1.com" not in manager._connections
 
     @pytest.mark.unit
     def test_get_connection_stats_alias(self):

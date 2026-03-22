@@ -4,8 +4,9 @@
   import { onMount, onDestroy } from 'svelte';
   import { watcherEvents, eventsLoading } from '../stores/watchers';
   import type { WatcherEvent } from '../types/watchers';
-  import { Clock, Zap, Activity, Filter, ChevronRight, Search, X } from 'lucide-svelte';
+  import { Clock, Zap, Activity, Filter, Search, X } from 'lucide-svelte';
   import { slide, fade, fly } from 'svelte/transition';
+  import WatcherMetrics from './WatcherMetrics.svelte';
 
   // View modes for different event perspectives
   type ViewMode = 'latest' | 'by-watcher' | 'timeline';
@@ -15,7 +16,6 @@
   let searchTerm = $state('');
   let showFilters = $state(false);
   let timeFilter: 'all' | '1h' | '24h' | '7d' = $state('24h');
-  let actionFilter = $state('');
   let successFilter: 'all' | 'success' | 'failed' = $state('all');
 
   // Auto-refresh for latest events
@@ -82,11 +82,6 @@
       ].join(' ').toLowerCase();
 
       if (!matchText.includes(term)) return false;
-    }
-
-    // Action type filter
-    if (actionFilter && !event.action_type.toLowerCase().includes(actionFilter.toLowerCase())) {
-      return false;
     }
 
     // Success filter
@@ -194,7 +189,6 @@
   function clearAllFilters() {
     searchTerm = '';
     timeFilter = '24h';
-    actionFilter = '';
     successFilter = 'all';
     showFilters = false;
   }
@@ -274,25 +268,37 @@
     </div>
   </div>
 
+  <div class="toolbar-row">
+    <div class="search-box">
+      <div class="search-icon">
+        <Search class="w-4 h-4" />
+      </div>
+      <input
+        type="text"
+        placeholder="Search events..."
+        bind:value={searchTerm}
+        class="search-input"
+      />
+      {#if searchTerm}
+        <button class="clear-search" onclick={clearSearch} aria-label="Clear event search">
+          <X class="w-4 h-4" />
+        </button>
+      {/if}
+    </div>
+
+    <div class="toolbar-stats">
+      <span class="toolbar-pill">{filteredEvents.length} matches</span>
+      <span class="toolbar-pill">{timeFilter === 'all' ? 'All time' : timeFilter}</span>
+      {#if successFilter !== 'all'}
+        <span class="toolbar-pill">{successFilter}</span>
+      {/if}
+    </div>
+  </div>
+
   <!-- Expandable Filters -->
   {#if showFilters}
     <div class="filters-panel" transition:slide={{ duration: 200 }}>
       <div class="filter-row">
-        <div class="search-box">
-          <Search class="w-4 h-4 search-icon" />
-          <input
-            type="text"
-            placeholder="Search events..."
-            bind:value={searchTerm}
-            class="search-input"
-          />
-          {#if searchTerm}
-            <button class="clear-search" onclick={clearSearch}>
-              <X class="w-4 h-4" />
-            </button>
-          {/if}
-        </div>
-
         <select bind:value={timeFilter} class="filter-select">
           <option value="all">All time</option>
           <option value="1h">Last hour</option>
@@ -313,6 +319,8 @@
     </div>
   {/if}
 
+  <WatcherMetrics events={sortedEvents} />
+
   <!-- Events Content -->
   <div class="events-content">
     {#if $eventsLoading}
@@ -327,7 +335,7 @@
         </div>
         <h3>No events found</h3>
         <p>Try adjusting your filters or check back later</p>
-        {#if searchTerm || timeFilter !== '24h' || actionFilter || successFilter !== 'all'}
+        {#if searchTerm || timeFilter !== '24h' || successFilter !== 'all'}
           <button class="reset-filters" onclick={clearAllFilters}>
             Reset filters
           </button>
@@ -593,6 +601,30 @@
     border-color: #3b82f6;
   }
 
+  .toolbar-row {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    padding: 0.9rem 1.5rem 0;
+    background: #fafafa;
+  }
+
+  .toolbar-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .toolbar-pill {
+    border-radius: 999px;
+    background: #eef2ff;
+    color: #4338ca;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .filters-panel {
     padding: 1rem 1.5rem;
     background: #f8fafc;
@@ -610,6 +642,15 @@
     position: relative;
     flex: 1;
     min-width: 200px;
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #9ca3af;
+    pointer-events: none;
   }
 
   .search-input {
@@ -967,6 +1008,16 @@
 
     .view-controls {
       justify-content: center;
+    }
+
+    .toolbar-row {
+      flex-direction: column;
+      align-items: stretch;
+      padding: 0.9rem 1rem 0;
+    }
+
+    .toolbar-stats {
+      justify-content: flex-start;
     }
 
     .filter-row {

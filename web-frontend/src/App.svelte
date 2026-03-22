@@ -44,11 +44,13 @@
     '/settings': SettingsPage
   };
 
+  let currentPath = $derived(($location || '/').split('?')[0]);
+
   // Derive active tab from location
-  let activeTab = $derived($location === '/launch' ? 'launch' :
-                 $location === '/settings' ? 'settings' :
-                 $location === '/watchers' ? 'watchers' :
-                 $location === '/' || $location.startsWith('/jobs/') ? 'jobs' :
+  let activeTab = $derived(currentPath === '/launch' ? 'launch' :
+                 currentPath === '/settings' ? 'settings' :
+                 currentPath === '/watchers' ? 'watchers' :
+                 currentPath === '/' || currentPath.startsWith('/jobs/') ? 'jobs' :
                  'jobs');
 
   // Track route changes for back navigation
@@ -75,21 +77,26 @@
         // Store the previous route
         navigationActions.setPreviousRoute(previousLocation);
       }
+
+      if (isMobile) {
+        sidebarOpen.set(false);
+        document.body.style.overflow = '';
+      }
     }
     previousLocation = $location;
 
     // Update document title based on current route
-    if ($location === '/') {
+    if (currentPath === '/') {
       document.title = 'Jobs | ssync';
-    } else if ($location === '/launch') {
+    } else if (currentPath === '/launch') {
       document.title = 'Launch Job | ssync';
-    } else if ($location === '/watchers') {
+    } else if (currentPath === '/watchers') {
       document.title = 'Watchers | ssync';
-    } else if ($location === '/settings') {
+    } else if (currentPath === '/settings') {
       document.title = 'Settings | ssync';
-    } else if ($location.startsWith('/jobs/')) {
+    } else if (currentPath.startsWith('/jobs/')) {
       // Extract job ID and host from URL: /jobs/:id/:host
-      const parts = $location.split('/');
+      const parts = currentPath.split('/');
       if (parts.length >= 4) {
         const jobId = decodeURIComponent(parts[2]);
         const hostname = parts[3];
@@ -103,7 +110,14 @@
   });
 
   function checkMobile() {
-    isMobile = window.innerWidth < 768;
+    const nextIsMobile = window.innerWidth < 768;
+    if (nextIsMobile !== isMobile) {
+      sidebarOpen.set(!nextIsMobile);
+      if (nextIsMobile) {
+        document.body.style.overflow = '';
+      }
+    }
+    isMobile = nextIsMobile;
   }
 
   // Prevent body scroll when sidebar is open on mobile
@@ -119,7 +133,16 @@
 
   onMount(() => {
     checkMobile();
+    if (isMobile) {
+      sidebarOpen.set(false);
+      document.body.style.overflow = '';
+    }
     window.addEventListener('resize', checkMobile);
+
+    const browserRoute = `${window.location.pathname}${window.location.search}`;
+    if (browserRoute !== '/' && browserRoute !== $location) {
+      push(browserRoute);
+    }
 
     // Initialize theme from store (already happens in theme.ts module load, but ensure it's applied)
     theme.init();

@@ -110,6 +110,12 @@ interface PerformanceMetrics {
   updateHistory: number[];
 }
 
+interface SyncRequest {
+  forceSync: boolean;
+  userInitiated: boolean;
+  filters: StatusSyncFilters;
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -190,6 +196,12 @@ class JobStateManager {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts: number = 0;
+  private syncAllHostsPromise: Promise<void> | null = null;
+  private currentSyncAllHostsRequest: SyncRequest | null = null;
+  private pendingSyncAllHostsRequest: SyncRequest | null = null;
+  private hostSyncPromises = new Map<string, Promise<void>>();
+  private currentHostSyncRequests = new Map<string, SyncRequest>();
+  private pendingHostSyncRequests = new Map<string, SyncRequest>();
 
   // Injected dependencies
   private api: IAPIClient;
@@ -431,48 +443,12 @@ class JobStateManager {
         console.log('[JobStateManager] Initial WebSocket data is empty (0 jobs, 0 hosts) - will allow API sync to proceed');
       }
 
-      // ⚡ PERFORMANCE FIX: Don't clear cache if we have recent API data
-      // Check if we have recent data from API sync (within last 5 seconds)
-      // This prevents WebSocket initial data from clearing the cache that was just populated by API
-      const state = get(this.state);
-      const now = Date.now();
-      let shouldClearCache = true;
-
-      // Check if any host has very recent data from API
-      for (const hostname of hostsInUpdate) {
-        const hostState = state.hostStates.get(hostname);
-        if (hostState && (now - hostState.lastSync) < 5000) {
-          console.log(`[JobStateManager] Host ${hostname} has very recent API data (${now - hostState.lastSync}ms old) - will merge WebSocket data instead of clearing cache`);
-          shouldClearCache = false;
-          break;
-        }
-      }
-
-      // Only clear cache for hosts if we don't have recent API data
-      // This prevents race conditions where WebSocket initial data arrives after API sync
-      if (shouldClearCache) {
-        this.state.update(s => {
-          const newCache = new Map(s.jobCache);
-
-          // Remove jobs only for hosts included in the update
-          hostsInUpdate.forEach(hostname => {
-            // Remove all jobs for this host
-            const keysToDelete: string[] = [];
-            newCache.forEach((_, cacheKey) => {
-              if (cacheKey.startsWith(`${hostname}:`)) {
-                keysToDelete.push(cacheKey);
-              }
-            });
-            keysToDelete.forEach(key => newCache.delete(key));
-            console.log(`[JobStateManager] Cleared ${keysToDelete.length} cached jobs for host ${hostname} before initial load`);
-          });
-
-          s.jobCache = newCache;
-          return s;
-        });
-      } else {
-        console.log('[JobStateManager] Skipping cache clear - will merge WebSocket initial data with existing cache');
-      }
+      // Never clear the cache based on WebSocket initial data.
+      // The WebSocket only delivers a small subset of all jobs (active/recent ones),
+      // while the REST API returns the full history. Clearing the cache here would
+      // wipe thousands of API-synced jobs every time the WebSocket reconnects.
+      // Merging is always safe: the API sync owns cache cleanup via executeSyncHost.
+      console.log('[JobStateManager] Merging WebSocket initial data into existing cache (no clear)');
 
       // ⚡ PERFORMANCE: Process all jobs in a single batch for faster UI update
       const allUpdates: JobUpdate[] = [];
@@ -702,6 +678,42 @@ class JobStateManager {
     userInitiated = false,
     filters: StatusSyncFilters = {}
   ): Promise<void> {
+    const request: SyncRequest = {
+      forceSync,
+      userInitiated,
+      filters: { ...filters },
+    };
+
+    if (this.syncAllHostsPromise) {
+      if (
+        this.syncRequestsEqual(this.currentSyncAllHostsRequest, request) &&
+        !this.pendingSyncAllHostsRequest
+      ) {
+        console.log('[JobStateManager] ⏳ Reusing in-flight all-host sync request');
+        return this.syncAllHostsPromise;
+      }
+
+      this.pendingSyncAllHostsRequest = this.mergeSyncRequest(
+        this.pendingSyncAllHostsRequest,
+        request
+      );
+      console.log('[JobStateManager] ⏳ All-host sync already in flight, coalescing request');
+      return this.syncAllHostsPromise;
+    }
+
+    this.syncAllHostsPromise = this.runSyncAllHostsQueue(request).finally(() => {
+      this.syncAllHostsPromise = null;
+      this.pendingSyncAllHostsRequest = null;
+    });
+
+    return this.syncAllHostsPromise;
+  }
+
+  private async executeSyncAllHosts(
+    forceSync = false,
+    userInitiated = false,
+    filters: StatusSyncFilters = {}
+  ): Promise<void> {
     const state = get(this.state);
     if (!forceSync && !userInitiated && state.isPaused) return;
 
@@ -768,6 +780,46 @@ class JobStateManager {
   }
 
   public async syncHost(
+    hostname: string,
+    forceSync = false,
+    userInitiated = false,
+    filters: StatusSyncFilters = {}
+  ): Promise<void> {
+    const request: SyncRequest = {
+      forceSync,
+      userInitiated,
+      filters: { ...filters },
+    };
+
+    const inFlightPromise = this.hostSyncPromises.get(hostname);
+    if (inFlightPromise) {
+      const currentRequest = this.currentHostSyncRequests.get(hostname) ?? null;
+      if (
+        this.syncRequestsEqual(currentRequest, request) &&
+        !this.pendingHostSyncRequests.has(hostname)
+      ) {
+        console.log(`[JobStateManager] ⏳ Reusing in-flight host sync for ${hostname}`);
+        return inFlightPromise;
+      }
+
+      const pendingRequest = this.pendingHostSyncRequests.get(hostname) ?? null;
+      this.pendingHostSyncRequests.set(
+        hostname,
+        this.mergeSyncRequest(pendingRequest, request)
+      );
+      console.log(`[JobStateManager] ⏳ Host sync already in flight for ${hostname}, coalescing request`);
+      return inFlightPromise;
+    }
+
+    const promise = this.runHostSyncQueue(hostname, request).finally(() => {
+      this.hostSyncPromises.delete(hostname);
+      this.pendingHostSyncRequests.delete(hostname);
+    });
+    this.hostSyncPromises.set(hostname, promise);
+    return promise;
+  }
+
+  private async executeSyncHost(
     hostname: string,
     forceSync = false,
     userInitiated = false,
@@ -888,16 +940,22 @@ class JobStateManager {
           if (hs) {
             // Clean up cache: remove jobs that are no longer in this host's job list
             // This handles array jobs that have been moved to array groups
+            // SAFETY: Skip cleanup when API returns 0 jobs but we had cached jobs —
+            // this almost certainly means a backend failure, not "all jobs vanished".
             const oldJobIds = Array.from(hs.jobs.values());
             let removedCount = 0;
-            oldJobIds.forEach(cacheKey => {
-              if (!currentJobIds.has(cacheKey)) {
-                newJobCache.delete(cacheKey);
-                removedCount++;
+            if (currentJobIds.size > 0 || oldJobIds.length === 0) {
+              oldJobIds.forEach(cacheKey => {
+                if (!currentJobIds.has(cacheKey)) {
+                  newJobCache.delete(cacheKey);
+                  removedCount++;
+                }
+              });
+              if (removedCount > 0) {
+                console.log(`[JobStateManager] 🧹 ${hostname} - Removed ${removedCount} stale jobs from cache (moved to array groups or completed)`);
               }
-            });
-            if (removedCount > 0) {
-              console.log(`[JobStateManager] 🧹 ${hostname} - Removed ${removedCount} stale jobs from cache (moved to array groups or completed)`);
+            } else {
+              console.warn(`[JobStateManager] ⚠️ ${hostname} - API returned 0 jobs but cache had ${oldJobIds.length} — skipping cache cleanup (likely backend failure)`);
             }
 
             const newJobs = new Map<string, string>();
@@ -911,12 +969,15 @@ class JobStateManager {
               newJobs.set(job.job_id, cacheKey);
 
               // Prepare update for this job
+              // Use Date.now() instead of the stale `now` captured before the API call.
+              // API calls can take 20+ seconds; using the old timestamp causes the
+              // deduplication window in queueUpdates to drop all these updates.
               jobsToQueue.push({
                 jobId: job.job_id,
                 hostname: hostname,
                 job: job,
                 source: 'api',
-                timestamp: now,
+                timestamp: Date.now(),
                 priority: 'normal',
                 messageType: 'api_sync',
               });
@@ -1049,12 +1110,12 @@ class JobStateManager {
       s.pendingUpdates.push(...newestUpdates.values());
 
       if (s.pendingUpdates.length > 1) {
-        const cutoff = Date.now() - CONFIG.updateStrategy.deduplicateWindow;
-        const recent = s.pendingUpdates.filter(u => u.timestamp > cutoff);
-
-        // Keep only latest update per job, with source priority
+        // Deduplicate by job key, keeping the newest update per job.
+        // Do NOT filter by timestamp age — API calls can take 20+ seconds,
+        // so their updates would be silently dropped by a time-based cutoff,
+        // leaving the cache empty after the cleanup already removed old entries.
         const latestByJob = new Map<string, JobUpdate>();
-        recent.forEach(u => {
+        s.pendingUpdates.forEach(u => {
           const key = `${u.hostname}:${u.jobId}`;
           const existing = latestByJob.get(key);
 
@@ -1328,6 +1389,83 @@ class JobStateManager {
     this.state.update(s => ({ ...s, ...partial }));
   }
 
+  private mergeSyncRequest(
+    current: SyncRequest | null,
+    incoming: SyncRequest
+  ): SyncRequest {
+    if (!current) return incoming;
+
+    return {
+      forceSync: current.forceSync || incoming.forceSync,
+      userInitiated: current.userInitiated || incoming.userInitiated,
+      filters: { ...current.filters, ...incoming.filters },
+    };
+  }
+
+  private syncRequestsEqual(a: SyncRequest | null, b: SyncRequest): boolean {
+    if (!a) return false;
+
+    return (
+      a.forceSync === b.forceSync &&
+      a.userInitiated === b.userInitiated &&
+      a.filters.user === b.filters.user &&
+      a.filters.since === b.filters.since &&
+      a.filters.limit === b.filters.limit &&
+      a.filters.state === b.filters.state &&
+      a.filters.activeOnly === b.filters.activeOnly &&
+      a.filters.completedOnly === b.filters.completedOnly &&
+      a.filters.search === b.filters.search &&
+      a.filters.groupArrayJobs === b.filters.groupArrayJobs
+    );
+  }
+
+  private async runSyncAllHostsQueue(initialRequest: SyncRequest): Promise<void> {
+    let nextRequest: SyncRequest | null = initialRequest;
+
+    while (nextRequest) {
+      const request = nextRequest;
+      nextRequest = null;
+      this.currentSyncAllHostsRequest = request;
+      await this.executeSyncAllHosts(
+        request.forceSync,
+        request.userInitiated,
+        request.filters
+      );
+      this.currentSyncAllHostsRequest = null;
+
+      if (this.pendingSyncAllHostsRequest) {
+        nextRequest = this.pendingSyncAllHostsRequest;
+        this.pendingSyncAllHostsRequest = null;
+      }
+    }
+  }
+
+  private async runHostSyncQueue(
+    hostname: string,
+    initialRequest: SyncRequest
+  ): Promise<void> {
+    let nextRequest: SyncRequest | null = initialRequest;
+
+    while (nextRequest) {
+      const request = nextRequest;
+      nextRequest = null;
+      this.currentHostSyncRequests.set(hostname, request);
+      await this.executeSyncHost(
+        hostname,
+        request.forceSync,
+        request.userInitiated,
+        request.filters
+      );
+      this.currentHostSyncRequests.delete(hostname);
+
+      const pendingRequest = this.pendingHostSyncRequests.get(hostname);
+      if (pendingRequest) {
+        nextRequest = pendingRequest;
+        this.pendingHostSyncRequests.delete(hostname);
+      }
+    }
+  }
+
   // ========================================================================
   // Public API
   // ========================================================================
@@ -1350,24 +1488,10 @@ class JobStateManager {
       wsInitialDataTimestamp: 0,
     }));
 
-    console.log('[JobStateManager] ⚡ Connecting WebSocket for initial data...');
-    // ⚡ PERFORMANCE FIX: Connect WebSocket FIRST without API sync
-    // The backend has a per-host concurrency lock (_fetching_hosts) that prevents
-    // concurrent fetches. If we do API sync first, the WebSocket initial fetch gets
-    // blocked and returns 0 jobs. Instead, let WebSocket connect first and deliver
-    // the initial data. API polling will kick in as a fallback if WebSocket fails.
+    console.log('[JobStateManager] ⚡ Connecting WebSocket and starting API sync...');
     this.connectWebSocket();
-
-    // Set up fallback: if WebSocket doesn't provide jobs within 5 seconds, trigger API sync
-    setTimeout(() => {
-      const state = get(this.state);
-      if (!state.wsInitialDataReceived && state.jobCache.size === 0) {
-        console.log('[JobStateManager] WebSocket provided no jobs after timeout - triggering API sync as fallback');
-        this.syncAllHosts(false, false);
-      }
-    }, 5000);
-
-    console.log('[JobStateManager] ✅ Initialization complete - waiting for WebSocket initial data');
+    void this.syncAllHosts(false, false);
+    console.log('[JobStateManager] ✅ Initialization complete - API sync and WebSocket are both active');
   }
 
   public destroy(): void {

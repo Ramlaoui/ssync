@@ -549,8 +549,23 @@ class WatcherEngine:
                         JobState.TIMEOUT,
                     ]:
                         logger.info(
-                            f"Job {job_id} finished with state {job_info.state}, stopping watcher {watcher_id}"
+                            f"Job {job_id} finished with state {job_info.state}, "
+                            f"performing final output scan for watcher {watcher_id}"
                         )
+                        # Final output scan before stopping — ensures we don't
+                        # miss patterns printed near the end of the job
+                        final_content = await self._get_new_output(
+                            job_info,
+                            watcher.definition.output_type,
+                            watcher.last_position,
+                        )
+                        if final_content:
+                            new_position = watcher.last_position + len(
+                                final_content.encode()
+                            )
+                            self._update_watcher_position(watcher_id, new_position)
+                            self._check_patterns(watcher, final_content)
+
                         self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
                         break
 
