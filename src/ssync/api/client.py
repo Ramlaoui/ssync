@@ -1,6 +1,7 @@
 """API client for communicating with ssync web API."""
 
 import json
+import os
 import re
 import warnings
 from pathlib import Path
@@ -22,11 +23,18 @@ logger = setup_logger(__name__, "INFO")
 class APIClient:
     """Client for communicating with ssync web API."""
 
-    def __init__(self, base_url: Optional[str] = None, verbose: bool = False):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        *,
+        api_key: Optional[str] = None,
+        verbose: bool = False,
+    ):
         """Initialize APIClient.
 
         Args:
             base_url: API server URL. If None, reads from config.
+            api_key: API key for authentication. If None, reads from config/env.
             verbose: Enable verbose logging.
         """
         from ..utils.config import config as global_config
@@ -38,7 +46,43 @@ class APIClient:
 
         self.server_manager = ServerManager(url=self.base_url)
         self.verbose = verbose
-        self.api_key = global_config.api_key if global_config.api_key else None
+        self.api_key = api_key or self._get_api_key()
+
+    @staticmethod
+    def _get_api_key() -> Optional[str]:
+        """Get API key from environment, config, or key file."""
+        api_key = os.getenv("SSYNC_API_KEY")
+        if api_key:
+            return api_key
+
+        try:
+            from ..utils.config import config as global_config
+
+            if global_config.api_key:
+                return global_config.api_key
+
+            config_path = global_config.config_path
+            if config_path and config_path.exists():
+                import yaml
+
+                with open(config_path, "r") as file_obj:
+                    config_data = yaml.safe_load(file_obj) or {}
+                config_api_key = config_data.get("api_key")
+                if config_api_key:
+                    return config_api_key
+        except Exception:
+            pass
+
+        try:
+            api_key_file = Path.home() / ".config" / "ssync" / ".api_key"
+            if api_key_file.exists():
+                file_api_key = api_key_file.read_text().strip()
+                if file_api_key:
+                    return file_api_key
+        except Exception:
+            pass
+
+        return None
 
     def _get_headers(self) -> dict:
         """Get headers including API key if available."""
@@ -46,6 +90,35 @@ class APIClient:
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
+
+    def is_running(self) -> bool:
+        """Check whether the configured API server is responding."""
+        return self.server_manager.is_running()
+
+    def test_auth(self) -> bool:
+        """Test whether the configured API key can access protected endpoints."""
+        try:
+            response = requests.get(
+                f"{self.base_url}/api/info",
+                headers=self._get_headers(),
+                timeout=5,
+                verify=False,
+            )
+            if response.status_code == 401:
+                logger.error("Authentication failed. Please check your API key.")
+                return False
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
+
+    def start_server(self, config_path: Path, secure: bool = True) -> bool:
+        """Compatibility wrapper for starting the local API server."""
+        if secure and not self.api_key:
+            logger.warning(
+                "Starting API server without an API key configured. "
+                "Run 'ssync auth setup' to enable authentication."
+            )
+        return self.server_manager.start(config_path)
 
     def get(
         self, endpoint: str, params: Optional[dict] = None, timeout: int = 30

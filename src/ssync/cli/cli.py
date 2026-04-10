@@ -413,7 +413,7 @@ def web(ctx, port, host, stop, status, foreground, no_browser, skip_build, no_ht
     # Create a mock context for the launcher since it expects click options
     import sys
 
-    from ..web.launcher import main as web_launcher
+    from ..api.web import main as web_launcher
 
     original_argv = sys.argv
     try:
