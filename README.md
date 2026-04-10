@@ -152,6 +152,13 @@ python train.py --epochs 100
 
 The synchronization process automatically respects `.gitignore` patterns, preventing unnecessary transfer of build artifacts, virtual environments, and other excluded files.
 
+### Watcher-Driven Resubmission
+
+Watchers can capture values from job output and resubmit the original script with
+those values interpolated back into the script body. See
+[`docs/watcher-resubmit.md`](docs/watcher-resubmit.md) for the recommended
+pattern for checkpoint-based continuation.
+
 ### Persistent Job Information
 
 Job scripts and metadata are cached locally, allowing retrieval of job information even after SLURM's job history expiration.
