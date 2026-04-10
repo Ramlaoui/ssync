@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,7 @@ from starlette.responses import Response
 
 from .. import config
 from ..cache import get_cache
+from ..launch_events import LOG_EVENT_TYPE, LaunchEventManager
 from ..manager import SlurmManager
 from ..models.job import JobState
 from ..notifications import get_notification_service
@@ -56,14 +58,16 @@ from .models import (
     JobOutputResponse,
     JobStateWeb,
     JobStatusResponse,
-    PartitionResourcesWeb,
-    PartitionStatusResponse,
+    LaunchEventWeb,
     LaunchJobRequest,
     LaunchJobResponse,
+    LaunchStatusResponse,
     NotificationDeviceRegistration,
     NotificationPreferences,
     NotificationPreferencesPatch,
     NotificationTestRequest,
+    PartitionResourcesWeb,
+    PartitionStatusResponse,
     SlurmDefaultsWeb,
     WebPushSubscriptionRegistration,
     WebPushUnsubscribeRequest,
@@ -364,12 +368,14 @@ executor = ThreadPoolExecutor(
     max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-worker"
 )
 logger.info(f"Initialized thread pool with {THREAD_POOL_SIZE} workers")
+launch_event_manager = LaunchEventManager()
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup."""
     configure_logging(memory=True)
+    await launch_event_manager.start()
 
     logger.info(f"Starting Slurm Manager API with {THREAD_POOL_SIZE} worker threads")
 
@@ -409,6 +415,7 @@ async def shutdown_event():
     logger.info("Shutting down Slurm Manager API...")
 
     _shutdown_event.set()
+    await launch_event_manager.stop()
 
     # Stop the watcher service
     try:
@@ -793,7 +800,9 @@ def _cache_job_state(
     from ..models.job import JobInfo
 
     cached_job = _cache_middleware.cache.get_cached_job(job_id, hostname)
-    previous_state = cached_job.job_info.state if cached_job and cached_job.job_info else None
+    previous_state = (
+        cached_job.job_info.state if cached_job and cached_job.job_info else None
+    )
 
     if cached_job and cached_job.job_info:
         job_info = replace(cached_job.job_info, state=state)
@@ -813,7 +822,12 @@ def _cache_job_state(
         job_info.name = job_name
     if reason:
         job_info.reason = reason
-    if state in [JobState.CANCELLED, JobState.COMPLETED, JobState.FAILED, JobState.TIMEOUT]:
+    if state in [
+        JobState.CANCELLED,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.TIMEOUT,
+    ]:
         job_info.end_time = job_info.end_time or datetime.now(timezone.utc).isoformat()
 
     _cache_middleware.cache.cache_job(job_info)
@@ -823,7 +837,9 @@ def _cache_job_state(
     return job_info, previous_state
 
 
-async def _broadcast_job_state(job_info, previous_state: Optional[JobState] = None) -> None:
+async def _broadcast_job_state(
+    job_info, previous_state: Optional[JobState] = None
+) -> None:
     """Broadcast a single realtime job update to websocket clients."""
     await job_manager.broadcast_job_update(
         job_info.job_id,
@@ -835,6 +851,70 @@ async def _broadcast_job_state(job_info, previous_state: Optional[JobState] = No
             "job": JobInfoWeb.from_job_info(job_info).model_dump(mode="json"),
         },
     )
+
+
+def _legacy_launch_progress_payload(
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    stage = payload.get("stage")
+    if not stage:
+        return None
+
+    if stage.startswith("sync_") or stage == "accepted":
+        legacy_stage = "syncing"
+    elif stage.startswith("submit_") or stage.startswith("setup_"):
+        legacy_stage = "submitting"
+    elif stage == "completed":
+        legacy_stage = "completed"
+    elif stage == "failed":
+        legacy_stage = "failed"
+    else:
+        return None
+
+    legacy_payload: Dict[str, Any] = {
+        "type": "launch_progress",
+        "launch_id": payload["launch_id"],
+        "hostname": payload["hostname"],
+        "stage": legacy_stage,
+        "message": payload.get("message", ""),
+    }
+    if payload.get("job_id") is not None:
+        legacy_payload["job_id"] = payload["job_id"]
+    return legacy_payload
+
+
+async def _broadcast_launch_event_to_all_jobs(payload: Dict[str, Any]) -> None:
+    disconnected = []
+    for connection in job_manager.all_jobs_connections:
+        try:
+            await connection.send_json(payload)
+            legacy_payload = _legacy_launch_progress_payload(payload)
+            if legacy_payload is not None:
+                await connection.send_json(legacy_payload)
+        except Exception:
+            disconnected.append(connection)
+    for conn in disconnected:
+        job_manager.disconnect(conn)
+
+
+async def _broadcast_launch_progress(
+    launch_id: str,
+    hostname: str,
+    stage: str,
+    *,
+    message: str = "",
+    job_id: Optional[str] = None,
+) -> None:
+    """Compatibility helper for legacy launch progress broadcasts."""
+    launch_event_manager.publish(
+        launch_id=launch_id,
+        hostname=hostname,
+        event_type="launch_stage",
+        stage=stage,
+        message=message,
+        job_id=job_id,
+    )
+
 
 frontend_dist = Path(__file__).parent.parent.parent.parent / "web-frontend" / "dist"
 if frontend_dist.exists():
@@ -1340,9 +1420,7 @@ async def get_partitions(
         async def fetch_host_partitions(slurm_host):
             hostname = slurm_host.host.hostname
             try:
-                conn = await _run_in_executor(
-                    manager._get_connection, slurm_host.host
-                )
+                conn = await _run_in_executor(manager._get_connection, slurm_host.host)
                 partitions, cached, cache_age, stale = await _run_in_executor(
                     manager.slurm_client.get_partition_state,
                     conn,
@@ -1690,9 +1768,7 @@ async def get_job_status(
                                 f"Cache for {hostname} is {cache_age:.0f}s old - triggering background refresh"
                             )
                             # Trigger async refresh without awaiting
-                            asyncio.create_task(
-                                fetch_host_jobs(slurm_host)
-                            )
+                            asyncio.create_task(fetch_host_jobs(slurm_host))
 
                     # Apply state filter if provided
                     # Note: State filter is applied here because cached jobs may have stale state data
@@ -2100,7 +2176,9 @@ async def stream_job_output(
                 if job_info:
                     return job_info
             except Exception as e:
-                logger.debug(f"Failed to refresh job info for output stream {job_id}: {e}")
+                logger.debug(
+                    f"Failed to refresh job info for output stream {job_id}: {e}"
+                )
 
             if cached_job and cached_job.job_info:
                 return cached_job.job_info
@@ -2218,7 +2296,9 @@ async def stream_job_output(
 
                 while file_path and current_size > position:
                     read_size = min(current_size - position, max_live_chunk_bytes)
-                    payload = await read_file_chunk_base64(file_path, position, read_size)
+                    payload = await read_file_chunk_base64(
+                        file_path, position, read_size
+                    )
                     if not payload:
                         break
 
@@ -2238,7 +2318,11 @@ async def stream_job_output(
                     current_size = await stat_file(file_path)
                     last_heartbeat_at = now
 
-                if job_info and job_info.state != JobState.RUNNING and current_size <= position:
+                if (
+                    job_info
+                    and job_info.state != JobState.RUNNING
+                    and current_size <= position
+                ):
                     yield await send_event({"type": "complete"})
                     break
 
@@ -2590,7 +2674,10 @@ async def get_job_output(
         if cached_job and cached_job.job_info:
             is_running = cached_job.job_info.state == JobState.RUNNING
             is_pending = cached_job.job_info.state == JobState.PENDING
-            is_completed = cached_job.job_info.state not in [JobState.PENDING, JobState.RUNNING]
+            is_completed = cached_job.job_info.state not in [
+                JobState.PENDING,
+                JobState.RUNNING,
+            ]
 
             # Initialize output variables - will be set based on job state
             stdout_content = None
@@ -2928,12 +3015,19 @@ async def get_job_script(
 async def launch_job(
     request: LaunchJobRequest, authenticated: bool = Depends(verify_api_key)
 ):
-    """Launch a job by syncing source directory and submitting script."""
+    """Launch a job by syncing source directory and submitting script.
+
+    Returns immediately with a launch_id. The actual sync + submit runs in the
+    background and progress is pushed to WebSocket clients via
+    ``launch_progress`` messages.
+    """
     import tempfile
 
     from ..launch import LaunchManager
 
     try:
+        # --- Synchronous validation (fast, runs before we return) ---
+
         # Validate and sanitize script
         request.script_content = ScriptValidator.validate_script(request.script_content)
 
@@ -2947,10 +3041,6 @@ async def launch_job(
             _ = manager.get_host_by_name(request.host)
         except ValueError:
             raise HTTPException(status_code=400, detail="Host not found")
-
-        # Apply defaults from host configuration if needed
-        # Note: Currently defaults are applied at the manager level
-        # This could be used for frontend defaults display if needed
 
         # Validate source directory if provided
         source_dir = None
@@ -2969,99 +3059,135 @@ async def launch_job(
                     status_code=400, detail="Source path is not a directory"
                 )
 
-        # Create temporary script file
+        # Create temporary script file (cleaned up inside the background task)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".sh", delete=False
         ) as tmp_script:
             tmp_script.write(request.script_content)
             script_path = Path(tmp_script.name)
 
-        try:
-            # Initialize launch manager with thread pool executor
-            launch_manager = LaunchManager(manager, executor=executor)
+        # Validate Slurm parameters
+        slurm_params = SlurmParams(
+            job_name=request.job_name[:64]
+            if request.job_name
+            else None,  # Limit length
+            time_min=request.time,
+            cpus_per_task=min(request.cpus, 256)
+            if request.cpus
+            else None,  # Reasonable limit
+            mem_gb=min(request.mem, 1024) if request.mem else None,  # 1TB max
+            partition=request.partition,
+            output=request.output,
+            error=request.error,
+            constraint=request.constraint,
+            account=request.account,
+            nodes=min(request.nodes, 100)
+            if request.nodes
+            else None,  # Reasonable limit
+            n_tasks_per_node=request.n_tasks_per_node,
+            gpus_per_node=request.gpus_per_node,
+            gres=request.gres,
+        )
 
-            # Validate Slurm parameters
-            slurm_params = SlurmParams(
-                job_name=request.job_name[:64]
-                if request.job_name
-                else None,  # Limit length
-                time_min=request.time,
-                cpus_per_task=min(request.cpus, 256)
-                if request.cpus
-                else None,  # Reasonable limit
-                mem_gb=min(request.mem, 1024) if request.mem else None,  # 1TB max
-                partition=request.partition,
-                output=request.output,
-                error=request.error,
-                constraint=request.constraint,
-                account=request.account,
-                nodes=min(request.nodes, 100)
-                if request.nodes
-                else None,  # Reasonable limit
-                n_tasks_per_node=request.n_tasks_per_node,
-                gpus_per_node=request.gpus_per_node,
-                gres=request.gres,
-            )
+        # --- Fire-and-forget: schedule the heavy work in the background ---
 
-            # Launch the job
-            job = await launch_manager.launch_job(
-                script_path=script_path,
-                source_dir=source_dir,
-                host=request.host,
-                slurm_params=slurm_params,
-                python_env=request.python_env,
-                exclude=request.exclude,
-                include=request.include,
-                no_gitignore=request.no_gitignore,
-                sync_enabled=source_dir is not None,
-                abort_on_setup_failure=request.abort_on_setup_failure,
-            )
+        launch_id = uuid.uuid4().hex[:12]
+        launch_emitter = launch_event_manager.create_emitter(launch_id, request.host)
+        launch_emitter.stage(
+            "accepted",
+            message="Launch accepted. Waiting for background execution.",
+        )
 
-            if job:
-                # Cache the script with local source directory
-                try:
-                    local_dir_str = str(source_dir) if source_dir else None
-                    await _cache_middleware.cache_job_script(
-                        job.job_id, request.host, request.script_content, local_dir_str
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to cache script: {e}")
+        # Capture request fields we need (request object may not survive after return)
+        host = request.host
+        script_content = request.script_content
+        job_name = request.job_name
+        python_env = request.python_env
+        exclude = list(request.exclude)
+        include = list(request.include)
+        no_gitignore = request.no_gitignore
+        sync_enabled = source_dir is not None
+        abort_on_setup_failure = request.abort_on_setup_failure
 
-                # Publish the launch immediately so the UI does not have to wait
-                # for squeue/cache propagation before showing the new job.
-                try:
-                    pending_job_info, previous_state = _cache_job_state(
-                        job.job_id,
-                        request.host,
-                        JobState.PENDING,
-                        job_name=request.job_name,
-                        array_submission=looks_like_array_submission(
-                            request.script_content
-                        ),
-                    )
-                    await _broadcast_job_state(pending_job_info, previous_state)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to broadcast launched job {job.job_id}: {e}"
-                    )
-
-                return LaunchJobResponse(
-                    success=True,
-                    job_id=job.job_id,
-                    message="Job launched successfully",
-                    hostname=request.host,
-                )
-            else:
-                return LaunchJobResponse(
-                    success=False, message="Failed to launch job", hostname=request.host
-                )
-
-        finally:
-            # Clean up temporary script file
+        async def _run_launch_in_background() -> None:
+            """Background coroutine that performs sync + submit and broadcasts progress."""
             try:
-                os.unlink(script_path)
-            except Exception:
-                pass
+                launch_manager = LaunchManager(manager, executor=executor)
+                job = await launch_manager.launch_job(
+                    script_path=script_path,
+                    source_dir=source_dir,
+                    host=host,
+                    slurm_params=slurm_params,
+                    python_env=python_env,
+                    exclude=exclude,
+                    include=include,
+                    no_gitignore=no_gitignore,
+                    sync_enabled=sync_enabled,
+                    abort_on_setup_failure=abort_on_setup_failure,
+                    launch_event_emitter=launch_emitter,
+                )
+
+                if job:
+                    # Cache the script
+                    try:
+                        local_dir_str = str(source_dir) if source_dir else None
+                        await _cache_middleware.cache_job_script(
+                            job.job_id, host, script_content, local_dir_str
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to cache script: {e}")
+
+                    # Publish job state so the UI picks it up immediately
+                    try:
+                        pending_job_info, previous_state = _cache_job_state(
+                            job.job_id,
+                            host,
+                            JobState.PENDING,
+                            job_name=job_name,
+                            array_submission=looks_like_array_submission(
+                                script_content
+                            ),
+                        )
+                        await _broadcast_job_state(pending_job_info, previous_state)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to broadcast launched job {job.job_id}: {e}"
+                        )
+
+                    launch_emitter.result(
+                        success=True,
+                        message=f"Job launched successfully ({job.job_id})",
+                        job_id=job.job_id,
+                    )
+                else:
+                    launch_emitter.result(
+                        success=False,
+                        message="Failed to launch job",
+                    )
+            except Exception as e:
+                logger.error(f"Background launch {launch_id} failed: {e}")
+                launch_emitter.result(
+                    success=False,
+                    message=str(e),
+                )
+            finally:
+                # Clean up temporary script file
+                try:
+                    os.unlink(script_path)
+                except Exception:
+                    pass
+
+        create_task(
+            _run_launch_in_background(),
+            name=f"launch-{launch_id}",
+        )
+
+        return LaunchJobResponse(
+            success=True,
+            launch_id=launch_id,
+            message="Launch started" if sync_enabled else "Submitting job...",
+            hostname=request.host,
+        )
 
     except HTTPException:
         raise
@@ -3121,6 +3247,67 @@ async def launch_job(
             raise HTTPException(
                 status_code=500, detail=f"Job launch failed: {error_message}"
             )
+
+
+@app.get("/api/launches/{launch_id}", response_model=LaunchStatusResponse)
+async def get_launch_status(
+    launch_id: str,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Return current launch state and recent buffered events."""
+    status = launch_event_manager.get_status(launch_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Launch not found")
+    return LaunchStatusResponse(**status)
+
+
+@app.get("/api/launches/{launch_id}/events")
+async def stream_launch_events(
+    launch_id: str,
+    api_key: Optional[str] = Query(None, description="API key for EventSource"),
+    authenticated: bool = Depends(verify_api_key_flexible),
+):
+    """Stream launch events via Server-Sent Events."""
+
+    try:
+        snapshot, queue = await launch_event_manager.subscribe(launch_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Launch not found")
+
+    async def send_event(payload: dict[str, Any]) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
+    async def generate():
+        try:
+            for event in snapshot["events"]:
+                yield await send_event(event)
+
+            if snapshot["terminal"]:
+                return
+
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+
+                yield await send_event(payload)
+                if payload["type"] == "launch_result":
+                    break
+        finally:
+            launch_event_manager.unsubscribe(launch_id, queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -3224,6 +3411,7 @@ async def get_job_watchers(
                        captures_json, condition, actions_json, state,
                        trigger_count, last_check, last_position, created_at,
                        timer_mode_enabled, timer_interval_seconds, timer_mode_active,
+                       trigger_on_job_end, trigger_job_states_json,
                        is_array_template, array_spec, parent_watcher_id,
                        discovered_task_count, expected_task_count
                 FROM job_watchers
@@ -3274,6 +3462,18 @@ async def get_job_watchers(
                     watcher["timer_mode_active"] = bool(row_dict["timer_mode_active"])
                 else:
                     watcher["timer_mode_active"] = False
+
+                if "trigger_on_job_end" in row_dict:
+                    watcher["trigger_on_job_end"] = bool(row_dict["trigger_on_job_end"])
+                else:
+                    watcher["trigger_on_job_end"] = False
+
+                if "trigger_job_states_json" in row_dict:
+                    watcher["trigger_job_states"] = json.loads(
+                        row_dict["trigger_job_states_json"] or "[]"
+                    )
+                else:
+                    watcher["trigger_job_states"] = []
 
                 # Add array template fields with safe fallbacks
                 if "is_array_template" in row_dict:
@@ -3403,6 +3603,21 @@ async def get_all_watchers(
                     )
                 else:
                     watcher_dict["timer_mode_active"] = False
+
+                if "trigger_on_job_end" in watcher_dict:
+                    watcher_dict["trigger_on_job_end"] = bool(
+                        watcher_dict["trigger_on_job_end"]
+                    )
+                else:
+                    watcher_dict["trigger_on_job_end"] = False
+
+                if watcher_dict.get("trigger_job_states_json"):
+                    watcher_dict["trigger_job_states"] = json.loads(
+                        watcher_dict["trigger_job_states_json"]
+                    )
+                else:
+                    watcher_dict["trigger_job_states"] = []
+                watcher_dict.pop("trigger_job_states_json", None)
 
                 watchers.append(watcher_dict)
 
@@ -4901,6 +5116,7 @@ class JobConnectionManager:
 
 
 job_manager = JobConnectionManager()
+launch_event_manager.set_websocket_broadcaster(_broadcast_launch_event_to_all_jobs)
 
 
 async def monitor_job_updates(

@@ -258,6 +258,40 @@ class SyncCommand(BaseCommand):
 class LaunchCommand(BaseCommand):
     """Handles the launch command logic via API."""
 
+    def _follow_launch(self, api_client: APIClient, launch_id: str) -> tuple[bool, Optional[str], str]:
+        last_stage = None
+        last_message = ""
+        final_job_id = None
+
+        try:
+            for event in api_client.stream_launch_events(launch_id):
+                event_type = event.get("type")
+                message = event.get("message") or ""
+
+                if event_type == "launch_stage":
+                    stage = event.get("stage")
+                    if stage != last_stage or (message and message != last_message):
+                        if message:
+                            click.echo(message)
+                        elif stage:
+                            click.echo(f"Launch stage: {stage}")
+                    last_stage = stage
+                    last_message = message or last_message
+                elif event_type == "launch_log" and self.verbose and message:
+                    source = event.get("source", "launch")
+                    stream = event.get("stream", "stdout")
+                    click.echo(f"[{source}/{stream}] {message}")
+                elif event_type == "launch_result":
+                    final_job_id = event.get("job_id")
+                    return bool(event.get("success")), final_job_id, message
+        except requests.exceptions.RequestException as exc:
+            if self.verbose:
+                click.echo(f"Launch stream interrupted: {exc}", err=True)
+
+        status = api_client.get_launch_status(launch_id)
+        final_job_id = status.get("job_id")
+        return bool(status.get("success")), final_job_id, status.get("message", "")
+
     def execute(
         self,
         script_path: Path,
@@ -310,7 +344,7 @@ class LaunchCommand(BaseCommand):
                 source_dir_str = None
 
             # Launch job via API
-            success, job_id, message = api_client.launch_job(
+            launch_response = api_client.launch_job(
                 script_content=script_content,
                 source_dir=source_dir_str,
                 host=host,
@@ -334,9 +368,30 @@ class LaunchCommand(BaseCommand):
                 abort_on_setup_failure=abort_on_setup_failure,
             )
 
+            success = bool(launch_response.get("success"))
+            job_id = launch_response.get("job_id")
+            launch_id = launch_response.get("launch_id")
+            message = launch_response.get("message", "")
+
             if success:
-                click.echo(f"Job launched successfully with ID: {job_id}")
-                return True
+                if job_id:
+                    click.echo(f"Job launched successfully with ID: {job_id}")
+                    return True
+
+                if not launch_id:
+                    click.echo(message or "Launch started but no job ID was returned.")
+                    return True
+
+                click.echo(message or f"Launch started with ID: {launch_id}")
+                success, job_id, message = self._follow_launch(api_client, launch_id)
+                if success and job_id:
+                    click.echo(f"Job launched successfully with ID: {job_id}")
+                    return True
+                if success:
+                    click.echo(message or f"Launch {launch_id} completed successfully")
+                    return True
+                click.echo(message or f"Launch {launch_id} failed", err=True)
+                return False
             else:
                 # Message already contains error details, don't add prefix
                 click.echo(message, err=True)

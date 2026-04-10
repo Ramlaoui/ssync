@@ -22,6 +22,40 @@ interface AllJobsWebSocketState {
   error: string | null;
 }
 
+export interface LaunchProgress {
+  launch_id: string;
+  hostname: string;
+  stage: 'syncing' | 'submitting' | 'completed' | 'failed';
+  message: string;
+  job_id?: string;
+}
+
+export interface LaunchEvent {
+  type: 'launch_stage' | 'launch_log' | 'launch_result';
+  launch_id: string;
+  hostname: string;
+  sequence: number;
+  timestamp: string;
+  stage?: string;
+  source?: string;
+  stream?: string;
+  level?: string;
+  message?: string;
+  job_id?: string;
+  success?: boolean;
+}
+
+export interface LaunchState {
+  launch_id: string;
+  hostname: string;
+  stage: string;
+  terminal: boolean;
+  success?: boolean;
+  job_id?: string;
+  message?: string;
+  events: LaunchEvent[];
+}
+
 let jobWebSocket: WebSocket | null = null;
 let allJobsWebSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -69,6 +103,42 @@ export const allJobsWebSocketStore = writable<AllJobsWebSocketState>({
   updates: [],
   error: null
 });
+
+// Store for launch progress events (keyed by launch_id)
+export const launchProgressStore = writable<{ [launchId: string]: LaunchProgress }>({});
+export const launchStateStore = writable<{ [launchId: string]: LaunchState }>({});
+
+function applyLaunchEvent(data: LaunchEvent) {
+  launchStateStore.update(state => {
+    const existing = state[data.launch_id] ?? {
+      launch_id: data.launch_id,
+      hostname: data.hostname,
+      stage: data.stage ?? 'accepted',
+      terminal: false,
+      success: undefined,
+      job_id: data.job_id,
+      message: data.message,
+      events: [],
+    };
+
+    const nextEvents = [...existing.events, data].slice(-80);
+    const nextState: LaunchState = {
+      ...existing,
+      hostname: data.hostname,
+      stage: data.stage ?? existing.stage,
+      terminal: data.type === 'launch_result' ? true : existing.terminal,
+      success: data.type === 'launch_result' ? data.success : existing.success,
+      job_id: data.job_id ?? existing.job_id,
+      message: data.message ?? existing.message,
+      events: nextEvents,
+    };
+
+    return {
+      ...state,
+      [data.launch_id]: nextState,
+    };
+  });
+}
 
 // Helper functions for connection quality
 function getReconnectDelay(attempts: number): number {
@@ -406,6 +476,33 @@ export function connectAllJobsWebSocket() {
               data: data.updates
             }]
           };
+        });
+      } else if (data.type === 'launch_progress') {
+        launchProgressStore.update(state => ({
+          ...state,
+          [data.launch_id]: data as LaunchProgress,
+        }));
+      } else if (data.type === 'launch_stage' || data.type === 'launch_log' || data.type === 'launch_result') {
+        applyLaunchEvent(data as LaunchEvent);
+      } else if (data.type === 'job_update') {
+        // Handle direct (non-batched) job_update broadcasts
+        allJobsWebSocketStore.update(state => {
+          const newJobs = { ...state.jobs };
+          const hostname = data.hostname;
+          if (hostname) {
+            if (!newJobs[hostname]) {
+              newJobs[hostname] = [];
+            }
+            const jobIndex = newJobs[hostname].findIndex(
+              (j: JobInfo) => j.job_id === data.job_id
+            );
+            if (jobIndex >= 0) {
+              newJobs[hostname][jobIndex] = data.job;
+            } else if (data.job) {
+              newJobs[hostname].push(data.job);
+            }
+          }
+          return { ...state, jobs: newJobs };
         });
       } else if (data.type === 'error') {
         allJobsWebSocketStore.update(state => ({

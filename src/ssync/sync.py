@@ -2,8 +2,10 @@ import fnmatch
 import os
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
+from .launch_events import LaunchEventEmitter
 from .manager import SlurmManager
 from .models.cluster import PathRestrictions, SlurmHost
 from .ssh.native import NativeSSH
@@ -22,12 +24,57 @@ class SyncManager:
         use_gitignore: bool = True,
         max_depth: int = 3,
         path_restrictions: PathRestrictions | None = None,
+        launch_event_emitter: LaunchEventEmitter | None = None,
     ):
         self.slurm_manager = slurm_manager
         self.source_dir = source_dir
         self.use_gitignore = use_gitignore
         self.max_depth = max_depth
         self.path_restrictions = path_restrictions
+        self.launch_event_emitter = launch_event_emitter
+
+    def _emit_sync_log(self, message: str, *, stream: str = "stdout") -> None:
+        if self.launch_event_emitter is None or not message:
+            return
+        self.launch_event_emitter.log("sync", message, stream=stream)
+
+    def _run_streaming_subprocess(self, cmd: list[str], env: dict | None = None) -> int:
+        process = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
+        def _reader(pipe, stream_name: str):
+            assert pipe is not None
+            try:
+                for line in iter(pipe.readline, ""):
+                    stripped = line.rstrip()
+                    if stripped:
+                        self._emit_sync_log(stripped, stream=stream_name)
+            finally:
+                pipe.close()
+
+        threads = [
+            threading.Thread(
+                target=_reader, args=(process.stdout, "stdout"), daemon=True
+            ),
+            threading.Thread(
+                target=_reader, args=(process.stderr, "stderr"), daemon=True
+            ),
+        ]
+        for thread in threads:
+            thread.start()
+
+        returncode = process.wait()
+
+        for thread in threads:
+            thread.join(timeout=1)
+
+        return returncode
 
     def _validate_path(self, path: Path) -> tuple[bool, str]:
         """Validate a path against restrictions.
@@ -201,6 +248,7 @@ class SyncManager:
             raise ValueError(f"Directory size check failed: {error_msg}")
         elif size_gb > 0:
             logger.info(f"Directory size: {size_gb:.2f} GB")
+            self._emit_sync_log(f"Directory size: {size_gb:.2f} GB", stream="system")
 
         conn = self.slurm_manager._get_connection(slurm_host.host)
 
@@ -267,7 +315,10 @@ class SyncManager:
                     + [f"{self.source_dir}/", target]
                 )
                 logger.debug("Running rsync with password authentication")
-                result = subprocess.run(rsync_cmd, env=env, capture_output=False)
+                self._emit_sync_log(
+                    "Running rsync with password authentication", stream="system"
+                )
+                returncode = self._run_streaming_subprocess(rsync_cmd, env=env)
             else:
                 # Use the existing ControlMaster socket to avoid a new SSH handshake
                 control_path = NativeSSH.ensure_control_master(
@@ -281,21 +332,38 @@ class SyncManager:
                         + [f"{self.source_dir}/", target]
                     )
                     logger.debug(f"Running rsync via ControlMaster: {control_path}")
+                    self._emit_sync_log(
+                        f"Running rsync via ControlMaster: {control_path}",
+                        stream="system",
+                    )
                 else:
                     rsync_cmd = (
                         ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
                     )
-                    logger.debug(f"Running rsync without ControlMaster")
-                result = subprocess.run(rsync_cmd, capture_output=False)
+                    logger.debug("Running rsync without ControlMaster")
+                    self._emit_sync_log(
+                        "Running rsync without ControlMaster", stream="system"
+                    )
+                returncode = self._run_streaming_subprocess(rsync_cmd)
 
-            if result.returncode == 0:
+            if returncode == 0:
                 logger.info(f"Successfully synced to {slurm_host.host.hostname}")
+                self._emit_sync_log(
+                    f"Successfully synced to {slurm_host.host.hostname}",
+                    stream="system",
+                )
                 return True
             else:
-                logger.warning(f"rsync failed with exit code {result.returncode}")
+                logger.warning(f"rsync failed with exit code {returncode}")
+                self._emit_sync_log(
+                    f"rsync failed with exit code {returncode}", stream="stderr"
+                )
                 return False
         except Exception as e:
             logger.warning(f"Failed to sync to {slurm_host.host.hostname}: {e}")
+            self._emit_sync_log(
+                f"Failed to sync to {slurm_host.host.hostname}: {e}", stream="stderr"
+            )
             return False
         finally:
             if temp_gitignore_path and os.path.exists(temp_gitignore_path):
