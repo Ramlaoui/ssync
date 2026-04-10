@@ -224,7 +224,6 @@ class TestFromSqueuFields:
 
     @pytest.mark.unit
     def test_parse_basic_squeue_fields(self):
-        from ssync.slurm.fields import SQUEUE_FIELDS
 
         # Create fields matching SQUEUE_FIELDS order
         fields = ["12345", "test_job", "RUNNING", "testuser", "gpu", "1", "4", "8G",
@@ -274,7 +273,6 @@ class TestFromSqueuFields:
 
     @pytest.mark.unit
     def test_parse_squeue_expands_path_variables(self):
-        from ssync.slurm.fields import SQUEUE_FIELDS
 
         fields = ["12345", "test_job", "RUNNING", "testuser", "gpu", "1", "4", "8G",
                   "01:00:00", "00:15:30", "", "/home/testuser/work",
@@ -291,7 +289,6 @@ class TestFromSacctFields:
 
     @pytest.mark.unit
     def test_parse_basic_sacct_fields(self):
-        from ssync.slurm.fields import SACCT_FIELDS
 
         fields = ["12345", "test_job", "COMPLETED", "testuser", "gpu", "1", "4",
                   "8G", "01:00:00", "00:45:30", "", "/home/testuser/work",
@@ -309,7 +306,6 @@ class TestFromSacctFields:
 
     @pytest.mark.unit
     def test_parse_sacct_failed_job(self):
-        from ssync.slurm.fields import SACCT_FIELDS
 
         # Fields must match SACCT_FIELDS order: JobID, JobName, State, User, Partition, AllocNodes,
         # AllocCPUS, ReqMem, Timelimit, Elapsed, Submit, Start, End, WorkDir, NodeList, Reason...
@@ -358,7 +354,6 @@ class TestFromSacctFields:
 
     @pytest.mark.unit
     def test_parse_sacct_expands_path_variables(self):
-        from ssync.slurm.fields import SACCT_FIELDS
 
         # Use custom field names to properly map StdOut and StdErr fields
         custom_fields = ["JobID", "JobName", "State", "User", "Partition", "AllocNodes",

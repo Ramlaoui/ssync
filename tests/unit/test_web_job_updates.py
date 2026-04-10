@@ -65,7 +65,7 @@ async def test_cancel_job_updates_cache_and_broadcasts(monkeypatch, test_cache):
     monkeypatch.setattr(web_app._cache_middleware, "cache", test_cache)
     monkeypatch.setattr(web_app.job_manager, "broadcast_job_update", fake_broadcast)
 
-    result = await web_app.cancel_job("7001", host=hostname, authenticated=True)
+    result = await web_app.cancel_job("7001", host=hostname, _authenticated=True)
 
     assert result == {"message": "Job cancelled successfully"}
 
@@ -157,7 +157,7 @@ async def test_get_job_details_force_refresh_skips_cache_fallback(
             cache_first=False,
             force_refresh=True,
             force=False,
-            authenticated=True,
+            _authenticated=True,
         )
 
     assert excinfo.value.status_code == 404

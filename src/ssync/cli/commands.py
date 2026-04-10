@@ -1,8 +1,8 @@
 """CLI command implementations."""
 
+import json
 from pathlib import Path
 from typing import List, Optional
-import json
 
 import click
 import requests

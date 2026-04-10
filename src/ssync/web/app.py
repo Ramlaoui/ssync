@@ -35,9 +35,9 @@ from starlette.responses import Response
 
 from .. import config
 from ..cache import get_cache
-from ..launch_events import LOG_EVENT_TYPE, LaunchEventManager
+from ..launch_events import LaunchEventManager
 from ..manager import SlurmManager
-from ..models.job import JobState
+from ..models.job import JobInfo, JobState
 from ..notifications import get_notification_service
 from ..notifications.monitor import (
     start_notification_monitor,
@@ -58,7 +58,6 @@ from .models import (
     JobOutputResponse,
     JobStateWeb,
     JobStatusResponse,
-    LaunchEventWeb,
     LaunchJobRequest,
     LaunchJobResponse,
     LaunchStatusResponse,
@@ -797,8 +796,6 @@ def _cache_job_state(
 
     This keeps UI state coherent while Slurm accounting catches up.
     """
-    from ..models.job import JobInfo
-
     cached_job = _cache_middleware.cache.get_cached_job(job_id, hostname)
     previous_state = (
         cached_job.job_info.state if cached_job and cached_job.job_info else None
@@ -940,7 +937,7 @@ if frontend_dist.exists():
 else:
 
     @app.get("/")
-    async def root(authenticated: bool = Depends(verify_api_key)):
+    async def root(_authenticated: bool = Depends(verify_api_key)):
         """API root endpoint."""
         return {
             "message": "Slurm Manager API",
@@ -1035,7 +1032,7 @@ async def health_check():
 
 
 @app.post("/api/shutdown")
-async def shutdown_server(authenticated: bool = Depends(verify_api_key)):
+async def shutdown_server(_authenticated: bool = Depends(verify_api_key)):
     """Shutdown the API server gracefully."""
     import asyncio
     import os
@@ -1055,7 +1052,7 @@ async def shutdown_server(authenticated: bool = Depends(verify_api_key)):
 @app.get("/api/logs")
 async def get_server_logs(
     lines: int = Query(default=50, ge=1, le=1000),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get recent server logs."""
     from ..utils.logging import get_memory_handler
@@ -1066,7 +1063,7 @@ async def get_server_logs(
 
 
 @app.get("/api/info")
-async def api_info(authenticated: bool = Depends(verify_api_key)):
+async def api_info(_authenticated: bool = Depends(verify_api_key)):
     """API info endpoint."""
     return {
         "message": "Slurm Manager API",
@@ -1077,7 +1074,7 @@ async def api_info(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.get("/api/connections/stats")
-async def get_connection_stats(authenticated: bool = Depends(verify_api_key)):
+async def get_connection_stats(_authenticated: bool = Depends(verify_api_key)):
     """Get current SSH connection statistics."""
     try:
         manager = get_slurm_manager()
@@ -1095,7 +1092,7 @@ async def get_connection_stats(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.post("/api/connections/refresh")
-async def refresh_connections(authenticated: bool = Depends(verify_api_key)):
+async def refresh_connections(_authenticated: bool = Depends(verify_api_key)):
     """Refresh all SSH connections by closing and recreating them."""
     try:
         manager = get_slurm_manager()
@@ -1121,7 +1118,7 @@ async def get_complete_job_data(
     lines: Optional[int] = Query(
         None, description="Number of output lines to return (tail)"
     ),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get complete job data (info + script + outputs) in a single request."""
     try:
@@ -1239,7 +1236,7 @@ async def get_complete_job_data(
 
 
 @app.get("/api/cache/stats")
-async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
+async def get_cache_stats(_authenticated: bool = Depends(verify_api_key)):
     """Get cache statistics including date range cache information."""
     try:
         stats = await _cache_middleware.get_cache_stats()
@@ -1269,7 +1266,7 @@ async def get_cache_stats(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.post("/api/cache/clear")
-async def clear_cache(authenticated: bool = Depends(verify_api_key)):
+async def clear_cache(_authenticated: bool = Depends(verify_api_key)):
     """Clear all cache entries."""
     try:
         cache = get_cache()
@@ -1285,7 +1282,7 @@ async def clear_cache(authenticated: bool = Depends(verify_api_key)):
 @app.get("/api/cache/fetch-state")
 async def get_fetch_state(
     host: Optional[str] = Query(None, description="Specific host to check"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get the incremental fetch state for hosts."""
     try:
@@ -1368,7 +1365,7 @@ async def _run_in_executor(func, *args, **kwargs):
 
 
 @app.get("/api/hosts", response_model=List[HostInfoWeb])
-async def get_hosts(authenticated: bool = Depends(verify_api_key)):
+async def get_hosts(_authenticated: bool = Depends(verify_api_key)):
     """Get list of configured Slurm hosts."""
     try:
         manager = get_slurm_manager()
@@ -1401,7 +1398,7 @@ async def get_partitions(
     force_refresh: bool = Query(
         False, description="Force refresh from Slurm, bypassing cache"
     ),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get partition resource state across hosts."""
     try:
@@ -1529,7 +1526,7 @@ async def get_job_status(
         False,
         description="Enable server-side timing profile logs for this request",
     ),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get job status across hosts."""
     try:
@@ -1997,7 +1994,7 @@ async def get_job_details(
     force: bool = Query(
         False, description="Legacy alias for force_refresh", alias="force"
     ),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get detailed information for a specific job."""
     try:
@@ -2138,7 +2135,7 @@ async def stream_job_output(
     output_type: str = Query("stdout", regex="^(stdout|stderr)$"),
     chunk_size: int = Query(default=8192, ge=1024, le=1048576),
     api_key: Optional[str] = Query(None, description="API key for EventSource"),
-    authenticated: bool = Depends(verify_api_key_flexible),
+    _authenticated: bool = Depends(verify_api_key_flexible),
 ):
     """Stream compressed job output efficiently."""
     import base64
@@ -2479,7 +2476,7 @@ async def download_job_output(
     host: str = Query(..., description="Host where job is running"),
     output_type: str = Query("stdout", regex="^(stdout|stderr)$"),
     compressed: bool = Query(default=False, description="Download as gzip"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Download job output file, optionally compressed."""
     import base64
@@ -2572,7 +2569,7 @@ async def get_job_output(
     force: bool = Query(
         False, description="Legacy alias for force_refresh", alias="force"
     ),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get output files content for a specific job."""
     try:
@@ -2943,7 +2940,7 @@ async def get_job_output(
 async def get_job_script(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host to search"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get the batch script content for a specific job."""
     try:
@@ -3030,7 +3027,7 @@ async def get_job_script(
 
 @app.post("/api/jobs/launch", response_model=LaunchJobResponse)
 async def launch_job(
-    request: LaunchJobRequest, authenticated: bool = Depends(verify_api_key)
+    request: LaunchJobRequest, _authenticated: bool = Depends(verify_api_key)
 ):
     """Launch a job by syncing source directory and submitting script.
 
@@ -3063,7 +3060,7 @@ async def launch_job(
         source_dir = None
         if request.source_dir:
             source_dir = PathValidator.validate_path(
-                request.source_dir, base_type="local", user_home=Path.home()
+                request.source_dir, user_home=Path.home()
             )
 
             if not source_dir.exists():
@@ -3269,7 +3266,7 @@ async def launch_job(
 @app.get("/api/launches/{launch_id}", response_model=LaunchStatusResponse)
 async def get_launch_status(
     launch_id: str,
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Return current launch state and recent buffered events."""
     status = launch_event_manager.get_status(launch_id)
@@ -3282,7 +3279,7 @@ async def get_launch_status(
 async def stream_launch_events(
     launch_id: str,
     api_key: Optional[str] = Query(None, description="API key for EventSource"),
-    authenticated: bool = Depends(verify_api_key_flexible),
+    _authenticated: bool = Depends(verify_api_key_flexible),
 ):
     """Stream launch events via Server-Sent Events."""
 
@@ -3331,7 +3328,7 @@ async def stream_launch_events(
 async def cancel_job(
     job_id: str,
     host: Optional[str] = Query(None, description="Specific host"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Cancel a running job."""
     try:
@@ -3409,7 +3406,7 @@ async def cancel_job(
 async def get_job_watchers(
     job_id: str,
     host: Optional[str] = Query(None, description="Filter by hostname"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get watchers for a specific job."""
     try:
@@ -3560,7 +3557,7 @@ async def get_all_watchers(
         None, description="Filter by state (active, paused, completed, failed)"
     ),
     limit: int = Query(100, description="Maximum number of watchers to return"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get all watchers across all jobs."""
     try:
@@ -3650,7 +3647,7 @@ async def get_watcher_events(
     job_id: Optional[str] = Query(None, description="Filter by job ID"),
     watcher_id: Optional[int] = Query(None, description="Filter by watcher ID"),
     limit: int = Query(50, description="Maximum number of events to return"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get recent watcher events."""
     try:
@@ -3709,7 +3706,7 @@ async def get_watcher_events(
 
 @app.get("/api/watchers/stats")
 async def get_watcher_stats(
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Get watcher statistics."""
     try:
@@ -3860,7 +3857,7 @@ async def unregister_notification_device(
 @app.post("/api/notifications/test")
 async def test_notification(
     payload: NotificationTestRequest,
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Send a test notification to registered devices or a specific token."""
     service = get_notification_service()
@@ -3903,7 +3900,7 @@ async def update_notification_preferences(
 
 
 @app.get("/api/notifications/webpush/vapid")
-async def get_webpush_vapid(authenticated: bool = Depends(verify_api_key)):
+async def get_webpush_vapid(_authenticated: bool = Depends(verify_api_key)):
     """Return Web Push VAPID public key for browser registration."""
     settings = config.notification_settings
     return {
@@ -3956,7 +3953,7 @@ async def unregister_webpush_subscription(
 @app.post("/api/watchers/cleanup")
 async def cleanup_orphaned_watchers(
     dry_run: bool = Query(default=False, description="Only list what would be cleaned"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Clean up watchers for completed or non-existent jobs."""
     try:
@@ -4001,7 +3998,7 @@ async def cleanup_orphaned_watchers(
 @app.post("/api/watchers/{watcher_id}/pause")
 async def pause_watcher(
     watcher_id: int,
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Pause a watcher."""
     try:
@@ -4057,7 +4054,7 @@ async def pause_watcher(
 async def trigger_watcher_manually(
     watcher_id: int,
     test_text: str = Body(None, description="Optional test text to match against"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Manually trigger a watcher for testing purposes."""
     try:
@@ -4304,7 +4301,7 @@ async def trigger_watcher_manually(
 @app.post("/api/watchers/{watcher_id}/resume")
 async def resume_watcher(
     watcher_id: int,
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Resume a paused watcher."""
     try:
@@ -4367,7 +4364,7 @@ async def resume_watcher(
 @app.post("/api/watchers/{watcher_id}/discover-array-tasks")
 async def discover_array_tasks(
     watcher_id: int,
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """
     Manually trigger array task discovery for a template watcher.
@@ -4424,7 +4421,7 @@ async def discover_array_tasks(
 @app.post("/api/watchers")
 async def create_watcher(
     watcher_config: Dict[str, Any] = Body(...),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Create a new watcher."""
     try:
@@ -4636,7 +4633,7 @@ async def create_watcher(
 async def update_watcher(
     watcher_id: int,
     watcher_update: Dict[str, Any] = Body(...),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Update a watcher configuration."""
     try:
@@ -4822,7 +4819,7 @@ async def update_watcher(
 @app.delete("/api/watchers/{watcher_id}")
 async def delete_watcher(
     watcher_id: int,
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Delete a watcher."""
     try:
@@ -4876,7 +4873,7 @@ async def attach_watchers_to_job(
     watchers: List[Dict[str, Any]] = Body(
         ..., description="List of watcher definitions"
     ),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """Attach watchers to an existing running job."""
     try:
@@ -4983,7 +4980,7 @@ async def list_local_path(
     limit: int = Query(100, description="Maximum number of entries to return"),
     show_hidden: bool = Query(False, description="Include hidden files/directories"),
     dirs_only: bool = Query(False, description="Show directories only"),
-    authenticated: bool = Depends(verify_api_key),
+    _authenticated: bool = Depends(verify_api_key),
 ):
     """List entries in a local filesystem path to help the web UI pick a source_dir.
 

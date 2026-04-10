@@ -1,14 +1,11 @@
 """Unit tests for SSH backend (ConnectionManager, SSHConnection, NativeSSH)."""
 
-import os
-import subprocess
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-from ssync.ssh import ConnectionManager
 from ssync.models.cluster import Host
+from ssync.ssh import ConnectionManager
 from ssync.ssh.connection import SSHCommandResult, SSHConnection, _CDContext
 from ssync.ssh.native import NativeSSH, SSHResult
 
@@ -174,7 +171,7 @@ class TestCDContext:
 
         with _CDContext(connection, "/path/to/dir"):
             # Inside context, run should be wrapped
-            result = connection.run("ls")
+            connection.run("ls")
 
         # Check that cd was prepended to command
         connection.run.assert_called()

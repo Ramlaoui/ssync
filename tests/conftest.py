@@ -28,7 +28,7 @@ def test_cache(temp_dir):
 @pytest.fixture
 def sample_job_info():
     """Create a sample JobInfo object for testing."""
-    from datetime import datetime, timezone
+    from datetime import timezone
 
     return JobInfo(
         job_id="12345",
@@ -52,7 +52,7 @@ def sample_job_info():
 @pytest.fixture
 def sample_array_job_info():
     """Create a sample array job JobInfo object for testing."""
-    from datetime import datetime, timezone
+    from datetime import timezone
 
     return JobInfo(
         job_id="54321_0",

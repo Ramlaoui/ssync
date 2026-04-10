@@ -1,14 +1,11 @@
 """Unit tests for cache.py - Job data caching system."""
 
 import json
-import sqlite3
-import tempfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
-from ssync.cache import CachedJobData, JobDataCache
+from ssync.cache import JobDataCache
 from ssync.models.job import JobInfo, JobState
 
 
@@ -1423,7 +1420,7 @@ class TestCacheManagement:
         cache.cache_job(job_without_script)
 
         # Trigger cleanup with very small size limit
-        deleted = cache.cleanup_by_size(max_size_mb=0)
+        cache.cleanup_by_size(max_size_mb=0)
 
         # Job with script should still exist
         cached_with_script = cache.get_cached_job("1", "test.host")
