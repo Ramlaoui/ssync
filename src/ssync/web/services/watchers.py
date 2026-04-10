@@ -10,6 +10,7 @@ from ...utils.async_helpers import create_task
 from ...utils.logging import setup_logger
 
 logger = setup_logger(__name__)
+DEFAULT_TRIGGER_JOB_STATES = ["completed", "failed", "timeout"]
 FINISHED_JOB_STATES = {
     JobState.COMPLETED,
     JobState.FAILED,
@@ -25,6 +26,16 @@ def format_watcher_name(watcher_id: int, name: Optional[str]) -> str:
 
 def parse_json_field(raw_value: Optional[str], default):
     return json.loads(raw_value) if raw_value else default
+
+
+def normalize_trigger_job_states(
+    states: Optional[List[str]],
+) -> List[str]:
+    if states is None:
+        return list(DEFAULT_TRIGGER_JOB_STATES)
+
+    normalized = [str(state).strip().lower() for state in states if str(state).strip()]
+    return normalized or list(DEFAULT_TRIGGER_JOB_STATES)
 
 
 def serialize_watcher_actions(actions: List[Dict[str, Any]]) -> str:
@@ -63,6 +74,13 @@ def format_api_actions(actions_json: Optional[str]) -> List[Dict[str, Any]]:
 
 
 def format_watcher_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    trigger_on_job_end = bool(row_dict.get("trigger_on_job_end", 0))
+    trigger_job_states = parse_json_field(row_dict.get("trigger_job_states_json"), None)
+    if trigger_job_states is None:
+        trigger_job_states = (
+            normalize_trigger_job_states(None) if trigger_on_job_end else []
+        )
+
     response = {
         "id": row_dict["id"],
         "job_id": row_dict["job_id"],
@@ -78,10 +96,8 @@ def format_watcher_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
         "timer_mode_enabled": bool(row_dict.get("timer_mode_enabled", 0)),
         "timer_interval_seconds": row_dict.get("timer_interval_seconds", 30),
         "timer_mode_active": bool(row_dict.get("timer_mode_active", 0)),
-        "trigger_on_job_end": bool(row_dict.get("trigger_on_job_end", 0)),
-        "trigger_job_states": parse_json_field(
-            row_dict.get("trigger_job_states_json"), []
-        ),
+        "trigger_on_job_end": trigger_on_job_end,
+        "trigger_job_states": trigger_job_states,
         "is_array_template": bool(row_dict.get("is_array_template", 0)),
         "array_spec": row_dict.get("array_spec"),
         "parent_watcher_id": row_dict.get("parent_watcher_id"),
@@ -289,6 +305,16 @@ def build_watcher_update_fields(
     if "timer_mode_enabled" in watcher_update:
         update_fields.append("timer_mode_enabled = ?")
         update_values.append(1 if watcher_update["timer_mode_enabled"] else 0)
+    if "trigger_on_job_end" in watcher_update:
+        update_fields.append("trigger_on_job_end = ?")
+        update_values.append(1 if watcher_update["trigger_on_job_end"] else 0)
+    if "trigger_job_states" in watcher_update:
+        update_fields.append("trigger_job_states_json = ?")
+        update_values.append(
+            json.dumps(
+                normalize_trigger_job_states(watcher_update["trigger_job_states"])
+            )
+        )
 
     return update_fields, update_values
 
@@ -711,20 +737,28 @@ async def discover_array_tasks_payload(*, watcher_id: int) -> Dict[str, Any]:
 
 
 def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
-    required_fields = ["job_id", "hostname", "name", "pattern"]
+    required_fields = ["job_id", "hostname", "name"]
     for field in required_fields:
         if field not in watcher_config:
             raise ValueError(f"Missing required field: {field}")
 
     with cache._get_connection() as conn:
         name = watcher_config["name"]
-        pattern = watcher_config["pattern"]
+        pattern = watcher_config.get("pattern", "")
         job_id = watcher_config["job_id"]
         hostname = watcher_config["hostname"]
         interval_seconds = watcher_config.get("interval_seconds", 30)
         captures_json = serialize_watcher_captures(watcher_config)
         condition = watcher_config.get("condition")
         timer_mode_enabled = watcher_config.get("timer_mode_enabled", False)
+        trigger_on_job_end = watcher_config.get("trigger_on_job_end", False)
+        trigger_job_states = normalize_trigger_job_states(
+            watcher_config.get("trigger_job_states")
+        )
+
+        if not pattern and not trigger_on_job_end:
+            raise ValueError("Missing required field: pattern")
+
         state = resolve_initial_watcher_state(
             get_slurm_manager=get_slurm_manager,
             job_id=job_id,
@@ -741,8 +775,9 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
                 job_id, hostname, name, pattern, interval_seconds,
                 captures_json, condition, actions_json, state,
                 last_check, last_position, trigger_count, created_at,
-                timer_mode_enabled, timer_interval_seconds, timer_mode_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                timer_mode_enabled, timer_interval_seconds, timer_mode_active,
+                trigger_on_job_end, trigger_job_states_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -761,6 +796,8 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
                 1 if timer_mode_enabled else 0,
                 timer_interval_seconds,
                 0,
+                1 if trigger_on_job_end else 0,
+                json.dumps(trigger_job_states),
             ),
         )
         watcher_id = cursor.lastrowid
@@ -784,6 +821,13 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
 
     watcher_defs = []
     for watcher_definition in watchers:
+        pattern = watcher_definition.get("pattern", "")
+        trigger_on_job_end = watcher_definition.get("trigger_on_job_end", False)
+        if not pattern and not trigger_on_job_end:
+            raise ValueError(
+                "Watcher must define either a pattern or trigger_on_job_end=true"
+            )
+
         actions = []
         for action in watcher_definition.get("actions", []):
             action_type_str = (
@@ -806,7 +850,7 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
         watcher_defs.append(
             WatcherDefinition(
                 name=watcher_definition.get("name", f"watcher_{job_id}"),
-                pattern=watcher_definition.get("pattern", ""),
+                pattern=pattern,
                 interval_seconds=watcher_definition.get("interval_seconds", 60),
                 captures=watcher_definition.get(
                     "captures",
@@ -819,6 +863,10 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
                 timer_mode_enabled=watcher_definition.get("timer_mode_enabled", False),
                 timer_interval_seconds=watcher_definition.get(
                     "timer_interval_seconds", 60
+                ),
+                trigger_on_job_end=trigger_on_job_end,
+                trigger_job_states=normalize_trigger_job_states(
+                    watcher_definition.get("trigger_job_states")
                 ),
             )
         )
@@ -879,7 +927,24 @@ def update_watcher(*, cache, watcher_id: int, watcher_update: Dict[str, Any]):
             raise ValueError("Watcher not found")
 
         previous_row = dict(row)
+        effective_pattern = watcher_update.get("pattern", previous_row["pattern"])
+        effective_trigger_on_job_end = watcher_update.get(
+            "trigger_on_job_end",
+            bool(previous_row.get("trigger_on_job_end", 0)),
+        )
+        if not effective_pattern and not effective_trigger_on_job_end:
+            raise ValueError(
+                "Watcher must define either a pattern or trigger_on_job_end=true"
+            )
+
         update_fields, update_values = build_watcher_update_fields(watcher_update)
+        if (
+            effective_trigger_on_job_end
+            and "trigger_job_states" not in watcher_update
+            and not previous_row.get("trigger_job_states_json")
+        ):
+            update_fields.append("trigger_job_states_json = ?")
+            update_values.append(json.dumps(normalize_trigger_job_states(None)))
 
         if update_fields:
             update_values.append(watcher_id)
