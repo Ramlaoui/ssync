@@ -237,14 +237,14 @@
 
   // Reactive block 3: Load output data when tab changes
   run(() => {
-    if (job && activeTab === 'output' && !outputData) {
+    if (job && activeTab === 'output' && !outputData && !outputError && !loadingOutput) {
       loadOutput();
     }
   });
 
   // Reactive block 4: Load script data when tab changes
   run(() => {
-    if (job && activeTab === 'script' && !scriptData) {
+    if (job && activeTab === 'script' && !scriptData && !scriptError && !loadingScript) {
       loadScript();
     }
   });
