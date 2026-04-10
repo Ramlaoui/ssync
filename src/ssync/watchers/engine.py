@@ -306,6 +306,8 @@ class WatcherEngine:
                         output_type=template.definition.output_type,
                         timer_mode_enabled=template.definition.timer_mode_enabled,
                         timer_interval_seconds=template.definition.timer_interval_seconds,
+                        trigger_on_job_end=template.definition.trigger_on_job_end,
+                        trigger_job_states=template.definition.trigger_job_states,
                         is_array_template=False,  # Child watchers are not templates
                         array_spec=None,
                     )
@@ -566,6 +568,7 @@ class WatcherEngine:
                             self._update_watcher_position(watcher_id, new_position)
                             self._check_patterns(watcher, final_content)
 
+                        await self._handle_job_end_trigger(watcher, job_info.state)
                         self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
                         break
 
@@ -706,6 +709,9 @@ class WatcherEngine:
         matches_found = False
 
         try:
+            if not pattern:
+                return False
+
             # Use cached compiled regex if available
             if pattern not in self._pattern_cache:
                 try:
@@ -747,6 +753,9 @@ class WatcherEngine:
                         watcher.definition.condition, watcher.variables
                     ):
                         continue
+
+                if watcher.definition.trigger_on_job_end:
+                    continue
 
                 # Trigger actions (with rate limiting)
                 for action in watcher.definition.actions:
@@ -790,6 +799,79 @@ class WatcherEngine:
             logger.error(f"Error checking patterns for watcher {watcher.id}: {e}")
 
         return matches_found
+
+    def _normalize_trigger_job_states(self, states: list[str] | None) -> set[str]:
+        """Normalize configured terminal job states for matching."""
+        normalized = {
+            str(state).strip().lower()
+            for state in (states or ["completed", "failed", "timeout"])
+            if str(state).strip()
+        }
+        return normalized or {"completed", "failed", "timeout"}
+
+    def _job_end_state_name(self, job_state: JobState) -> str:
+        """Convert a JobState enum to a watcher-facing terminal state name."""
+        state_map = {
+            JobState.COMPLETED: "completed",
+            JobState.FAILED: "failed",
+            JobState.CANCELLED: "cancelled",
+            JobState.TIMEOUT: "timeout",
+        }
+        return state_map.get(job_state, str(job_state).lower())
+
+    async def _handle_job_end_trigger(
+        self, watcher: WatcherInstance, job_state: JobState
+    ) -> bool:
+        """Execute watcher actions once when the job reaches a matching terminal state."""
+        if not watcher.definition.trigger_on_job_end:
+            return False
+
+        state_name = self._job_end_state_name(job_state)
+        allowed_states = self._normalize_trigger_job_states(
+            watcher.definition.trigger_job_states
+        )
+        if state_name not in allowed_states:
+            return False
+
+        fresh_variables = {
+            **watcher.variables,
+            **self._get_watcher_variables(watcher.id),
+            "job_end_state": state_name,
+        }
+
+        if watcher.definition.condition and not self._evaluate_condition(
+            watcher.definition.condition, fresh_variables
+        ):
+            return False
+
+        actions_executed = 0
+        for action in watcher.definition.actions:
+            if action.condition and not self._evaluate_condition(
+                action.condition, fresh_variables
+            ):
+                continue
+
+            try:
+                success, _ = await self._execute_action(
+                    watcher,
+                    action,
+                    f"[Job End: {state_name}]",
+                    fresh_variables,
+                )
+                if success:
+                    actions_executed += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to execute job-end action for watcher {watcher.id}: {e}"
+                )
+
+        if actions_executed > 0:
+            self._update_watcher_trigger_count(
+                watcher.id, watcher.trigger_count + 1
+            )
+            return True
+
+        return False
 
     def _evaluate_condition(self, condition: str, variables: Dict[str, Any]) -> bool:
         """Safely evaluate a condition with variables."""
@@ -1051,8 +1133,9 @@ class WatcherEngine:
                     (job_id, hostname, name, pattern, interval_seconds,
                      captures_json, condition, actions_json, created_at, state,
                      timer_mode_enabled, timer_interval_seconds,
+                     trigger_on_job_end, trigger_job_states_json,
                      is_array_template, array_spec, parent_watcher_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -1076,6 +1159,8 @@ class WatcherEngine:
                         WatcherState.ACTIVE.value,
                         1 if definition.timer_mode_enabled else 0,
                         definition.timer_interval_seconds,
+                        1 if definition.trigger_on_job_end else 0,
+                        json.dumps(definition.trigger_job_states),
                         1 if definition.is_array_template else 0,
                         definition.array_spec,
                         parent_watcher_id,
@@ -1122,6 +1207,17 @@ class WatcherEngine:
                         timer_interval_seconds=row["timer_interval_seconds"]
                         if "timer_interval_seconds" in row.keys()
                         else 30,
+                        trigger_on_job_end=bool(
+                            row["trigger_on_job_end"]
+                            if "trigger_on_job_end" in row.keys()
+                            else 0
+                        ),
+                        trigger_job_states=json.loads(
+                            row["trigger_job_states_json"]
+                            if "trigger_job_states_json" in row.keys()
+                            and row["trigger_job_states_json"]
+                            else '["completed", "failed", "timeout"]'
+                        ),
                         is_array_template=bool(
                             row["is_array_template"]
                             if "is_array_template" in row.keys()

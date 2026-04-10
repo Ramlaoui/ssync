@@ -238,6 +238,8 @@ class JobDataCache:
                     timer_mode_enabled INTEGER DEFAULT 0,
                     timer_interval_seconds INTEGER DEFAULT 30,
                     timer_mode_active INTEGER DEFAULT 0,
+                    trigger_on_job_end INTEGER DEFAULT 0,
+                    trigger_job_states_json TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (job_id, hostname) REFERENCES cached_jobs(job_id, hostname)
                 )
@@ -259,6 +261,18 @@ class JobDataCache:
             try:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN timer_mode_active INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN trigger_on_job_end INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN trigger_job_states_json TEXT"
                 )
             except sqlite3.OperationalError:
                 pass  # Column already exists

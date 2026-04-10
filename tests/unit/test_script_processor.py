@@ -190,6 +190,26 @@ echo "test"
         assert len(watchers) == 1
         assert watchers[0].captures == ["loss", "accuracy"]
 
+    @pytest.mark.unit
+    def test_extract_job_end_watcher_without_pattern(self):
+        script = """#!/bin/bash
+#WATCHER_BEGIN
+# name: End Trigger
+# trigger_on_job_end: true
+# trigger_job_states: [completed, failed, timeout]
+# actions:
+#   - resubmit()
+#WATCHER_END
+echo "test"
+"""
+        watchers, clean_script = ScriptProcessor.extract_watchers(script)
+        assert len(watchers) == 1
+        assert watchers[0].pattern == ""
+        assert watchers[0].trigger_on_job_end is True
+        assert watchers[0].trigger_job_states == ["completed", "failed", "timeout"]
+        assert watchers[0].actions[0].type == ActionType.RESUBMIT
+        assert "#WATCHER_BEGIN" not in clean_script
+
 
 class TestParseActionString:
     """Tests for _parse_action_string method."""
@@ -293,6 +313,19 @@ class TestParseInlineWatcher:
         assert watcher is None
 
     @pytest.mark.unit
+    def test_parse_inline_watcher_with_job_end_trigger(self):
+        line = (
+            'name="End Trigger" trigger_on_job_end=true '
+            'trigger_job_states=[completed,failed,timeout] action=resubmit'
+        )
+        watcher = ScriptProcessor._parse_inline_watcher(line)
+        assert watcher is not None
+        assert watcher.pattern == ""
+        assert watcher.trigger_on_job_end is True
+        assert watcher.trigger_job_states == ["completed", "failed", "timeout"]
+        assert watcher.actions[0].type == ActionType.RESUBMIT
+
+    @pytest.mark.unit
     def test_parse_inline_watcher_adds_default_action(self):
         line = 'pattern="Error"'  # No action specified
         watcher = ScriptProcessor._parse_inline_watcher(line)
@@ -365,6 +398,21 @@ captures: ["loss", "accuracy"]
         watcher = ScriptProcessor._parse_watcher_block(block)
         assert watcher is not None
         assert watcher.captures == ["loss", "accuracy"]
+
+    @pytest.mark.unit
+    def test_parse_watcher_with_job_end_trigger(self):
+        block = """name: End Trigger
+trigger_on_job_end: true
+trigger_job_states: [completed, failed, timeout]
+actions:
+  - resubmit()
+"""
+        watcher = ScriptProcessor._parse_watcher_block(block)
+        assert watcher is not None
+        assert watcher.pattern == ""
+        assert watcher.trigger_on_job_end is True
+        assert watcher.trigger_job_states == ["completed", "failed", "timeout"]
+        assert watcher.actions[0].type == ActionType.RESUBMIT
 
     @pytest.mark.unit
     def test_parse_watcher_without_pattern_returns_none(self):
