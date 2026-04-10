@@ -53,6 +53,10 @@ class WatcherDefinition:
     output_type: str = "stdout"  # stdout, stderr, or both
     timer_mode_enabled: bool = False  # Switch to timer mode after first match
     timer_interval_seconds: int = 30  # Interval for timer mode execution
+    trigger_on_job_end: bool = False  # Execute actions once when the job finishes
+    trigger_job_states: List[str] = field(
+        default_factory=lambda: ["completed", "failed", "timeout"]
+    )
     is_array_template: bool = False  # Whether this is a template for array jobs
     array_spec: Optional[str] = None  # Original array spec (e.g., "0-5" or "1,3,5")
 

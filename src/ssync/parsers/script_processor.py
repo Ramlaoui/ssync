@@ -310,6 +310,29 @@ class ScriptProcessor:
                         watcher.timer_interval_seconds = int(value)
                     except ValueError:
                         pass
+                elif key == "trigger_on_job_end":
+                    watcher.trigger_on_job_end = value.lower() in [
+                        "true",
+                        "yes",
+                        "1",
+                        "on",
+                    ]
+                elif key == "trigger_job_states":
+                    if value.startswith("["):
+                        try:
+                            watcher.trigger_job_states = json.loads(value)
+                        except json.JSONDecodeError:
+                            watcher.trigger_job_states = [
+                                v.strip().strip("\"'")
+                                for v in value.strip("[]").split(",")
+                                if v.strip()
+                            ]
+                    else:
+                        watcher.trigger_job_states = [
+                            v.strip().strip("\"'")
+                            for v in value.split(",")
+                            if v.strip()
+                        ]
                 elif key == "action":
                     # Simple single action
                     action_type, params = ScriptProcessor._parse_action_string(value)
@@ -331,7 +354,7 @@ class ScriptProcessor:
 
         # Validate minimum requirements
         # Pattern is required, but actions can be empty (will be added later or use defaults)
-        if watcher.pattern:
+        if watcher.pattern or watcher.trigger_on_job_end:
             # If no actions specified, add a default log_event action
             if not watcher.actions:
                 watcher.actions.append(
@@ -383,10 +406,24 @@ class ScriptProcessor:
                 watcher.condition = value
             elif key == "name":
                 watcher.name = value
+            elif key == "trigger_on_job_end":
+                watcher.trigger_on_job_end = value.lower() in [
+                    "true",
+                    "yes",
+                    "1",
+                    "on",
+                ]
+            elif key == "trigger_job_states":
+                if value.startswith("[") and value.endswith("]"):
+                    watcher.trigger_job_states = [
+                        v.strip().strip("\"'")
+                        for v in value[1:-1].split(",")
+                        if v.strip()
+                    ]
 
         # Validate minimum requirements
         # Pattern is required, but actions can be empty (will be added later or use defaults)
-        if watcher.pattern:
+        if watcher.pattern or watcher.trigger_on_job_end:
             # If no actions specified, add a default log_event action
             if not watcher.actions:
                 watcher.actions.append(
