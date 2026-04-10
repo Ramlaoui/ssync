@@ -16,9 +16,7 @@ class TestSSHResult:
     @pytest.mark.unit
     def test_ssh_result_creation(self):
         """Test creating SSHResult."""
-        result = SSHResult(
-            success=True, stdout="output", stderr="", return_code=0
-        )
+        result = SSHResult(success=True, stdout="output", stderr="", return_code=0)
         assert result.success is True
         assert result.stdout == "output"
         assert result.stderr == ""
@@ -317,7 +315,9 @@ class TestConnectionManager:
     def test_host_to_config_ssh_alias_with_password(self):
         """Test converting Host to config when password is present."""
         manager = ConnectionManager()
-        host = Host(hostname="myhost", username="", use_ssh_config=True, password="secret")
+        host = Host(
+            hostname="myhost", username="", use_ssh_config=True, password="secret"
+        )
         config = manager._host_to_config(host)
         assert isinstance(config, dict)
         assert config["hostname"] == "myhost"
@@ -342,9 +342,7 @@ class TestConnectionManager:
         # Note: key_file gets processed in __post_init__ and converted to Path
         # Since Host is frozen, we can't test this directly without the actual file
         # Just test that config can be created with a host that would have key_file
-        host = Host(
-            hostname="example.com", username="testuser"
-        )
+        host = Host(hostname="example.com", username="testuser")
         config = manager._host_to_config(host)
 
         assert config["hostname"] == "example.com"
@@ -489,9 +487,7 @@ class TestPasswordAuthentication:
     def test_host_to_config_with_password(self):
         """Test converting Host with password to config."""
         manager = ConnectionManager()
-        host = Host(
-            hostname="example.com", username="testuser", password="secretpass"
-        )
+        host = Host(hostname="example.com", username="testuser", password="secretpass")
         config = manager._host_to_config(host)
 
         assert isinstance(config, dict)

@@ -39,7 +39,9 @@ def _make_slurm_host(hostname: str) -> SlurmHost:
     )
 
 
-def _make_job(job_id: str, hostname: str, state: JobState = JobState.RUNNING) -> JobInfo:
+def _make_job(
+    job_id: str, hostname: str, state: JobState = JobState.RUNNING
+) -> JobInfo:
     return JobInfo(
         job_id=job_id,
         name=f"job_{job_id}",
@@ -103,7 +105,9 @@ async def test_fetch_all_jobs_concurrent_requests_use_cache_for_second_request(
 
     monkeypatch.setattr(job_data_manager, "_fetch_host_jobs", fake_fetch_host_jobs)
 
-    first_request = asyncio.create_task(job_data_manager.fetch_all_jobs(hostname=hostname))
+    first_request = asyncio.create_task(
+        job_data_manager.fetch_all_jobs(hostname=hostname)
+    )
     await started.wait()
 
     # While first request is in-flight, second should avoid duplicate fetch and use cache.
@@ -149,7 +153,9 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_comp
 
     async def fail_if_busy_host_cache(*args, **kwargs):
         busy_cache_calls["count"] += 1
-        raise AssertionError("timed-out host should use failure backoff, not busy-host cache")
+        raise AssertionError(
+            "timed-out host should use failure backoff, not busy-host cache"
+        )
 
     monkeypatch.setattr(job_data_manager, "_fetch_host_jobs", slow_fetch_host_jobs)
     monkeypatch.setattr(
@@ -183,7 +189,9 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_comp
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fetch_all_jobs_skips_backed_off_host_and_uses_cache(monkeypatch, test_cache):
+async def test_fetch_all_jobs_skips_backed_off_host_and_uses_cache(
+    monkeypatch, test_cache
+):
     hostname = "cluster-backoff.example.com"
     slurm_host = _make_slurm_host(hostname)
     manager = _FakeManager([slurm_host])
@@ -215,7 +223,9 @@ async def test_fetch_all_jobs_skips_backed_off_host_and_uses_cache(monkeypatch, 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fetch_all_jobs_uses_live_fetch_after_backoff_expires(monkeypatch, test_cache):
+async def test_fetch_all_jobs_uses_live_fetch_after_backoff_expires(
+    monkeypatch, test_cache
+):
     hostname = "cluster-backoff-expired.example.com"
     slurm_host = _make_slurm_host(hostname)
     manager = _FakeManager([slurm_host])

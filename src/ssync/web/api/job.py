@@ -74,7 +74,9 @@ def register_job_routes(
             raise
         except Exception as e:
             logger.error(f"Error in get_complete_job_data: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error occurred")
+            raise HTTPException(
+                status_code=500, detail="Internal server error occurred"
+            )
 
     @app.get("/api/jobs/{job_id}", response_model=JobInfoWeb)
     async def get_job_details(
@@ -166,7 +168,9 @@ def register_job_routes(
             raise
         except Exception as e:
             logger.error(f"Error in get_job_details: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error occurred")
+            raise HTTPException(
+                status_code=500, detail="Internal server error occurred"
+            )
 
     @app.get("/api/jobs/{job_id}/output/stream")
     async def stream_job_output(
@@ -213,7 +217,9 @@ def register_job_routes(
     async def get_job_output(
         job_id: str,
         host: Optional[str] = Query(None, description="Specific host to search"),
-        lines: Optional[int] = Query(None, description="Number of lines to return (tail)"),
+        lines: Optional[int] = Query(
+            None, description="Number of lines to return (tail)"
+        ),
         metadata_only: bool = Query(
             False, description="Return only metadata about output files, not content"
         ),
@@ -259,8 +265,7 @@ def register_job_routes(
             elif "timeout" in error_msg.lower():
                 detail = f"Operation timed out while fetching output: {error_msg}"
             elif (
-                "not found" in error_msg.lower()
-                or "no such file" in error_msg.lower()
+                "not found" in error_msg.lower() or "no such file" in error_msg.lower()
             ):
                 detail = f"Output file not found: {error_msg}"
             else:
@@ -288,4 +293,6 @@ def register_job_routes(
             raise
         except Exception as e:
             logger.error(f"Error in get_job_script: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error occurred")
+            raise HTTPException(
+                status_code=500, detail="Internal server error occurred"
+            )

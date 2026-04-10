@@ -39,9 +39,7 @@ class TestCacheInitialization:
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
 
         with cache._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = {row["name"] for row in cursor.fetchall()}
 
         expected_tables = {
@@ -591,9 +589,15 @@ class TestJobStateManagement:
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
 
         jobs = [
-            JobInfo(job_id="1", name="job_1", state=JobState.RUNNING, hostname="host.a"),
-            JobInfo(job_id="2", name="job_2", state=JobState.RUNNING, hostname="host.a"),
-            JobInfo(job_id="3", name="job_3", state=JobState.RUNNING, hostname="host.b"),
+            JobInfo(
+                job_id="1", name="job_1", state=JobState.RUNNING, hostname="host.a"
+            ),
+            JobInfo(
+                job_id="2", name="job_2", state=JobState.RUNNING, hostname="host.a"
+            ),
+            JobInfo(
+                job_id="3", name="job_3", state=JobState.RUNNING, hostname="host.b"
+            ),
         ]
         for job in jobs:
             cache.cache_job(job)
@@ -1094,7 +1098,9 @@ class TestEdgeCases:
             except Exception as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=cache_job_thread, args=(i,)) for i in range(10)]
+        threads = [
+            threading.Thread(target=cache_job_thread, args=(i,)) for i in range(10)
+        ]
 
         for t in threads:
             t.start()
@@ -1192,7 +1198,9 @@ class TestDateRangeCaching:
         cache.close()
 
     @pytest.mark.unit
-    @pytest.mark.skip(reason="Date range comparison has timing precision issues - needs investigation")
+    @pytest.mark.skip(
+        reason="Date range comparison has timing precision issues - needs investigation"
+    )
     def test_cache_date_range_query(self, tmp_path):
         """Test caching a date range query."""
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
@@ -1201,7 +1209,9 @@ class TestDateRangeCaching:
         job_ids = ["1", "2", "3"]
 
         # Use a longer time range to avoid timestamp precision issues
-        cache.cache_date_range_query("test.host", filters, "7d", job_ids, ttl_seconds=3600)
+        cache.cache_date_range_query(
+            "test.host", filters, "7d", job_ids, ttl_seconds=3600
+        )
 
         # Should be able to retrieve it
         cached_ids = cache.check_date_range_cache("test.host", filters, "7d")
@@ -1234,7 +1244,9 @@ class TestDateRangeCaching:
         cache.close()
 
     @pytest.mark.unit
-    @pytest.mark.skip(reason="Date range comparison has timing precision issues - needs investigation")
+    @pytest.mark.skip(
+        reason="Date range comparison has timing precision issues - needs investigation"
+    )
     def test_date_range_cache_hit_increments_count(self, tmp_path):
         """Test that cache hits increment the hit count."""
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
@@ -1243,7 +1255,9 @@ class TestDateRangeCaching:
         job_ids = ["1", "2", "3"]
 
         # Use longer time range for stability
-        cache.cache_date_range_query("test.host", filters, "7d", job_ids, ttl_seconds=3600)
+        cache.cache_date_range_query(
+            "test.host", filters, "7d", job_ids, ttl_seconds=3600
+        )
 
         # Hit the cache twice
         result1 = cache.check_date_range_cache("test.host", filters, "7d")
@@ -1272,6 +1286,7 @@ class TestDateRangeCaching:
 
         # Wait briefly and cleanup
         import time
+
         time.sleep(0.1)
         deleted = cache.cleanup_expired_ranges()
 

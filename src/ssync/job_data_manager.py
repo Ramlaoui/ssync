@@ -102,10 +102,12 @@ class JobDataManager:
         self._host_failure_lock = asyncio.Lock()
         # Deduplicate concurrent SSH output fetches for the same (job_id, host).
         # Maps key -> asyncio.Future with the result of the in-flight fetch.
-        self._output_fetch_futures: Dict[str, "asyncio.Future[tuple[Optional[str], Optional[str]]]"] = {}
-        self._profile_timings_enabled = (
-            os.getenv("SSYNC_PROFILE_TIMINGS", "0").lower() in {"1", "true", "yes"}
-        )
+        self._output_fetch_futures: Dict[
+            str, "asyncio.Future[tuple[Optional[str], Optional[str]]]"
+        ] = {}
+        self._profile_timings_enabled = os.getenv(
+            "SSYNC_PROFILE_TIMINGS", "0"
+        ).lower() in {"1", "true", "yes"}
         self._profile_request_counter = 0
         # Freshly launched jobs can take a short time to appear in squeue.
         # Keep recently cached active jobs visible during that window.
@@ -291,7 +293,9 @@ class JobDataManager:
                     ]
                 elif limit:
                     cached_job_data = self.cache.get_cached_jobs(limit=limit)
-                    cached_jobs = [cjd.job_info for cjd in cached_job_data if cjd.job_info]
+                    cached_jobs = [
+                        cjd.job_info for cjd in cached_job_data if cjd.job_info
+                    ]
                 else:
                     if busy_hosts:
                         busy_results = await asyncio.gather(
@@ -420,9 +424,7 @@ class JobDataManager:
                         f"Host {host_name} exceeded fetch timeout ({self._host_fetch_timeout_seconds:.1f}s); "
                         "returning cached data for this cycle"
                     )
-                    await self._mark_host_fetch_failure(
-                        host_name, "request timeout"
-                    )
+                    await self._mark_host_fetch_failure(host_name, "request timeout")
                     all_jobs.extend(
                         self._get_cached_jobs_for_host(host_name, job_ids, limit)
                     )
@@ -603,7 +605,9 @@ class JobDataManager:
             cached_job_data = self.cache.get_cached_jobs_by_ids(job_ids, host_name)
             return [cjd.job_info for cjd in cached_job_data.values() if cjd.job_info]
 
-        cached_job_data = self.cache.get_cached_jobs(hostname=host_name, limit=limit or 1000)
+        cached_job_data = self.cache.get_cached_jobs(
+            hostname=host_name, limit=limit or 1000
+        )
         return [cjd.job_info for cjd in cached_job_data if cjd.job_info]
 
     async def _wait_for_host_idle(self, host_name: str, timeout_seconds: float) -> None:
@@ -685,7 +689,9 @@ class JobDataManager:
 
         def mark_host_timing(name: str, section_start: float) -> None:
             if profile_enabled:
-                host_profile_timings[name] = (time.perf_counter() - section_start) * 1000
+                host_profile_timings[name] = (
+                    time.perf_counter() - section_start
+                ) * 1000
 
         logger.info(
             f"_fetch_host_jobs called for {hostname} with limit={limit}, job_ids={job_ids}"
@@ -944,8 +950,10 @@ class JobDataManager:
             # jobs so the UI can surface them before Slurm propagation catches up.
             if not completed_only:
                 section_start = time.perf_counter()
-                recent_cached_active_jobs = self._get_recent_cached_active_jobs_for_host(
-                    hostname, effective_user, limit
+                recent_cached_active_jobs = (
+                    self._get_recent_cached_active_jobs_for_host(
+                        hostname, effective_user, limit
+                    )
                 )
                 jobs = self._merge_with_cached_jobs(jobs, recent_cached_active_jobs)
                 mark_host_timing("merge_recent_cached_active", section_start)
@@ -1178,7 +1186,9 @@ class JobDataManager:
                 )
                 return await existing
 
-            future: "asyncio.Future[tuple[Optional[str], Optional[str]]]" = asyncio.get_running_loop().create_future()
+            future: "asyncio.Future[tuple[Optional[str], Optional[str]]]" = (
+                asyncio.get_running_loop().create_future()
+            )
             self._output_fetch_futures[dedup_key] = future
             try:
                 result = await self._do_fetch_outputs(job_info, force_fetch=False)

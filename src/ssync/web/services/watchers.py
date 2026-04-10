@@ -400,9 +400,7 @@ def get_watcher_events_payload(
                     "hostname": row["hostname"],
                     "timestamp": row["timestamp"],
                     "matched_text": row["matched_text"],
-                    "captured_vars": parse_json_field(
-                        row["captured_vars_json"], {}
-                    ),
+                    "captured_vars": parse_json_field(row["captured_vars_json"], {}),
                     "action_type": row["action_type"],
                     "action_result": row["action_result"],
                     "success": bool(row["success"]),
@@ -487,9 +485,7 @@ def get_watcher_stats_payload(*, cache) -> Dict[str, Any]:
     }
 
 
-async def cleanup_orphaned_watchers_payload(
-    *, cache, dry_run: bool
-) -> Dict[str, Any]:
+async def cleanup_orphaned_watchers_payload(*, cache, dry_run: bool) -> Dict[str, Any]:
     from ...watchers import get_watcher_engine
 
     engine = get_watcher_engine()
@@ -783,9 +779,7 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
         return format_watcher_row(dict(created_row))
 
 
-def build_watcher_definitions(
-    *, watchers: List[Dict[str, Any]], job_id: str
-):
+def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
     from ...models.watcher import ActionType, WatcherAction, WatcherDefinition
 
     watcher_defs = []
@@ -822,9 +816,7 @@ def build_watcher_definitions(
                 actions=actions,
                 max_triggers=watcher_definition.get("max_triggers", 10),
                 output_type=watcher_definition.get("output_type", "stdout"),
-                timer_mode_enabled=watcher_definition.get(
-                    "timer_mode_enabled", False
-                ),
+                timer_mode_enabled=watcher_definition.get("timer_mode_enabled", False),
                 timer_interval_seconds=watcher_definition.get(
                     "timer_interval_seconds", 60
                 ),

@@ -224,9 +224,7 @@ class ActionExecutor:
             # Interpolate captured variables into the script body
             # Supports ${var} and ${var:-default} syntax
             all_vars = {"JOB_ID": job_id, "HOSTNAME": hostname, **(variables or {})}
-            logger.info(
-                f"Interpolating variables into script: {all_vars}"
-            )
+            logger.info(f"Interpolating variables into script: {all_vars}")
             for var_name, var_value in all_vars.items():
                 if var_name.startswith("_") or var_name.isdigit():
                     continue
@@ -240,6 +238,7 @@ class ActionExecutor:
                     + r"((?:[^{}]|\$\{[^}]*\})*)"
                     + re.escape("}")
                 )
+
                 def _expand_conditional(m: re.Match) -> str:
                     word = m.group(1)
                     # Expand ${var} references within the word
@@ -247,6 +246,7 @@ class ActionExecutor:
                         if not vn.startswith("_") and not vn.isdigit():
                             word = word.replace(f"${{{vn}}}", str(vv))
                     return word
+
                 before = script_content
                 script_content = cond_pattern.sub(_expand_conditional, script_content)
                 if script_content != before:

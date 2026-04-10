@@ -92,7 +92,9 @@ def register_launch_routes(
             )
 
             launch_id = uuid.uuid4().hex[:12]
-            launch_emitter = launch_event_manager.create_emitter(launch_id, request.host)
+            launch_emitter = launch_event_manager.create_emitter(
+                launch_id, request.host
+            )
             launch_emitter.stage(
                 "accepted",
                 message="Launch accepted. Waiting for background execution.",
@@ -135,14 +137,16 @@ def register_launch_routes(
                             logger.warning(f"Failed to cache script: {e}")
 
                         try:
-                            pending_job_info, previous_state = cache_job_state_transition(
-                                job.job_id,
-                                host,
-                                JobState.PENDING,
-                                job_name=job_name,
-                                array_submission=looks_like_array_submission(
-                                    script_content
-                                ),
+                            pending_job_info, previous_state = (
+                                cache_job_state_transition(
+                                    job.job_id,
+                                    host,
+                                    JobState.PENDING,
+                                    job_name=job_name,
+                                    array_submission=looks_like_array_submission(
+                                        script_content
+                                    ),
+                                )
                             )
                             await broadcast_job_state(pending_job_info, previous_state)
                         except Exception as e:
@@ -227,7 +231,10 @@ def register_launch_routes(
                     status_code=504,
                     detail=f"Operation timed out: {error_message}. The cluster may be overloaded or unresponsive.",
                 )
-            if "sbatch" in error_message.lower() and "not found" in error_message.lower():
+            if (
+                "sbatch" in error_message.lower()
+                and "not found" in error_message.lower()
+            ):
                 raise HTTPException(
                     status_code=503,
                     detail="Slurm commands not available on the cluster. Verify Slurm is installed and accessible.",
@@ -319,11 +326,13 @@ def register_launch_routes(
                             f"Cancelled job {job_id} on {slurm_host.host.hostname}"
                         )
                         try:
-                            cancelled_job_info, previous_state = cache_job_state_transition(
-                                job_id,
-                                slurm_host.host.hostname,
-                                JobState.CANCELLED,
-                                reason="Cancelled via API",
+                            cancelled_job_info, previous_state = (
+                                cache_job_state_transition(
+                                    job_id,
+                                    slurm_host.host.hostname,
+                                    JobState.CANCELLED,
+                                    reason="Cancelled via API",
+                                )
                             )
                             await broadcast_job_state(
                                 cancelled_job_info, previous_state

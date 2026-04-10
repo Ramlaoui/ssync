@@ -126,8 +126,12 @@ def register_notification_routes(
     ):
         """Update notification preferences for the current API key."""
         cache = get_cache()
-        current = cache.get_notification_preferences(api_key_hash=_api_key_hash(api_key))
-        updates = sanitize_notification_preferences(payload.model_dump(exclude_unset=True))
+        current = cache.get_notification_preferences(
+            api_key_hash=_api_key_hash(api_key)
+        )
+        updates = sanitize_notification_preferences(
+            payload.model_dump(exclude_unset=True)
+        )
 
         merged = {**current, **updates}
         cache.upsert_notification_preferences(

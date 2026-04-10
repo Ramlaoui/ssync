@@ -258,7 +258,9 @@ class SyncCommand(BaseCommand):
 class LaunchCommand(BaseCommand):
     """Handles the launch command logic via API."""
 
-    def _follow_launch(self, api_client: APIClient, launch_id: str) -> tuple[bool, Optional[str], str]:
+    def _follow_launch(
+        self, api_client: APIClient, launch_id: str
+    ) -> tuple[bool, Optional[str], str]:
         last_stage = None
         last_message = ""
         final_job_id = None
@@ -483,9 +485,7 @@ class CopyOutputCommand(BaseCommand):
 
             destination = destination.expanduser()
             if destination.exists() and not destination.is_dir():
-                click.echo(
-                    f"Destination must be a directory: {destination}", err=True
-                )
+                click.echo(f"Destination must be a directory: {destination}", err=True)
                 return False
 
             downloads = []

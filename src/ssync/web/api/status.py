@@ -30,7 +30,9 @@ def register_status_routes(
     """Register job status and cache maintenance routes."""
 
     @app.get("/api/cache/stats")
-    async def get_cache_stats(_authenticated: bool = Depends(verify_api_key_dependency)):
+    async def get_cache_stats(
+        _authenticated: bool = Depends(verify_api_key_dependency),
+    ):
         """Get cache statistics including date range cache information."""
         try:
             stats = await cache_middleware.get_cache_stats()
@@ -89,7 +91,9 @@ def register_status_routes(
         ),
         active_only: bool = Query(False, description="Show only running/pending jobs"),
         completed_only: bool = Query(False, description="Show only completed jobs"),
-        search: Optional[str] = Query(None, description="Search for jobs by name or ID"),
+        search: Optional[str] = Query(
+            None, description="Search for jobs by name or ID"
+        ),
         group_array_jobs: bool = Query(
             False, description="Group array job tasks together"
         ),
@@ -152,7 +156,11 @@ def register_status_routes(
             manager = get_slurm_manager()
             slurm_hosts = manager.slurm_hosts
             if host:
-                slurm_hosts = [slurm_host for slurm_host in slurm_hosts if slurm_host.host.hostname == host]
+                slurm_hosts = [
+                    slurm_host
+                    for slurm_host in slurm_hosts
+                    if slurm_host.host.hostname == host
+                ]
                 if not slurm_hosts:
                     raise HTTPException(status_code=404, detail="Host not found")
 
@@ -191,9 +199,7 @@ def register_status_routes(
                             JobInfoWeb.from_job_info(job)
                             for job in jobs_by_host[hostname]
                         ]
-                        jobs_by_host[hostname] = filter_jobs_by_search(
-                            web_jobs, search
-                        )
+                        jobs_by_host[hostname] = filter_jobs_by_search(web_jobs, search)
 
                     results = []
                     for slurm_host in slurm_hosts:
@@ -305,4 +311,6 @@ def register_status_routes(
 
             logger.error(f"Error in get_job_status: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail="Internal server error occurred")
+            raise HTTPException(
+                status_code=500, detail="Internal server error occurred"
+            )

@@ -232,7 +232,9 @@ async def websocket_job_handler(
                         hostname=host, job_ids=job_ids, limit=len(job_ids)
                     )
 
-                job_info = await coalescer.fetch_job(actual_job_id, hostname, fetch_batch)
+                job_info = await coalescer.fetch_job(
+                    actual_job_id, hostname, fetch_batch
+                )
             else:
                 all_jobs = await job_data_manager.fetch_all_jobs(
                     hostname=None, job_ids=[actual_job_id], limit=1

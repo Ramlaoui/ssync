@@ -66,7 +66,9 @@ class CustomTrustedHostMiddleware(BaseHTTPMiddleware):
 def configure_security_middleware(app, logger) -> None:
     """Register trusted host, CORS, and rate limiting middleware."""
     trusted_hosts_env = os.getenv("SSYNC_TRUSTED_HOSTS", "localhost,127.0.0.1")
-    trusted_hosts_list = [host.strip() for host in trusted_hosts_env.split(",") if host.strip()]
+    trusted_hosts_list = [
+        host.strip() for host in trusted_hosts_env.split(",") if host.strip()
+    ]
 
     valid_patterns = []
     ip_patterns = []
@@ -118,7 +120,9 @@ def configure_security_middleware(app, logger) -> None:
     app.add_middleware(RateLimitMiddleware)
 
 
-def create_auth_dependencies(*, api_key_manager, api_key_header, require_api_key, logger):
+def create_auth_dependencies(
+    *, api_key_manager, api_key_header, require_api_key, logger
+):
     """Create request and websocket auth dependency functions."""
 
     async def verify_api_key(
@@ -203,4 +207,9 @@ def create_auth_dependencies(*, api_key_manager, api_key_header, require_api_key
         logger.info(f"WebSocket auth successful for {websocket.url.path}")
         return True
 
-    return verify_api_key, get_api_key, verify_api_key_flexible, verify_websocket_api_key
+    return (
+        verify_api_key,
+        get_api_key,
+        verify_api_key_flexible,
+        verify_websocket_api_key,
+    )

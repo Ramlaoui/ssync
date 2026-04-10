@@ -94,7 +94,9 @@ def register_lifecycle_events(
         configure_logging(memory=True)
         await launch_event_manager.start()
 
-        logger.info(f"Starting Slurm Manager API with {thread_pool_size} worker threads")
+        logger.info(
+            f"Starting Slurm Manager API with {thread_pool_size} worker threads"
+        )
         _ = get_slurm_manager()
         logger.info("Secure API started, manager initialized")
 

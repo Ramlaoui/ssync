@@ -684,7 +684,9 @@ async def get_job_output_response(
                     metadata_only=metadata_only,
                 )
 
-        cached_job = cache_middleware.cache.get_cached_job(job_id, host) if host else None
+        cached_job = (
+            cache_middleware.cache.get_cached_job(job_id, host) if host else None
+        )
         if not cached_job and not host:
             manager = get_slurm_manager()
             for slurm_host in manager.slurm_hosts:
@@ -932,8 +934,7 @@ async def get_job_script_payload(
         cached_script = await cache_middleware.get_cached_job_script(job_id, None)
         if cached_script:
             logger.info(
-                f"Returning cached script for job {job_id} "
-                "(found without host filter)"
+                f"Returning cached script for job {job_id} (found without host filter)"
             )
             return cached_script
 
@@ -955,7 +956,9 @@ async def refresh_job_in_background(
         manager = get_slurm_manager()
         slurm_hosts = manager.slurm_hosts
         if host:
-            slurm_hosts = [entry for entry in slurm_hosts if entry.host.hostname == host]
+            slurm_hosts = [
+                entry for entry in slurm_hosts if entry.host.hostname == host
+            ]
 
         for slurm_host in slurm_hosts:
             try:

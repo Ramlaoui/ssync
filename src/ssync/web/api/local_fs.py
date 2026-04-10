@@ -47,7 +47,8 @@ def register_local_fs_routes(app: FastAPI, *, verify_api_key_dependency) -> None
         entries = []
         try:
             for child in sorted(
-                base.iterdir(), key=lambda candidate: (not candidate.is_dir(), candidate.name.lower())
+                base.iterdir(),
+                key=lambda candidate: (not candidate.is_dir(), candidate.name.lower()),
             ):
                 if not show_hidden and child.name.startswith("."):
                     continue

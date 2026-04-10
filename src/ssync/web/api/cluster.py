@@ -68,7 +68,9 @@ def register_cluster_routes(
                     if slurm_host.host.hostname == host
                 ]
                 if not hosts_to_check:
-                    raise HTTPException(status_code=404, detail=f"Host '{host}' not found")
+                    raise HTTPException(
+                        status_code=404, detail=f"Host '{host}' not found"
+                    )
             else:
                 hosts_to_check = manager.slurm_hosts
 
@@ -107,7 +109,9 @@ def register_cluster_routes(
             raise
         except Exception as e:
             logger.error(f"Error getting fetch state: {e}")
-            raise HTTPException(status_code=500, detail="Failed to retrieve fetch state")
+            raise HTTPException(
+                status_code=500, detail="Failed to retrieve fetch state"
+            )
 
     @app.get("/api/hosts", response_model=List[HostInfoWeb])
     async def get_hosts(_authenticated: bool = Depends(verify_api_key_dependency)):

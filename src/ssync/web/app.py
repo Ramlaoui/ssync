@@ -211,6 +211,7 @@ async def websocket_watchers(websocket: WebSocket):
         verify_websocket_api_key=verify_websocket_api_key,
     )
 
+
 def main():
     """Run the secure web server."""
     import uvicorn

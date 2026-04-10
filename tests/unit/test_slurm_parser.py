@@ -226,10 +226,28 @@ class TestFromSqueuFields:
     def test_parse_basic_squeue_fields(self):
 
         # Create fields matching SQUEUE_FIELDS order
-        fields = ["12345", "test_job", "RUNNING", "testuser", "gpu", "1", "4", "8G",
-                  "01:00:00", "00:15:30", "", "/home/testuser/work",
-                  "slurm-12345.out", "slurm-12345.err", "2024-01-15T10:30:00",
-                  "2024-01-15T10:30:05", "default", "normal", "1000", "node001"]
+        fields = [
+            "12345",
+            "test_job",
+            "RUNNING",
+            "testuser",
+            "gpu",
+            "1",
+            "4",
+            "8G",
+            "01:00:00",
+            "00:15:30",
+            "",
+            "/home/testuser/work",
+            "slurm-12345.out",
+            "slurm-12345.err",
+            "2024-01-15T10:30:00",
+            "2024-01-15T10:30:05",
+            "default",
+            "normal",
+            "1000",
+            "node001",
+        ]
 
         job_info = SlurmParser.from_squeue_fields(fields, "cluster.example.com")
 
@@ -274,9 +292,22 @@ class TestFromSqueuFields:
     @pytest.mark.unit
     def test_parse_squeue_expands_path_variables(self):
 
-        fields = ["12345", "test_job", "RUNNING", "testuser", "gpu", "1", "4", "8G",
-                  "01:00:00", "00:15:30", "", "/home/testuser/work",
-                  "output-%j.log", "error-%j.log"]
+        fields = [
+            "12345",
+            "test_job",
+            "RUNNING",
+            "testuser",
+            "gpu",
+            "1",
+            "4",
+            "8G",
+            "01:00:00",
+            "00:15:30",
+            "",
+            "/home/testuser/work",
+            "output-%j.log",
+            "error-%j.log",
+        ]
 
         job_info = SlurmParser.from_squeue_fields(fields, "cluster.example.com")
 
@@ -290,11 +321,30 @@ class TestFromSacctFields:
     @pytest.mark.unit
     def test_parse_basic_sacct_fields(self):
 
-        fields = ["12345", "test_job", "COMPLETED", "testuser", "gpu", "1", "4",
-                  "8G", "01:00:00", "00:45:30", "", "/home/testuser/work",
-                  "slurm-12345.out", "slurm-12345.err", "2024-01-15T10:30:00",
-                  "2024-01-15T10:30:05", "2024-01-15T11:15:35", "node001",
-                  "0:0", "default", "normal", "1000"]
+        fields = [
+            "12345",
+            "test_job",
+            "COMPLETED",
+            "testuser",
+            "gpu",
+            "1",
+            "4",
+            "8G",
+            "01:00:00",
+            "00:45:30",
+            "",
+            "/home/testuser/work",
+            "slurm-12345.out",
+            "slurm-12345.err",
+            "2024-01-15T10:30:00",
+            "2024-01-15T10:30:05",
+            "2024-01-15T11:15:35",
+            "node001",
+            "0:0",
+            "default",
+            "normal",
+            "1000",
+        ]
 
         job_info = SlurmParser.from_sacct_fields(fields, "cluster.example.com")
 
@@ -309,8 +359,24 @@ class TestFromSacctFields:
 
         # Fields must match SACCT_FIELDS order: JobID, JobName, State, User, Partition, AllocNodes,
         # AllocCPUS, ReqMem, Timelimit, Elapsed, Submit, Start, End, WorkDir, NodeList, Reason...
-        fields = ["12346", "failed_job", "FAILED", "testuser", "cpu", "1", "2",
-                  "4G", "00:30:00", "00:05:00", "", "", "", "", "", "NonZeroExitCode"]
+        fields = [
+            "12346",
+            "failed_job",
+            "FAILED",
+            "testuser",
+            "cpu",
+            "1",
+            "2",
+            "4G",
+            "00:30:00",
+            "00:05:00",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "NonZeroExitCode",
+        ]
 
         job_info = SlurmParser.from_sacct_fields(fields, "cluster.example.com")
 
@@ -356,14 +422,40 @@ class TestFromSacctFields:
     def test_parse_sacct_expands_path_variables(self):
 
         # Use custom field names to properly map StdOut and StdErr fields
-        custom_fields = ["JobID", "JobName", "State", "User", "Partition", "AllocNodes",
-                         "AllocCPUS", "ReqMem", "Timelimit", "Elapsed", "WorkDir",
-                         "StdOut", "StdErr"]
-        fields = ["12345", "test_job", "COMPLETED", "testuser", "gpu", "1", "4",
-                  "8G", "01:00:00", "00:45:30", "/home/testuser/work",
-                  "/home/%u/output-%j.log", "/home/%u/error-%j.log"]
+        custom_fields = [
+            "JobID",
+            "JobName",
+            "State",
+            "User",
+            "Partition",
+            "AllocNodes",
+            "AllocCPUS",
+            "ReqMem",
+            "Timelimit",
+            "Elapsed",
+            "WorkDir",
+            "StdOut",
+            "StdErr",
+        ]
+        fields = [
+            "12345",
+            "test_job",
+            "COMPLETED",
+            "testuser",
+            "gpu",
+            "1",
+            "4",
+            "8G",
+            "01:00:00",
+            "00:45:30",
+            "/home/testuser/work",
+            "/home/%u/output-%j.log",
+            "/home/%u/error-%j.log",
+        ]
 
-        job_info = SlurmParser.from_sacct_fields(fields, "cluster.example.com", field_names=custom_fields)
+        job_info = SlurmParser.from_sacct_fields(
+            fields, "cluster.example.com", field_names=custom_fields
+        )
 
         assert job_info.stdout_file == "/home/testuser/output-12345.log"
         assert job_info.stderr_file == "/home/testuser/error-12345.log"
@@ -400,10 +492,28 @@ class TestEdgeCases:
     def test_handle_very_long_node_list(self):
         # Simulate a job running on many nodes
         long_node_list = ",".join([f"node{i:04d}" for i in range(1000)])
-        fields = ["12345", "big_job", "RUNNING", "testuser", "cpu", "1000", "4000",
-                  "1000G", "24:00:00", "01:00:00", "", "/work", "out.log", "err.log",
-                  "2024-01-15T10:00:00", "2024-01-15T10:00:05", "default", "normal",
-                  "1000", long_node_list]
+        fields = [
+            "12345",
+            "big_job",
+            "RUNNING",
+            "testuser",
+            "cpu",
+            "1000",
+            "4000",
+            "1000G",
+            "24:00:00",
+            "01:00:00",
+            "",
+            "/work",
+            "out.log",
+            "err.log",
+            "2024-01-15T10:00:00",
+            "2024-01-15T10:00:05",
+            "default",
+            "normal",
+            "1000",
+            long_node_list,
+        ]
 
         job_info = SlurmParser.from_squeue_fields(fields, "cluster.example.com")
 

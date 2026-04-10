@@ -207,11 +207,7 @@ class APIClient:
         disposition = response.headers.get("Content-Disposition", "")
         match = re.search(r'filename="?([^";]+)"?', disposition)
         suffix = ".log.gz" if compressed else ".log"
-        filename = (
-            match.group(1)
-            if match
-            else f"job_{job_id}_{output_type}{suffix}"
-        )
+        filename = match.group(1) if match else f"job_{job_id}_{output_type}{suffix}"
         return filename, response.content
 
     def get_job_output(
@@ -492,7 +488,12 @@ class APIClient:
                         error_msg += f" - {response.text[:200]}"
                 # Don't log here to avoid duplication - let the caller handle display
                 logger.debug(f"API request failed: {error_msg}")
-                return {"success": False, "job_id": None, "launch_id": None, "message": error_msg}
+                return {
+                    "success": False,
+                    "job_id": None,
+                    "launch_id": None,
+                    "message": error_msg,
+                }
 
             return response.json()
 

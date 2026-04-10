@@ -245,7 +245,9 @@ async def monitor_all_jobs_singleton(
                 current_time = asyncio.get_event_loop().time()
                 time_since_full = current_time - last_full_update
                 if time_since_full >= full_interval:
-                    logger.debug("Performing full job update (active + recent completed)")
+                    logger.debug(
+                        "Performing full job update (active + recent completed)"
+                    )
                     all_jobs = await job_data_manager.fetch_all_jobs(
                         hostname=None,
                         limit=active_fetch_limit,

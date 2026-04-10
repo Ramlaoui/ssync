@@ -240,7 +240,9 @@ class CacheVerificationService:
                 f"Giving up on job {job_id} after {attempts} failed sacct attempts "
                 f"({time_elapsed:.0f}s elapsed). Marking as completed with UNKNOWN state."
             )
-            cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+            cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(
+                job_id
+            )
             if cached_job and cached_job.job_info:
                 from ...models.job import JobState
 

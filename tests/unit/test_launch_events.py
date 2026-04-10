@@ -107,7 +107,11 @@ def test_launch_command_follows_async_launch(monkeypatch, tmp_path):
             raise AssertionError("status fallback should not be used")
 
     monkeypatch.setattr(commands, "APIClient", _FakeAPIClient)
-    monkeypatch.setattr(commands.click, "echo", lambda message="", err=False: outputs.append((message, err)))
+    monkeypatch.setattr(
+        commands.click,
+        "echo",
+        lambda message="", err=False: outputs.append((message, err)),
+    )
 
     command = commands.LaunchCommand(
         config_path=Path("/tmp/ssync-config.yaml"),

@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from ssync.web.cache_middleware import CacheMiddleware
 
 from ssync.models.cluster import Host, SlurmHost
 from ssync.models.job import JobInfo, JobState
 from ssync.web import app as web_app
-from ssync.web.cache_middleware import CacheMiddleware
 
 
 def _make_slurm_host(hostname: str) -> SlurmHost:
@@ -230,7 +230,9 @@ async def test_verify_active_snapshot_cache_includes_hosts_without_jobs(monkeypa
 
 
 @pytest.mark.unit
-def test_cache_job_state_marks_array_submission_parent_placeholder(monkeypatch, test_cache):
+def test_cache_job_state_marks_array_submission_parent_placeholder(
+    monkeypatch, test_cache
+):
     monkeypatch.setattr(web_app._cache_middleware, "cache", test_cache)
 
     job_info, previous_state = web_app._cache_job_state(
@@ -348,9 +350,13 @@ async def test_fetch_completed_job_updates_batches_requests_by_host():
     calls = []
 
     class _FakeJobDataManager:
-        async def fetch_all_jobs(self, hostname=None, job_ids=None, limit=None, **kwargs):
+        async def fetch_all_jobs(
+            self, hostname=None, job_ids=None, limit=None, **kwargs
+        ):
             calls.append((hostname, tuple(job_ids or ()), limit))
-            return [_make_job(job_id, hostname, JobState.COMPLETED) for job_id in job_ids]
+            return [
+                _make_job(job_id, hostname, JobState.COMPLETED) for job_id in job_ids
+            ]
 
     updates = await web_app._fetch_completed_job_updates(
         _FakeJobDataManager(),
@@ -380,9 +386,7 @@ async def test_broadcast_json_to_websockets_returns_failed_clients(monkeypatch):
     failing = _FakeWebSocket(fail=True)
     message = {"type": "batch_update", "updates": []}
 
-    disconnected = await web_app._broadcast_json_to_websockets(
-        [ok, failing], message
-    )
+    disconnected = await web_app._broadcast_json_to_websockets([ok, failing], message)
 
     assert disconnected == {failing}
     assert ok.messages == [message]

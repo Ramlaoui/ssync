@@ -199,7 +199,9 @@ class PartitionDisplay:
 
             header = f"\n=== {hostname} ==="
             if cached:
-                cached_note = f"cached {cache_age}s" if cache_age is not None else "cached"
+                cached_note = (
+                    f"cached {cache_age}s" if cache_age is not None else "cached"
+                )
                 if stale:
                     cached_note += " (stale)"
                 header += f" [{cached_note}]"

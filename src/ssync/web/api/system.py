@@ -27,7 +27,9 @@ def register_system_routes(
         return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
     @app.post("/api/shutdown")
-    async def shutdown_server(_authenticated: bool = Depends(verify_api_key_dependency)):
+    async def shutdown_server(
+        _authenticated: bool = Depends(verify_api_key_dependency),
+    ):
         """Shutdown the API server gracefully."""
         logger.info("Shutdown requested via API")
 
@@ -77,7 +79,9 @@ def register_system_routes(
             }
         except Exception as e:
             logger.error(f"Error getting connection stats: {e}")
-            raise HTTPException(status_code=500, detail="Failed to get connection stats")
+            raise HTTPException(
+                status_code=500, detail="Failed to get connection stats"
+            )
 
     @app.post("/api/connections/refresh")
     async def refresh_connections(

@@ -4,9 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
 
-def _normalize_used_count(
-    used_raw: int, per_node: int, nodes: int, total: int
-) -> int:
+def _normalize_used_count(used_raw: int, per_node: int, nodes: int, total: int) -> int:
     """Normalize used GPU counts to total allocation for the partition line.
 
     Heuristic: if used_raw looks like a per-node count, scale by node count.

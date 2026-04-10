@@ -137,9 +137,7 @@ class PartitionParser:
             if "gres" in row:
                 gres = cls.parse_gres(row.get("gres"))
                 gres_used = (
-                    cls.parse_gres(row.get("gres_used"))
-                    if "gres_used" in row
-                    else None
+                    cls.parse_gres(row.get("gres_used")) if "gres_used" in row else None
                 )
                 partition.add_gres(nodes, gres, gres_used)
 
