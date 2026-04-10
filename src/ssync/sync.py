@@ -120,6 +120,25 @@ class SyncManager:
             logger.warning(f"Error checking directory size: {e}")
             return 0, True, ""  # Allow sync if we can't determine size
 
+    def _translate_gitignore_pattern(self, pattern: str, base_path: str = "") -> str:
+        """Translate a gitignore pattern into an rsync filter pattern."""
+        anchored = pattern.startswith("/")
+        if anchored:
+            pattern = pattern[1:]
+
+        if base_path:
+            if anchored:
+                pattern = f"/{base_path}/{pattern}"
+            else:
+                pattern = f"{base_path}/{pattern}"
+        elif anchored:
+            pattern = f"/{pattern}"
+
+        if pattern.endswith("/"):
+            pattern = pattern.rstrip("/") + "/***"
+
+        return pattern
+
     def _collect_rsync_filter_rules(self, max_depth: int = 3) -> list[str]:
         """
         Convert .gitignore files to basic rsync filter rules.
@@ -147,14 +166,7 @@ class SyncManager:
                             pattern = line
                             prefix = "-"
 
-                        if base_path and not pattern.startswith("/"):
-                            pattern = f"{base_path}/{pattern}"
-                        elif pattern.startswith("/"):
-                            pattern = pattern[1:]
-
-                        if pattern.endswith("/"):
-                            pattern = pattern.rstrip("/") + "/***"
-
+                        pattern = self._translate_gitignore_pattern(pattern, base_path)
                         rules.append(f"{prefix} {pattern}")
 
             except (OSError, UnicodeDecodeError):
