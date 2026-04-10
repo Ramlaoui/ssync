@@ -313,11 +313,17 @@ class LaunchManager:
 
                         if abort_on_setup_failure and setup_result.return_code != 0:
                             if launch_event_emitter:
-                                if stdout_output and stdout_output != "No stdout captured":
+                                if (
+                                    stdout_output
+                                    and stdout_output != "No stdout captured"
+                                ):
                                     launch_event_emitter.log(
                                         "setup", stdout_output, stream="stdout"
                                     )
-                                if stderr_output and stderr_output != "No stderr captured":
+                                if (
+                                    stderr_output
+                                    and stderr_output != "No stderr captured"
+                                ):
                                     launch_event_emitter.log(
                                         "setup",
                                         stderr_output,
@@ -337,11 +343,17 @@ class LaunchManager:
                             logger.warning(f"Setup stdout: {stdout_output}")
                             logger.warning(f"Setup stderr: {stderr_output}")
                             if launch_event_emitter:
-                                if stdout_output and stdout_output != "No stdout captured":
+                                if (
+                                    stdout_output
+                                    and stdout_output != "No stdout captured"
+                                ):
                                     launch_event_emitter.log(
                                         "setup", stdout_output, stream="stdout"
                                     )
-                                if stderr_output and stderr_output != "No stderr captured":
+                                if (
+                                    stderr_output
+                                    and stderr_output != "No stderr captured"
+                                ):
                                     launch_event_emitter.log(
                                         "setup",
                                         stderr_output,

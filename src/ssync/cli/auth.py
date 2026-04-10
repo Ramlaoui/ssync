@@ -172,9 +172,9 @@ def show(reveal):
 @auth.command()
 def test():
     """Test API authentication."""
-    from ..web.client import AuthenticatedSlurmAPIClient
+    from ..api.client import APIClient
 
-    client = AuthenticatedSlurmAPIClient()
+    client = APIClient()
 
     if not client.api_key:
         click.echo("❌ No API key configured")

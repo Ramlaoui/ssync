@@ -42,7 +42,9 @@ def test_copy_output_writes_available_files_and_auto_detects_host(
                 )
             ]
 
-        def get_job_output(self, job_id, host, metadata_only=False, force_refresh=False):
+        def get_job_output(
+            self, job_id, host, metadata_only=False, force_refresh=False
+        ):
             assert job_id == "1234"
             assert host == hostname
             assert metadata_only is True
@@ -87,7 +89,9 @@ def test_copy_output_refuses_to_overwrite_existing_files(monkeypatch, tmp_path, 
         def ensure_server_running(self, config_path):
             return True, None
 
-        def get_job_output(self, job_id, host, metadata_only=False, force_refresh=False):
+        def get_job_output(
+            self, job_id, host, metadata_only=False, force_refresh=False
+        ):
             return {"stdout_metadata": {"exists": True}, "stderr_metadata": None}
 
         def download_job_output(
@@ -137,7 +141,9 @@ def test_copy_output_fails_when_requested_output_is_unavailable(
         def ensure_server_running(self, config_path):
             return True, None
 
-        def get_job_output(self, job_id, host, metadata_only=False, force_refresh=False):
+        def get_job_output(
+            self, job_id, host, metadata_only=False, force_refresh=False
+        ):
             return {
                 "stdout_metadata": {"exists": False},
                 "stderr_metadata": {"exists": False},

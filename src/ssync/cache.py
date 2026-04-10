@@ -1018,7 +1018,9 @@ class JobDataCache:
             return None
         return (datetime.now() - timedelta(days=max_age_days)).isoformat()
 
-    def _get_submit_time_cutoff(self, max_age_days: Optional[int]) -> Optional[datetime]:
+    def _get_submit_time_cutoff(
+        self, max_age_days: Optional[int]
+    ) -> Optional[datetime]:
         """Return submit_time cutoff (UTC) for recycled-ID validation."""
         if max_age_days is None or max_age_days <= 0:
             return None

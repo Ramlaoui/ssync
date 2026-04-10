@@ -151,7 +151,9 @@ class LaunchEventManager:
             self._ensure_record_locked(launch_id, hostname)
         return LaunchEventEmitter(self, launch_id, hostname)
 
-    def publish(self, *, launch_id: str, hostname: str, event_type: str, **fields) -> None:
+    def publish(
+        self, *, launch_id: str, hostname: str, event_type: str, **fields
+    ) -> None:
         with self._lock:
             self._cleanup_expired_locked()
             record = self._ensure_record_locked(launch_id, hostname)
@@ -196,9 +198,7 @@ class LaunchEventManager:
                 return None
             return self._record_to_status(record)
 
-    async def subscribe(
-        self, launch_id: str
-    ) -> tuple[dict[str, Any], asyncio.Queue]:
+    async def subscribe(self, launch_id: str) -> tuple[dict[str, Any], asyncio.Queue]:
         with self._lock:
             self._cleanup_expired_locked()
             record = self._records.get(launch_id)
@@ -320,7 +320,9 @@ class LaunchEventManager:
             except Exception as exc:
                 logger.debug("Launch websocket broadcast failed: %s", exc)
 
-    def _enqueue_subscriber(self, queue: asyncio.Queue, payload: dict[str, Any]) -> None:
+    def _enqueue_subscriber(
+        self, queue: asyncio.Queue, payload: dict[str, Any]
+    ) -> None:
         if not queue.full():
             queue.put_nowait(payload)
             return
@@ -336,6 +338,8 @@ class LaunchEventManager:
         queue.put_nowait(payload)
 
     @staticmethod
-    def iter_recent_logs(events: Iterable[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+    def iter_recent_logs(
+        events: Iterable[dict[str, Any]], limit: int = 20
+    ) -> list[dict[str, Any]]:
         logs = [event for event in events if event["type"] == LOG_EVENT_TYPE]
         return logs[-limit:]

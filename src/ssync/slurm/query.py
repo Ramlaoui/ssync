@@ -176,7 +176,15 @@ class SlurmQuery:
         formats = [
             (
                 "%P|%a|%D|%t|%C|%G|%g",
-                ["partition", "availability", "nodes", "state", "cpus", "gres", "gres_used"],
+                [
+                    "partition",
+                    "availability",
+                    "nodes",
+                    "state",
+                    "cpus",
+                    "gres",
+                    "gres_used",
+                ],
             ),
             (
                 "%P|%a|%D|%t|%C|%G",
@@ -217,7 +225,9 @@ class SlurmQuery:
             return cached_data, True, cache_age, True
 
         if last_error:
-            logger.debug(f"Failed to fetch partition state for {hostname}: {last_error}")
+            logger.debug(
+                f"Failed to fetch partition state for {hostname}: {last_error}"
+            )
         return [], False, 0.0, False
 
     def get_active_jobs(

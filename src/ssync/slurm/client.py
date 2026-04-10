@@ -130,4 +130,6 @@ class SlurmClient:
     def get_partition_state(
         self, conn: SSHConnection, hostname: str, force_refresh: bool = False
     ):
-        return self.query.get_partition_state(conn, hostname, force_refresh=force_refresh)
+        return self.query.get_partition_state(
+            conn, hostname, force_refresh=force_refresh
+        )

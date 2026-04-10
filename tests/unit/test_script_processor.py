@@ -92,7 +92,7 @@ class TestExtractWatchers:
         # Check that watcher blocks are removed from clean script
         assert "#WATCHER_BEGIN" not in clean_script
         assert "#WATCHER_END" not in clean_script
-        assert "echo \"Training model...\"" in clean_script
+        assert 'echo "Training model..."' in clean_script
 
     @pytest.mark.unit
     def test_extract_inline_watcher(self, script_with_watchers):
@@ -308,7 +308,7 @@ class TestParseInlineWatcher:
 
     @pytest.mark.unit
     def test_parse_inline_watcher_without_pattern_returns_none(self):
-        line = 'action=cancel interval=30'  # Missing pattern
+        line = "action=cancel interval=30"  # Missing pattern
         watcher = ScriptProcessor._parse_inline_watcher(line)
         assert watcher is None
 
@@ -316,7 +316,7 @@ class TestParseInlineWatcher:
     def test_parse_inline_watcher_with_job_end_trigger(self):
         line = (
             'name="End Trigger" trigger_on_job_end=true '
-            'trigger_job_states=[completed,failed,timeout] action=resubmit'
+            "trigger_job_states=[completed,failed,timeout] action=resubmit"
         )
         watcher = ScriptProcessor._parse_inline_watcher(line)
         assert watcher is not None
@@ -601,5 +601,6 @@ class TestPrepareScript:
 
         # Check that file is executable
         import stat
+
         st = result_path.stat()
         assert st.st_mode & stat.S_IXUSR  # User executable bit set

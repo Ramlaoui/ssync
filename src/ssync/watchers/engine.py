@@ -866,9 +866,7 @@ class WatcherEngine:
                 )
 
         if actions_executed > 0:
-            self._update_watcher_trigger_count(
-                watcher.id, watcher.trigger_count + 1
-            )
+            self._update_watcher_trigger_count(watcher.id, watcher.trigger_count + 1)
             return True
 
         return False

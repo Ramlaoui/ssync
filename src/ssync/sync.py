@@ -350,7 +350,9 @@ class SyncManager:
                     )
                 else:
                     rsync_cmd = (
-                        ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
+                        ["rsync", "-avz"]
+                        + exclude_args
+                        + [f"{self.source_dir}/", target]
                     )
                     logger.debug("Running rsync without ControlMaster")
                     self._emit_sync_log(

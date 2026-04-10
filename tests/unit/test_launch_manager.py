@@ -36,7 +36,9 @@ def test_submit_script_in_workdir_reuses_existing_connection(monkeypatch):
             )
 
         def _get_connection(self, _host, force_refresh=False):
-            raise AssertionError("launch submission should reuse the existing connection")
+            raise AssertionError(
+                "launch submission should reuse the existing connection"
+            )
 
     monkeypatch.setattr("ssync.launch.looks_like_array_submission", lambda *_: False)
 

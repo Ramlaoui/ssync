@@ -247,7 +247,7 @@ class TestScriptValidator:
         """Test that scripts referencing sensitive environment variables are blocked."""
         sensitive_env_scripts = [
             "echo $AWS_SECRET_ACCESS_KEY",
-            "curl -H \"Authorization: $GITHUB_TOKEN\" http://api.github.com",
+            'curl -H "Authorization: $GITHUB_TOKEN" http://api.github.com',
             "ssh -i $SSH_PRIVATE_KEY user@host",
         ]
 
@@ -417,7 +417,7 @@ class TestInputSanitizer:
     @pytest.mark.unit
     def test_sanitize_text_removes_control_characters(self):
         """Test that control characters are removed from text."""
-        text = "Hello\x00\x01\x02World\x1F"
+        text = "Hello\x00\x01\x02World\x1f"
         result = InputSanitizer.sanitize_text(text)
         assert "\x00" not in result
         assert "\x01" not in result
