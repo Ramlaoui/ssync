@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import List, Optional
 
+from .launch_events import LaunchEventEmitter
 from .manager import Job, SlurmManager
 from .parsers.script_processor import ScriptProcessor
 from .slurm.params import SlurmParams
@@ -87,6 +88,7 @@ class LaunchManager:
         no_gitignore: bool = False,
         sync_enabled: bool = True,
         abort_on_setup_failure: bool = True,
+        launch_event_emitter: Optional[LaunchEventEmitter] = None,
     ) -> Optional[Job]:
         """Launch a job with optional sync and submission.
 
@@ -148,8 +150,14 @@ class LaunchManager:
                     source_dir,
                     use_gitignore=not no_gitignore,
                     path_restrictions=config.path_restrictions,
+                    launch_event_emitter=launch_event_emitter,
                 )
 
+                if launch_event_emitter:
+                    launch_event_emitter.stage(
+                        "sync_started",
+                        message=f"Syncing {source_dir.name} to {slurm_host.host.hostname}",
+                    )
                 sync_success = await loop.run_in_executor(
                     executor, sync_manager.sync_to_host, slurm_host, exclude, include
                 )
@@ -160,9 +168,20 @@ class LaunchManager:
                     raise RuntimeError(error_msg)
 
                 logger.info("Sync completed successfully")
+                if launch_event_emitter:
+                    launch_event_emitter.stage(
+                        "sync_finished",
+                        message=f"Sync completed for {source_dir.name}",
+                    )
                 remote_work_dir = Path(slurm_host.work_dir) / source_dir.name
             else:
                 logger.info("Skipping sync - submitting job in host work directory")
+                if launch_event_emitter:
+                    launch_event_emitter.log(
+                        "system",
+                        "Skipping sync and submitting in the host work directory.",
+                        stream="system",
+                    )
                 remote_work_dir = Path(slurm_host.work_dir)
 
             logger.info("Parsing script for login node setup and compute commands...")
@@ -223,9 +242,20 @@ class LaunchManager:
             )
 
             logger.info(f"Script uploaded to {remote_script_path}")
+            if launch_event_emitter:
+                launch_event_emitter.log(
+                    "system",
+                    f"Uploaded script to {remote_script_path}",
+                    stream="system",
+                )
 
             if login_setup_commands:
                 logger.info("Executing login node setup commands...")
+                if launch_event_emitter:
+                    launch_event_emitter.stage(
+                        "setup_started",
+                        message="Running login-node setup commands...",
+                    )
                 logger.debug(
                     f"Setup commands: {login_setup_commands[:500]}..."
                 )  # Log first 500 chars
@@ -251,6 +281,24 @@ class LaunchManager:
 
                     if setup_result.ok:
                         logger.info("Login node setup completed successfully")
+                        if launch_event_emitter:
+                            if setup_result.stdout:
+                                launch_event_emitter.log(
+                                    "setup",
+                                    setup_result.stdout.strip(),
+                                    stream="stdout",
+                                )
+                            if setup_result.stderr:
+                                launch_event_emitter.log(
+                                    "setup",
+                                    setup_result.stderr.strip(),
+                                    stream="stderr",
+                                    level="warning",
+                                )
+                            launch_event_emitter.stage(
+                                "setup_finished",
+                                message="Login-node setup completed successfully.",
+                            )
                     else:
                         stderr_output = (
                             setup_result.stderr.strip()
@@ -264,6 +312,18 @@ class LaunchManager:
                         )
 
                         if abort_on_setup_failure and setup_result.return_code != 0:
+                            if launch_event_emitter:
+                                if stdout_output and stdout_output != "No stdout captured":
+                                    launch_event_emitter.log(
+                                        "setup", stdout_output, stream="stdout"
+                                    )
+                                if stderr_output and stderr_output != "No stderr captured":
+                                    launch_event_emitter.log(
+                                        "setup",
+                                        stderr_output,
+                                        stream="stderr",
+                                        level="error",
+                                    )
                             error_msg = (
                                 f"Login node setup failed with exit code {setup_result.return_code}\n"
                                 f"Setup stdout:\n{stdout_output}\n"
@@ -276,6 +336,22 @@ class LaunchManager:
                             logger.warning("Login node setup completed with warnings")
                             logger.warning(f"Setup stdout: {stdout_output}")
                             logger.warning(f"Setup stderr: {stderr_output}")
+                            if launch_event_emitter:
+                                if stdout_output and stdout_output != "No stdout captured":
+                                    launch_event_emitter.log(
+                                        "setup", stdout_output, stream="stdout"
+                                    )
+                                if stderr_output and stderr_output != "No stderr captured":
+                                    launch_event_emitter.log(
+                                        "setup",
+                                        stderr_output,
+                                        stream="stderr",
+                                        level="warning",
+                                    )
+                                launch_event_emitter.stage(
+                                    "setup_finished",
+                                    message="Login-node setup completed with warnings.",
+                                )
 
                 except Exception as e:
                     # Try to extract more details from the exception
@@ -312,9 +388,25 @@ class LaunchManager:
                         logger.warning(
                             "Continuing despite setup failure (abort_on_setup_failure=False)"
                         )
+                        if launch_event_emitter:
+                            launch_event_emitter.log(
+                                "setup",
+                                error_msg,
+                                stream="stderr",
+                                level="warning",
+                            )
+                            launch_event_emitter.stage(
+                                "setup_finished",
+                                message="Continuing despite login-node setup failure.",
+                            )
 
             logger.info("Submitting job to Slurm...")
             logger.info(f"Using working directory: {remote_work_dir}")
+            if launch_event_emitter:
+                launch_event_emitter.stage(
+                    "submit_started",
+                    message=f"Submitting job from {remote_work_dir}",
+                )
 
             try:
                 job = await loop.run_in_executor(
@@ -325,9 +417,16 @@ class LaunchManager:
                     slurm_params,
                     remote_script_path,
                     remote_work_dir,
+                    launch_event_emitter,
                 )
 
                 logger.info(f"Job submitted successfully with ID: {job.job_id}")
+                if launch_event_emitter:
+                    launch_event_emitter.stage(
+                        "submit_finished",
+                        message=f"Slurm accepted job {job.job_id}",
+                        job_id=job.job_id,
+                    )
                 try:
                     from .job_data_manager import get_job_data_manager
 
@@ -376,6 +475,7 @@ class LaunchManager:
         slurm_params: SlurmParams,
         remote_script_path: str,
         work_dir: Path,
+        launch_event_emitter: Optional[LaunchEventEmitter] = None,
     ) -> Optional[Job]:
         """Submit a script to Slurm from a specific working directory.
 
@@ -439,8 +539,17 @@ class LaunchManager:
             # Log the raw output for debugging
             if stdout:
                 logger.debug(f"sbatch stdout: {stdout}")
+                if launch_event_emitter:
+                    launch_event_emitter.log("submit", stdout, stream="stdout")
             if stderr:
                 logger.debug(f"sbatch stderr: {stderr}")
+                if launch_event_emitter:
+                    launch_event_emitter.log(
+                        "submit",
+                        stderr,
+                        stream="stderr",
+                        level="warning",
+                    )
 
             job_id_match = re.search(r"Submitted batch job (\d+)", stdout)
             if job_id_match:

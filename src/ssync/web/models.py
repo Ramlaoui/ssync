@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SlurmDefaultsWeb(BaseModel):
@@ -421,6 +421,7 @@ class LaunchJobResponse(BaseModel):
 
     success: bool
     job_id: Optional[str] = None
+    launch_id: Optional[str] = None
     message: str
     hostname: str
 
@@ -428,3 +429,33 @@ class LaunchJobResponse(BaseModel):
     directory_warning: Optional[str] = None
     directory_stats: Optional[dict] = None
     requires_confirmation: bool = False
+
+
+class LaunchEventWeb(BaseModel):
+    """Web-serializable launch event."""
+
+    type: str
+    launch_id: str
+    hostname: str
+    sequence: int
+    timestamp: str
+    stage: Optional[str] = None
+    source: Optional[str] = None
+    stream: Optional[str] = None
+    level: Optional[str] = None
+    message: Optional[str] = None
+    job_id: Optional[str] = None
+    success: Optional[bool] = None
+
+
+class LaunchStatusResponse(BaseModel):
+    """Current status and recent events for a launch."""
+
+    launch_id: str
+    hostname: str
+    stage: str
+    terminal: bool
+    success: Optional[bool] = None
+    job_id: Optional[str] = None
+    message: Optional[str] = None
+    events: List[LaunchEventWeb] = Field(default_factory=list)

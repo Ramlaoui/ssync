@@ -4,11 +4,12 @@
   interface Props {
     status: 'launching' | 'success' | 'error';
     message?: string;
+    logLines?: string[];
     onDismiss: () => void;
     onNavigate?: () => void;
   }
 
-  let { status, message = '', onDismiss, onNavigate }: Props = $props();
+  let { status, message = '', logLines = [], onDismiss, onNavigate }: Props = $props();
 
   const statusConfig = {
     launching: {
@@ -55,6 +56,9 @@
           <p class={`text-xs mt-1 ${config.textClass} opacity-80`}>
             {message}
           </p>
+        {/if}
+        {#if logLines.length > 0}
+          <pre class={`mt-2 max-h-40 overflow-auto rounded-md border border-black/10 bg-black/5 p-2 text-[11px] leading-4 ${config.textClass}`}>{logLines.join('\n')}</pre>
         {/if}
         {#if status === 'launching'}
           <p class={`text-xs mt-1 ${config.textClass} opacity-70`}>

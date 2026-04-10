@@ -1,9 +1,10 @@
 """API client for communicating with ssync web API."""
 
+import json
 import re
 import warnings
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -347,11 +348,11 @@ class APIClient:
         include: Optional[List[str]] = None,
         no_gitignore: bool = False,
         abort_on_setup_failure: bool = True,
-    ) -> tuple[bool, Optional[str], str]:
+    ) -> dict[str, Any]:
         """Launch a job via the API.
 
         Returns:
-            tuple of (success, job_id, message)
+            Response payload from the launch endpoint.
         """
         request_data = {
             "script_content": script_content,
@@ -418,22 +419,62 @@ class APIClient:
                         error_msg += f" - {response.text[:200]}"
                 # Don't log here to avoid duplication - let the caller handle display
                 logger.debug(f"API request failed: {error_msg}")
-                return False, None, error_msg
+                return {"success": False, "job_id": None, "launch_id": None, "message": error_msg}
 
-            data = response.json()
-            return data["success"], data.get("job_id"), data["message"]
+            return response.json()
 
         except requests.exceptions.Timeout:
-            return False, None, "API request timed out (server may be overloaded)"
+            return {
+                "success": False,
+                "job_id": None,
+                "launch_id": None,
+                "message": "API request timed out (server may be overloaded)",
+            }
         except requests.exceptions.ConnectionError:
-            return (
-                False,
-                None,
-                f"Could not connect to API server at {self.base_url}. Is it running?",
-            )
+            return {
+                "success": False,
+                "job_id": None,
+                "launch_id": None,
+                "message": f"Could not connect to API server at {self.base_url}. Is it running?",
+            }
         except requests.exceptions.RequestException as e:
             logger.error(f"API request failed: {str(e)}")
-            return False, None, f"API request failed: {str(e)}"
+            return {
+                "success": False,
+                "job_id": None,
+                "launch_id": None,
+                "message": f"API request failed: {str(e)}",
+            }
+
+    def get_launch_status(self, launch_id: str) -> dict[str, Any]:
+        """Get the current status and recent events for a launch."""
+        response = requests.get(
+            f"{self.base_url}/api/launches/{launch_id}",
+            headers=self._get_headers(),
+            timeout=30,
+            verify=False,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def stream_launch_events(self, launch_id: str) -> Iterator[dict[str, Any]]:
+        """Stream launch events via SSE."""
+        with requests.get(
+            f"{self.base_url}/api/launches/{launch_id}/events",
+            headers=self._get_headers(),
+            params={"api_key": self.api_key} if self.api_key else None,
+            timeout=180,
+            verify=False,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if not raw_line or raw_line.startswith(":"):
+                    continue
+                if not raw_line.startswith("data: "):
+                    continue
+                yield json.loads(raw_line[6:])
 
     def cancel_job(self, job_id: str, host: str) -> tuple[bool, str]:
         """Cancel a job via the API.

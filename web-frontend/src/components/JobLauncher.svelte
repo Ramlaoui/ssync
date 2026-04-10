@@ -18,6 +18,8 @@
   } from "../lib/sbatch-parser";
   import { validateParameters } from "../lib/sbatchUtils";
   import { api } from "../services/api";
+  import { launchProgressStore, launchStateStore } from "../stores/jobWebSocket";
+  import type { LaunchEvent } from "../stores/jobWebSocket";
   import { resubmitStore } from "../stores/resubmit";
   import type { HostInfo } from "../types/api";
   import CodeMirrorEditor from "./CodeMirrorEditor.svelte";
@@ -95,8 +97,17 @@ echo "Starting job..."
   let launchToastStatus: "launching" | "success" | "error" =
     $state("launching");
   let launchToastMessage = $state("");
+  let launchToastLogLines: string[] = $state([]);
   let pendingJobNavigation: { jobId: string; host: string } | null =
     $state(null);
+  let activeLaunchId: string | null = $state(null);
+
+  function formatLaunchLogLine(event: LaunchEvent): string {
+    const source = event.source || "launch";
+    const stream = event.stream || "stdout";
+    const message = event.message || "";
+    return `[${source}/${stream}] ${message}`;
+  }
 
   // Script Templates
   interface ScriptTemplate {
@@ -608,6 +619,7 @@ echo "Starting job..."
     showLaunchToast = true;
     launchToastStatus = "launching";
     launchToastMessage = "Syncing files and submitting job...";
+    launchToastLogLines = [];
     launching = true;
 
     // Keep the original script for the actual launch
@@ -676,21 +688,22 @@ echo "Starting job..."
       if (parameters.outputFile) launchData.output = parameters.outputFile;
       if (parameters.errorFile) launchData.error = parameters.errorFile;
 
-      // Call the launch API with extended timeout (5 minutes for launch operations)
-      const response = await api.post("/api/jobs/launch", launchData, {
-        timeout: 300000, // 5 minutes timeout for job launch
-      });
+      // Call the launch API - now returns immediately with a launch_id
+      const response = await api.post("/api/jobs/launch", launchData);
 
-      if (response.data && response.data.job_id) {
-        // Success - update toast
+      if (response.data?.success && response.data.launch_id) {
+        // Server accepted the launch - progress will arrive via WebSocket
+        activeLaunchId = response.data.launch_id;
+        launchToastMessage = response.data.message || "Syncing files and submitting job...";
+      } else if (response.data?.success && response.data.job_id) {
+        // Backward compat: server returned a job_id directly (no sync needed)
         const jobId = response.data.job_id;
         const host = response.data.hostname || selectedHost;
-
         launchToastStatus = "success";
         launchToastMessage = `Job ${jobId} launched successfully`;
         pendingJobNavigation = { jobId, host };
+        launching = false;
 
-        // Auto-dismiss success toast after 5 seconds
         setTimeout(() => {
           if (showLaunchToast && launchToastStatus === "success") {
             showLaunchToast = false;
@@ -729,14 +742,16 @@ echo "Starting job..."
       // Update toast with error
       launchToastStatus = "error";
       launchToastMessage = launchError;
-    } finally {
       launching = false;
+      activeLaunchId = null;
     }
   }
 
   function handleDismissToast() {
     showLaunchToast = false;
     pendingJobNavigation = null;
+    activeLaunchId = null;
+    launchToastLogLines = [];
   }
 
   function handleNavigateToJob() {
@@ -942,6 +957,95 @@ echo "Starting job..."
     }
   }
 
+  // Watch for launch progress from WebSocket
+  $effect(() => {
+    if (!activeLaunchId) return;
+    const launchState = $launchStateStore[activeLaunchId];
+    if (launchState) {
+      const logEvents = launchState.events.filter(
+        (event) => event.type === "launch_log" && event.message,
+      );
+      launchToastLogLines = logEvents.slice(-8).map(formatLaunchLogLine);
+
+      if (launchState.message) {
+        launchToastMessage = launchState.message;
+      }
+
+      if (launchState.terminal) {
+        const completedLaunchId = activeLaunchId;
+        launching = false;
+        if (launchState.success) {
+          launchToastStatus = "success";
+          launchToastMessage =
+            launchState.message || "Job launched successfully";
+          if (launchState.job_id) {
+            pendingJobNavigation = {
+              jobId: launchState.job_id,
+              host: launchState.hostname,
+            };
+          }
+          setTimeout(() => {
+            if (showLaunchToast && launchToastStatus === "success") {
+              showLaunchToast = false;
+            }
+          }, 5000);
+        } else {
+          launchToastStatus = "error";
+          launchToastMessage = launchState.message || "Launch failed";
+        }
+        activeLaunchId = null;
+        launchStateStore.update((state) => {
+          const { [completedLaunchId!]: _, ...rest } = state;
+          return rest;
+        });
+        launchProgressStore.update((state) => {
+          const { [completedLaunchId!]: _, ...rest } = state;
+          return rest;
+        });
+        return;
+      }
+
+      launchToastStatus = "launching";
+    }
+
+    const progress = $launchProgressStore[activeLaunchId];
+    if (!progress) return;
+
+    if (progress.stage === 'syncing') {
+      launchToastStatus = 'launching';
+      launchToastMessage = progress.message || 'Syncing files to remote host...';
+    } else if (progress.stage === 'completed') {
+      launchToastStatus = 'success';
+      launchToastMessage = progress.message || 'Job launched successfully';
+      launching = false;
+      if (progress.job_id) {
+        pendingJobNavigation = { jobId: progress.job_id, host: progress.hostname };
+      }
+      // Auto-dismiss after 5 seconds
+      setTimeout(() => {
+        if (showLaunchToast && launchToastStatus === 'success') {
+          showLaunchToast = false;
+        }
+      }, 5000);
+      // Clean up from the store
+      launchProgressStore.update(s => {
+        const { [activeLaunchId!]: _, ...rest } = s;
+        return rest;
+      });
+      activeLaunchId = null;
+    } else if (progress.stage === 'failed') {
+      launchToastStatus = 'error';
+      launchToastMessage = progress.message || 'Launch failed';
+      launching = false;
+      // Clean up from the store
+      launchProgressStore.update(s => {
+        const { [activeLaunchId!]: _, ...rest } = s;
+        return rest;
+      });
+      activeLaunchId = null;
+    }
+  });
+
   // Initialize component - ensure FileBrowser uses persisted directory
   onMount(() => {
     const initialize = async () => {
@@ -1067,6 +1171,7 @@ echo "Starting job..."
   <LaunchStatusToast
     status={launchToastStatus}
     message={launchToastMessage}
+    logLines={launchToastLogLines}
     onDismiss={handleDismissToast}
     onNavigate={launchToastStatus === "success"
       ? handleNavigateToJob
