@@ -151,7 +151,7 @@ def get_watcher_events(
                     event["vars"] = ", ".join(
                         [f"{k}={v}" for k, v in vars_dict.items()]
                     )
-                except:
+                except (TypeError, json.JSONDecodeError):
                     event["vars"] = ""
             else:
                 event["vars"] = ""
@@ -254,7 +254,7 @@ def format_time_ago(timestamp_str: str) -> str:
             return f"{int(delta.total_seconds() / 3600)}h ago"
         else:
             return f"{int(delta.days)}d ago"
-    except:
+    except ValueError:
         return timestamp_str
 
 

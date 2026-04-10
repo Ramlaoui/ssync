@@ -1,14 +1,14 @@
 """Slurm query operations (squeue/sacct/scontrol)."""
 
-from datetime import datetime, timedelta, timezone
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Protocol
 
 from ..models.job import JobInfo, JobState
 from ..models.partition import PartitionResources
-from ..parsers.slurm import SlurmParser
 from ..parsers.partition import PartitionParser
+from ..parsers.slurm import SlurmParser
 from ..utils.logging import setup_logger
 from .fields import SQUEUE_FIELDS
 from .output import SlurmOutput

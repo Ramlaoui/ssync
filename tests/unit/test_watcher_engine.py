@@ -1,7 +1,12 @@
 import pytest
 
 from ssync.models.job import JobState
-from ssync.models.watcher import ActionType, WatcherAction, WatcherDefinition, WatcherInstance
+from ssync.models.watcher import (
+    ActionType,
+    WatcherAction,
+    WatcherDefinition,
+    WatcherInstance,
+)
 from ssync.watchers import engine as engine_module
 
 
@@ -47,7 +52,7 @@ async def test_job_end_watcher_captures_during_run_and_executes_once_on_terminal
         lambda watcher_id, count: trigger_counts.append((watcher_id, count)),
     )
 
-    async def fake_execute_action(watcher_arg, action, matched_text, captured_vars):
+    async def fake_execute_action(_watcher_arg, action, matched_text, captured_vars):
         executed_actions.append((action.type.value, matched_text, dict(captured_vars)))
         return True, "ok"
 
@@ -90,9 +95,11 @@ async def test_job_end_watcher_skips_cancelled_by_default(monkeypatch, test_cach
     executed_actions = []
 
     monkeypatch.setattr(engine, "_get_watcher_variables", lambda watcher_id: {})
-    monkeypatch.setattr(engine, "_update_watcher_trigger_count", lambda watcher_id, count: None)
+    monkeypatch.setattr(
+        engine, "_update_watcher_trigger_count", lambda watcher_id, count: None
+    )
 
-    async def fake_execute_action(watcher_arg, action, matched_text, captured_vars):
+    async def fake_execute_action(_watcher_arg, action, matched_text, captured_vars):
         executed_actions.append((action.type.value, matched_text, dict(captured_vars)))
         return True, "ok"
 

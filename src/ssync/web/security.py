@@ -147,14 +147,13 @@ class PathValidator:
 
     @classmethod
     def validate_path(
-        cls, path: str, base_type: str = "local", user_home: Optional[Path] = None
+        cls, path: str, user_home: Optional[Path] = None
     ) -> Path:
         """
         Validate and sanitize a file path.
 
         Args:
             path: Path to validate
-            base_type: Type of base paths to check against ("local" or "remote")
             user_home: User's home directory for additional validation
 
         Returns:

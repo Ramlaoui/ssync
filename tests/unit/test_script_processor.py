@@ -2,7 +2,7 @@
 
 import pytest
 
-from ssync.models.watcher import ActionType, WatcherAction, WatcherDefinition
+from ssync.models.watcher import ActionType
 from ssync.parsers.script_processor import ScriptProcessor
 from ssync.slurm.params import SlurmParams
 
@@ -169,7 +169,7 @@ echo "test"
 """
         watchers, _ = ScriptProcessor.extract_watchers(script)
         assert len(watchers) == 1
-        assert "[\\d+]\\s+ERROR.*" in watchers[0].pattern or "[\d+]\s+ERROR.*" in watchers[0].pattern
+        assert watchers[0].pattern in {r"[\d+]\s+ERROR.*", "[\\d+]\\s+ERROR.*"}
 
     @pytest.mark.unit
     def test_empty_script_returns_empty(self):

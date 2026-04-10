@@ -100,6 +100,8 @@ class SSHConnection:
         Returns:
             Fabric-compatible result
         """
+        _ = hide
+
         # For synchronous API, we need to block but commands can still
         # run in parallel through the same ControlMaster socket
         try:
@@ -245,6 +247,8 @@ class SSHConnection:
         Returns:
             None (Fabric compatibility)
         """
+        _ = preserve_mode
+
         import os
         import tempfile
 
@@ -334,6 +338,8 @@ class SSHConnection:
         Returns:
             None (Fabric compatibility)
         """
+        _ = preserve_mode
+
         import os
         import tempfile
 
