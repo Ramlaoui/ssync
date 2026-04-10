@@ -2710,31 +2710,48 @@ async def get_job_output(
                 except Exception as e:
                     logger.error(f"Failed to decompress cached stderr: {e}")
 
-            # For RUNNING jobs, ALWAYS fetch fresh output
+            # For RUNNING jobs, fetch fresh output but throttle to avoid SSH spam
             if is_running:
-                logger.info(f"Job {job_id} is running, fetching fresh output")
-                from ..job_data_manager import get_job_data_manager
+                import time
 
-                job_data_manager = get_job_data_manager()
-                (
-                    stdout_content,
-                    stderr_content,
-                ) = await job_data_manager._fetch_outputs_from_cached_paths(
-                    cached_job.job_info,
-                    force_fetch=True,  # Force fetch for running jobs
+                _now = time.time()
+                _throttle_key = f"output:{host}:{job_id}"
+                _min_interval = 10  # seconds between live SSH fetches
+                _last_fetch = getattr(get_job_output, "_throttle_cache", {}).get(
+                    _throttle_key, 0
                 )
 
-                # Fresh content is already in stdout_content and stderr_content variables
-                # They will be used in the response below
+                if _now - _last_fetch >= _min_interval or not stdout_content:
+                    logger.info(f"Job {job_id} is running, fetching fresh output")
+                    from ..job_data_manager import get_job_data_manager
 
-                # Also update the cache for running jobs (but don't mark as fetched after completion)
-                cache_middleware.cache.update_job_outputs(
-                    job_id=job_id,
-                    hostname=host,
-                    stdout_content=stdout_content,
-                    stderr_content=stderr_content,
-                    mark_fetched_after_completion=False,  # Don't mark as final fetch since job is still running
-                )
+                    job_data_manager = get_job_data_manager()
+                    (
+                        stdout_content,
+                        stderr_content,
+                    ) = await job_data_manager._fetch_outputs_from_cached_paths(
+                        cached_job.job_info,
+                        force_fetch=True,
+                    )
+
+                    # Update the cache for running jobs
+                    cache_middleware.cache.update_job_outputs(
+                        job_id=job_id,
+                        hostname=host,
+                        stdout_content=stdout_content,
+                        stderr_content=stderr_content,
+                        mark_fetched_after_completion=False,
+                    )
+
+                    # Update throttle timestamp
+                    if not hasattr(get_job_output, "_throttle_cache"):
+                        get_job_output._throttle_cache = {}  # type: ignore[attr-defined]
+                    get_job_output._throttle_cache[_throttle_key] = _now  # type: ignore[attr-defined]
+                else:
+                    logger.debug(
+                        f"Job {job_id} output throttled, serving cached "
+                        f"({_now - _last_fetch:.1f}s since last fetch)"
+                    )
 
             elif is_completed:
                 # Check if outputs were already fetched after completion
