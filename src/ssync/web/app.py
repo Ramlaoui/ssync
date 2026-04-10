@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from fastapi import (
     Body,
@@ -81,6 +81,7 @@ from .security import (
 )
 
 logger = setup_logger(__name__, "INFO")
+_WS_SEND_TIMEOUT_SECONDS = float(os.getenv("SSYNC_WS_SEND_TIMEOUT_SECONDS", "5"))
 
 
 def _get_array_base_job_ids(jobs: List[JobInfoWeb]) -> Set[str]:
@@ -125,6 +126,122 @@ def _filter_ws_initial_cached_jobs(job_data_manager, cached_job_data) -> list:
         filtered_jobs.append(job_info)
 
     return filtered_jobs
+
+
+def _serialize_job_for_ws(job: JobInfo) -> dict[str, Any]:
+    """Serialize a job once for websocket delivery with consistency checks."""
+    original_job_id = job.job_id
+    original_hostname = job.hostname
+    job_dict = JobInfoWeb.from_job_info(job).model_dump(mode="json")
+
+    if job.job_id != original_job_id:
+        raise ValueError(
+            f"job mutated during websocket serialization: was {original_job_id}, now {job.job_id}"
+        )
+
+    if job_dict["job_id"] != original_job_id:
+        raise ValueError(
+            "job_id mismatch during websocket serialization: "
+            f"original={original_job_id} serialized={job_dict['job_id']} "
+            f"hostname={original_hostname}"
+        )
+
+    return job_dict
+
+
+async def _send_json_to_websocket(
+    websocket: WebSocket, message: dict[str, Any]
+) -> tuple[WebSocket, bool]:
+    """Send a JSON websocket message with a bounded timeout."""
+    try:
+        if _WS_SEND_TIMEOUT_SECONDS > 0:
+            await asyncio.wait_for(
+                websocket.send_json(message), timeout=_WS_SEND_TIMEOUT_SECONDS
+            )
+        else:
+            await websocket.send_json(message)
+        return websocket, True
+    except Exception as exc:
+        logger.debug(f"Failed to send websocket message: {exc}")
+        return websocket, False
+
+
+async def _broadcast_json_to_websockets(
+    websockets: Iterable[WebSocket], message: dict[str, Any]
+) -> Set[WebSocket]:
+    """Broadcast JSON to websocket clients concurrently and return failed sockets."""
+    websocket_list = list(websockets)
+    if not websocket_list:
+        return set()
+
+    results = await asyncio.gather(
+        *[_send_json_to_websocket(websocket, message) for websocket in websocket_list]
+    )
+    return {websocket for websocket, ok in results if not ok}
+
+
+async def _fetch_completed_job_updates(
+    job_data_manager, completed_job_keys: Set[str]
+) -> list[dict[str, Any]]:
+    """Resolve disappeared jobs in host-sized batches for websocket completion events."""
+    if not completed_job_keys:
+        return []
+
+    job_ids_by_host: dict[str, list[str]] = {}
+    sorted_job_keys = sorted(completed_job_keys)
+    for job_key in sorted_job_keys:
+        hostname, job_id = job_key.split(":", 1)
+        job_ids_by_host.setdefault(hostname, []).append(job_id)
+
+    fetch_tasks = {
+        hostname: asyncio.create_task(
+            job_data_manager.fetch_all_jobs(
+                hostname=hostname,
+                job_ids=job_ids,
+                limit=len(job_ids),
+            ),
+            name=f"fetch_completed_jobs_{hostname}",
+        )
+        for hostname, job_ids in job_ids_by_host.items()
+    }
+
+    jobs_by_host: dict[str, dict[str, JobInfo]] = {}
+    for hostname, task in fetch_tasks.items():
+        try:
+            jobs_by_host[hostname] = {
+                job.job_id: job for job in await task if getattr(job, "job_id", None)
+            }
+        except Exception as exc:
+            logger.debug(
+                f"Skipping completed job refresh for host {hostname} after fetch failure: {exc}"
+            )
+            jobs_by_host[hostname] = {}
+
+    updates = []
+    for job_key in sorted_job_keys:
+        hostname, job_id = job_key.split(":", 1)
+        completed_job = jobs_by_host.get(hostname, {}).get(job_id)
+        if not completed_job:
+            logger.debug(
+                f"Skipping job_completed update for {job_id} - no job data available"
+            )
+            continue
+
+        try:
+            updates.append(
+                {
+                    "type": "job_completed",
+                    "job_id": job_id,
+                    "hostname": hostname,
+                    "job": _serialize_job_for_ws(completed_job),
+                }
+            )
+        except Exception as exc:
+            logger.debug(
+                f"Skipping job_completed update for {job_id} - serialization failed: {exc}"
+            )
+
+    return updates
 
 
 def group_array_job_tasks(
@@ -5101,13 +5218,9 @@ class JobConnectionManager:
     async def send_to_job(self, job_id: str, message: dict):
         """Send message to all connections watching a specific job."""
         if job_id in self.active_connections:
-            disconnected = []
-            for connection in self.active_connections[job_id]:
-                try:
-                    await connection.send_json(message)
-                except Exception:
-                    disconnected.append(connection)
-            # Clean up disconnected connections
+            disconnected = await _broadcast_json_to_websockets(
+                self.active_connections[job_id], message
+            )
             for conn in disconnected:
                 self.disconnect(conn, job_id)
 
@@ -5118,13 +5231,9 @@ class JobConnectionManager:
 
         # Send to all-jobs watchers with job_id and hostname context
         message_with_context = {**message, "job_id": job_id, "hostname": hostname}
-        disconnected = []
-        for connection in self.all_jobs_connections:
-            try:
-                await connection.send_json(message_with_context)
-            except Exception:
-                disconnected.append(connection)
-        # Clean up disconnected connections
+        disconnected = await _broadcast_json_to_websockets(
+            self.all_jobs_connections, message_with_context
+        )
         for conn in disconnected:
             self.disconnect(conn)
 
@@ -5453,7 +5562,6 @@ async def _verify_active_snapshot_cache(
 async def monitor_all_jobs_singleton():
     """Single background task that broadcasts to all connected WebSocket clients."""
     global _all_jobs_websockets
-    import copy  # For deep copying job dicts to avoid object reuse
 
     try:
         from ..job_data_manager import get_job_data_manager
@@ -5517,6 +5625,9 @@ async def monitor_all_jobs_singleton():
 
                 current_job_ids = set()
                 updates = []
+                new_job_count = 0
+                state_change_count = 0
+                running_refresh_count = 0
 
                 for job in all_jobs:
                     job_key = f"{job.hostname}:{job.job_id}"
@@ -5538,6 +5649,12 @@ async def monitor_all_jobs_singleton():
                     if is_new or state_changed or is_running:
                         old_state = job_states.get(job_key)
                         job_states[job_key] = job.state
+                        if is_new:
+                            new_job_count += 1
+                        elif state_changed:
+                            state_change_count += 1
+                        else:
+                            running_refresh_count += 1
                         new_state_value = (
                             job.state.value
                             if hasattr(job.state, "value")
@@ -5549,102 +5666,44 @@ async def monitor_all_jobs_singleton():
                             else old_state
                         )
 
-                        # Capture job_id BEFORE any processing to detect mutations
-                        original_job_id = job.job_id
-                        original_hostname = job.hostname
-
-                        # Create job dict and validate consistency
-                        # IMPORTANT: Create a fresh JobInfoWeb object for each update
-                        web_job = JobInfoWeb.from_job_info(job)
-                        job_dict = web_job.model_dump(mode="json")
-
-                        # Make a deep copy to ensure no dict reuse across updates
-                        # This prevents the same dict object from being shared across multiple updates
-                        job_dict_copy = copy.deepcopy(job_dict)
-
-                        # Verify job_id didn't change during processing
-                        if job.job_id != original_job_id:
+                        try:
+                            job_dict = _serialize_job_for_ws(job)
+                        except Exception as exc:
                             logger.error(
-                                f"Job object MUTATED during processing: was {original_job_id}, now {job.job_id}"
+                                f"Skipping websocket job update for {job.job_id} on {job.hostname}: {exc}"
                             )
                             continue
-
-                        # Verify job_id consistency before adding to updates
-                        if job_dict_copy["job_id"] != original_job_id:
-                            logger.error(
-                                f"Job ID mismatch in batch_update: original_job_id={original_job_id} vs job_dict['job_id']={job_dict_copy['job_id']}, hostname={original_hostname}"
-                            )
-                            logger.error(f"Full job object: {job}")
-                            logger.error(f"Full job_dict: {job_dict_copy}")
-                            continue  # Skip this update to prevent cache corruption
 
                         updates.append(
                             {
                                 "type": "job_update",
-                                "job_id": original_job_id,  # Use captured value
-                                "hostname": original_hostname,  # Use captured value
+                                "job_id": job.job_id,
+                                "hostname": job.hostname,
                                 "old_state": old_state_value,
                                 "new_state": new_state_value,
-                                "job": job_dict_copy,
+                                "job": job_dict,
                             }
                         )
 
                 # Detect jobs that disappeared from the list (completed/removed)
                 completed_jobs = set(job_states.keys()) - current_job_ids
+                completed_updates = await _fetch_completed_job_updates(
+                    job_data_manager, completed_jobs
+                )
+                updates.extend(completed_updates)
                 for job_key in completed_jobs:
-                    hostname, job_id = job_key.split(":", 1)
-
-                    try:
-                        completed_job_data = await job_data_manager.fetch_all_jobs(
-                            hostname=hostname, job_ids=[job_id], limit=1
-                        )
-                        if completed_job_data:
-                            completed_job = completed_job_data[0]
-
-                            updates.append(
-                                {
-                                    "type": "job_completed",
-                                    "job_id": job_id,
-                                    "hostname": hostname,
-                                    "job": JobInfoWeb.from_job_info(
-                                        completed_job
-                                    ).model_dump(mode="json"),
-                                }
-                            )
-
-                        else:
-                            # Skip sending update if we can't get job data
-                            # Frontend will handle job removal via periodic sync
-                            logger.debug(
-                                f"Skipping job_completed update for {job_id} - no job data available"
-                            )
-                    except Exception as e:
-                        # Skip sending update if fetch fails
-                        # Frontend will handle job removal via periodic sync
-                        logger.debug(
-                            f"Skipping job_completed update for {job_id} - fetch failed: {e}"
-                        )
-
                     del job_states[job_key]
 
                 # Broadcast to all connected clients
                 if updates:
-                    # ⚡ DIAGNOSTIC: Count update types
-                    new_jobs = sum(
-                        1
-                        for u in updates
-                        if u["type"] == "job_update"
-                        and not any(
-                            j for j in job_states if j.split(":")[1] == u["job_id"]
-                        )
-                    )
-                    state_changes = sum(
-                        1 for u in updates if u["type"] == "state_change"
-                    )
-                    running_refreshes = len(updates) - new_jobs - state_changes
-
                     logger.info(
-                        f"Broadcasting {len(updates)} updates ({new_jobs} new, {state_changes} state changes, {running_refreshes} running refreshes) to {len(_all_jobs_websockets)} clients"
+                        "Broadcasting %s updates (%s new, %s state changes, %s running refreshes, %s completed) to %s clients",
+                        len(updates),
+                        new_job_count,
+                        state_change_count,
+                        running_refresh_count,
+                        len(completed_updates),
+                        len(_all_jobs_websockets),
                     )
 
                     message = {
@@ -5653,15 +5712,9 @@ async def monitor_all_jobs_singleton():
                         "timestamp": datetime.now().isoformat(),
                     }
 
-                    disconnected = set()
-                    for ws in _all_jobs_websockets:
-                        try:
-                            await ws.send_json(message)
-                        except Exception as e:
-                            logger.debug(f"Failed to send to WebSocket: {e}")
-                            disconnected.add(ws)
-
-                    # Remove disconnected clients
+                    disconnected = await _broadcast_json_to_websockets(
+                        _all_jobs_websockets, message
+                    )
                     _all_jobs_websockets -= disconnected
 
             except Exception as e:
@@ -5801,12 +5854,14 @@ async def websocket_all_jobs(websocket: WebSocket):
         except WebSocketDisconnect:
             # Client disconnected - this is normal, don't log as error
             logger.debug("WebSocket client disconnected during initial data fetch")
+            job_manager.disconnect(websocket)
             _all_jobs_websockets.discard(websocket)
             return
         except Exception as e:
             # Only log actual errors, not disconnections
             if not isinstance(e, WebSocketDisconnect):
                 logger.error(f"Error fetching initial jobs data: {e}", exc_info=True)
+            job_manager.disconnect(websocket)
             _all_jobs_websockets.discard(websocket)
             try:
                 await websocket.send_json({"type": "error", "message": str(e)})

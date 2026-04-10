@@ -1,5 +1,6 @@
 """Unit tests for immediate web job state updates."""
 
+import asyncio
 import sys
 import types
 from datetime import datetime, timedelta
@@ -20,6 +21,32 @@ def _make_slurm_host(hostname: str) -> SlurmHost:
         work_dir=Path("/tmp"),
         scratch_dir=Path("/tmp"),
     )
+
+
+def _make_job(
+    job_id: str, hostname: str, state: JobState = JobState.RUNNING
+) -> JobInfo:
+    return JobInfo(
+        job_id=job_id,
+        name=f"job-{job_id}",
+        state=state,
+        hostname=hostname,
+        user="testuser",
+    )
+
+
+class _FakeWebSocket:
+    def __init__(self, *, fail: bool = False, delay: float = 0.0):
+        self.fail = fail
+        self.delay = delay
+        self.messages = []
+
+    async def send_json(self, message):
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.fail:
+            raise RuntimeError("send failed")
+        self.messages.append(message)
 
 
 @pytest.mark.unit
@@ -311,3 +338,66 @@ def test_filter_ws_initial_cached_jobs_skips_stale_placeholders(test_cache):
     filtered_ids = {job.job_id for job in filtered_jobs}
 
     assert filtered_ids == {"8100", "8103"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_completed_job_updates_batches_requests_by_host():
+    host_a = "cluster-a.example.com"
+    host_b = "cluster-b.example.com"
+    calls = []
+
+    class _FakeJobDataManager:
+        async def fetch_all_jobs(self, hostname=None, job_ids=None, limit=None, **kwargs):
+            calls.append((hostname, tuple(job_ids or ()), limit))
+            return [_make_job(job_id, hostname, JobState.COMPLETED) for job_id in job_ids]
+
+    updates = await web_app._fetch_completed_job_updates(
+        _FakeJobDataManager(),
+        {
+            f"{host_b}:9103",
+            f"{host_a}:9101",
+            f"{host_a}:9102",
+        },
+    )
+
+    assert calls == [
+        (host_a, ("9101", "9102"), 2),
+        (host_b, ("9103",), 1),
+    ]
+    assert [(update["hostname"], update["job_id"]) for update in updates] == [
+        (host_a, "9101"),
+        (host_a, "9102"),
+        (host_b, "9103"),
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_broadcast_json_to_websockets_returns_failed_clients(monkeypatch):
+    monkeypatch.setattr(web_app, "_WS_SEND_TIMEOUT_SECONDS", 0.0)
+    ok = _FakeWebSocket()
+    failing = _FakeWebSocket(fail=True)
+    message = {"type": "batch_update", "updates": []}
+
+    disconnected = await web_app._broadcast_json_to_websockets(
+        [ok, failing], message
+    )
+
+    assert disconnected == {failing}
+    assert ok.messages == [message]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_broadcast_json_to_websockets_times_out_slow_clients(monkeypatch):
+    monkeypatch.setattr(web_app, "_WS_SEND_TIMEOUT_SECONDS", 0.01)
+    ok = _FakeWebSocket()
+    slow = _FakeWebSocket(delay=0.05)
+
+    disconnected = await web_app._broadcast_json_to_websockets(
+        [ok, slow], {"type": "job_update"}
+    )
+
+    assert disconnected == {slow}
+    assert ok.messages == [{"type": "job_update"}]
