@@ -464,25 +464,28 @@ async def websocket_watchers_handler(
         await watcher_manager.connect(websocket)
 
         cache = get_cache()
-        with cache._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM watcher_events
-                ORDER BY timestamp DESC
-                LIMIT 10
-                """
-            )
-            columns = [desc[0] for desc in cursor.description]
-            events = []
-            for row in cursor.fetchall():
-                event_dict = dict(zip(columns, row))
-                if event_dict.get("captured_vars"):
-                    event_dict["captured_vars"] = json.loads(
-                        event_dict["captured_vars"]
-                    )
-                events.append(event_dict)
+        def load_initial_events():
+            with cache._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT * FROM watcher_events
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                    """
+                )
+                columns = [desc[0] for desc in cursor.description]
+                events = []
+                for row in cursor.fetchall():
+                    event_dict = dict(zip(columns, row))
+                    if event_dict.get("captured_vars"):
+                        event_dict["captured_vars"] = json.loads(
+                            event_dict["captured_vars"]
+                        )
+                    events.append(event_dict)
+                return events
 
-            await websocket.send_json({"type": "initial", "events": events})
+        events = await asyncio.to_thread(load_initial_events)
+        await websocket.send_json({"type": "initial", "events": events})
 
         while True:
             try:

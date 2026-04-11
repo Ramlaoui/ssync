@@ -318,9 +318,12 @@ def register_launch_routes(
             if host:
                 slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
 
+            loop = asyncio.get_running_loop()
             for slurm_host in slurm_hosts:
                 try:
-                    success = manager.cancel_job(slurm_host, job_id)
+                    success = await loop.run_in_executor(
+                        executor, manager.cancel_job, slurm_host, job_id
+                    )
                     if success:
                         logger.info(
                             f"Cancelled job {job_id} on {slurm_host.host.hostname}"

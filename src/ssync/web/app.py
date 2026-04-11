@@ -158,6 +158,7 @@ register_job_routes(
     get_slurm_manager=get_slurm_manager,
     cache_middleware=_cache_middleware,
     job_manager=job_manager,
+    executor=executor,
 )
 
 register_launch_routes(

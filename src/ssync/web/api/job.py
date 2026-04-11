@@ -1,5 +1,6 @@
 """Job detail, script, and output route registration."""
 
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -35,6 +36,7 @@ def register_job_routes(
     get_slurm_manager,
     cache_middleware,
     job_manager,
+    executor,
 ) -> None:
     """Register job data, detail, script, and output routes."""
 
@@ -127,9 +129,12 @@ def register_job_routes(
                 if not slurm_hosts:
                     raise HTTPException(status_code=404, detail="Host not found")
 
+            loop = asyncio.get_running_loop()
             for slurm_host in slurm_hosts:
                 try:
-                    job_info = manager.get_job_info(slurm_host, job_id)
+                    job_info = await loop.run_in_executor(
+                        executor, manager.get_job_info, slurm_host, job_id
+                    )
                     if job_info:
                         job_web = JobInfoWeb.from_job_info(job_info)
                         await cache_middleware.cache_job_status_response(

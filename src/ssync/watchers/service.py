@@ -60,14 +60,16 @@ class WatcherService:
         """Check for new watchers to start."""
         cache = get_cache()
 
-        with cache._get_connection() as conn:
-            # Get active watchers that aren't already running
-            cursor = conn.execute("""
-                SELECT id, job_id, hostname
-                FROM job_watchers
-                WHERE state = 'active'
-            """)
-            watchers = cursor.fetchall()
+        def load_active_watchers():
+            with cache._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, job_id, hostname
+                    FROM job_watchers
+                    WHERE state = 'active'
+                """)
+                return cursor.fetchall()
+
+        watchers = await asyncio.to_thread(load_active_watchers)
 
         for watcher_id, job_id, hostname in watchers:
             if watcher_id not in self.engine.active_tasks:

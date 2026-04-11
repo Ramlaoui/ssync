@@ -256,6 +256,51 @@ async def test_fetch_all_jobs_uses_live_fetch_after_backoff_expires(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_force_output_fetch_deduplicates_concurrent_requests(test_cache):
+    hostname = "cluster-output-dedup.example.com"
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    job_info = _make_job("6001", hostname, state=JobState.RUNNING)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    fetch_calls = {"count": 0}
+
+    async def fake_do_fetch_outputs(job_info_arg, force_fetch=False):
+        fetch_calls["count"] += 1
+        started.set()
+        await release.wait()
+        return (
+            f"stdout:{job_info_arg.job_id}:{force_fetch}",
+            f"stderr:{job_info_arg.job_id}:{force_fetch}",
+        )
+
+    job_data_manager._do_fetch_outputs = fake_do_fetch_outputs
+
+    first = asyncio.create_task(
+        job_data_manager._fetch_outputs_from_cached_paths(job_info, force_fetch=True)
+    )
+    await started.wait()
+    second = asyncio.create_task(
+        job_data_manager._fetch_outputs_from_cached_paths(job_info, force_fetch=True)
+    )
+
+    await asyncio.sleep(0)
+    assert fetch_calls["count"] == 1
+
+    release.set()
+    first_result = await first
+    second_result = await second
+
+    assert first_result == second_result == (
+        "stdout:6001:True",
+        "stderr:6001:True",
+    )
+    assert not job_data_manager._output_fetch_futures
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_fetch_all_jobs_applies_global_limit_for_cache_only_paths(
     monkeypatch, test_cache
 ):
