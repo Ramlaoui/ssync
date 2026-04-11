@@ -202,11 +202,14 @@ class WatcherEngine:
         """Stop watchers for jobs that no longer exist or have completed."""
         try:
             # Get all active watchers from database
-            with self.cache._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT id, job_id, hostname FROM job_watchers WHERE state = 'active'"
-                )
-                active_watchers = cursor.fetchall()
+            def load_active_watchers():
+                with self.cache._get_connection() as conn:
+                    cursor = conn.execute(
+                        "SELECT id, job_id, hostname FROM job_watchers WHERE state = 'active'"
+                    )
+                    return cursor.fetchall()
+
+            active_watchers = await asyncio.to_thread(load_active_watchers)
 
             for row in active_watchers:
                 watcher_id, job_id, hostname = row
@@ -393,15 +396,18 @@ class WatcherEngine:
         """Check all array template watchers and spawn watchers for new tasks."""
         try:
             # Get all array template watchers
-            with self.cache._get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    SELECT id, job_id, hostname
-                    FROM job_watchers
-                    WHERE is_array_template = 1 AND state = 'active'
-                    """
-                )
-                templates = cursor.fetchall()
+            def load_templates():
+                with self.cache._get_connection() as conn:
+                    cursor = conn.execute(
+                        """
+                        SELECT id, job_id, hostname
+                        FROM job_watchers
+                        WHERE is_array_template = 1 AND state = 'active'
+                        """
+                    )
+                    return cursor.fetchall()
+
+            templates = await asyncio.to_thread(load_templates)
 
             if not templates:
                 return
@@ -449,15 +455,18 @@ class WatcherEngine:
         """Check health of watchers and restart if needed."""
         try:
             # Get all active watchers from database
-            with self.cache._get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    SELECT id, job_id, hostname, last_check, interval_seconds
-                    FROM job_watchers 
-                    WHERE state = 'active'
-                    """
-                )
-                watchers = cursor.fetchall()
+            def load_active_watchers():
+                with self.cache._get_connection() as conn:
+                    cursor = conn.execute(
+                        """
+                        SELECT id, job_id, hostname, last_check, interval_seconds
+                        FROM job_watchers 
+                        WHERE state = 'active'
+                        """
+                    )
+                    return cursor.fetchall()
+
+            watchers = await asyncio.to_thread(load_active_watchers)
 
             for row in watchers:
                 watcher_id = row["id"]
@@ -1013,11 +1022,17 @@ class WatcherEngine:
 
             slurm_manager = get_slurm_manager()
             if slurm_manager:
-                live_job_info = slurm_manager.get_job_info(hostname, job_id)
+                live_job_info = await asyncio.to_thread(
+                    slurm_manager.get_job_info, hostname, job_id
+                )
                 if live_job_info:
                     try:
                         # Keep cache warm with corrected paths.
-                        self.cache.cache_job(live_job_info, script_content=None)
+                        await asyncio.to_thread(
+                            self.cache.cache_job,
+                            live_job_info,
+                            script_content=None,
+                        )
                     except Exception as cache_error:
                         logger.debug(
                             f"Failed to refresh cache for job {job_id}: {cache_error}"
@@ -1049,65 +1064,56 @@ class WatcherEngine:
             if not manager:
                 return None
 
-            slurm_host = manager.get_host_by_name(job_info.hostname)
-            conn = manager._get_connection(slurm_host.host)
+            def read_new_output() -> Optional[str]:
+                slurm_host = manager.get_host_by_name(job_info.hostname)
+                conn = manager._get_connection(slurm_host.host)
 
-            # Determine which file to read
-            if output_type == "stderr" and job_info.stderr_file:
-                file_path = job_info.stderr_file
-            elif job_info.stdout_file:
-                file_path = job_info.stdout_file
-            else:
+                if output_type == "stderr" and job_info.stderr_file:
+                    file_path = job_info.stderr_file
+                elif job_info.stdout_file:
+                    file_path = job_info.stdout_file
+                else:
+                    return None
+
+                position = last_position
+                size_result = conn.run(
+                    f"stat -c %s '{file_path}' 2>/dev/null || echo 0",
+                    hide=True,
+                    warn=True,
+                )
+
+                if size_result.ok:
+                    try:
+                        file_size = int(size_result.stdout.strip())
+                        if file_size < position:
+                            logger.warning(
+                                f"File {file_path} was truncated/rotated "
+                                f"(size={file_size} < position={position}), resetting position"
+                            )
+                            position = 0
+                        if file_size == position:
+                            return None
+                    except ValueError:
+                        pass
+
+                max_read_size = 1024 * 1024
+                result = conn.run(
+                    f"tail -c +{position + 1} '{file_path}' 2>/dev/null | head -c {max_read_size}",
+                    hide=True,
+                    warn=True,
+                )
+
+                if result.ok and result.stdout:
+                    try:
+                        return result.stdout.encode("utf-8", "ignore").decode(
+                            "utf-8", "ignore"
+                        )
+                    except Exception:
+                        return result.stdout
+
                 return None
 
-            # First check if file exists and get its size
-            size_result = conn.run(
-                f"stat -c %s '{file_path}' 2>/dev/null || echo 0",
-                hide=True,
-                warn=True,
-            )
-
-            if size_result.ok:
-                try:
-                    file_size = int(size_result.stdout.strip())
-
-                    # Handle file rotation/truncation
-                    if file_size < last_position:
-                        logger.warning(
-                            f"File {file_path} was truncated/rotated "
-                            f"(size={file_size} < position={last_position}), resetting position"
-                        )
-                        last_position = 0
-                        # Note: Position will be updated by caller
-
-                    # Don't read if we're at the end
-                    if file_size == last_position:
-                        return None
-
-                except ValueError:
-                    pass
-
-            # Read from last position (like tail -f)
-            # Limit read size to prevent memory issues
-            max_read_size = 1024 * 1024  # 1MB max per read
-            result = conn.run(
-                f"tail -c +{last_position + 1} '{file_path}' 2>/dev/null | head -c {max_read_size}",
-                hide=True,
-                warn=True,
-            )
-
-            if result.ok and result.stdout:
-                # Filter out binary data
-                try:
-                    # Try to decode as UTF-8, replace invalid chars
-                    clean_output = result.stdout.encode("utf-8", "ignore").decode(
-                        "utf-8", "ignore"
-                    )
-                    return clean_output
-                except Exception:
-                    return result.stdout
-
-            return None
+            return await asyncio.to_thread(read_new_output)
 
         except Exception as e:
             logger.error(f"Failed to get output for job {job_info.job_id}: {e}")

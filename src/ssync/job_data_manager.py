@@ -1036,7 +1036,7 @@ class JobDataManager:
                 return
 
             slurm_host = manager.get_host_by_name(hostname)
-            conn = manager._get_connection(slurm_host.host)
+            conn = await self._run_in_executor(manager._get_connection, slurm_host.host)
 
             # 1. Cache the script immediately
             self.cache.update_job_script(job_id, hostname, script_content)
@@ -1167,16 +1167,18 @@ class JobDataManager:
             job_info: Job information including output file paths
             force_fetch: If True, always fetch from SSH regardless of cache state
         """
-        # For completed jobs, deduplicate concurrent SSH fetches so only one
-        # SSH round-trip happens even when multiple requests arrive simultaneously.
+        # Deduplicate expensive concurrent SSH fetches for the same job.
+        # Force refreshes also share a single in-flight fetch so bursts of
+        # identical refreshes do not fan out into repeated SSH work.
         is_completed_state = job_info.state in [
             JobState.COMPLETED,
             JobState.FAILED,
             JobState.CANCELLED,
             JobState.TIMEOUT,
         ]
-        if is_completed_state and not force_fetch:
-            dedup_key = f"{job_info.hostname}:{job_info.job_id}"
+        if force_fetch or is_completed_state:
+            dedup_mode = "force" if force_fetch else "cached"
+            dedup_key = f"{job_info.hostname}:{job_info.job_id}:{dedup_mode}"
             existing: "asyncio.Future[tuple[Optional[str], Optional[str]]] | None" = (
                 self._output_fetch_futures.get(dedup_key)
             )
@@ -1191,7 +1193,9 @@ class JobDataManager:
             )
             self._output_fetch_futures[dedup_key] = future
             try:
-                result = await self._do_fetch_outputs(job_info, force_fetch=False)
+                result = await self._do_fetch_outputs(
+                    job_info, force_fetch=force_fetch
+                )
                 future.set_result(result)
                 return result
             except Exception as exc:
@@ -1265,7 +1269,9 @@ class JobDataManager:
 
             try:
                 slurm_host = manager.get_host_by_name(job_info.hostname)
-                conn = manager._get_connection(slurm_host.host)
+                conn = await self._run_in_executor(
+                    manager._get_connection, slurm_host.host
+                )
             except Exception as e:
                 error_msg = f"Failed to connect to {job_info.hostname}: {e}"
                 logger.error(error_msg)
@@ -1587,9 +1593,14 @@ class JobDataManager:
 
             for slurm_host in hosts_to_try:
                 try:
-                    conn = manager._get_connection(slurm_host.host)
-                    script_content = manager.slurm_client.get_job_batch_script(
-                        conn, job_id, slurm_host.host.hostname
+                    conn = await self._run_in_executor(
+                        manager._get_connection, slurm_host.host
+                    )
+                    script_content = await self._run_in_executor(
+                        manager.slurm_client.get_job_batch_script,
+                        conn,
+                        job_id,
+                        slurm_host.host.hostname,
                     )
 
                     if script_content:

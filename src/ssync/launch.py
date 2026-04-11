@@ -222,7 +222,9 @@ class LaunchManager:
                 clean_script_path, temp_dir, params=slurm_params
             )
 
-            conn = self.slurm_manager._get_connection(slurm_host.host)
+            conn = await loop.run_in_executor(
+                executor, self.slurm_manager._get_connection, slurm_host.host
+            )
 
             await loop.run_in_executor(
                 executor, conn.run, f"mkdir -p {remote_script_dir}"

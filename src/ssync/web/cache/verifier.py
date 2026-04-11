@@ -132,7 +132,7 @@ class CacheVerificationService:
 
         try:
             slurm_host = manager.get_host_by_name(hostname)
-            conn = manager._get_connection(slurm_host.host)
+            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
             tasks = [
                 self._fetch_single_job_final_state(manager, conn, hostname, job_id)
                 for job_id in job_ids

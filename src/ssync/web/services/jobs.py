@@ -226,7 +226,7 @@ async def build_stream_job_output_response(
 ) -> StreamingResponse:
     manager = get_slurm_manager()
     slurm_host = manager.get_host_by_name(host)
-    conn = manager._get_connection(slurm_host.host)
+    conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
     max_initial_bytes = 1024 * 1024
     max_live_chunk_bytes = min(chunk_size, 256 * 1024)
@@ -793,7 +793,9 @@ async def get_job_output_response(
         target_host = None
         for slurm_host in slurm_hosts:
             try:
-                job_info = manager.get_job_info(slurm_host, job_id)
+                job_info = await asyncio.to_thread(
+                    manager.get_job_info, slurm_host, job_id
+                )
                 if job_info:
                     target_host = slurm_host
                     break
@@ -804,9 +806,10 @@ async def get_job_output_response(
         if not job_info or not target_host:
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-        conn = manager._get_connection(target_host.host)
+        conn = await asyncio.to_thread(manager._get_connection, target_host.host)
         if not job_info.stdout_file or not job_info.stderr_file:
-            stdout_path, stderr_path = manager.slurm_client.get_job_output_files(
+            stdout_path, stderr_path = await asyncio.to_thread(
+                manager.slurm_client.get_job_output_files,
                 conn,
                 job_id,
                 target_host.host.hostname,
@@ -816,7 +819,8 @@ async def get_job_output_response(
             if stderr_path and not job_info.stderr_file:
                 job_info.stderr_file = stderr_path
 
-        stdout_content, stdout_metadata = get_file_metadata_and_content(
+        stdout_content, stdout_metadata = await asyncio.to_thread(
+            get_file_metadata_and_content,
             conn=conn,
             file_path=job_info.stdout_file,
             file_type="stdout",
@@ -825,7 +829,8 @@ async def get_job_output_response(
             lines=lines,
             metadata_only=metadata_only,
         )
-        stderr_content, stderr_metadata = get_file_metadata_and_content(
+        stderr_content, stderr_metadata = await asyncio.to_thread(
+            get_file_metadata_and_content,
             conn=conn,
             file_path=job_info.stderr_file,
             file_type="stderr",
@@ -895,8 +900,9 @@ async def get_job_script_payload(
     script_found_in_slurm = False
     for slurm_host in slurm_hosts:
         try:
-            conn = manager._get_connection(slurm_host.host)
-            script_content = manager.slurm_client.get_job_batch_script(
+            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+            script_content = await asyncio.to_thread(
+                manager.slurm_client.get_job_batch_script,
                 conn,
                 job_id,
                 slurm_host.host.hostname,
@@ -962,7 +968,9 @@ async def refresh_job_in_background(
 
         for slurm_host in slurm_hosts:
             try:
-                job_info = manager.get_job_info(slurm_host, job_id)
+                job_info = await asyncio.to_thread(
+                    manager.get_job_info, slurm_host, job_id
+                )
                 if not job_info:
                     continue
 

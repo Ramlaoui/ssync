@@ -1,5 +1,6 @@
 """Action executor for watchers."""
 
+import asyncio
 import json
 import os
 import re
@@ -148,11 +149,9 @@ class ActionExecutor:
                 return False, "No Slurm manager available"
 
             slurm_host = manager.get_host_by_name(hostname)
-            conn = manager._get_connection(slurm_host.host)
+            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
             # Import throttler for rate limiting SSH commands per host
-            import asyncio
-
             from .engine import get_host_throttler
 
             throttler = get_host_throttler()
@@ -162,8 +161,7 @@ class ActionExecutor:
                 return conn.run(f"scancel {job_id}", hide=True, warn=True)
 
             async with throttler.throttle(hostname):
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, do_cancel)
+                result = await asyncio.to_thread(do_cancel)
 
             if result.ok:
                 reason = params.get("reason", "Triggered by watcher")
@@ -272,11 +270,9 @@ class ActionExecutor:
 
             # Submit new job
             slurm_host = manager.get_host_by_name(hostname)
-            conn = manager._get_connection(slurm_host.host)
+            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
             # Import throttler for rate limiting SSH commands per host
-            import asyncio
-
             from .engine import get_host_throttler
 
             throttler = get_host_throttler()
@@ -295,8 +291,7 @@ class ActionExecutor:
                     )
 
                 async with throttler.throttle(hostname):
-                    loop = asyncio.get_event_loop()
-                    result = await loop.run_in_executor(None, do_transfer_and_submit)
+                    result = await asyncio.to_thread(do_transfer_and_submit)
 
                 if result.ok:
                     # Extract new job ID
@@ -315,12 +310,8 @@ class ActionExecutor:
                 # Cleanup remote file with throttling
                 async def cleanup_remote():
                     async with throttler.throttle(hostname):
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None,
-                            lambda: conn.run(
-                                f"rm -f /tmp/resubmit_{job_id}.sh", warn=True
-                            ),
+                        await asyncio.to_thread(
+                            conn.run, f"rm -f /tmp/resubmit_{job_id}.sh", warn=True
                         )
 
                 try:
@@ -360,11 +351,9 @@ class ActionExecutor:
             manager = get_slurm_manager()
             if manager:
                 slurm_host = manager.get_host_by_name(hostname)
-                conn = manager._get_connection(slurm_host.host)
+                conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
                 # Import throttler for rate limiting SSH commands per host
-                import asyncio
-
                 from .engine import get_host_throttler
 
                 throttler = get_host_throttler()
@@ -378,8 +367,7 @@ class ActionExecutor:
                     )
 
                 async with throttler.throttle(hostname):
-                    loop = asyncio.get_event_loop()
-                    result = await loop.run_in_executor(None, do_send_email)
+                    result = await asyncio.to_thread(do_send_email)
 
                 if result.ok:
                     logger.info(
@@ -517,7 +505,7 @@ class ActionExecutor:
                 return False, "No Slurm manager available"
 
             slurm_host = manager.get_host_by_name(hostname)
-            conn = manager._get_connection(slurm_host.host)
+            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
             # Import throttler for rate limiting SSH commands per host
             from .engine import get_host_throttler
@@ -530,8 +518,6 @@ class ActionExecutor:
             try:
                 async with throttler.throttle(hostname):
                     # Get job info to find working directory
-                    import asyncio
-
                     def get_work_dir():
                         job_result = conn.run(
                             f"scontrol show job {job_id}", hide=True, warn=True
@@ -542,8 +528,7 @@ class ActionExecutor:
                                     return line.split("WorkDir=")[1].split()[0]
                         return None
 
-                    loop = asyncio.get_event_loop()
-                    work_dir = await loop.run_in_executor(None, get_work_dir)
+                    work_dir = await asyncio.to_thread(get_work_dir)
             except Exception:
                 pass  # Continue without work dir
 
@@ -558,8 +543,6 @@ class ActionExecutor:
                     logger.info(f"Running command in job directory: {work_dir}")
 
             # Run command asynchronously with throttling to prevent resource exhaustion
-            import asyncio
-
             def run_ssh_command():
                 """Run SSH command in a thread to avoid blocking."""
                 try:
@@ -574,8 +557,7 @@ class ActionExecutor:
             # Throttle the main command execution
             async with throttler.throttle(hostname):
                 # Run the SSH command in a thread pool to avoid blocking the event loop
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, run_ssh_command)
+                result = await asyncio.to_thread(run_ssh_command)
 
             if result is None:
                 return False, "Failed to execute SSH command"
@@ -617,20 +599,23 @@ class ActionExecutor:
             cache = get_cache()
 
             # Store as watcher variable for now
-            with cache._get_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO watcher_variables
-                    (watcher_id, variable_name, variable_value, updated_at)
-                    VALUES (0, ?, ?, ?)
-                    """,
-                    (
-                        f"{job_id}_{metric_name}",
-                        str(metric_value),
-                        datetime.now().isoformat(),
-                    ),
-                )
-                conn.commit()
+            def store_metric():
+                with cache._get_connection() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO watcher_variables
+                        (watcher_id, variable_name, variable_value, updated_at)
+                        VALUES (0, ?, ?, ?)
+                        """,
+                        (
+                            f"{job_id}_{metric_name}",
+                            str(metric_value),
+                            datetime.now().isoformat(),
+                        ),
+                    )
+                    conn.commit()
+
+            await asyncio.to_thread(store_metric)
 
             logger.info(f"Stored metric {metric_name}={metric_value} for job {job_id}")
             return True, f"Stored {metric_name}={metric_value}"

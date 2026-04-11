@@ -1,5 +1,6 @@
 """System and admin route registration."""
 
+import asyncio
 import os
 import signal
 from datetime import datetime
@@ -70,8 +71,10 @@ def register_system_routes(
         """Get current SSH connection statistics."""
         try:
             manager = get_slurm_manager()
-            stats = manager.get_connection_stats()
-            health_check_count = manager.check_connection_health()
+            stats = await asyncio.to_thread(manager.get_connection_stats)
+            health_check_count = await asyncio.to_thread(
+                manager.check_connection_health
+            )
             return {
                 "stats": stats,
                 "unhealthy_removed": health_check_count,
@@ -90,7 +93,7 @@ def register_system_routes(
         """Refresh all SSH connections by closing and recreating them."""
         try:
             manager = get_slurm_manager()
-            refreshed_count = manager.refresh_connections()
+            refreshed_count = await asyncio.to_thread(manager.refresh_connections)
             logger.info(f"Manually refreshed {refreshed_count} SSH connections")
             return {
                 "message": f"Refreshed {refreshed_count} connections",

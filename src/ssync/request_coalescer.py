@@ -91,6 +91,7 @@ class JobRequestCoalescer:
             jobs = await fetch_func(hostname, [job_id])
             return jobs[0] if jobs else None
 
+        future: asyncio.Future
         async with self.lock:
             self.stats["total_requests"] += 1
 
@@ -99,37 +100,37 @@ class JobRequestCoalescer:
                 logger.debug(
                     f"Job {job_id} on {hostname} already has pending request, reusing"
                 )
-                return await self.pending[hostname][job_id].future
-
-            # Create new request
-            future = asyncio.Future()
-            request = JobRequest(
-                job_id=job_id,
-                hostname=hostname,
-                future=future,
-                timestamp=datetime.now(),
-            )
-            self.pending[hostname][job_id] = request
-
-            # Schedule batch execution if not already scheduled
-            if hostname not in self.batch_tasks or self.batch_tasks[hostname].done():
-                self.batch_tasks[hostname] = create_task(
-                    self._execute_batch_after_delay(hostname, fetch_func)
+                future = self.pending[hostname][job_id].future
+            else:
+                # Create new request
+                future = asyncio.get_running_loop().create_future()
+                request = JobRequest(
+                    job_id=job_id,
+                    hostname=hostname,
+                    future=future,
+                    timestamp=datetime.now(),
                 )
+                self.pending[hostname][job_id] = request
 
-            # Check if we've reached max batch size - execute immediately
-            pending_count = len(self.pending[hostname])
-            if pending_count >= self.max_batch_size:
-                logger.info(
-                    f"Max batch size ({self.max_batch_size}) reached for {hostname}, "
-                    f"executing batch immediately"
-                )
-                # Cancel the delayed task and execute now
-                if not self.batch_tasks[hostname].done():
-                    self.batch_tasks[hostname].cancel()
-                self.batch_tasks[hostname] = create_task(
-                    self._execute_batch(hostname, fetch_func)
-                )
+                # Schedule batch execution if not already scheduled
+                if hostname not in self.batch_tasks or self.batch_tasks[hostname].done():
+                    self.batch_tasks[hostname] = create_task(
+                        self._execute_batch_after_delay(hostname, fetch_func)
+                    )
+
+                # Check if we've reached max batch size - execute immediately
+                pending_count = len(self.pending[hostname])
+                if pending_count >= self.max_batch_size:
+                    logger.info(
+                        f"Max batch size ({self.max_batch_size}) reached for {hostname}, "
+                        f"executing batch immediately"
+                    )
+                    # Cancel the delayed task and execute now
+                    if not self.batch_tasks[hostname].done():
+                        self.batch_tasks[hostname].cancel()
+                    self.batch_tasks[hostname] = create_task(
+                        self._execute_batch(hostname, fetch_func)
+                    )
 
         # Wait for result outside the lock
         return await future

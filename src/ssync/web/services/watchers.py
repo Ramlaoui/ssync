@@ -1,5 +1,6 @@
 """Watcher-related orchestration helpers used by web routes."""
 
+import asyncio
 import gzip
 import json
 from datetime import datetime, timedelta
@@ -516,23 +517,26 @@ async def cleanup_orphaned_watchers_payload(*, cache, dry_run: bool) -> Dict[str
 
     engine = get_watcher_engine()
     if dry_run:
-        with cache._get_connection() as conn:
-            active_watchers = [
-                {
-                    "id": row["id"],
-                    "job_id": row["job_id"],
-                    "hostname": row["hostname"],
-                    "state": row["state"],
-                    "name": row["name"],
-                }
-                for row in conn.execute(
-                    """
-                    SELECT w.id, w.job_id, w.hostname, w.state, w.name
-                    FROM job_watchers w
-                    WHERE w.state = 'active'
-                    """
-                ).fetchall()
-            ]
+        def load_active_watchers():
+            with cache._get_connection() as conn:
+                return [
+                    {
+                        "id": row["id"],
+                        "job_id": row["job_id"],
+                        "hostname": row["hostname"],
+                        "state": row["state"],
+                        "name": row["name"],
+                    }
+                    for row in conn.execute(
+                        """
+                        SELECT w.id, w.job_id, w.hostname, w.state, w.name
+                        FROM job_watchers w
+                        WHERE w.state = 'active'
+                        """
+                    ).fetchall()
+                ]
+
+        active_watchers = await asyncio.to_thread(load_active_watchers)
         return {
             "dry_run": True,
             "active_watchers": active_watchers,
@@ -576,17 +580,20 @@ async def trigger_watcher_manually_payload(
     from ...watchers.engine import get_watcher_engine
 
     engine = get_watcher_engine()
-    with cache._get_connection() as conn:
-        watcher_row = conn.execute(
-            """
-            SELECT w.*
-            FROM job_watchers w
-            WHERE w.id = ?
-            """,
-            (watcher_id,),
-        ).fetchone()
-        if not watcher_row:
-            raise ValueError("Watcher not found")
+    def load_watcher_row():
+        with cache._get_connection() as conn:
+            return conn.execute(
+                """
+                SELECT w.*
+                FROM job_watchers w
+                WHERE w.id = ?
+                """,
+                (watcher_id,),
+            ).fetchone()
+
+    watcher_row = await asyncio.to_thread(load_watcher_row)
+    if not watcher_row:
+        raise ValueError("Watcher not found")
 
     watcher = engine._get_watcher(watcher_id)
     if not watcher:
@@ -611,7 +618,8 @@ async def trigger_watcher_manually_payload(
         content = test_text
         logger.info(f"Manually triggering watcher {watcher_id} with test text")
     else:
-        stdout_content, stderr_content = load_watcher_output_text(
+        stdout_content, stderr_content = await asyncio.to_thread(
+            load_watcher_output_text,
             get_slurm_manager=get_slurm_manager,
             cache=cache,
             job_id=watcher_row["job_id"],
@@ -890,7 +898,7 @@ async def attach_watchers_to_job_payload(
         raise ValueError(f"Unknown host: {host}") from exc
 
     try:
-        job_info = manager.get_job_info(slurm_host, job_id)
+        job_info = await asyncio.to_thread(manager.get_job_info, slurm_host, job_id)
         if not job_info:
             raise LookupError(f"Job {job_id} not found on {host}")
     except LookupError:

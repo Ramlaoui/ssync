@@ -57,7 +57,10 @@ def create_periodic_connection_health_check(*, get_slurm_manager, shutdown_event
                     break
 
                 try:
-                    unhealthy_count = get_slurm_manager().check_connection_health()
+                    manager = get_slurm_manager()
+                    unhealthy_count = await asyncio.to_thread(
+                        manager.check_connection_health
+                    )
                     if unhealthy_count > 0:
                         logger.info(
                             f"Periodic health check: Removed {unhealthy_count} unhealthy connections"
