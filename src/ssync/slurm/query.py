@@ -375,6 +375,102 @@ class SlurmQuery:
 
         return array_job_id, array_task_id
 
+    @staticmethod
+    def _split_array_parent_job_id(job_id: str) -> tuple[Optional[str], Optional[str]]:
+        """Return (array_job_id, array_task_spec) for an array parent identifier."""
+        if "_[" not in job_id or not job_id.endswith("]"):
+            return None, None
+
+        array_job_id, task_spec = job_id.split("_", 1)
+        return array_job_id, task_spec
+
+    @staticmethod
+    def _is_task_specific_sacct_field(field_name: str) -> bool:
+        """Return True for sacct fields that should not be copied onto array parents."""
+        return field_name in {
+            "JobID",
+            "Elapsed",
+            "Start",
+            "End",
+            "StdOut",
+            "StdErr",
+            "NodeList",
+            "ExitCode",
+            "CPUTime",
+            "TotalCPU",
+            "UserCPU",
+            "SystemCPU",
+            "AveCPU",
+            "AveCPUFreq",
+            "ReqCPUFreqMin",
+            "ReqCPUFreqMax",
+            "MaxRSS",
+            "AveRSS",
+            "MaxVMSize",
+            "AveVMSize",
+            "MaxDiskRead",
+            "MaxDiskWrite",
+            "AveDiskRead",
+            "AveDiskWrite",
+            "ConsumedEnergy",
+        }
+
+    def _build_array_parent_job_info(
+        self,
+        *,
+        original_job_id: str,
+        hostname: str,
+        available_fields: list[str],
+        template_fields: list[str],
+        aggregated_state: JobState,
+    ) -> JobInfo:
+        """Build a clean array-parent JobInfo without inheriting task-specific fields."""
+        sanitized_fields = []
+        for field_name, value in zip(available_fields, template_fields):
+            if self._is_task_specific_sacct_field(field_name):
+                sanitized_fields.append("")
+            else:
+                sanitized_fields.append(value)
+
+        if len(sanitized_fields) < len(available_fields):
+            sanitized_fields.extend(
+                [""] * (len(available_fields) - len(sanitized_fields))
+            )
+
+        job_info = self.parser.from_sacct_fields(
+            sanitized_fields, hostname, available_fields
+        )
+        array_job_id, array_task_spec = self._split_array_parent_job_id(original_job_id)
+        job_info.job_id = original_job_id
+        job_info.state = aggregated_state
+        job_info.array_job_id = array_job_id
+        job_info.array_task_id = array_task_spec
+        job_info.runtime = None
+        job_info.start_time = None
+        job_info.end_time = None
+        job_info.stdout_file = None
+        job_info.stderr_file = None
+        job_info.node_list = None
+        job_info.exit_code = None
+        job_info.cpu_time = None
+        job_info.total_cpu = None
+        job_info.user_cpu = None
+        job_info.system_cpu = None
+        job_info.ave_cpu = None
+        job_info.ave_cpu_freq = None
+        job_info.req_cpu_freq_min = None
+        job_info.req_cpu_freq_max = None
+        job_info.max_rss = None
+        job_info.ave_rss = None
+        job_info.max_vmsize = None
+        job_info.ave_vmsize = None
+        job_info.max_disk_read = None
+        job_info.max_disk_write = None
+        job_info.ave_disk_read = None
+        job_info.ave_disk_write = None
+        job_info.consumed_energy = None
+        return job_info
+
     def _run_sacct_job_query(
         self,
         conn: SSHConnection,
@@ -441,11 +537,13 @@ class SlurmQuery:
         try:
             available_fields = self.get_available_sacct_fields(conn, hostname)
             query_job_id = job_id
-            is_array_parent = False
+            array_parent_job_id, array_parent_task_spec = (
+                self._split_array_parent_job_id(job_id)
+            )
+            is_array_parent = array_parent_job_id is not None
             array_job_id, _array_task_id = self._split_array_task_job_id(job_id)
-            if "_[" in job_id and "]" in job_id:
-                query_job_id = job_id.split("_[")[0]
-                is_array_parent = True
+            if is_array_parent:
+                query_job_id = array_parent_job_id
                 logger.debug(
                     f"Array parent job detected: {job_id}, querying base ID: {query_job_id}"
                 )
@@ -456,34 +554,46 @@ class SlurmQuery:
             )
 
             if is_array_parent and len(lines) > 1:
-                first_line = lines[0].strip().split("|")
-                if len(first_line) >= len(available_fields):
-                    job_info = self.parser.from_sacct_fields(
-                        first_line, hostname, available_fields
-                    )
+                states = {}
+                template_fields = None
+                for line in lines:
+                    fields = line.strip().split("|")
+                    if len(fields) < len(available_fields) or "." in fields[0]:
+                        continue
 
-                    job_info.job_id = job_id
+                    normalized_job_id = self._normalize_sacct_job_id(fields[0])
+                    state_str = fields[2]
+                    state = self.parser.map_slurm_state(state_str, from_sacct=True)
+                    states[state.value] = states.get(state.value, 0) + 1
 
-                    states = {}
-                    for line in lines:
-                        fields = line.strip().split("|")
-                        if len(fields) >= 3:
-                            state_str = fields[2]
-                            state = self.parser.map_slurm_state(
-                                state_str, from_sacct=True
-                            )
-                            states[state.value] = states.get(state.value, 0) + 1
+                    if template_fields is None:
+                        template_fields = fields
 
+                    if fields[0] == job_id:
+                        template_fields = fields
+                    elif normalized_job_id == query_job_id and fields[0] == query_job_id:
+                        template_fields = fields
+
+                if template_fields:
+                    aggregated_state = JobState.COMPLETED
                     if "F" in states or "TO" in states:
-                        job_info.state = (
+                        aggregated_state = (
                             JobState.FAILED if "F" in states else JobState.TIMEOUT
                         )
                     elif "CA" in states:
-                        job_info.state = JobState.CANCELLED
+                        aggregated_state = JobState.CANCELLED
+
+                    job_info = self._build_array_parent_job_info(
+                        original_job_id=job_id,
+                        hostname=hostname,
+                        available_fields=available_fields,
+                        template_fields=template_fields,
+                        aggregated_state=aggregated_state,
+                    )
 
                     logger.info(
                         f"Retrieved final state for array job {job_id}: {job_info.state.value} "
-                        f"(task states: {states})"
+                        f"(task states: {states}, task_spec={array_parent_task_spec})"
                     )
                     return job_info
 
