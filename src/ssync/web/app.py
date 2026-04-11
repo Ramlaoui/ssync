@@ -112,7 +112,8 @@ register_notification_routes(
 
 
 frontend_dist = Path(__file__).parent.parent.parent.parent / "web-frontend" / "dist"
-if not register_frontend_routes(app, frontend_dist):
+frontend_registered = frontend_dist.exists()
+if not frontend_registered:
 
     @app.get("/")
     async def root(_authenticated: bool = Depends(verify_api_key)):
@@ -211,6 +212,10 @@ async def websocket_watchers(websocket: WebSocket):
         websocket,
         verify_websocket_api_key=verify_websocket_api_key,
     )
+
+
+if frontend_registered:
+    register_frontend_routes(app, frontend_dist)
 
 
 def main():
