@@ -14,6 +14,7 @@ DESIGN PRINCIPLE: One fetcher, one source of truth, one data flow.
 
 import asyncio
 import os
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,35 @@ class JobDataManager:
             except Exception:
                 return None
         return None
+
+    def _get_cached_output_content(
+        self, job_id: str, hostname: str, output_type: str
+    ) -> Optional[str]:
+        cached_job = self.cache.get_cached_job(job_id, hostname)
+        if not cached_job:
+            return None
+
+        if output_type == "stdout":
+            return self._decompress_output(
+                cached_job.stdout_compressed, cached_job.stdout_compression
+            )
+        return self._decompress_output(
+            cached_job.stderr_compressed, cached_job.stderr_compression
+        )
+
+    async def _read_remote_output_file(
+        self, conn, file_path: str
+    ) -> tuple[bool, Optional[str]]:
+        quoted_path = shlex.quote(file_path)
+        result = await self._run_in_executor(
+            conn.run,
+            f"test -f {quoted_path} && cat {quoted_path}",
+            hide=True,
+            timeout=60,
+        )
+        if result.ok:
+            return True, result.stdout
+        return False, None
 
     """THE SINGLE JOB FETCHER - replaces all job fetching logic."""
 
@@ -1324,160 +1354,112 @@ class JobDataManager:
 
             stdout_content = None
             stderr_content = None
+            # Never treat a submission script path as output content.
+            if should_fetch_stdout and job_info.stdout_file and self._is_suspicious_output_path(
+                job_info.stdout_file
+            ):
+                logger.warning(
+                    f"Job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
+                    "Skipping stdout fetch to avoid returning script content."
+                )
+                should_fetch_stdout = False
 
-            # Try to fetch stdout if needed
-            if should_fetch_stdout:
+            if should_fetch_stderr and job_info.stderr_file and self._is_suspicious_output_path(
+                job_info.stderr_file
+            ):
+                logger.warning(
+                    f"Job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
+                    "Skipping stderr fetch to avoid returning script content."
+                )
+                should_fetch_stderr = False
+
+            async def fetch_remote_output(
+                output_type: str, file_path: Optional[str]
+            ) -> Optional[str]:
+                if not file_path:
+                    return None
+
                 try:
-                    # Never treat a submission script path as output content.
-                    if job_info.stdout_file and self._is_suspicious_output_path(
-                        job_info.stdout_file
-                    ):
-                        logger.warning(
-                            f"Job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
-                            "Skipping stdout fetch to avoid returning script content."
+                    exists, content = await self._read_remote_output_file(conn, file_path)
+                    if exists:
+                        logger.debug(
+                            f"Fetched {output_type} for job {job_info.job_id} from SSH"
                         )
-                        stdout_content = None
-                        should_fetch_stdout = False
+                        return content
 
-                    if should_fetch_stdout and job_info.stdout_file:
-                        # First check if file exists
-                        check_result = await self._run_in_executor(
-                            conn.run,
-                            f"test -f '{job_info.stdout_file}' && echo 'exists' || echo 'notfound'",
-                            hide=True,
-                            timeout=10,
-                        )
-
-                        if "exists" in check_result.stdout:
-                            result = await self._run_in_executor(
-                                conn.run,
-                                f"cat '{job_info.stdout_file}'",
-                                hide=True,
-                                timeout=60,
-                            )
-                            if result.ok:
-                                stdout_content = result.stdout
-                                logger.debug(
-                                    f"Fetched stdout for job {job_info.job_id} from SSH"
-                                )
-                        else:
-                            logger.debug(
-                                f"Stdout file not found for job {job_info.job_id}"
-                            )
-                            # Keep existing cached content if file not found
-                            cached_job = self.cache.get_cached_job(
-                                job_info.job_id, job_info.hostname
-                            )
-                            if cached_job and cached_job.stdout_compressed:
-                                stdout_content = self._decompress_output(
-                                    cached_job.stdout_compressed,
-                                    cached_job.stdout_compression,
-                                )
+                    logger.debug(
+                        f"{output_type.capitalize()} file not found for job {job_info.job_id}"
+                    )
                 except Exception as e:
                     logger.error(
-                        f"Error fetching stdout for job {job_info.job_id} from {job_info.hostname}: {e}"
+                        f"Error fetching {output_type} for job {job_info.job_id} from {job_info.hostname}: {e}"
                     )
-                    # If force_fetch was requested, don't fall back to cache - raise the error
                     if force_fetch:
-                        raise RuntimeError(f"Failed to fetch stdout from SSH: {e}")
-
-                    # Otherwise, keep existing cached content on error
-                    cached_job = self.cache.get_cached_job(
-                        job_info.job_id, job_info.hostname
+                        raise RuntimeError(
+                            f"Failed to fetch {output_type} from SSH: {e}"
+                        )
+                    logger.info(
+                        f"Using cached {output_type} for job {job_info.job_id} after fetch error"
                     )
-                    if cached_job and cached_job.stdout_compressed:
-                        logger.info(
-                            f"Using cached stdout for job {job_info.job_id} after fetch error"
-                        )
-                        stdout_content = self._decompress_output(
-                            cached_job.stdout_compressed, cached_job.stdout_compression
-                        )
-            else:
-                # Use cached content
-                cached_job = self.cache.get_cached_job(
-                    job_info.job_id, job_info.hostname
+
+                return self._get_cached_output_content(
+                    job_info.job_id, job_info.hostname, output_type
                 )
-                if cached_job:
-                    stdout_content = self._decompress_output(
-                        cached_job.stdout_compressed, cached_job.stdout_compression
-                    )
 
-            # Try to fetch stderr if needed
-            if should_fetch_stderr:
-                try:
-                    # Never treat a submission script path as output content.
-                    if job_info.stderr_file and self._is_suspicious_output_path(
-                        job_info.stderr_file
-                    ):
-                        logger.warning(
-                            f"Job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
-                            "Skipping stderr fetch to avoid returning script content."
-                        )
-                        stderr_content = None
-                        should_fetch_stderr = False
-
-                    if should_fetch_stderr and job_info.stderr_file:
-                        # First check if file exists
-                        check_result = await self._run_in_executor(
-                            conn.run,
-                            f"test -f '{job_info.stderr_file}' && echo 'exists' || echo 'notfound'",
-                            hide=True,
-                            timeout=10,
-                        )
-
-                        if "exists" in check_result.stdout:
-                            result = await self._run_in_executor(
-                                conn.run,
-                                f"cat '{job_info.stderr_file}'",
-                                hide=True,
-                                timeout=60,
-                            )
-                            if result.ok:
-                                stderr_content = result.stdout
-                                logger.debug(
-                                    f"Fetched stderr for job {job_info.job_id} from SSH"
-                                )
-                        else:
-                            logger.debug(
-                                f"Stderr file not found for job {job_info.job_id}"
-                            )
-                            # Keep existing cached content if file not found
-                            cached_job = self.cache.get_cached_job(
-                                job_info.job_id, job_info.hostname
-                            )
-                            if cached_job and cached_job.stderr_compressed:
-                                stderr_content = self._decompress_output(
-                                    cached_job.stderr_compressed,
-                                    cached_job.stderr_compression,
-                                )
-                except Exception as e:
-                    logger.error(
-                        f"Error fetching stderr for job {job_info.job_id} from {job_info.hostname}: {e}"
-                    )
-                    # If force_fetch was requested, don't fall back to cache - raise the error
-                    if force_fetch:
-                        raise RuntimeError(f"Failed to fetch stderr from SSH: {e}")
-
-                    # Otherwise, keep existing cached content on error
-                    cached_job = self.cache.get_cached_job(
-                        job_info.job_id, job_info.hostname
-                    )
-                    if cached_job and cached_job.stderr_compressed:
-                        logger.info(
-                            f"Using cached stderr for job {job_info.job_id} after fetch error"
-                        )
-                        stderr_content = self._decompress_output(
-                            cached_job.stderr_compressed, cached_job.stderr_compression
-                        )
-            else:
-                # Use cached content
-                cached_job = self.cache.get_cached_job(
-                    job_info.job_id, job_info.hostname
+            if should_fetch_stdout or should_fetch_stderr:
+                shared_output_path = (
+                    should_fetch_stdout
+                    and should_fetch_stderr
+                    and job_info.stdout_file
+                    and job_info.stdout_file == job_info.stderr_file
                 )
-                if cached_job:
-                    stderr_content = self._decompress_output(
-                        cached_job.stderr_compressed, cached_job.stderr_compression
+                if shared_output_path:
+                    shared_content = await fetch_remote_output(
+                        "stdout", job_info.stdout_file
                     )
+                    stdout_content = shared_content
+                    stderr_content = shared_content
+                else:
+                    tasks = []
+                    task_names = []
+                    if should_fetch_stdout:
+                        tasks.append(
+                            asyncio.create_task(
+                                fetch_remote_output("stdout", job_info.stdout_file)
+                            )
+                        )
+                        task_names.append("stdout")
+                    else:
+                        stdout_content = self._get_cached_output_content(
+                            job_info.job_id, job_info.hostname, "stdout"
+                        )
+
+                    if should_fetch_stderr:
+                        tasks.append(
+                            asyncio.create_task(
+                                fetch_remote_output("stderr", job_info.stderr_file)
+                            )
+                        )
+                        task_names.append("stderr")
+                    else:
+                        stderr_content = self._get_cached_output_content(
+                            job_info.job_id, job_info.hostname, "stderr"
+                        )
+
+                    if tasks:
+                        results = await asyncio.gather(*tasks)
+                        for name, content in zip(task_names, results, strict=False):
+                            if name == "stdout":
+                                stdout_content = content
+                            else:
+                                stderr_content = content
+            else:
+                stdout_content = self._get_cached_output_content(
+                    job_info.job_id, job_info.hostname, "stdout"
+                )
+                stderr_content = self._get_cached_output_content(
+                    job_info.job_id, job_info.hostname, "stderr"
+                )
 
             # Update cache with fetched outputs
             if should_fetch_stdout or should_fetch_stderr:
