@@ -34,13 +34,14 @@ def build_output_metadata(
     output_type: str,
     path: Optional[str],
     content: Optional[str],
+    size_bytes: Optional[int] = None,
     exists: Optional[bool] = None,
 ) -> Optional[FileMetadata]:
     if not path:
         return None
     return FileMetadata(
         path=path,
-        size_bytes=len(content) if content else 0,
+        size_bytes=size_bytes if size_bytes is not None else len(content) if content else 0,
         last_modified=None,
         exists=bool(content) if exists is None else exists,
         access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type={output_type}",
@@ -78,6 +79,39 @@ def get_cached_output_payload(
     )
 
 
+def has_cached_output_payload(
+    compressed_data: Optional[bytes], size_bytes: Optional[int]
+) -> bool:
+    return compressed_data is not None or size_bytes is not None
+
+
+def limit_output_lines(content: Optional[str], lines: Optional[int]) -> Optional[str]:
+    if content is None or lines is None:
+        return content
+    if lines <= 0:
+        return ""
+
+    chunks = content.splitlines(keepends=True)
+    if len(chunks) <= lines:
+        return content
+    return "".join(chunks[-lines:])
+
+
+def decode_cached_output_for_response(
+    *,
+    compressed_data: Optional[bytes],
+    compression: str,
+    output_type: str,
+    lines: Optional[int],
+    metadata_only: bool,
+) -> Optional[str]:
+    if metadata_only or compressed_data is None:
+        return None
+
+    content = decode_cached_output(compressed_data, compression, output_type)
+    return limit_output_lines(content, lines)
+
+
 def build_job_output_response(
     *,
     job_id: str,
@@ -87,6 +121,8 @@ def build_job_output_response(
     stdout_content: Optional[str],
     stderr_content: Optional[str],
     metadata_only: bool = False,
+    stdout_size_bytes: Optional[int] = None,
+    stderr_size_bytes: Optional[int] = None,
     stdout_exists: Optional[bool] = None,
     stderr_exists: Optional[bool] = None,
 ) -> JobOutputResponse:
@@ -101,6 +137,7 @@ def build_job_output_response(
             output_type="stdout",
             path=stdout_path,
             content=stdout_content,
+            size_bytes=stdout_size_bytes,
             exists=stdout_exists,
         ),
         stderr_metadata=build_output_metadata(
@@ -109,6 +146,7 @@ def build_job_output_response(
             output_type="stderr",
             path=stderr_path,
             content=stderr_content,
+            size_bytes=stderr_size_bytes,
             exists=stderr_exists,
         ),
     )
@@ -679,9 +717,17 @@ async def get_job_output_response(
                     host=host,
                     stdout_path=job_data.job_info.stdout_file,
                     stderr_path=job_data.job_info.stderr_file,
-                    stdout_content=stdout_content,
-                    stderr_content=stderr_content,
+                    stdout_content=limit_output_lines(stdout_content, lines),
+                    stderr_content=limit_output_lines(stderr_content, lines),
                     metadata_only=metadata_only,
+                    stdout_size_bytes=len(stdout_content)
+                    if stdout_content is not None
+                    else None,
+                    stderr_size_bytes=len(stderr_content)
+                    if stderr_content is not None
+                    else None,
+                    stdout_exists=stdout_content is not None,
+                    stderr_exists=stderr_content is not None,
                 )
 
         cached_job = (
@@ -705,16 +751,28 @@ async def get_job_output_response(
                 JobState.PENDING,
                 JobState.RUNNING,
             ]
-
-            stdout_content = decode_cached_output(
-                cached_job.stdout_compressed,
-                cached_job.stdout_compression,
-                "stdout",
+            stdout_payload, stdout_compression, stdout_size = get_cached_output_payload(
+                cached_job, "stdout"
             )
-            stderr_content = decode_cached_output(
-                cached_job.stderr_compressed,
-                cached_job.stderr_compression,
-                "stderr",
+            stderr_payload, stderr_compression, stderr_size = get_cached_output_payload(
+                cached_job, "stderr"
+            )
+            stdout_exists = has_cached_output_payload(stdout_payload, stdout_size)
+            stderr_exists = has_cached_output_payload(stderr_payload, stderr_size)
+
+            stdout_content = decode_cached_output_for_response(
+                compressed_data=stdout_payload,
+                compression=stdout_compression,
+                output_type="stdout",
+                lines=lines,
+                metadata_only=metadata_only,
+            )
+            stderr_content = decode_cached_output_for_response(
+                compressed_data=stderr_payload,
+                compression=stderr_compression,
+                output_type="stderr",
+                lines=lines,
+                metadata_only=metadata_only,
             )
 
             if is_running:
@@ -722,7 +780,7 @@ async def get_job_output_response(
                 min_interval = 10
                 now = time.time()
                 last_fetch = _OUTPUT_THROTTLE_CACHE.get(throttle_key, 0)
-                if now - last_fetch >= min_interval or not stdout_content:
+                if now - last_fetch >= min_interval or not stdout_exists:
                     logger.info(f"Job {job_id} is running, fetching fresh output")
                     stdout_content, stderr_content = await fetch_outputs_for_job_info(
                         cached_job.job_info,
@@ -735,6 +793,14 @@ async def get_job_output_response(
                         stderr_content=stderr_content,
                         mark_fetched_after_completion=False,
                     )
+                    stdout_size = (
+                        len(stdout_content) if stdout_content is not None else stdout_size
+                    )
+                    stderr_size = (
+                        len(stderr_content) if stderr_content is not None else stderr_size
+                    )
+                    stdout_exists = stdout_content is not None
+                    stderr_exists = stderr_content is not None
                     _OUTPUT_THROTTLE_CACHE[throttle_key] = now
                 else:
                     logger.debug(
@@ -757,6 +823,14 @@ async def get_job_output_response(
                     stdout_content, stderr_content = await fetch_outputs_for_job_info(
                         cached_job.job_info
                     )
+                    stdout_size = (
+                        len(stdout_content) if stdout_content is not None else stdout_size
+                    )
+                    stderr_size = (
+                        len(stderr_content) if stderr_content is not None else stderr_size
+                    )
+                    stdout_exists = stdout_content is not None
+                    stderr_exists = stderr_content is not None
             elif is_pending:
                 logger.debug(f"Job {job_id} is pending, no outputs available yet")
                 return build_job_output_response(
@@ -775,9 +849,13 @@ async def get_job_output_response(
                 host=host,
                 stdout_path=cached_job.job_info.stdout_file,
                 stderr_path=cached_job.job_info.stderr_file,
-                stdout_content=stdout_content,
-                stderr_content=stderr_content,
+                stdout_content=limit_output_lines(stdout_content, lines),
+                stderr_content=limit_output_lines(stderr_content, lines),
                 metadata_only=metadata_only,
+                stdout_size_bytes=stdout_size,
+                stderr_size_bytes=stderr_size,
+                stdout_exists=stdout_exists,
+                stderr_exists=stderr_exists,
             )
 
         manager = get_slurm_manager()

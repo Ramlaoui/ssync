@@ -2,6 +2,8 @@
 
 import asyncio
 import sys
+import threading
+import time
 import types
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -297,6 +299,99 @@ async def test_force_output_fetch_deduplicates_concurrent_requests(test_cache):
         "stderr:6001:True",
     )
     assert not job_data_manager._output_fetch_futures
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_do_fetch_outputs_reuses_shared_stdout_stderr_path(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-shared-output.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    fake_conn = types.SimpleNamespace()
+    commands = []
+
+    def run(command, hide=True, timeout=None):
+        commands.append(command)
+        return types.SimpleNamespace(ok=True, stdout="shared output")
+
+    fake_conn.run = run
+    manager._get_connection = lambda _host: fake_conn
+    _install_fake_web_app(monkeypatch, manager)
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    async def run_inline(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(job_data_manager, "_run_in_executor", run_inline)
+
+    job_info = _make_job("7001", hostname, state=JobState.RUNNING)
+    job_info.stdout_file = "/tmp/shared.log"
+    job_info.stderr_file = "/tmp/shared.log"
+
+    stdout_content, stderr_content = await job_data_manager._do_fetch_outputs(job_info)
+
+    assert stdout_content == "shared output"
+    assert stderr_content == "shared output"
+    assert commands == ["test -f /tmp/shared.log && cat /tmp/shared.log"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_do_fetch_outputs_fetches_distinct_streams_concurrently(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-concurrent-output.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+
+    class _ConcurrentConn:
+        def __init__(self):
+            self.commands = []
+            self.active = 0
+            self.max_active = 0
+            self.lock = threading.Lock()
+
+        def run(self, command, hide=True, timeout=None):
+            with self.lock:
+                self.commands.append(command)
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            time.sleep(0.05)
+            with self.lock:
+                self.active -= 1
+
+            label = "stdout" if "stdout.log" in command else "stderr"
+            return types.SimpleNamespace(ok=True, stdout=label)
+
+    fake_conn = _ConcurrentConn()
+    manager._get_connection = lambda _host: fake_conn
+    _install_fake_web_app(monkeypatch, manager)
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    async def run_in_threads(func, *args, **kwargs):
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(job_data_manager, "_run_in_executor", run_in_threads)
+
+    job_info = _make_job("7002", hostname, state=JobState.RUNNING)
+    job_info.stdout_file = "/tmp/stdout.log"
+    job_info.stderr_file = "/tmp/stderr.log"
+
+    stdout_content, stderr_content = await job_data_manager._do_fetch_outputs(job_info)
+
+    assert stdout_content == "stdout"
+    assert stderr_content == "stderr"
+    assert fake_conn.max_active >= 2
+    assert sorted(fake_conn.commands) == [
+        "test -f /tmp/stderr.log && cat /tmp/stderr.log",
+        "test -f /tmp/stdout.log && cat /tmp/stdout.log",
+    ]
 
 
 @pytest.mark.unit
