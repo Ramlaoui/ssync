@@ -76,6 +76,46 @@ class LaunchManager:
 
         return login_setup_commands, clean_compute_script
 
+    def _extract_watchers_from_script_content(self, script_content: str):
+        """Extract watcher definitions from the local prepared script."""
+        watchers = []
+        try:
+            watchers, _ = ScriptProcessor.extract_watchers(script_content)
+            array_spec = ScriptProcessor.extract_array_spec(script_content)
+
+            if array_spec and watchers:
+                expected_tasks = ScriptProcessor.parse_array_spec(array_spec)
+                for watcher in watchers:
+                    watcher.is_array_template = True
+                    watcher.array_spec = array_spec
+                logger.info(
+                    f"Found {len(watchers)} watchers in array job script "
+                    f"(array={array_spec}, expected_tasks={expected_tasks})"
+                )
+            elif watchers:
+                logger.info(f"Found {len(watchers)} watchers in script")
+        except Exception as e:
+            logger.warning(f"Failed to extract watchers: {e}")
+            return []
+
+        return watchers
+
+    async def _capture_submission_in_background(
+        self, job_id: str, hostname: str, script_content: str
+    ) -> None:
+        """Capture submission metadata without blocking the launch response."""
+        try:
+            from .job_data_manager import get_job_data_manager
+
+            job_data_manager = get_job_data_manager()
+            await job_data_manager.capture_job_submission(
+                job_id, hostname, script_content
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to capture submission data for job {job_id}: {e}"
+            )
+
     async def launch_job(
         self,
         script_path: str | Path,
@@ -220,6 +260,10 @@ class LaunchManager:
 
             prepared_script = ScriptProcessor.prepare_script(
                 clean_script_path, temp_dir, params=slurm_params
+            )
+            prepared_script_content = prepared_script.read_text()
+            watchers = self._extract_watchers_from_script_content(
+                prepared_script_content
             )
 
             conn = await loop.run_in_executor(
@@ -431,6 +475,8 @@ class LaunchManager:
                     slurm_params,
                     remote_script_path,
                     remote_work_dir,
+                    prepared_script_content,
+                    watchers,
                     launch_event_emitter,
                 )
 
@@ -441,16 +487,28 @@ class LaunchManager:
                         message=f"Slurm accepted job {job.job_id}",
                         job_id=job.job_id,
                     )
-                try:
-                    from .job_data_manager import get_job_data_manager
-
-                    job_data_manager = get_job_data_manager()
-                    await job_data_manager.capture_job_submission(
-                        job.job_id, slurm_host.host.hostname, clean_compute_script
+                capture_task = create_task(
+                    self._capture_submission_in_background(
+                        job.job_id,
+                        slurm_host.host.hostname,
+                        clean_compute_script,
+                    ),
+                    name=f"capture_submission_{slurm_host.host.hostname}_{job.job_id}",
+                )
+                if capture_task is None:
+                    await self._capture_submission_in_background(
+                        job.job_id,
+                        slurm_host.host.hostname,
+                        clean_compute_script,
                     )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to capture submission data for job {job.job_id}: {e}"
+                else:
+                    capture_task.add_done_callback(
+                        lambda task, job_id=job.job_id: task.exception()
+                        and logger.warning(
+                            "Background submission capture failed for job %s: %s",
+                            job_id,
+                            task.exception(),
+                        )
                     )
 
                 return job
@@ -489,6 +547,8 @@ class LaunchManager:
         slurm_params: SlurmParams,
         remote_script_path: str,
         work_dir: Path,
+        script_content: str,
+        watchers,
         launch_event_emitter: Optional[LaunchEventEmitter] = None,
     ) -> Optional[Job]:
         """Submit a script to Slurm from a specific working directory.
@@ -518,33 +578,6 @@ class LaunchManager:
                     "Submitting with CLI parameters (will override script directives)"
                 )
             logger.info(f"Running: {full_cmd}")
-
-            # Extract watchers from the local script before submission
-            watchers = []
-            try:
-                # Read the local script to extract watchers and array spec
-                result_read = conn.run(f"cat {remote_script_path}", hide=True)
-                script_content = result_read.stdout
-
-                from .parsers.script_processor import ScriptProcessor
-
-                watchers, _ = ScriptProcessor.extract_watchers(script_content)
-                array_spec = ScriptProcessor.extract_array_spec(script_content)
-
-                # If this is an array job, mark watchers as templates
-                if array_spec and watchers:
-                    expected_tasks = ScriptProcessor.parse_array_spec(array_spec)
-                    for watcher in watchers:
-                        watcher.is_array_template = True
-                        watcher.array_spec = array_spec
-                    logger.info(
-                        f"Found {len(watchers)} watchers in array job script "
-                        f"(array={array_spec}, expected_tasks={expected_tasks})"
-                    )
-                elif watchers:
-                    logger.info(f"Found {len(watchers)} watchers in script")
-            except Exception as e:
-                logger.warning(f"Failed to extract watchers: {e}")
 
             # Capture both stdout and stderr for better debugging
             stdout = result.stdout.strip() if result.stdout else ""

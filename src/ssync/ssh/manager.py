@@ -1,6 +1,7 @@
 """SSH connection management using native SSH with ControlMaster."""
 
 import threading
+import time
 from typing import Dict
 
 from ..models.cluster import Host
@@ -13,15 +14,23 @@ logger = setup_logger(__name__, "INFO")
 class ConnectionManager:
     """Manages SSH connections using native SSH with ControlMaster for key-based auth."""
 
-    def __init__(self, use_ssh_config: bool = True, connection_timeout: int = 30):
+    def __init__(
+        self,
+        use_ssh_config: bool = True,
+        connection_timeout: int = 30,
+        health_check_ttl_seconds: float = 30.0,
+    ):
         """Initialize connection manager.
 
         Args:
             use_ssh_config: Whether to use SSH config (always True now)
             connection_timeout: Connection timeout in seconds
+            health_check_ttl_seconds: Minimum interval between blocking health checks
         """
         self.connection_timeout = connection_timeout
+        self.health_check_ttl_seconds = health_check_ttl_seconds
         self._connections: Dict[str, SSHConnection] = {}
+        self._last_health_check: Dict[str, float] = {}
         self._lock = threading.RLock()
         logger.info("ConnectionManager initialized with native SSH")
 
@@ -43,6 +52,7 @@ class ConnectionManager:
                 try:
                     logger.info(f"Force refreshing connection to {host_string}")
                     del self._connections[host_string]
+                    self._last_health_check.pop(host_string, None)
                 except Exception as e:
                     logger.warning(f"Error closing connection to {host_string}: {e}")
 
@@ -52,12 +62,23 @@ class ConnectionManager:
                 host_config = self._host_to_config(host)
                 connection = SSHConnection(host_config, host_string)
                 self._connections[host_string] = connection
+                self._last_health_check[host_string] = time.monotonic()
                 logger.debug(f"Created SSH connection for {host_string}")
+                return connection
+
+            last_health_check = self._last_health_check.get(host_string, 0.0)
+            if (
+                self.health_check_ttl_seconds > 0
+                and time.monotonic() - last_health_check < self.health_check_ttl_seconds
+            ):
                 return connection
 
         # Validate connection health outside the lock so other threads can proceed.
         try:
             if connection.is_healthy(timeout=5):
+                with self._lock:
+                    if self._connections.get(host_string) is connection:
+                        self._last_health_check[host_string] = time.monotonic()
                 return connection
             logger.warning(f"Existing connection to {host_string} is unhealthy")
         except Exception as e:
@@ -72,6 +93,7 @@ class ConnectionManager:
             host_config = self._host_to_config(host)
             refreshed_connection = SSHConnection(host_config, host_string)
             self._connections[host_string] = refreshed_connection
+            self._last_health_check[host_string] = time.monotonic()
             logger.info(f"Recreated SSH connection for {host_string}")
             return refreshed_connection
 
@@ -207,6 +229,7 @@ class ConnectionManager:
                     current = self._connections.get(host_string)
                     if current is old_connection:
                         del self._connections[host_string]
+                        self._last_health_check.pop(host_string, None)
                         logger.info(f"Removed unhealthy connection to {host_string}")
                 except Exception as e:
                     logger.warning(f"Error removing connection {host_string}: {e}")

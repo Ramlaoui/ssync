@@ -11,6 +11,7 @@ import pytest
 from ssync.models.cluster import Host, SlurmHost
 from ssync.models.job import JobInfo, JobState
 from ssync.request_coalescer import JobRequestCoalescer
+from ssync.web.models import JobInfoWeb
 from ssync.web import app as web_app
 
 
@@ -129,6 +130,53 @@ async def test_get_job_details_offloads_blocking_manager_call(
 
     assert result.job_id == "7002"
     assert call_thread["ident"] != threading.get_ident()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_job_details_force_refresh_returns_cached_job_immediately(
+    monkeypatch
+):
+    hostname = "cluster-cache-first.example.com"
+    cached_job = _make_job("7003", hostname)
+
+    queue_calls = []
+
+    def fake_queue_job_refresh(**kwargs):
+        queue_calls.append(kwargs)
+        return True
+
+    def fail_get_job_info(*args, **kwargs):
+        raise AssertionError("cached force_refresh should not block on get_job_info")
+
+    async def fake_get_job_with_cache_fallback(*args, **kwargs):
+        return JobInfoWeb.from_job_info(cached_job)
+
+    manager = web_app.get_slurm_manager()
+    monkeypatch.setattr(manager, "slurm_hosts", [_make_slurm_host(hostname)])
+    monkeypatch.setattr(manager, "get_job_info", fail_get_job_info)
+    monkeypatch.setattr(
+        web_app._cache_middleware,
+        "get_job_with_cache_fallback",
+        fake_get_job_with_cache_fallback,
+    )
+    monkeypatch.setattr("ssync.web.api.job.queue_job_refresh", fake_queue_job_refresh)
+
+    get_job_details = _get_route_endpoint("/api/jobs/{job_id}", "GET")
+    result = await get_job_details(
+        "7003",
+        host=hostname,
+        cache_first=False,
+        force_refresh=True,
+        force=False,
+        _authenticated=True,
+    )
+
+    assert result.job_id == "7003"
+    assert result.cached is True
+    assert result.stale is True
+    assert result.refresh_queued is True
+    assert queue_calls and queue_calls[0]["host"] == hostname
 
 
 @pytest.mark.unit

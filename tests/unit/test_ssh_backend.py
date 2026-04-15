@@ -260,13 +260,15 @@ class TestConnectionManager:
         """Test ConnectionManager initialization."""
         manager = ConnectionManager()
         assert manager.connection_timeout == 30
+        assert manager.health_check_ttl_seconds == 30.0
         assert len(manager._connections) == 0
 
     @pytest.mark.unit
     def test_init_with_custom_timeout(self):
         """Test ConnectionManager with custom timeout."""
-        manager = ConnectionManager(connection_timeout=60)
+        manager = ConnectionManager(connection_timeout=60, health_check_ttl_seconds=5)
         assert manager.connection_timeout == 60
+        assert manager.health_check_ttl_seconds == 5
 
     @pytest.mark.unit
     def test_get_host_string_simple(self):
@@ -351,7 +353,6 @@ class TestConnectionManager:
     @patch.object(SSHConnection, "is_healthy")
     def test_get_connection_creates_new(self, mock_is_healthy):
         """Test get_connection creates new connection."""
-        mock_is_healthy.return_value = True
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
@@ -359,12 +360,12 @@ class TestConnectionManager:
 
         assert isinstance(conn, SSHConnection)
         assert "testuser@example.com" in manager._connections
+        mock_is_healthy.assert_not_called()
 
     @pytest.mark.unit
     @patch.object(SSHConnection, "is_healthy")
     def test_get_connection_reuses_existing(self, mock_is_healthy):
         """Test get_connection reuses existing connection."""
-        mock_is_healthy.return_value = True
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
@@ -372,12 +373,12 @@ class TestConnectionManager:
         conn2 = manager.get_connection(host)
 
         assert conn1 is conn2
+        mock_is_healthy.assert_not_called()
 
     @pytest.mark.unit
     @patch.object(SSHConnection, "is_healthy")
     def test_get_connection_force_refresh(self, mock_is_healthy):
         """Test get_connection with force_refresh."""
-        mock_is_healthy.return_value = True
         manager = ConnectionManager()
         host = Host(hostname="example.com", username="testuser")
 
@@ -391,11 +392,10 @@ class TestConnectionManager:
     @patch.object(SSHConnection, "is_healthy")
     def test_get_connection_recreates_unhealthy(self, mock_is_healthy):
         """Test get_connection recreates unhealthy connection."""
-        manager = ConnectionManager()
+        manager = ConnectionManager(health_check_ttl_seconds=0)
         host = Host(hostname="example.com", username="testuser")
 
         # First call succeeds
-        mock_is_healthy.return_value = True
         conn1 = manager.get_connection(host)
 
         # Second call - existing connection health check fails
@@ -403,6 +403,19 @@ class TestConnectionManager:
         conn2 = manager.get_connection(host)
 
         assert conn1 is not conn2
+
+    @pytest.mark.unit
+    @patch.object(SSHConnection, "is_healthy")
+    def test_get_connection_skips_health_check_within_ttl(self, mock_is_healthy):
+        """Test get_connection avoids repeated blocking health probes within TTL."""
+        manager = ConnectionManager(health_check_ttl_seconds=60)
+        host = Host(hostname="example.com", username="testuser")
+
+        conn1 = manager.get_connection(host)
+        conn2 = manager.get_connection(host)
+
+        assert conn1 is conn2
+        mock_is_healthy.assert_not_called()
 
     @pytest.mark.unit
     def test_get_stats(self):

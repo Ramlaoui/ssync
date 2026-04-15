@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from ...cache import get_cache
 from ...models.job import JobState
+from ...utils.async_helpers import create_task
 from ...utils.logging import setup_logger
 from ..models import (
     CompleteJobDataResponse,
@@ -25,6 +26,8 @@ from ..models import (
 
 logger = setup_logger(__name__)
 _OUTPUT_THROTTLE_CACHE: dict[str, float] = {}
+_JOB_REFRESH_TASKS: dict[tuple[str, str], asyncio.Task] = {}
+_OUTPUT_REFRESH_TASKS: dict[tuple[str, str], asyncio.Task] = {}
 
 
 def build_output_metadata(
@@ -125,6 +128,9 @@ def build_job_output_response(
     stderr_size_bytes: Optional[int] = None,
     stdout_exists: Optional[bool] = None,
     stderr_exists: Optional[bool] = None,
+    cached: bool = False,
+    stale: bool = False,
+    refresh_queued: bool = False,
 ) -> JobOutputResponse:
     return JobOutputResponse(
         job_id=job_id,
@@ -149,7 +155,46 @@ def build_job_output_response(
             size_bytes=stderr_size_bytes,
             exists=stderr_exists,
         ),
+        cached=cached,
+        stale=stale,
+        refresh_queued=refresh_queued,
     )
+
+
+def mark_job_response_cached(job: JobInfoWeb, *, refresh_queued: bool) -> JobInfoWeb:
+    return job.model_copy(
+        update={
+            "cached": True,
+            "stale": True,
+            "refresh_queued": refresh_queued,
+        }
+    )
+
+
+def _queue_deduped_task(
+    *,
+    registry: dict[tuple[str, str], asyncio.Task],
+    key: tuple[str, str],
+    coro,
+    name: str,
+) -> bool:
+    existing = registry.get(key)
+    if existing and not existing.done():
+        return True
+
+    task = create_task(coro, name=name)
+    if task is None:
+        return False
+
+    registry[key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        current = registry.get(key)
+        if current is done_task:
+            registry.pop(key, None)
+
+    task.add_done_callback(_cleanup)
+    return True
 
 
 def iter_chunk_payloads(
@@ -583,6 +628,111 @@ async def fetch_outputs_for_job_info(job_info, *, force_fetch: bool = False):
     )
 
 
+def queue_job_refresh(
+    *,
+    job_id: str,
+    host: str,
+    get_slurm_manager,
+    cache_middleware,
+    job_manager,
+) -> bool:
+    return _queue_deduped_task(
+        registry=_JOB_REFRESH_TASKS,
+        key=(host, job_id),
+        coro=refresh_job_in_background(
+            job_id=job_id,
+            host=host,
+            get_slurm_manager=get_slurm_manager,
+            cache_middleware=cache_middleware,
+            job_manager=job_manager,
+        ),
+        name=f"job-refresh:{host}:{job_id}",
+    )
+
+
+async def refresh_job_output_in_background(
+    *,
+    job_info,
+    cache_middleware,
+    job_manager,
+    force_fetch: bool,
+    refresh_reason: str,
+) -> None:
+    try:
+        stdout_content, stderr_content = await fetch_outputs_for_job_info(
+            job_info,
+            force_fetch=force_fetch,
+        )
+        is_running = job_info.state == JobState.RUNNING
+        cache_middleware.cache.update_job_outputs(
+            job_id=job_info.job_id,
+            hostname=job_info.hostname,
+            stdout_content=stdout_content,
+            stderr_content=stderr_content,
+            mark_fetched_after_completion=not is_running,
+        )
+
+        if not job_manager:
+            return
+
+        output_response = build_job_output_response(
+            job_id=job_info.job_id,
+            host=job_info.hostname,
+            stdout_path=job_info.stdout_file,
+            stderr_path=job_info.stderr_file,
+            stdout_content=None,
+            stderr_content=None,
+            metadata_only=True,
+            stdout_size_bytes=len(stdout_content)
+            if stdout_content is not None
+            else None,
+            stderr_size_bytes=len(stderr_content)
+            if stderr_content is not None
+            else None,
+            stdout_exists=stdout_content is not None,
+            stderr_exists=stderr_content is not None,
+        )
+        await job_manager.broadcast_job_update(
+            job_info.job_id,
+            job_info.hostname,
+            {
+                "type": "output_update",
+                "output": output_response.model_dump(mode="json"),
+                "refresh_reason": refresh_reason,
+                "source": "background_refresh",
+            },
+        )
+    except Exception as exc:
+        logger.debug(
+            "Background output refresh failed for job %s on %s: %s",
+            job_info.job_id,
+            job_info.hostname,
+            exc,
+        )
+
+
+def queue_job_output_refresh(
+    *,
+    job_info,
+    cache_middleware,
+    job_manager,
+    force_fetch: bool,
+    refresh_reason: str,
+) -> bool:
+    return _queue_deduped_task(
+        registry=_OUTPUT_REFRESH_TASKS,
+        key=(job_info.hostname, job_info.job_id),
+        coro=refresh_job_output_in_background(
+            job_info=job_info,
+            cache_middleware=cache_middleware,
+            job_manager=job_manager,
+            force_fetch=force_fetch,
+            refresh_reason=refresh_reason,
+        ),
+        name=f"output-refresh:{job_info.hostname}:{job_info.job_id}",
+    )
+
+
 def build_complete_job_data_response(
     *,
     job_id: str,
@@ -689,47 +839,9 @@ async def get_job_output_response(
     force_refresh: bool,
     get_slurm_manager,
     cache_middleware,
+    job_manager,
 ) -> JobOutputResponse:
     try:
-        if force_refresh:
-            logger.info(f"Force refresh requested for job {job_id} outputs")
-            job_data, host = await get_job_data_with_optional_host_search(
-                job_id=job_id,
-                host=host,
-                get_slurm_manager=get_slurm_manager,
-            )
-
-            if job_data and job_data.job_info:
-                stdout_content, stderr_content = await fetch_outputs_for_job_info(
-                    job_data.job_info,
-                    force_fetch=True,
-                )
-                is_running = job_data.job_info.state == JobState.RUNNING
-                cache_middleware.cache.update_job_outputs(
-                    job_id=job_id,
-                    hostname=host,
-                    stdout_content=stdout_content,
-                    stderr_content=stderr_content,
-                    mark_fetched_after_completion=not is_running,
-                )
-                return build_job_output_response(
-                    job_id=job_id,
-                    host=host,
-                    stdout_path=job_data.job_info.stdout_file,
-                    stderr_path=job_data.job_info.stderr_file,
-                    stdout_content=limit_output_lines(stdout_content, lines),
-                    stderr_content=limit_output_lines(stderr_content, lines),
-                    metadata_only=metadata_only,
-                    stdout_size_bytes=len(stdout_content)
-                    if stdout_content is not None
-                    else None,
-                    stderr_size_bytes=len(stderr_content)
-                    if stderr_content is not None
-                    else None,
-                    stdout_exists=stdout_content is not None,
-                    stderr_exists=stderr_content is not None,
-                )
-
         cached_job = (
             cache_middleware.cache.get_cached_job(job_id, host) if host else None
         )
@@ -774,34 +886,34 @@ async def get_job_output_response(
                 lines=lines,
                 metadata_only=metadata_only,
             )
+            refresh_queued = False
 
             if is_running:
                 throttle_key = f"output:{host}:{job_id}"
                 min_interval = 10
                 now = time.time()
                 last_fetch = _OUTPUT_THROTTLE_CACHE.get(throttle_key, 0)
-                if now - last_fetch >= min_interval or not stdout_exists:
-                    logger.info(f"Job {job_id} is running, fetching fresh output")
-                    stdout_content, stderr_content = await fetch_outputs_for_job_info(
-                        cached_job.job_info,
+                should_refresh = (
+                    force_refresh
+                    or now - last_fetch >= min_interval
+                    or not stdout_exists
+                    or not stderr_exists
+                )
+                if should_refresh:
+                    refresh_reason = (
+                        "force_refresh"
+                        if force_refresh
+                        else "running_output_refresh"
+                    )
+                    refresh_queued = queue_job_output_refresh(
+                        job_info=cached_job.job_info,
+                        cache_middleware=cache_middleware,
+                        job_manager=job_manager,
                         force_fetch=True,
+                        refresh_reason=refresh_reason,
                     )
-                    cache_middleware.cache.update_job_outputs(
-                        job_id=job_id,
-                        hostname=host,
-                        stdout_content=stdout_content,
-                        stderr_content=stderr_content,
-                        mark_fetched_after_completion=False,
-                    )
-                    stdout_size = (
-                        len(stdout_content) if stdout_content is not None else stdout_size
-                    )
-                    stderr_size = (
-                        len(stderr_content) if stderr_content is not None else stderr_size
-                    )
-                    stdout_exists = stdout_content is not None
-                    stderr_exists = stderr_content is not None
-                    _OUTPUT_THROTTLE_CACHE[throttle_key] = now
+                    if refresh_queued:
+                        _OUTPUT_THROTTLE_CACHE[throttle_key] = now
                 else:
                     logger.debug(
                         f"Job {job_id} output throttled, serving cached "
@@ -814,23 +926,23 @@ async def get_job_output_response(
                         host,
                     )
                 )
-                if not stdout_fetched_after or not stderr_fetched_after:
+                if force_refresh or not stdout_fetched_after or not stderr_fetched_after:
                     logger.info(
-                        "Job %s is completed but outputs not fetched after completion, "
-                        "fetching now",
+                        "Job %s completed output request served from cache "
+                        "(force_refresh=%s, stdout_fetched=%s, stderr_fetched=%s); "
+                        "queueing background refresh",
                         job_id,
+                        force_refresh,
+                        stdout_fetched_after,
+                        stderr_fetched_after,
                     )
-                    stdout_content, stderr_content = await fetch_outputs_for_job_info(
-                        cached_job.job_info
+                    refresh_queued = queue_job_output_refresh(
+                        job_info=cached_job.job_info,
+                        cache_middleware=cache_middleware,
+                        job_manager=job_manager,
+                        force_fetch=force_refresh,
+                        refresh_reason="completed_output_refresh",
                     )
-                    stdout_size = (
-                        len(stdout_content) if stdout_content is not None else stdout_size
-                    )
-                    stderr_size = (
-                        len(stderr_content) if stderr_content is not None else stderr_size
-                    )
-                    stdout_exists = stdout_content is not None
-                    stderr_exists = stderr_content is not None
             elif is_pending:
                 logger.debug(f"Job {job_id} is pending, no outputs available yet")
                 return build_job_output_response(
@@ -842,6 +954,9 @@ async def get_job_output_response(
                     stderr_content=None,
                     stdout_exists=False,
                     stderr_exists=False,
+                    cached=True,
+                    stale=True,
+                    refresh_queued=False,
                 )
 
             return build_job_output_response(
@@ -856,6 +971,9 @@ async def get_job_output_response(
                 stderr_size_bytes=stderr_size,
                 stdout_exists=stdout_exists,
                 stderr_exists=stderr_exists,
+                cached=True,
+                stale=True,
+                refresh_queued=refresh_queued,
             )
 
         manager = get_slurm_manager()
