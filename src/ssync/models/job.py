@@ -39,6 +39,8 @@ class JobInfo:
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     node_list: Optional[str] = None
+    node_hostnames: Optional[list[str]] = None
+    batch_host: Optional[str] = None
 
     # Additional job metadata
     exit_code: Optional[str] = None
@@ -51,6 +53,8 @@ class JobInfo:
     # Resource allocation
     alloc_tres: Optional[str] = None
     req_tres: Optional[str] = None
+    gres: Optional[str] = None
+    tres_per_node: Optional[str] = None
 
     # CPU metrics
     cpu_time: Optional[str] = None

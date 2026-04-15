@@ -1,5 +1,7 @@
 """Slurm output retrieval utilities."""
 
+import shlex
+from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
 from ..parsers.slurm import SlurmParser
@@ -13,6 +15,22 @@ class SSHConnection(Protocol):
 
 
 logger = setup_logger(__name__, "INFO")
+
+
+@dataclass
+class JobScontrolDetails:
+    """Parsed job metadata from ``scontrol show job``."""
+
+    stdout_path: Optional[str] = None
+    stderr_path: Optional[str] = None
+    submit_line: Optional[str] = None
+    batch_host: Optional[str] = None
+    node_list: Optional[str] = None
+    num_nodes: Optional[str] = None
+    num_cpus: Optional[str] = None
+    tres: Optional[str] = None
+    gres: Optional[str] = None
+    tres_per_node: Optional[str] = None
 
 
 class SlurmOutput:
@@ -50,23 +68,20 @@ class SlurmOutput:
 
         return stdout_path, stderr_path
 
-    def get_job_details_from_scontrol_batch(
+    def get_job_metadata_from_scontrol_batch(
         self,
         conn: SSHConnection,
         job_ids: list[str],
         hostname: str,
         max_single_job_fallbacks: Optional[int] = None,
-    ) -> dict[str, tuple[Optional[str], Optional[str], Optional[str]]]:
-        """Fetch job details for multiple jobs in a single scontrol call.
-
-        Returns a mapping of job_id -> (stdout_path, stderr_path, submit_line).
-        """
+    ) -> dict[str, JobScontrolDetails]:
+        """Fetch structured job metadata for multiple jobs in one scontrol call."""
         if not job_ids:
             return {}
 
         # scontrol accepts multiple job IDs as args.
         cmd = f"scontrol show job {' '.join(job_ids)}"
-        details: dict[str, tuple[Optional[str], Optional[str], Optional[str]]] = {}
+        details: dict[str, JobScontrolDetails] = {}
 
         try:
             result = conn.run(cmd, hide=True, timeout=20, warn=True, pty=True)
@@ -76,18 +91,23 @@ class SlurmOutput:
                 )
             else:
                 parsed = self._parse_scontrol_show_job_output(result.stdout)
-                for parsed_job_id, (
-                    stdout_path,
-                    stderr_path,
-                    submit_line,
-                ) in parsed.items():
+                for parsed_job_id, parsed_details in parsed.items():
                     expanded_stdout, expanded_stderr = self._expand_paths(
-                        parsed_job_id, stdout_path, stderr_path
+                        parsed_job_id,
+                        parsed_details.stdout_path,
+                        parsed_details.stderr_path,
                     )
-                    details[parsed_job_id] = (
-                        expanded_stdout,
-                        expanded_stderr,
-                        submit_line,
+                    details[parsed_job_id] = JobScontrolDetails(
+                        stdout_path=expanded_stdout,
+                        stderr_path=expanded_stderr,
+                        submit_line=parsed_details.submit_line,
+                        batch_host=parsed_details.batch_host,
+                        node_list=parsed_details.node_list,
+                        num_nodes=parsed_details.num_nodes,
+                        num_cpus=parsed_details.num_cpus,
+                        tres=parsed_details.tres,
+                        gres=parsed_details.gres,
+                        tres_per_node=parsed_details.tres_per_node,
                     )
 
         except Exception as e:
@@ -109,18 +129,52 @@ class SlurmOutput:
             fallback_job_ids = missing_job_ids
 
         for job_id in fallback_job_ids:
-            stdout_path, stderr_path, submit_line = self.get_job_details_from_scontrol(
+            job_details = self.get_job_metadata_from_scontrol(
                 conn, job_id, hostname
             )
-            if stdout_path or stderr_path or submit_line:
-                details[job_id] = (stdout_path, stderr_path, submit_line)
+            if any(
+                (
+                    job_details.stdout_path,
+                    job_details.stderr_path,
+                    job_details.submit_line,
+                    job_details.batch_host,
+                    job_details.node_list,
+                    job_details.tres,
+                    job_details.gres,
+                    job_details.tres_per_node,
+                )
+            ):
+                details[job_id] = job_details
 
         return details
 
-    def get_job_details_from_scontrol(
+    def get_job_details_from_scontrol_batch(
+        self,
+        conn: SSHConnection,
+        job_ids: list[str],
+        hostname: str,
+        max_single_job_fallbacks: Optional[int] = None,
+    ) -> dict[str, tuple[Optional[str], Optional[str], Optional[str]]]:
+        """Fetch output paths and submit command for multiple jobs."""
+        details = self.get_job_metadata_from_scontrol_batch(
+            conn=conn,
+            job_ids=job_ids,
+            hostname=hostname,
+            max_single_job_fallbacks=max_single_job_fallbacks,
+        )
+        return {
+            job_id: (
+                job_details.stdout_path,
+                job_details.stderr_path,
+                job_details.submit_line,
+            )
+            for job_id, job_details in details.items()
+        }
+
+    def get_job_metadata_from_scontrol(
         self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None
-    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
-        """Get job details including output files and submit_line using scontrol show job."""
+    ) -> JobScontrolDetails:
+        """Get structured job metadata using ``scontrol show job``."""
         try:
             logger.debug(f"Getting job details for job {job_id} on {hostname}")
 
@@ -134,59 +188,129 @@ class SlurmOutput:
 
             if not result.ok:
                 logger.debug(f"scontrol show job failed for {job_id}: {result.stderr}")
-                return None, None, None
+                return JobScontrolDetails()
 
             parsed = self._parse_scontrol_show_job_output(result.stdout)
             # Prefer exact JobId match, but fallback to first parsed block if needed.
-            stdout_path, stderr_path, submit_line = parsed.get(
-                job_id, (None, None, None)
-            )
-            if stdout_path is None and stderr_path is None and submit_line is None:
+            details = parsed.get(job_id, JobScontrolDetails())
+            if not any(
+                (
+                    details.stdout_path,
+                    details.stderr_path,
+                    details.submit_line,
+                    details.batch_host,
+                    details.node_list,
+                    details.tres,
+                    details.gres,
+                    details.tres_per_node,
+                )
+            ):
                 if parsed:
-                    stdout_path, stderr_path, submit_line = next(iter(parsed.values()))
+                    details = next(iter(parsed.values()))
 
             stdout_path, stderr_path = self._expand_paths(
-                job_id, stdout_path, stderr_path
+                job_id, details.stdout_path, details.stderr_path
+            )
+            enriched_details = JobScontrolDetails(
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                submit_line=details.submit_line,
+                batch_host=details.batch_host,
+                node_list=details.node_list,
+                num_nodes=details.num_nodes,
+                num_cpus=details.num_cpus,
+                tres=details.tres,
+                gres=details.gres,
+                tres_per_node=details.tres_per_node,
             )
             logger.debug(
-                f"Found job details for job {job_id}: stdout={stdout_path}, stderr={stderr_path}, submit_line={submit_line}"
+                "Found job details for job %s: stdout=%s, stderr=%s, submit_line=%s, "
+                "batch_host=%s, node_list=%s, tres=%s, gres=%s",
+                job_id,
+                stdout_path,
+                stderr_path,
+                enriched_details.submit_line,
+                enriched_details.batch_host,
+                enriched_details.node_list,
+                enriched_details.tres,
+                enriched_details.gres,
             )
-            return stdout_path, stderr_path, submit_line
+            return enriched_details
 
         except Exception as e:
             logger.debug(f"Failed to get job details for job {job_id}: {e}")
-            return None, None, None
+            return JobScontrolDetails()
+
+    def get_job_details_from_scontrol(
+        self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """Get output file paths and submit command using scontrol show job."""
+        details = self.get_job_metadata_from_scontrol(conn, job_id, hostname, user)
+        return details.stdout_path, details.stderr_path, details.submit_line
 
     def _parse_scontrol_show_job_output(
         self, raw_output: str
-    ) -> dict[str, tuple[Optional[str], Optional[str], Optional[str]]]:
-        """Parse `scontrol show job` output into a job details mapping."""
-        details: dict[str, tuple[Optional[str], Optional[str], Optional[str]]] = {}
+    ) -> dict[str, JobScontrolDetails]:
+        """Parse ``scontrol show job`` output into structured metadata."""
+        details: dict[str, JobScontrolDetails] = {}
         current_job_id: Optional[str] = None
-        stdout_path: Optional[str] = None
-        stderr_path: Optional[str] = None
-        submit_line: Optional[str] = None
+        current_details = JobScontrolDetails()
 
         def flush_current() -> None:
             if current_job_id:
-                details[current_job_id] = (stdout_path, stderr_path, submit_line)
+                details[current_job_id] = current_details
 
         for token in raw_output.replace("\n", " ").split():
             if token.startswith("JobId="):
                 flush_current()
                 current_job_id = token.split("=", 1)[1]
-                stdout_path = None
-                stderr_path = None
-                submit_line = None
+                current_details = JobScontrolDetails()
             elif token.startswith("StdOut="):
-                stdout_path = token.split("=", 1)[1]
+                current_details.stdout_path = token.split("=", 1)[1]
             elif token.startswith("StdErr="):
-                stderr_path = token.split("=", 1)[1]
+                current_details.stderr_path = token.split("=", 1)[1]
             elif token.startswith("Command="):
-                submit_line = token.split("=", 1)[1]
+                current_details.submit_line = token.split("=", 1)[1]
+            elif token.startswith("BatchHost="):
+                current_details.batch_host = token.split("=", 1)[1]
+            elif token.startswith("NodeList="):
+                current_details.node_list = token.split("=", 1)[1]
+            elif token.startswith("NumNodes="):
+                current_details.num_nodes = token.split("=", 1)[1]
+            elif token.startswith("NumCPUs="):
+                current_details.num_cpus = token.split("=", 1)[1]
+            elif token.startswith("TRES="):
+                current_details.tres = token.split("=", 1)[1]
+            elif token.startswith("Gres="):
+                current_details.gres = token.split("=", 1)[1]
+            elif token.startswith("TresPerNode="):
+                current_details.tres_per_node = token.split("=", 1)[1]
 
         flush_current()
         return details
+
+    def resolve_node_hostnames(
+        self, conn: SSHConnection, node_list: Optional[str]
+    ) -> Optional[list[str]]:
+        """Expand a Slurm node list expression into concrete hostnames."""
+        if not node_list:
+            return None
+
+        try:
+            result = conn.run(
+                f"scontrol show hostnames {shlex.quote(node_list)}",
+                hide=True,
+                timeout=10,
+                warn=True,
+                pty=True,
+            )
+            if not result.ok or not result.stdout.strip():
+                return None
+            hostnames = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            return hostnames or None
+        except Exception as e:
+            logger.debug(f"Failed to resolve node hostnames for {node_list}: {e}")
+            return None
 
     def get_job_output_files(
         self, conn: SSHConnection, job_id: str, hostname: str, user: str | None = None
