@@ -53,6 +53,8 @@ class SSHCommandResult:
 class SSHConnection:
     """SSH connection with Fabric-compatible API."""
 
+    SCP_TIMEOUT_SECONDS = 120
+
     def __init__(self, host_config: Any, host_id: str):
         """Initialize with host configuration.
 
@@ -310,17 +312,7 @@ class SSHConnection:
                     # Fallback to direct scp
                     scp_cmd = ["scp", local_path, f"{host_for_scp}:{remote}"]
 
-            # Run scp locally, not through SSH
-            import subprocess
-
-            result = subprocess.run(scp_cmd, capture_output=True)
-            if result.returncode != 0:
-                # Decode stderr for error message
-                try:
-                    stderr = result.stderr.decode("utf-8")
-                except UnicodeDecodeError:
-                    stderr = result.stderr.decode("utf-8", errors="replace")
-                raise Exception(f"Failed to upload file: {stderr}")
+            self._run_scp_command(scp_cmd, direction="upload")
         finally:
             # Clean up temp file if we created one
             if temp_file and os.path.exists(temp_file):
@@ -401,17 +393,7 @@ class SSHConnection:
                     # Fallback to direct scp
                     scp_cmd = ["scp", f"{host_for_scp}:{remote}", local_path]
 
-            # Run scp locally, not through SSH
-            import subprocess
-
-            result = subprocess.run(scp_cmd, capture_output=True)
-            if result.returncode != 0:
-                # Decode stderr for error message
-                try:
-                    stderr = result.stderr.decode("utf-8")
-                except UnicodeDecodeError:
-                    stderr = result.stderr.decode("utf-8", errors="replace")
-                raise Exception(f"Failed to download file: {stderr}")
+            self._run_scp_command(scp_cmd, direction="download")
 
             # If it was a file object, write the content back
             if is_file_obj:
@@ -440,6 +422,50 @@ class SSHConnection:
         # We don't close the ControlMaster here because it's shared
         # It will be closed when the process exits or explicitly cleaned up
         logger.debug(f"Close called for {self.host_id} (ControlMaster remains active)")
+
+    def _run_scp_command(self, scp_cmd: list[str], direction: str) -> None:
+        """Run an scp command with timeout and one retry after socket cleanup."""
+        import subprocess
+
+        last_error = None
+        for attempt in range(2):
+            try:
+                result = subprocess.run(
+                    scp_cmd,
+                    capture_output=True,
+                    timeout=self.SCP_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                last_error = (
+                    f"SCP {direction} timed out after {self.SCP_TIMEOUT_SECONDS} seconds"
+                )
+                logger.warning(
+                    f"{last_error} for {self.host_id} (attempt {attempt + 1}/2)"
+                )
+                if attempt == 0:
+                    NativeSSH.cleanup_control_master(self.host_id)
+                    continue
+                raise Exception(last_error) from exc
+
+            if result.returncode == 0:
+                return
+
+            try:
+                stderr = result.stderr.decode("utf-8")
+            except UnicodeDecodeError:
+                stderr = result.stderr.decode("utf-8", errors="replace")
+
+            last_error = stderr.strip() or f"scp exited with code {result.returncode}"
+            logger.warning(
+                f"SCP {direction} failed for {self.host_id} "
+                f"(attempt {attempt + 1}/2): {last_error}"
+            )
+            if attempt == 0:
+                NativeSSH.cleanup_control_master(self.host_id)
+                continue
+            raise Exception(f"Failed to {direction} file: {last_error}")
+
+        raise Exception(f"Failed to {direction} file: {last_error}")
 
     @classmethod
     def cleanup_all(cls):

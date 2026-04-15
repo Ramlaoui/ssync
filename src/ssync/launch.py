@@ -3,8 +3,9 @@
 import asyncio
 import re
 import shutil
+import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .launch_events import LaunchEventEmitter
 from .manager import Job, SlurmManager
@@ -76,6 +77,22 @@ class LaunchManager:
 
         return login_setup_commands, clean_compute_script
 
+    def _resolve_remote_work_dir(
+        self,
+        slurm_host,
+        source_dir: Optional[Path],
+        sync_enabled: bool,
+        work_dir_override: Optional[str | Path] = None,
+    ) -> Path:
+        """Resolve the remote working directory for this launch."""
+        if work_dir_override is not None:
+            return Path(work_dir_override)
+
+        if sync_enabled and source_dir is not None:
+            return Path(slurm_host.work_dir) / source_dir.name
+
+        return Path(slurm_host.work_dir)
+
     def _extract_watchers_from_script_content(self, script_content: str):
         """Extract watcher definitions from the local prepared script."""
         watchers = []
@@ -101,7 +118,11 @@ class LaunchManager:
         return watchers
 
     async def _capture_submission_in_background(
-        self, job_id: str, hostname: str, script_content: str
+        self,
+        job_id: str,
+        hostname: str,
+        script_content: str,
+        local_source_dir: Optional[str] = None,
     ) -> None:
         """Capture submission metadata without blocking the launch response."""
         try:
@@ -109,16 +130,17 @@ class LaunchManager:
 
             job_data_manager = get_job_data_manager()
             await job_data_manager.capture_job_submission(
-                job_id, hostname, script_content
+                job_id,
+                hostname,
+                script_content,
+                local_source_dir=local_source_dir,
             )
         except Exception as e:
-            logger.warning(
-                f"Failed to capture submission data for job {job_id}: {e}"
-            )
+            logger.warning(f"Failed to capture submission data for job {job_id}: {e}")
 
     async def launch_job(
         self,
-        script_path: str | Path,
+        script_path: str | Path | None,
         source_dir: Optional[str | Path],
         host: str,
         slurm_params: SlurmParams,
@@ -129,6 +151,9 @@ class LaunchManager:
         sync_enabled: bool = True,
         abort_on_setup_failure: bool = True,
         launch_event_emitter: Optional[LaunchEventEmitter] = None,
+        script_content: Optional[str] = None,
+        script_variables: Optional[Dict[str, Any]] = None,
+        work_dir_override: Optional[str | Path] = None,
     ) -> Optional[Job]:
         """Launch a job with optional sync and submission.
 
@@ -143,16 +168,27 @@ class LaunchManager:
             no_gitignore: Disable .gitignore usage
             sync_enabled: Whether to sync source directory (default: True)
             abort_on_setup_failure: Whether to abort job submission if login setup fails (default: True)
+            script_content: Optional in-memory script content to submit
+            script_variables: Optional variables to render into script_content/script_path
+            work_dir_override: Optional explicit remote working directory
 
         Returns:
             Job object if successful, None otherwise
         """
-        script_path = Path(script_path)
-
-        if not script_path.exists():
-            error_msg = f"Script not found: {script_path}"
+        if script_path is None and script_content is None:
+            error_msg = "Either script_path or script_content is required"
             logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
+            raise ValueError(error_msg)
+
+        script_name = "inline_script.sh"
+        if script_path is not None:
+            script_path = Path(script_path)
+            script_name = script_path.name
+
+            if script_content is None and not script_path.exists():
+                error_msg = f"Script not found: {script_path}"
+                logger.error(error_msg)
+                raise FileNotFoundError(error_msg)
 
         if sync_enabled:
             if source_dir is None:
@@ -213,21 +249,32 @@ class LaunchManager:
                         "sync_finished",
                         message=f"Sync completed for {source_dir.name}",
                     )
-                remote_work_dir = Path(slurm_host.work_dir) / source_dir.name
             else:
-                logger.info("Skipping sync - submitting job in host work directory")
+                logger.info("Skipping sync - submitting job without remote sync")
                 if launch_event_emitter:
                     launch_event_emitter.log(
                         "system",
-                        "Skipping sync and submitting in the host work directory.",
+                        "Skipping sync and reusing the configured remote work directory.",
                         stream="system",
                     )
-                remote_work_dir = Path(slurm_host.work_dir)
+            remote_work_dir = self._resolve_remote_work_dir(
+                slurm_host,
+                source_dir,
+                sync_enabled=sync_enabled,
+                work_dir_override=work_dir_override,
+            )
 
             logger.info("Parsing script for login node setup and compute commands...")
 
-            with open(script_path, "r") as f:
-                original_script_content = f.read()
+            if script_content is None:
+                with open(script_path, "r") as f:
+                    original_script_content = f.read()
+            else:
+                original_script_content = script_content
+
+            original_script_content = ScriptProcessor.render_script_variables(
+                original_script_content, script_variables
+            )
 
             login_setup_commands, clean_compute_script = self._parse_structured_script(
                 original_script_content
@@ -251,9 +298,8 @@ class LaunchManager:
 
             logger.info("Preparing clean compute script for Slurm submission...")
             remote_script_dir = remote_work_dir / "scripts"
-            temp_dir = Path("/tmp/slurm_launch")
-            temp_dir.mkdir(exist_ok=True)
-            clean_script_path = temp_dir / f"clean_{script_path.name}"
+            temp_dir = Path(tempfile.mkdtemp(prefix="ssync-launch-"))
+            clean_script_path = temp_dir / f"clean_{script_name}"
 
             with open(clean_script_path, "w") as f:
                 f.write(clean_compute_script)
@@ -492,6 +538,7 @@ class LaunchManager:
                         job.job_id,
                         slurm_host.host.hostname,
                         clean_compute_script,
+                        local_source_dir=str(source_dir) if source_dir else None,
                     ),
                     name=f"capture_submission_{slurm_host.host.hostname}_{job.job_id}",
                 )
@@ -500,6 +547,7 @@ class LaunchManager:
                         job.job_id,
                         slurm_host.host.hostname,
                         clean_compute_script,
+                        local_source_dir=str(source_dir) if source_dir else None,
                     )
                 else:
                     capture_task.add_done_callback(

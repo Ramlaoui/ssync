@@ -251,6 +251,43 @@ class TestSSHConnection:
         assert conn.is_healthy(timeout=5) is True
         mock_run.assert_called_once_with("echo 'health check'", hide=True, timeout=5)
 
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.cleanup_control_master")
+    @patch("subprocess.run")
+    def test_run_scp_command_retries_after_timeout(
+        self, mock_run, mock_cleanup_control_master
+    ):
+        import subprocess
+
+        conn = SSHConnection("myhost", "user@myhost")
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["scp"], timeout=conn.SCP_TIMEOUT_SECONDS),
+            Mock(returncode=0, stderr=b""),
+        ]
+
+        conn._run_scp_command(["scp", "a", "b"], direction="upload")
+
+        assert mock_run.call_count == 2
+        mock_cleanup_control_master.assert_called_once_with("user@myhost")
+
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.cleanup_control_master")
+    @patch("subprocess.run")
+    def test_run_scp_command_raises_after_second_failure(
+        self, mock_run, mock_cleanup_control_master
+    ):
+        conn = SSHConnection("myhost", "user@myhost")
+        mock_run.side_effect = [
+            Mock(returncode=255, stderr=b"Connection reset by peer"),
+            Mock(returncode=255, stderr=b"Connection reset by peer"),
+        ]
+
+        with pytest.raises(Exception, match="Failed to upload file"):
+            conn._run_scp_command(["scp", "a", "b"], direction="upload")
+
+        assert mock_run.call_count == 2
+        mock_cleanup_control_master.assert_called_once_with("user@myhost")
+
 
 class TestConnectionManager:
     """Tests for ConnectionManager class."""

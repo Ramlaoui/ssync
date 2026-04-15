@@ -104,6 +104,17 @@ def register_lifecycle_events(
         logger.info("Secure API started, manager initialized")
 
         try:
+            from ..watchers.daemon import WatcherDaemon
+
+            stopped = WatcherDaemon.stop_all()
+            if stopped:
+                logger.info(
+                    "Stopped standalone watcher runners because API watcher service owns monitoring"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to stop standalone watcher daemon: {e}")
+
+        try:
             from ..watchers.service import start_watcher_service
 
             await start_watcher_service()

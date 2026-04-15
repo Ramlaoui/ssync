@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,41 @@ class WatcherDaemon:
     LOG_FILE = Path.home() / ".config" / "ssync" / "watcher-daemon.log"
 
     @classmethod
+    def _list_run_watcher_processes(cls) -> List[Tuple[int, str]]:
+        """Find all standalone watcher runner processes across worktrees."""
+        try:
+            result = subprocess.run(
+                ["ps", "-eo", "pid=,args="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return []
+
+            processes: List[Tuple[int, str]] = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line or "run_watchers.py" not in line:
+                    continue
+
+                pid_str, _, args = line.partition(" ")
+                try:
+                    pid = int(pid_str)
+                except ValueError:
+                    continue
+
+                if pid == os.getpid():
+                    continue
+
+                processes.append((pid, args.strip()))
+
+            return processes
+        except Exception as e:
+            logger.warning(f"Failed to list watcher daemon processes: {e}")
+            return []
+
+    @classmethod
     def script_path(cls) -> Path:
         """Return the watcher runner entrypoint path."""
         return Path(__file__).resolve().parents[3] / "utils" / "run_watchers.py"
@@ -29,7 +65,7 @@ class WatcherDaemon:
     def is_running(cls) -> bool:
         """Check if daemon is already running."""
         if not cls.PID_FILE.exists():
-            return False
+            return bool(cls._list_run_watcher_processes())
 
         try:
             pid = int(cls.PID_FILE.read_text().strip())
@@ -39,11 +75,51 @@ class WatcherDaemon:
         except (ProcessLookupError, ValueError):
             # Process doesn't exist or invalid PID
             cls.PID_FILE.unlink(missing_ok=True)
-            return False
+            return bool(cls._list_run_watcher_processes())
+
+    @classmethod
+    def stop_all(cls) -> int:
+        """Stop every standalone run_watchers.py process sharing the global cache."""
+        processes = cls._list_run_watcher_processes()
+        stopped = 0
+
+        for pid, args in processes:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                stopped += 1
+                logger.info(f"Stopped watcher runner process {pid}: {args}")
+            except ProcessLookupError:
+                continue
+            except Exception as e:
+                logger.warning(f"Failed to stop watcher runner process {pid}: {e}")
+
+        if stopped:
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                remaining = [pid for pid, _ in cls._list_run_watcher_processes()]
+                if not remaining:
+                    break
+                time.sleep(0.1)
+
+            for pid, args in cls._list_run_watcher_processes():
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    logger.warning(f"Killed stuck watcher runner process {pid}: {args}")
+                except ProcessLookupError:
+                    continue
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to kill stuck watcher runner process {pid}: {e}"
+                    )
+
+        cls.PID_FILE.unlink(missing_ok=True)
+        return stopped
 
     @classmethod
     def start(cls) -> bool:
         """Start the daemon if not already running."""
+        cls.stop_all()
+
         if cls.is_running():
             logger.info("Watcher daemon already running")
             return True
@@ -83,19 +159,13 @@ class WatcherDaemon:
     @classmethod
     def stop(cls) -> bool:
         """Stop the daemon if running."""
-        if not cls.is_running():
+        stopped = cls.stop_all()
+        if stopped == 0:
             logger.info("Watcher daemon not running")
+        else:
+            logger.info(f"Stopped {stopped} watcher daemon process(es)")
             return True
-
-        try:
-            pid = int(cls.PID_FILE.read_text().strip())
-            os.kill(pid, signal.SIGTERM)
-            cls.PID_FILE.unlink(missing_ok=True)
-            logger.info(f"Stopped watcher daemon (PID: {pid})")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to stop daemon: {e}")
-            return False
+        return True
 
     @classmethod
     def ensure_running(cls) -> bool:

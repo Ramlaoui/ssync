@@ -117,6 +117,45 @@ class WatcherEngine:
         self._shutdown = False
         self._pattern_cache: Dict[str, re.Pattern] = {}  # Cache compiled regex patterns
 
+    @staticmethod
+    def _looks_like_placeholder_capture(value: Any) -> bool:
+        """Detect captures that look like the regex pattern text, not real output."""
+        if value is None:
+            return False
+
+        text = str(value).strip()
+        if not text:
+            return False
+
+        placeholder_patterns = (
+            r"^\(\.\+\)\\?\"?$",
+            r"^\.\*$",
+            r"^\[\.\*\]$",
+        )
+        return any(re.match(pattern, text) for pattern in placeholder_patterns)
+
+    def _merge_captured_vars(
+        self, watcher: WatcherInstance, captured_vars: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Merge new captures without letting placeholder fragments clobber good data."""
+        merged = dict(captured_vars)
+        for name, value in list(merged.items()):
+            existing = watcher.variables.get(name)
+            if existing and self._looks_like_placeholder_capture(value):
+                logger.warning(
+                    f"Skipping placeholder capture overwrite for watcher {watcher.id}: "
+                    f"{name}={value!r} (keeping {existing!r})"
+                )
+                merged.pop(name, None)
+        return merged
+
+    def _captures_are_placeholder_only(self, captured_vars: Dict[str, Any]) -> bool:
+        """Return True when every capture value looks like regex text, not job output."""
+        return bool(captured_vars) and all(
+            self._looks_like_placeholder_capture(value)
+            for value in captured_vars.values()
+        )
+
     async def start_watchers_for_job(
         self,
         job_id: str,
@@ -297,6 +336,14 @@ class WatcherEngine:
                 )
 
                 for task_job_id in new_tasks:
+                    remaining_resubmits = next(
+                        (
+                            action.params.get("remaining_resubmits")
+                            for action in template.definition.actions
+                            if action.type.value == "resubmit"
+                        ),
+                        None,
+                    )
                     # Clone the template definition (without the array template flag)
                     child_definition = WatcherDefinition(
                         name=template.definition.name,
@@ -311,6 +358,7 @@ class WatcherEngine:
                         timer_interval_seconds=template.definition.timer_interval_seconds,
                         trigger_on_job_end=template.definition.trigger_on_job_end,
                         trigger_job_states=template.definition.trigger_job_states,
+                        remaining_resubmits=remaining_resubmits,
                         is_array_template=False,  # Child watchers are not templates
                         array_spec=None,
                     )
@@ -752,9 +800,19 @@ class WatcherEngine:
                         # Use string keys "1", "2" for positional references
                         captured_vars[str(i)] = group_value
 
-                # Update watcher variables
-                watcher.variables.update(captured_vars)
-                self._update_watcher_variables(watcher.id, captured_vars)
+                if self._captures_are_placeholder_only(captured_vars):
+                    logger.warning(
+                        f"Ignoring placeholder-only match for watcher {watcher.id}: "
+                        f"{matched_text!r}"
+                    )
+                    continue
+
+                # Update watcher variables, but do not let bogus placeholder
+                # matches overwrite a previously valid capture.
+                captured_vars = self._merge_captured_vars(watcher, captured_vars)
+                if captured_vars:
+                    watcher.variables.update(captured_vars)
+                    self._update_watcher_variables(watcher.id, captured_vars)
 
                 # Check condition if specified
                 if watcher.definition.condition:
@@ -833,6 +891,12 @@ class WatcherEngine:
     ) -> bool:
         """Execute watcher actions once when the job reaches a matching terminal state."""
         if not watcher.definition.trigger_on_job_end:
+            return False
+
+        if not self._claim_job_end_trigger(watcher.id):
+            logger.info(
+                f"Watcher {watcher.id} terminal trigger already claimed, skipping"
+            )
             return False
 
         state_name = self._job_end_state_name(job_state)
@@ -923,6 +987,7 @@ class WatcherEngine:
                 job_id=watcher.job_id,
                 hostname=watcher.hostname,
                 variables=variables_with_match,
+                watcher=watcher,
             )
 
             # Log event
@@ -1189,20 +1254,30 @@ class WatcherEngine:
                 if row:
                     from ..models.watcher import ActionType, WatcherAction
 
+                    actions = [
+                        WatcherAction(
+                            type=ActionType(action_data["type"]),
+                            params=action_data.get("params", {}),
+                            condition=action_data.get("condition"),
+                        )
+                        for action_data in json.loads(row["actions_json"] or "[]")
+                    ]
+                    remaining_resubmits = next(
+                        (
+                            action.params.get("remaining_resubmits")
+                            for action in actions
+                            if action.type == ActionType.RESUBMIT
+                        ),
+                        None,
+                    )
+
                     definition = WatcherDefinition(
                         name=row["name"],
                         pattern=row["pattern"],
                         interval_seconds=row["interval_seconds"],
                         captures=json.loads(row["captures_json"] or "[]"),
                         condition=row["condition"],
-                        actions=[
-                            WatcherAction(
-                                type=ActionType(action_data["type"]),
-                                params=action_data.get("params", {}),
-                                condition=action_data.get("condition"),
-                            )
-                            for action_data in json.loads(row["actions_json"] or "[]")
-                        ],
+                        actions=actions,
                         timer_mode_enabled=bool(
                             row["timer_mode_enabled"]
                             if "timer_mode_enabled" in row.keys()
@@ -1222,6 +1297,9 @@ class WatcherEngine:
                             and row["trigger_job_states_json"]
                             else '["completed", "failed", "timeout"]'
                         ),
+                        remaining_resubmits=int(remaining_resubmits)
+                        if remaining_resubmits is not None
+                        else None,
                         is_array_template=bool(
                             row["is_array_template"]
                             if "is_array_template" in row.keys()
@@ -1299,6 +1377,28 @@ class WatcherEngine:
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} state: {e}")
+
+    def _claim_job_end_trigger(self, watcher_id: int) -> bool:
+        """Atomically claim one terminal execution for a watcher."""
+        try:
+            with self.cache._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE job_watchers
+                    SET state = ?
+                    WHERE id = ? AND state = ?
+                    """,
+                    (
+                        WatcherState.TRIGGERED.value,
+                        watcher_id,
+                        WatcherState.ACTIVE.value,
+                    ),
+                )
+                conn.commit()
+                return cursor.rowcount == 1
+        except Exception as e:
+            logger.error(f"Failed to claim terminal trigger for watcher {watcher_id}: {e}")
+            return False
 
     def _update_watcher_position(self, watcher_id: int, position: int):
         """Update watcher last read position."""

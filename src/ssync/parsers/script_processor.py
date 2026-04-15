@@ -13,6 +13,167 @@ class ScriptProcessor:
     """Processes shell and Slurm scripts for job submission."""
 
     @staticmethod
+    def _apply_watcher_action_defaults(watcher: WatcherDefinition) -> None:
+        """Propagate watcher-level settings into action params when needed."""
+        if watcher.remaining_resubmits is None:
+            return
+
+        for action in watcher.actions:
+            if action.type == ActionType.RESUBMIT:
+                action.params.setdefault(
+                    "remaining_resubmits", watcher.remaining_resubmits
+                )
+
+    @staticmethod
+    def decrement_watcher_resubmit_counter(
+        script_content: str,
+        *,
+        watcher_name: Optional[str],
+        watcher_pattern: str,
+        trigger_on_job_end: bool,
+        current_remaining: int,
+    ) -> str:
+        """Decrement the resubmit counter for the matching watcher block."""
+        if current_remaining < 0:
+            raise ValueError("remaining resubmits cannot be negative")
+
+        lines = script_content.split("\n")
+        updated = False
+        i = 0
+
+        while i < len(lines):
+            if lines[i].strip() != "#WATCHER_BEGIN":
+                i += 1
+                continue
+
+            block_start = i
+            i += 1
+            watcher_lines: List[str] = []
+            while i < len(lines) and lines[i].strip() != "#WATCHER_END":
+                watcher_lines.append(lines[i])
+                i += 1
+
+            if i >= len(lines):
+                break
+
+            block_end = i
+            parsed = ScriptProcessor._parse_watcher_block("\n".join(watcher_lines))
+            if not parsed:
+                i += 1
+                continue
+
+            has_resubmit = any(
+                action.type == ActionType.RESUBMIT for action in parsed.actions
+            )
+            if (
+                has_resubmit
+                and parsed.name == watcher_name
+                and parsed.pattern == watcher_pattern
+                and parsed.trigger_on_job_end == trigger_on_job_end
+            ):
+                action_remaining = next(
+                    (
+                        action.params.get("remaining_resubmits")
+                        for action in parsed.actions
+                        if action.type == ActionType.RESUBMIT
+                    ),
+                    None,
+                )
+                if action_remaining is not None and int(action_remaining) != int(
+                    current_remaining
+                ):
+                    i += 1
+                    continue
+
+                next_remaining = current_remaining - 1
+                comment_prefix = "# "
+                for raw_line in watcher_lines:
+                    match = re.match(r"^(\s*#\s*)", raw_line)
+                    if match:
+                        comment_prefix = match.group(1)
+                        break
+
+                field_replaced = False
+                for idx, raw_line in enumerate(watcher_lines):
+                    if re.match(
+                        r"^\s*#\s*(remaining_resubmits|resubmit_count)\s*:",
+                        raw_line,
+                    ):
+                        key_match = re.match(
+                            r"^(\s*#\s*)(remaining_resubmits|resubmit_count)\s*:",
+                            raw_line,
+                        )
+                        key = key_match.group(2) if key_match else "remaining_resubmits"
+                        prefix = key_match.group(1) if key_match else comment_prefix
+                        watcher_lines[idx] = f"{prefix}{key}: {next_remaining}"
+                        field_replaced = True
+                        break
+
+                if not field_replaced:
+                    insert_at = len(watcher_lines)
+                    for idx, raw_line in enumerate(watcher_lines):
+                        if re.match(r"^\s*#\s*actions\s*:", raw_line):
+                            insert_at = idx
+                            break
+                    watcher_lines.insert(
+                        insert_at,
+                        f"{comment_prefix}remaining_resubmits: {next_remaining}",
+                    )
+
+                lines[block_start + 1 : block_end] = watcher_lines
+                updated = True
+                break
+
+            i += 1
+
+        if not updated:
+            raise ValueError("Could not locate watcher block to decrement resubmit counter")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def render_script_variables(
+        content: str, variables: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Render supported ${var} shell-style expressions for provided variables.
+
+        Only variables explicitly present in ``variables`` are rendered. Missing
+        variables are left untouched so the shell can handle them later.
+        """
+        if not variables:
+            return content
+
+        rendered = content
+        render_vars = {
+            str(name): str(value)
+            for name, value in variables.items()
+            if not str(name).startswith("_")
+        }
+
+        for var_name, var_value in render_vars.items():
+            cond_pattern = re.compile(
+                re.escape("${" + var_name + ":+")
+                + r"((?:[^{}]|\$\{[^}]*\})*)"
+                + re.escape("}")
+            )
+
+            def _expand_conditional(match: re.Match) -> str:
+                word = match.group(1)
+                for nested_name, nested_value in render_vars.items():
+                    word = word.replace(f"${{{nested_name}}}", nested_value)
+                return word
+
+            rendered = cond_pattern.sub(_expand_conditional, rendered)
+
+            default_pattern = re.compile(
+                re.escape("${" + var_name + ":-") + r"[^}]*" + re.escape("}")
+            )
+            rendered = default_pattern.sub(var_value, rendered)
+            rendered = rendered.replace(f"${{{var_name}}}", var_value)
+
+        return rendered
+
+    @staticmethod
     def is_slurm_script(script_path: Path) -> bool:
         """Check if script contains Slurm directives."""
         try:
@@ -333,6 +494,11 @@ class ScriptProcessor:
                             for v in value.split(",")
                             if v.strip()
                         ]
+                elif key == "remaining_resubmits" or key == "resubmit_count":
+                    try:
+                        watcher.remaining_resubmits = int(value)
+                    except ValueError:
+                        pass
                 elif key == "action":
                     # Simple single action
                     action_type, params = ScriptProcessor._parse_action_string(value)
@@ -360,6 +526,7 @@ class ScriptProcessor:
                 watcher.actions.append(
                     WatcherAction(type=ActionType.LOG_EVENT, params={})
                 )
+            ScriptProcessor._apply_watcher_action_defaults(watcher)
             return watcher
         return None
 
@@ -420,6 +587,11 @@ class ScriptProcessor:
                         for v in value[1:-1].split(",")
                         if v.strip()
                     ]
+            elif key == "remaining_resubmits" or key == "resubmit_count":
+                try:
+                    watcher.remaining_resubmits = int(value)
+                except ValueError:
+                    pass
 
         # Validate minimum requirements
         # Pattern is required, but actions can be empty (will be added later or use defaults)
@@ -429,6 +601,7 @@ class ScriptProcessor:
                 watcher.actions.append(
                     WatcherAction(type=ActionType.LOG_EVENT, params={})
                 )
+            ScriptProcessor._apply_watcher_action_defaults(watcher)
             return watcher
         return None
 

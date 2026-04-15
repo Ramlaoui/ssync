@@ -1041,7 +1041,11 @@ class JobDataManager:
             return False
 
     async def capture_job_submission(
-        self, job_id: str, hostname: str, script_content: str
+        self,
+        job_id: str,
+        hostname: str,
+        script_content: str,
+        local_source_dir: Optional[str] = None,
     ):
         """
         Called immediately after job submission to capture ALL critical data while still accessible.
@@ -1053,6 +1057,7 @@ class JobDataManager:
             job_id: Slurm job ID
             hostname: Target host
             script_content: The script content that was submitted
+            local_source_dir: Local source directory associated with the launch
         """
         try:
             # Get manager and connection
@@ -1083,7 +1088,9 @@ class JobDataManager:
                 if complete_job_info:
                     # Cache complete job info with all metadata
                     self.cache.cache_job(
-                        complete_job_info, script_content=script_content
+                        complete_job_info,
+                        script_content=script_content,
+                        local_source_dir=local_source_dir,
                     )
                     logger.info(
                         f"Captured COMPLETE job metadata for {job_id} including output paths"
@@ -1098,7 +1105,9 @@ class JobDataManager:
                         submit_time=datetime.now().isoformat(),
                     )
                     self.cache.cache_job(
-                        minimal_job_info, script_content=script_content
+                        minimal_job_info,
+                        script_content=script_content,
+                        local_source_dir=local_source_dir,
                     )
 
             except Exception as e:
@@ -1114,7 +1123,11 @@ class JobDataManager:
                     hostname=hostname,
                     submit_time=datetime.now().isoformat(),
                 )
-                self.cache.cache_job(minimal_job_info, script_content=script_content)
+                self.cache.cache_job(
+                    minimal_job_info,
+                    script_content=script_content,
+                    local_source_dir=local_source_dir,
+                )
 
             # 3. Try to get output file paths immediately (while scontrol works)
             try:

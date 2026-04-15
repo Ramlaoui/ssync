@@ -74,6 +74,24 @@ def format_api_actions(actions_json: Optional[str]) -> List[Dict[str, Any]]:
     return formatted_actions
 
 
+def extract_remaining_resubmits(actions_json: Optional[str]) -> Optional[int]:
+    if not actions_json:
+        return None
+
+    for action in json.loads(actions_json):
+        if action.get("type") != "resubmit":
+            continue
+        params = action.get("params") or {}
+        value = params.get("remaining_resubmits")
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def format_watcher_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     trigger_on_job_end = bool(row_dict.get("trigger_on_job_end", 0))
     trigger_job_states = parse_json_field(row_dict.get("trigger_job_states_json"), None)
@@ -107,6 +125,9 @@ def format_watcher_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
         "captures": parse_json_field(row_dict.get("captures_json"), []),
         "actions": format_api_actions(row_dict.get("actions_json")),
     }
+    remaining_resubmits = extract_remaining_resubmits(row_dict.get("actions_json"))
+    if remaining_resubmits is not None:
+        response["remaining_resubmits"] = remaining_resubmits
 
     if row_dict.get("condition"):
         response["condition"] = row_dict["condition"]
@@ -760,9 +781,24 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
         condition = watcher_config.get("condition")
         timer_mode_enabled = watcher_config.get("timer_mode_enabled", False)
         trigger_on_job_end = watcher_config.get("trigger_on_job_end", False)
+        remaining_resubmits = watcher_config.get("remaining_resubmits")
         trigger_job_states = normalize_trigger_job_states(
             watcher_config.get("trigger_job_states")
         )
+        actions = watcher_config.get("actions", [])
+        if remaining_resubmits is not None:
+            normalized_actions = []
+            for action in actions:
+                action_type = action.get("type")
+                if action_type in {"resubmit", "RESUBMIT"}:
+                    params = dict(action.get("params") or action.get("config") or {})
+                    params.setdefault("remaining_resubmits", remaining_resubmits)
+                    updated_action = dict(action)
+                    updated_action["params"] = params
+                    normalized_actions.append(updated_action)
+                else:
+                    normalized_actions.append(action)
+            actions = normalized_actions
 
         if not pattern and not trigger_on_job_end:
             raise ValueError("Missing required field: pattern")
@@ -795,7 +831,7 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
                 interval_seconds,
                 captures_json,
                 condition,
-                serialize_watcher_actions(watcher_config.get("actions", [])),
+                serialize_watcher_actions(actions),
                 state,
                 None,
                 0,
@@ -831,6 +867,7 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
     for watcher_definition in watchers:
         pattern = watcher_definition.get("pattern", "")
         trigger_on_job_end = watcher_definition.get("trigger_on_job_end", False)
+        remaining_resubmits = watcher_definition.get("remaining_resubmits")
         if not pattern and not trigger_on_job_end:
             raise ValueError(
                 "Watcher must define either a pattern or trigger_on_job_end=true"
@@ -851,7 +888,15 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
             actions.append(
                 WatcherAction(
                     type=action_type,
-                    params=action.get("params", {}),
+                    params={
+                        **(action.get("params", {})),
+                        **(
+                            {"remaining_resubmits": remaining_resubmits}
+                            if action_type == ActionType.RESUBMIT
+                            and remaining_resubmits is not None
+                            else {}
+                        ),
+                    },
                 )
             )
 
@@ -868,6 +913,7 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
                 actions=actions,
                 max_triggers=watcher_definition.get("max_triggers", 10),
                 output_type=watcher_definition.get("output_type", "stdout"),
+                remaining_resubmits=remaining_resubmits,
                 timer_mode_enabled=watcher_definition.get("timer_mode_enabled", False),
                 timer_interval_seconds=watcher_definition.get(
                     "timer_interval_seconds", 60

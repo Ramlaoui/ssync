@@ -1,5 +1,9 @@
 # Watcher-Driven Resubmission
 
+For a broader guide to watcher syntax, actions, timer mode, array-job behavior,
+manual/static watchers, and attach-via-CLI usage, see
+[`watchers.md`](watchers.md).
+
 `ssync` watchers can resubmit a finished job by rewriting the original cached
 submission script before sending it back through `sbatch`.
 

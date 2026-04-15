@@ -72,6 +72,40 @@ class TestIsSlurmScript:
         assert ScriptProcessor.is_slurm_script(script_path) is True
 
 
+class TestRenderScriptVariables:
+    """Tests for render_script_variables."""
+
+    @pytest.mark.unit
+    def test_leaves_script_unchanged_without_variables(self):
+        script = "python main.py ${resume_run_dir:+ +checkpoint=${resume_run_dir}}"
+        assert ScriptProcessor.render_script_variables(script, {}) == script
+
+    @pytest.mark.unit
+    def test_renders_present_variables_only(self):
+        script = (
+            "python main.py "
+            "${resume_run_dir:+ +checkpoint.config_dir=${resume_run_dir}} "
+            "${missing_var:-fallback}"
+        )
+        rendered = ScriptProcessor.render_script_variables(
+            script,
+            {"resume_run_dir": "/scratch/run-42"},
+        )
+        assert (
+            rendered
+            == "python main.py  +checkpoint.config_dir=/scratch/run-42 ${missing_var:-fallback}"
+        )
+
+    @pytest.mark.unit
+    def test_renders_numeric_capture_variables(self):
+        script = "python main.py ${1:+--resume ${1}}"
+        rendered = ScriptProcessor.render_script_variables(
+            script,
+            {"1": "/scratch/ckpt.pt"},
+        )
+        assert rendered == "python main.py --resume /scratch/ckpt.pt"
+
+
 class TestExtractWatchers:
     """Tests for extract_watchers method."""
 
@@ -415,6 +449,19 @@ actions:
         assert watcher.actions[0].type == ActionType.RESUBMIT
 
     @pytest.mark.unit
+    def test_parse_watcher_with_remaining_resubmits(self):
+        block = """name: End Trigger
+trigger_on_job_end: true
+remaining_resubmits: 3
+actions:
+  - resubmit()
+"""
+        watcher = ScriptProcessor._parse_watcher_block(block)
+        assert watcher is not None
+        assert watcher.remaining_resubmits == 3
+        assert watcher.actions[0].params["remaining_resubmits"] == 3
+
+    @pytest.mark.unit
     def test_parse_watcher_without_pattern_returns_none(self):
         block = """name: Invalid Watcher
 interval: 60
@@ -436,6 +483,28 @@ action: cancel_job
         assert watcher is not None
         assert len(watcher.actions) == 1
         assert watcher.actions[0].type == ActionType.CANCEL_JOB
+
+    @pytest.mark.unit
+    def test_decrement_watcher_resubmit_counter(self):
+        script = """#!/bin/bash
+#WATCHER_BEGIN
+# name: auto resubmit
+# pattern: "HYDRA_OUTPUT_DIR=(.+)"
+# trigger_on_job_end: true
+# remaining_resubmits: 2
+# actions:
+#   - resubmit()
+#WATCHER_END
+python main.py
+"""
+        updated = ScriptProcessor.decrement_watcher_resubmit_counter(
+            script,
+            watcher_name="auto resubmit",
+            watcher_pattern="HYDRA_OUTPUT_DIR=(.+)",
+            trigger_on_job_end=True,
+            current_remaining=2,
+        )
+        assert "# remaining_resubmits: 1" in updated
 
 
 class TestAddSlurmDirectives:
