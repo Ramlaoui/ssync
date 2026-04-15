@@ -43,6 +43,8 @@
   let loadingOutput = $state(false);
   let loadingMoreOutput = false;
   let refreshingOutput = $state(false);
+  let outputBackgroundRetryCount = $state(0);
+  let outputRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Script related state
   let scriptData: ScriptData | null = $state(null);
@@ -106,20 +108,48 @@
   }
 
   // Load output data
-  async function loadOutput() {
+  function clearOutputRetryTimer() {
+    if (outputRetryTimer) {
+      clearTimeout(outputRetryTimer);
+      outputRetryTimer = null;
+    }
+  }
+
+  function scheduleOutputRetry() {
+    if (outputBackgroundRetryCount >= 2) return;
+    clearOutputRetryTimer();
+    outputRetryTimer = setTimeout(() => {
+      outputBackgroundRetryCount += 1;
+      loadOutput({ backgroundRetry: true });
+    }, 1200);
+  }
+
+  async function loadOutput(options: { backgroundRetry?: boolean } = {}) {
     if (!job) return;
 
-    loadingOutput = true;
+    if (!options.backgroundRetry) {
+      outputBackgroundRetryCount = 0;
+      clearOutputRetryTimer();
+    }
+
+    loadingOutput = !options.backgroundRetry;
     outputError = null;
 
     try {
       const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}`);
       outputData = response.data;
+      if (response.data.refresh_queued) {
+        scheduleOutputRetry();
+      } else {
+        clearOutputRetryTimer();
+      }
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
       outputError = `Failed to load output: ${axiosError.message}`;
     } finally {
-      loadingOutput = false;
+      if (!options.backgroundRetry) {
+        loadingOutput = false;
+      }
     }
   }
 
@@ -129,6 +159,8 @@
 
     refreshingOutput = true;
     outputError = null;
+    outputBackgroundRetryCount = 0;
+    clearOutputRetryTimer();
 
     try {
       const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}&force_refresh=true`);
@@ -209,6 +241,8 @@
         outputError = null;
         scriptError = null;
         error = null;
+        outputBackgroundRetryCount = 0;
+        clearOutputRetryTimer();
         activeTab = 'details';
         initialLoadComplete = false;
 
@@ -266,6 +300,7 @@
 
   onDestroy(() => {
     window.removeEventListener("resize", checkMobile);
+    clearOutputRetryTimer();
 
     // Clear current view job
     jobStateManager.setCurrentViewJob(null, null);

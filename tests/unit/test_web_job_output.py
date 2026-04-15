@@ -1,10 +1,12 @@
 """Unit tests for web job output response shaping."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from ssync.models.job import JobState
+from ssync.web.services import jobs as job_services
 from ssync.web.services.jobs import get_job_output_response
 
 
@@ -132,3 +134,57 @@ async def test_force_refresh_returns_cached_output_and_queues_background_refresh
     assert response.cached is True
     assert response.stale is True
     assert response.refresh_queued is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_queue_job_output_refresh_reuses_existing_background_task(
+    monkeypatch, sample_job_info
+):
+    sample_job_info.state = JobState.COMPLETED
+    key = (sample_job_info.hostname, sample_job_info.job_id)
+    created = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    def fake_refresh_job_output_in_background(**kwargs):
+        created.append(kwargs)
+
+        async def _runner():
+            started.set()
+            await release.wait()
+
+        return _runner()
+
+    job_services._OUTPUT_REFRESH_TASKS.pop(key, None)
+    monkeypatch.setattr(
+        "ssync.web.services.jobs.refresh_job_output_in_background",
+        fake_refresh_job_output_in_background,
+    )
+
+    try:
+        assert job_services.queue_job_output_refresh(
+            job_info=sample_job_info,
+            cache_middleware=None,
+            job_manager=None,
+            force_fetch=False,
+            refresh_reason="test",
+        )
+        assert job_services.queue_job_output_refresh(
+            job_info=sample_job_info,
+            cache_middleware=None,
+            job_manager=None,
+            force_fetch=False,
+            refresh_reason="test",
+        )
+
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert len(created) == 1
+        assert key in job_services._OUTPUT_REFRESH_TASKS
+    finally:
+        release.set()
+        task = job_services._OUTPUT_REFRESH_TASKS.get(key)
+        if task is not None:
+            await task
+        await asyncio.sleep(0)
+        job_services._OUTPUT_REFRESH_TASKS.pop(key, None)

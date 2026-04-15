@@ -450,6 +450,7 @@ class JobDataManager:
 
                 # Slow hosts: serve cache now, keep refresh running.
                 section_start = time.perf_counter()
+                timed_out_hosts: Set[str] = set()
                 for pending_task in pending_tasks:
                     host_name = task_to_host[pending_task]
                     logger.warning(
@@ -457,9 +458,12 @@ class JobDataManager:
                         "returning cached data for this cycle"
                     )
                     await self._mark_host_fetch_failure(host_name, "request timeout")
+                    timed_out_hosts.add(host_name)
                     all_jobs.extend(
                         self._get_cached_jobs_for_host(host_name, job_ids, limit)
                     )
+                if timed_out_hosts:
+                    await self._release_hosts(timed_out_hosts)
                 mark_timing("pending_cache_fallback", section_start)
 
                 completed_hosts = {task_to_host[task] for task in done_tasks}

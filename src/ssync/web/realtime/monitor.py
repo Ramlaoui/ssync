@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Set
 
+from ...cache import get_cache
 from ...models.job import JobInfo, JobState
 from ...utils.logging import setup_logger
 from ..models import JobInfoWeb
@@ -229,9 +230,14 @@ async def monitor_all_jobs_singleton(
         fast_interval = 15
         full_interval = 60
         active_fetch_limit = 500
+        cache = get_cache()
 
+        first_iteration = True
         while True:
-            await asyncio.sleep(fast_interval)
+            if first_iteration:
+                first_iteration = False
+            else:
+                await asyncio.sleep(fast_interval)
 
             if not all_jobs_state.websockets:
                 logger.info("No WebSocket clients connected, stopping monitor task")
@@ -244,7 +250,25 @@ async def monitor_all_jobs_singleton(
 
                 current_time = asyncio.get_event_loop().time()
                 time_since_full = current_time - last_full_update
-                if time_since_full >= full_interval:
+                if last_full_update == 0:
+                    logger.debug("Performing initial cache-only websocket update")
+                    since_dt = datetime.now() - timedelta(days=1)
+                    cached_job_data = cache.get_cached_jobs(
+                        hostname=None,
+                        limit=active_fetch_limit,
+                        since=since_dt,
+                    )
+                    all_jobs = filter_ws_initial_cached_jobs(
+                        job_data_manager,
+                        cached_job_data,
+                    )
+                    did_fetch_active_snapshot = False
+                    logger.info(
+                        "Initial all-jobs monitor cycle used %s cached jobs",
+                        len(all_jobs),
+                    )
+                    last_full_update = current_time
+                elif time_since_full >= full_interval:
                     logger.debug(
                         "Performing full job update (active + recent completed)"
                     )

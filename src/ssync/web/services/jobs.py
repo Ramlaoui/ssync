@@ -6,6 +6,7 @@ import gzip
 import io
 import json
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Optional
 
@@ -175,13 +176,14 @@ def _queue_deduped_task(
     *,
     registry: dict[tuple[str, str], asyncio.Task],
     key: tuple[str, str],
-    coro,
+    coro_factory: Callable[[], Any],
     name: str,
 ) -> bool:
     existing = registry.get(key)
     if existing and not existing.done():
         return True
 
+    coro = coro_factory()
     task = create_task(coro, name=name)
     if task is None:
         return False
@@ -639,7 +641,7 @@ def queue_job_refresh(
     return _queue_deduped_task(
         registry=_JOB_REFRESH_TASKS,
         key=(host, job_id),
-        coro=refresh_job_in_background(
+        coro_factory=lambda: refresh_job_in_background(
             job_id=job_id,
             host=host,
             get_slurm_manager=get_slurm_manager,
@@ -722,7 +724,7 @@ def queue_job_output_refresh(
     return _queue_deduped_task(
         registry=_OUTPUT_REFRESH_TASKS,
         key=(job_info.hostname, job_info.job_id),
-        coro=refresh_job_output_in_background(
+        coro_factory=lambda: refresh_job_output_in_background(
             job_info=job_info,
             cache_middleware=cache_middleware,
             job_manager=job_manager,

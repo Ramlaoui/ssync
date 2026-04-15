@@ -5,6 +5,7 @@ This script maintains an event loop to keep watchers running.
 """
 
 import asyncio
+import os
 import signal
 import sys
 from pathlib import Path
@@ -19,6 +20,51 @@ from ssync.watchers import get_watcher_engine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+SHUTDOWN_TIMEOUT_SECONDS = float(
+    os.getenv("SSYNC_WATCHER_RUNNER_SHUTDOWN_TIMEOUT_SECONDS", "1.0")
+)
+
+
+async def _shutdown_engine_tasks(engine, *, timeout_seconds: float | None = None):
+    """Cancel watcher tasks and wait for them only up to a bounded timeout."""
+    if timeout_seconds is None:
+        timeout_seconds = SHUTDOWN_TIMEOUT_SECONDS
+
+    action_tasks = [
+        task
+        for task in getattr(engine, "_action_tasks", [])
+        if task is not None and not task.done()
+    ]
+    tasks = [
+        task for task in [*engine.active_tasks.values(), *action_tasks] if not task.done()
+    ]
+
+    if not tasks:
+        engine.active_tasks.clear()
+        if hasattr(engine, "_action_tasks"):
+            engine._action_tasks = []
+        return
+
+    for task in tasks:
+        task.cancel()
+
+    try:
+        if timeout_seconds and timeout_seconds > 0:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=timeout_seconds,
+            )
+        else:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Timed out waiting %.1fs for watcher tasks to exit; forcing runner shutdown",
+            timeout_seconds,
+        )
+    finally:
+        engine.active_tasks.clear()
+        if hasattr(engine, "_action_tasks"):
+            engine._action_tasks = []
 
 
 async def run_existing_watchers():
@@ -97,10 +143,7 @@ async def run_existing_watchers():
 
     except asyncio.CancelledError:
         logger.info("Shutting down watcher service")
-        # Cancel all tasks
-        for task in engine.active_tasks.values():
-            task.cancel()
-        await asyncio.gather(*engine.active_tasks.values(), return_exceptions=True)
+        await _shutdown_engine_tasks(engine)
 
 
 async def main():
@@ -109,11 +152,19 @@ async def main():
 
     # Handle shutdown signals
     loop = asyncio.get_running_loop()
+    main_task = asyncio.current_task()
+    force_exit_handle = None
 
     def signal_handler():
+        nonlocal force_exit_handle
         logger.info("Received shutdown signal")
-        for task in asyncio.all_tasks():
-            task.cancel()
+        if main_task and not main_task.done():
+            main_task.cancel()
+        if force_exit_handle is None and SHUTDOWN_TIMEOUT_SECONDS > 0:
+            force_exit_handle = loop.call_later(
+                SHUTDOWN_TIMEOUT_SECONDS + 0.5,
+                lambda: os._exit(0),
+            )
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, signal_handler)
@@ -123,6 +174,8 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
+        if force_exit_handle is not None:
+            force_exit_handle.cancel()
         logger.info("Watcher service stopped")
 
 

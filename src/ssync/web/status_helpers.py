@@ -196,6 +196,100 @@ def _normalize_cached_status_jobs(
     return normalized_jobs
 
 
+def _get_cached_username_for_host(manager, hostname: str) -> Optional[str]:
+    """Return the previously detected username for a host when available."""
+    try:
+        return manager.slurm_client.query._username_cache.get(hostname)
+    except AttributeError:
+        return None
+
+
+async def get_cached_host_status_response(
+    *,
+    cache_middleware,
+    manager,
+    hostname: str,
+    user: Optional[str],
+    active_only: bool,
+    completed_only: bool,
+    state: Optional[str],
+    search: Optional[str],
+    group_array_jobs: bool,
+    limit: Optional[int],
+    refresh_callback,
+) -> Optional[JobStatusResponse]:
+    """Return a cached single-host status response when user filtering is safe."""
+    effective_user = user or _get_cached_username_for_host(manager, hostname)
+    if not effective_user:
+        return None
+
+    cached_jobs = cache_middleware.cache.get_cached_jobs(
+        hostname=hostname,
+        active_only=active_only,
+    )
+    if not cached_jobs:
+        return None
+
+    web_jobs = [
+        JobInfoWeb.from_job_info(cached.job_info)
+        for cached in cached_jobs
+        if cached.job_info and cached.job_info.user == effective_user
+    ]
+    if not web_jobs:
+        return None
+
+    if completed_only:
+        web_jobs = [
+            job
+            for job in web_jobs
+            if job.state
+            in [
+                JobStateWeb.COMPLETED,
+                JobStateWeb.FAILED,
+                JobStateWeb.CANCELLED,
+                JobStateWeb.TIMEOUT,
+                JobStateWeb.UNKNOWN,
+            ]
+        ]
+
+    if state:
+        web_jobs = [job for job in web_jobs if job.state == state]
+
+    web_jobs = filter_jobs_by_search(web_jobs, search)
+
+    fetch_state = cache_middleware.cache.get_host_fetch_state(hostname)
+    if fetch_state:
+        try:
+            cache_age = (
+                datetime.now() - datetime.fromisoformat(fetch_state["updated_at"])
+            ).total_seconds()
+        except Exception:
+            cache_age = None
+        if cache_age is not None and cache_age > 60:
+            logger.info(
+                "Host status cache for %s is %.0fs old - triggering background refresh",
+                hostname,
+                cache_age,
+            )
+            create_task(refresh_callback())
+
+    response = build_job_status_response(
+        hostname=hostname,
+        web_jobs=web_jobs,
+        query_time=datetime.now(),
+        group_array_jobs=group_array_jobs,
+        limit=limit,
+        cached=True,
+    )
+    logger.info(
+        "Served %s jobs from cached host snapshot for %s (grouping=%s)",
+        len(web_jobs),
+        hostname,
+        group_array_jobs,
+    )
+    return response
+
+
 async def get_cached_date_range_status_response(
     *,
     cache_middleware,
