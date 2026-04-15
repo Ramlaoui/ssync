@@ -673,3 +673,31 @@ class TestPrepareScript:
 
         st = result_path.stat()
         assert st.st_mode & stat.S_IXUSR  # User executable bit set
+
+
+class TestPrepareScriptContent:
+    """Tests for prepare_script_content helper."""
+
+    @pytest.mark.unit
+    def test_prepares_in_memory_script_with_directives(self):
+        content = "echo 'hello'"
+        params = SlurmParams(job_name="templated", cpus_per_task=2)
+
+        prepared = ScriptProcessor.prepare_script_content(content, params=params)
+
+        assert prepared.startswith("#!/bin/bash\n")
+        assert "#SBATCH --job-name=templated" in prepared
+        assert "#SBATCH --cpus-per-task=2" in prepared
+        assert prepared.rstrip().endswith("echo 'hello'")
+
+    @pytest.mark.unit
+    def test_preserves_existing_directives_in_memory(self):
+        content = "#!/bin/bash\n#SBATCH --job-name=existing\necho 'hello'"
+
+        prepared = ScriptProcessor.prepare_script_content(
+            content,
+            params=SlurmParams(job_name="ignored"),
+        )
+
+        assert prepared.count("#SBATCH --job-name=existing") == 1
+        assert "#SBATCH --job-name=ignored" not in prepared

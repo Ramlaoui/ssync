@@ -129,14 +129,6 @@ def register_launch_routes(
 
                     if job:
                         try:
-                            local_dir_str = str(source_dir) if source_dir else None
-                            await cache_middleware.cache_job_script(
-                                job.job_id, host, script_content, local_dir_str
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to cache script: {e}")
-
-                        try:
                             pending_job_info, previous_state = (
                                 cache_job_state_transition(
                                     job.job_id,

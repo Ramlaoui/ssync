@@ -138,6 +138,30 @@ class LaunchManager:
         except Exception as e:
             logger.warning(f"Failed to capture submission data for job {job_id}: {e}")
 
+    def _cache_prepared_template(
+        self,
+        job_id: str,
+        hostname: str,
+        script_content: str,
+        local_source_dir: Optional[str] = None,
+    ) -> None:
+        """Persist the reusable script template for future relaunches immediately."""
+        from .cache import get_cache
+
+        cache = get_cache()
+        cache.update_job_script(job_id, hostname, script_content)
+
+        if local_source_dir is None:
+            return
+
+        cached_job = cache.get_cached_job(job_id, hostname)
+        if cached_job and cached_job.job_info:
+            cache.cache_job(
+                cached_job.job_info,
+                script_content=script_content,
+                local_source_dir=local_source_dir,
+            )
+
     async def launch_job(
         self,
         script_path: str | Path | None,
@@ -268,16 +292,22 @@ class LaunchManager:
 
             if script_content is None:
                 with open(script_path, "r") as f:
-                    original_script_content = f.read()
+                    raw_script_content = f.read()
             else:
-                original_script_content = script_content
+                raw_script_content = script_content
 
-            original_script_content = ScriptProcessor.render_script_variables(
-                original_script_content, script_variables
+            prepared_template_script = ScriptProcessor.prepare_script_content(
+                raw_script_content, params=slurm_params
+            )
+            rendered_submission_script = ScriptProcessor.render_script_variables(
+                prepared_template_script, script_variables
             )
 
             login_setup_commands, clean_compute_script = self._parse_structured_script(
-                original_script_content
+                rendered_submission_script
+            )
+            _, template_compute_script = self._parse_structured_script(
+                prepared_template_script
             )
 
             # Log what was extracted for debugging
@@ -307,9 +337,8 @@ class LaunchManager:
             prepared_script = ScriptProcessor.prepare_script(
                 clean_script_path, temp_dir, params=slurm_params
             )
-            prepared_script_content = prepared_script.read_text()
             watchers = self._extract_watchers_from_script_content(
-                prepared_script_content
+                template_compute_script
             )
 
             conn = await loop.run_in_executor(
@@ -521,7 +550,7 @@ class LaunchManager:
                     slurm_params,
                     remote_script_path,
                     remote_work_dir,
-                    prepared_script_content,
+                    template_compute_script,
                     watchers,
                     launch_event_emitter,
                 )
@@ -533,12 +562,24 @@ class LaunchManager:
                         message=f"Slurm accepted job {job.job_id}",
                         job_id=job.job_id,
                     )
+                local_source_dir = str(source_dir) if source_dir else None
+                try:
+                    self._cache_prepared_template(
+                        job.job_id,
+                        slurm_host.host.hostname,
+                        prepared_template_script,
+                        local_source_dir=local_source_dir,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to cache prepared template for job {job.job_id}: {e}"
+                    )
                 capture_task = create_task(
                     self._capture_submission_in_background(
                         job.job_id,
                         slurm_host.host.hostname,
-                        clean_compute_script,
-                        local_source_dir=str(source_dir) if source_dir else None,
+                        prepared_template_script,
+                        local_source_dir=local_source_dir,
                     ),
                     name=f"capture_submission_{slurm_host.host.hostname}_{job.job_id}",
                 )
@@ -546,8 +587,8 @@ class LaunchManager:
                     await self._capture_submission_in_background(
                         job.job_id,
                         slurm_host.host.hostname,
-                        clean_compute_script,
-                        local_source_dir=str(source_dir) if source_dir else None,
+                        prepared_template_script,
+                        local_source_dir=local_source_dir,
                     )
                 else:
                     capture_task.add_done_callback(
