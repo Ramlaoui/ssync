@@ -69,10 +69,22 @@ app = FastAPI(
 )
 
 THREAD_POOL_SIZE = int(os.getenv("SSYNC_THREAD_POOL_SIZE", str(os.cpu_count() + 4)))
-executor = ThreadPoolExecutor(
-    max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-worker"
+BACKGROUND_THREAD_POOL_SIZE = int(
+    os.getenv("SSYNC_BACKGROUND_THREAD_POOL_SIZE", str(THREAD_POOL_SIZE))
 )
-logger.info(f"Initialized thread pool with {THREAD_POOL_SIZE} workers")
+interactive_executor = ThreadPoolExecutor(
+    max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-interactive"
+)
+background_executor = ThreadPoolExecutor(
+    max_workers=BACKGROUND_THREAD_POOL_SIZE, thread_name_prefix="ssh-background"
+)
+# Backwards-compatible alias for code paths that still expect a single executor.
+executor = interactive_executor
+logger.info(
+    "Initialized thread pools: interactive=%s background=%s",
+    THREAD_POOL_SIZE,
+    BACKGROUND_THREAD_POOL_SIZE,
+)
 launch_event_manager = LaunchEventManager()
 api_key_manager = APIKeyManager()
 _shutdown_event = threading.Event()
@@ -99,7 +111,7 @@ register_lifecycle_events(
     get_slurm_manager=get_slurm_manager,
     cache_middleware=_cache_middleware,
     api_key_manager=api_key_manager,
-    executor=executor,
+    executor=interactive_executor,
     shutdown_event=_shutdown_event,
     periodic_connection_health_check=periodic_connection_health_check,
 )

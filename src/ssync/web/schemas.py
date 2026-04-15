@@ -82,15 +82,21 @@ class JobInfoWeb(BaseModel):
     ave_disk_read: Optional[str] = None
     ave_disk_write: Optional[str] = None
     consumed_energy: Optional[str] = None
+    cached: bool = False
+    stale: bool = False
+    refresh_queued: bool = False
 
     @classmethod
     def from_job_info(cls, job_info: JobInfo) -> "JobInfoWeb":
         """Convert from core JobInfo to web schema."""
-        payload = {
-            field_name: getattr(job_info, field_name)
-            for field_name in cls.model_fields
-            if field_name != "state"
-        }
+        payload = {}
+        for field_name, field_info in cls.model_fields.items():
+            if field_name == "state":
+                continue
+            default_value = (
+                None if field_info.is_required() else field_info.default
+            )
+            payload[field_name] = getattr(job_info, field_name, default_value)
         payload["state"] = JobStateWeb(job_info.state.value)
         return cls(**payload)
 
@@ -241,6 +247,9 @@ class JobOutputResponse(BaseModel):
     stderr: Optional[str] = None
     stdout_metadata: Optional[FileMetadata] = None
     stderr_metadata: Optional[FileMetadata] = None
+    cached: bool = False
+    stale: bool = False
+    refresh_queued: bool = False
 
 
 class CompleteJobDataResponse(BaseModel):

@@ -47,6 +47,7 @@ async def test_cached_metadata_only_skips_output_decode(
         force_refresh=False,
         get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
         cache_middleware=_FakeCacheMiddleware(test_cache),
+        job_manager=None,
     )
 
     assert response.stdout is None
@@ -82,9 +83,52 @@ async def test_cached_lines_returns_tail_without_losing_file_size(
         force_refresh=False,
         get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
         cache_middleware=_FakeCacheMiddleware(test_cache),
+        job_manager=None,
     )
 
     assert response.stdout == "three\nfour\n"
     assert response.stderr == "err2\nerr3\n"
     assert response.stdout_metadata.size_bytes == len(stdout_text)
     assert response.stderr_metadata.size_bytes == len(stderr_text)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_force_refresh_returns_cached_output_and_queues_background_refresh(
+    monkeypatch, test_cache, sample_job_info
+):
+    sample_job_info.state = JobState.COMPLETED
+    test_cache.cache_job(sample_job_info)
+    test_cache.update_job_outputs(
+        sample_job_info.job_id,
+        sample_job_info.hostname,
+        stdout_content="alpha\nbeta\n",
+        stderr_content="err\n",
+        mark_fetched_after_completion=True,
+    )
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("force_refresh should not fetch outputs inline")
+
+    monkeypatch.setattr("ssync.web.services.jobs.fetch_outputs_for_job_info", fail_fetch)
+    monkeypatch.setattr(
+        "ssync.web.services.jobs.queue_job_output_refresh",
+        lambda **_: True,
+    )
+
+    response = await get_job_output_response(
+        job_id=sample_job_info.job_id,
+        host=sample_job_info.hostname,
+        lines=None,
+        metadata_only=False,
+        force_refresh=True,
+        get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
+        cache_middleware=_FakeCacheMiddleware(test_cache),
+        job_manager=None,
+    )
+
+    assert response.stdout == "alpha\nbeta\n"
+    assert response.stderr == "err\n"
+    assert response.cached is True
+    assert response.stale is True
+    assert response.refresh_queued is True

@@ -30,6 +30,8 @@ class _FakeManager:
 def _install_fake_web_app(monkeypatch, manager):
     fake_module = types.ModuleType("ssync.web.app")
     fake_module.get_slurm_manager = lambda: manager
+    fake_module.executor = None
+    fake_module.background_executor = None
     monkeypatch.setitem(sys.modules, "ssync.web.app", fake_module)
 
 
