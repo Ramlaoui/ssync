@@ -1,11 +1,15 @@
 <script lang="ts">
   import { run } from 'svelte/legacy';
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
 
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
   import { Settings, Type, Hash, WrapText, RefreshCw } from 'lucide-svelte';
   import { debounce } from '../lib/debounce';
+  import {
+    resolveActiveSearchIndex,
+    updateActiveSearchHighlight,
+  } from '../lib/searchHighlights';
   
   interface Props {
     content?: string;
@@ -133,7 +137,6 @@
     }
     
     const query = searchQuery.toLowerCase();
-    searchResults = [];
     filteredLines = [];
     
     lines.forEach((line, index) => {
@@ -145,7 +148,6 @@
         const found = lowerLine.indexOf(query, pos);
         if (found === -1) break;
         matches.push(found);
-        searchResults.push(index);
         pos = found + 1;
       }
       
@@ -157,11 +159,6 @@
         });
       }
     });
-    
-    if (searchResults.length > 0 && currentSearchIndex === -1) {
-      currentSearchIndex = 0;
-      scrollToSearchResult(0);
-    }
   }
   
   function escapeHtml(unsafe: string): string {
@@ -204,45 +201,41 @@
       searchResults = matches ? Array.from({length: matches.length}, (_, i) => i) : [];
       
       highlightedContent = escaped.replace(regex, '<mark class="search-highlight">$1</mark>');
-      
-      // Auto-scroll to first result
-      if (searchResults.length > 0 && currentSearchIndex === -1) {
-        currentSearchIndex = 0;
-        scrollToSearchResult(0);
+
+      if (searchResults.length === 0) {
+        currentSearchIndex = -1;
+        return;
       }
+
+      const nextIndex = resolveActiveSearchIndex(
+        currentSearchIndex,
+        searchResults.length
+      );
+
+      currentSearchIndex = nextIndex;
+      void scrollToSearchResult(nextIndex);
     } catch (error) {
       // Fallback to escaped content if regex fails
       console.warn('Search highlighting failed:', error);
       highlightedContent = escapeHtml(renderedContent);
       searchResults = [];
+      currentSearchIndex = -1;
     }
   }
   
-  function scrollToSearchResult(index: number) {
+  async function scrollToSearchResult(index: number) {
     const element = outputElement;
     if (!element || searchResults.length === 0) return;
-    
-    // Wait for DOM to update with highlights
-    setTimeout(() => {
-      if (!element) return;
-      const marks = element.querySelectorAll('mark.search-highlight');
-      if (marks.length > 0 && marks[index]) {
-        const mark = marks[index] as HTMLElement;
-        // Scroll the mark into view centered
-        mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        currentSearchIndex = index;
-        
-        // Add visual emphasis to current result
-        marks.forEach((m, i) => {
-          const element = m as HTMLElement;
-          if (i === index) {
-            element.className = 'bg-amber-400 text-amber-900';
-          } else {
-            element.className = 'bg-yellow-200 text-amber-800';
-          }
-        });
-      }
-    }, 10);
+
+    await tick();
+
+    const marks = element.querySelectorAll('mark.search-highlight');
+    if (marks.length === 0 || !marks[index]) return;
+
+    const mark = marks[index] as HTMLElement;
+    mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    currentSearchIndex = index;
+    updateActiveSearchHighlight(marks, index);
   }
   
   function nextSearchResult() {
@@ -1297,6 +1290,12 @@
     padding: 0.125rem 0.25rem;
     border-radius: 3px;
     font-weight: 600;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  :global(.search-highlight-active) {
+    background: #fbbf24;
+    color: #78350f;
   }
 
   @media (max-width: 768px) {

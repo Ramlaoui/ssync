@@ -23,6 +23,8 @@ export interface JobInfo {
   start_time: string | null;
   end_time: string | null;
   node_list: string | null;
+  node_hostnames?: string[] | null;
+  batch_host?: string | null;
 
   // Additional job metadata
   exit_code?: string | null;
@@ -35,6 +37,8 @@ export interface JobInfo {
   // Resource allocation
   alloc_tres: string | null;
   req_tres: string | null;
+  gres?: string | null;
+  tres_per_node?: string | null;
 
   // CPU metrics
   cpu_time: string | null;

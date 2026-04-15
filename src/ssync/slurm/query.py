@@ -1108,13 +1108,37 @@ class SlurmQuery:
 
             if job_info:
                 try:
-                    stdout_path, stderr_path = self.output.get_job_output_files(
+                    scontrol_details = self.output.get_job_metadata_from_scontrol(
                         conn, job_id, hostname
                     )
-                    if stdout_path:
-                        job_info.stdout_file = stdout_path
-                    if stderr_path:
-                        job_info.stderr_file = stderr_path
+                    if scontrol_details.stdout_path:
+                        job_info.stdout_file = scontrol_details.stdout_path
+                    if scontrol_details.stderr_path:
+                        job_info.stderr_file = scontrol_details.stderr_path
+                    if scontrol_details.submit_line and not job_info.submit_line:
+                        job_info.submit_line = scontrol_details.submit_line
+                    if scontrol_details.batch_host:
+                        job_info.batch_host = scontrol_details.batch_host
+                    if scontrol_details.node_list and (
+                        not job_info.node_list or job_info.node_list == job_info.reason
+                    ):
+                        job_info.node_list = scontrol_details.node_list
+                    if scontrol_details.num_nodes and not job_info.nodes:
+                        job_info.nodes = scontrol_details.num_nodes
+                    if scontrol_details.num_cpus and not job_info.cpus:
+                        job_info.cpus = scontrol_details.num_cpus
+                    if scontrol_details.tres and not job_info.alloc_tres:
+                        job_info.alloc_tres = scontrol_details.tres
+                    if scontrol_details.gres and not job_info.gres:
+                        job_info.gres = scontrol_details.gres
+                    if scontrol_details.tres_per_node and not job_info.tres_per_node:
+                        job_info.tres_per_node = scontrol_details.tres_per_node
+
+                    resolved_node_list = scontrol_details.node_list or job_info.node_list
+                    if resolved_node_list:
+                        job_info.node_hostnames = self.output.resolve_node_hostnames(
+                            conn, resolved_node_list
+                        )
                 except Exception:
                     if job_info.stdout_file and "%" in job_info.stdout_file:
                         var_dict = {

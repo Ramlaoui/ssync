@@ -31,7 +31,9 @@ class _FakeConn:
             return _FakeResult(
                 ok=True,
                 stdout=(
-                    "JobId=123 JobName=test\n"
+                    "JobId=123 JobName=test NumNodes=2 NumCPUs=16 BatchHost=node001 "
+                    "NodeList=node[001-002] TRES=cpu=16,gres/gpu:a100=4 "
+                    "Gres=gpu:a100:4 TresPerNode=gres:gpu:a100:2\n"
                     "   Command=/work/scripts/job_123.slurm\n"
                     "   StdOut=/work/slurm-%j.out StdErr=/work/slurm-%j.err\n"
                 ),
@@ -46,6 +48,9 @@ class _FakeConn:
                     "   StdOut=/work/slurm-%j.out StdErr=/work/slurm-%j.err\n"
                 ),
             )
+
+        if command == "scontrol show hostnames 'node[001-002]'":
+            return _FakeResult(ok=True, stdout="node001\nnode002\n")
 
         return _FakeResult(ok=False, stderr="unexpected command", exited=1)
 
@@ -73,6 +78,36 @@ class TestSlurmOutput:
         assert conn.calls[0] == "scontrol show job 123 456"
         assert "scontrol show job 123" in conn.calls
         assert "scontrol show job 456" in conn.calls
+
+    @pytest.mark.unit
+    def test_scontrol_metadata_includes_node_and_gpu_details(self):
+        output = SlurmOutput()
+        conn = _FakeConn()
+
+        details = output.get_job_metadata_from_scontrol(
+            conn=conn,
+            job_id="123",
+            hostname="cluster.example.com",
+        )
+
+        assert details.batch_host == "node001"
+        assert details.node_list == "node[001-002]"
+        assert details.num_nodes == "2"
+        assert details.num_cpus == "16"
+        assert details.tres == "cpu=16,gres/gpu:a100=4"
+        assert details.gres == "gpu:a100:4"
+        assert details.tres_per_node == "gres:gpu:a100:2"
+        assert details.stdout_path == "/work/slurm-123.out"
+        assert details.stderr_path == "/work/slurm-123.err"
+
+    @pytest.mark.unit
+    def test_resolve_node_hostnames_expands_node_list(self):
+        output = SlurmOutput()
+        conn = _FakeConn()
+
+        hostnames = output.resolve_node_hostnames(conn, "node[001-002]")
+
+        assert hostnames == ["node001", "node002"]
 
     @pytest.mark.unit
     def test_batch_respects_single_job_fallback_cap(self):
