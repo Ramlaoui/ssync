@@ -13,6 +13,11 @@ class ScriptProcessor:
     """Processes shell and Slurm scripts for job submission."""
 
     @staticmethod
+    def _contains_slurm_directives(content: str) -> bool:
+        """Check whether in-memory script content already has Slurm directives."""
+        return bool(re.search(r"#SBATCH\s+", content))
+
+    @staticmethod
     def _apply_watcher_action_defaults(watcher: WatcherDefinition) -> None:
         """Propagate watcher-level settings into action params when needed."""
         if watcher.remaining_resubmits is None:
@@ -178,10 +183,37 @@ class ScriptProcessor:
         """Check if script contains Slurm directives."""
         try:
             content = script_path.read_text()
-            # Look for Slurm directives like #SBATCH
-            return bool(re.search(r"#SBATCH\s+", content))
+            return ScriptProcessor._contains_slurm_directives(content)
         except Exception:
             return False
+
+    @staticmethod
+    def prepare_script_content(
+        content: str, params: Optional[Union[SlurmParams, dict]] = None
+    ) -> str:
+        """Prepare in-memory script content for submission and future relaunch."""
+        prepared = ScriptProcessor.ensure_shebang(content)
+
+        if ScriptProcessor._contains_slurm_directives(prepared):
+            return prepared
+
+        if params is None:
+            directive_params = {}
+        elif isinstance(params, SlurmParams):
+            directive_params = params.as_dict()
+        else:
+            directive_params = params
+
+        directives = to_directives(directive_params)
+        if not directives:
+            return prepared
+
+        lines = prepared.split("\n")
+        insert_idx = 1 if lines and lines[0].startswith("#!") else 0
+        for i, directive in enumerate(directives):
+            lines.insert(insert_idx + i, directive)
+
+        return "\n".join(lines)
 
     @staticmethod
     def extract_array_spec(script_content: str) -> Optional[str]:
@@ -308,29 +340,7 @@ class ScriptProcessor:
 
         Returns path to the prepared script in target directory.
         """
-        content = script_path.read_text()
-
-        # Ensure proper shebang
-        content = cls.ensure_shebang(content)
-
-        # Add Slurm directives if it's a plain shell script
-        if not cls.is_slurm_script(script_path):
-            if params is None:
-                directive_params = {}
-            elif isinstance(params, SlurmParams):
-                directive_params = params.as_dict()
-            else:
-                directive_params = params
-
-            # Use the centralized formatter
-            directives = to_directives(directive_params)
-            if directives:
-                # Insert directives after shebang
-                lines = content.split("\n")
-                insert_idx = 1 if lines and lines[0].startswith("#!") else 0
-                for i, directive in enumerate(directives):
-                    lines.insert(insert_idx + i, directive)
-                content = "\n".join(lines)
+        content = cls.prepare_script_content(script_path.read_text(), params=params)
 
         # Create target script path with .slurm extension
         script_name = script_path.stem + ".slurm"
