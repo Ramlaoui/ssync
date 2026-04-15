@@ -4,7 +4,8 @@ import asyncio
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from pydantic import TypeAdapter
 
 from ...cache import get_cache
 from ...utils.logging import setup_logger
@@ -13,11 +14,19 @@ from ..security import InputSanitizer
 from ..status_helpers import (
     build_job_status_response,
     build_status_cache_filters,
+    get_cached_host_status_response,
     filter_jobs_by_search,
     get_cached_date_range_status_response,
 )
 
 logger = setup_logger(__name__)
+_STATUS_RESPONSE_ADAPTER = TypeAdapter(List[JobStatusResponse])
+
+
+async def _json_status_response(results: List[JobStatusResponse]) -> Response:
+    """Serialize large status payloads off the event loop."""
+    payload = await asyncio.to_thread(_STATUS_RESPONSE_ADAPTER.dump_json, results)
+    return Response(content=payload, media_type="application/json")
 
 
 def register_status_routes(
@@ -218,16 +227,17 @@ def register_status_routes(
                         f"Concurrent fetch completed: {sum(len(result.jobs) for result in results)} total jobs from {len(slurm_hosts)} hosts"
                     )
 
-                    return await cache_middleware.cache_job_status_response(
+                    cached_results = await cache_middleware.cache_job_status_response(
                         results, verify_active_jobs=safe_for_cache_verification
                     )
+                    return await _json_status_response(cached_results)
                 except Exception as e:
                     logger.error(f"Error in optimized concurrent fetch: {e}")
                     logger.info("Falling back to per-host fetching")
 
-            async def fetch_host_jobs(slurm_host):
+            async def fetch_host_jobs(slurm_host, *, use_cache: bool = True):
                 hostname = slurm_host.host.hostname
-                if host and since and not job_id_list and not force_refresh:
+                if use_cache and host and since and not job_id_list and not force_refresh:
                     cache_filters = build_status_cache_filters(
                         user=user,
                         state=state,
@@ -245,7 +255,33 @@ def register_status_routes(
                         search=search,
                         group_array_jobs=group_array_jobs,
                         limit=limit,
-                        refresh_callback=lambda: fetch_host_jobs(slurm_host),
+                        refresh_callback=lambda: fetch_host_jobs(
+                            slurm_host, use_cache=False
+                        ),
+                    )
+                    if cached_response is not None:
+                        return cached_response
+                if (
+                    use_cache
+                    and host
+                    and not since
+                    and not job_id_list
+                    and not force_refresh
+                ):
+                    cached_response = await get_cached_host_status_response(
+                        cache_middleware=cache_middleware,
+                        manager=manager,
+                        hostname=hostname,
+                        user=user,
+                        active_only=active_only,
+                        completed_only=completed_only,
+                        state=state,
+                        search=search,
+                        group_array_jobs=group_array_jobs,
+                        limit=limit,
+                        refresh_callback=lambda: fetch_host_jobs(
+                            slurm_host, use_cache=False
+                        ),
                     )
                     if cached_response is not None:
                         return cached_response
@@ -293,17 +329,19 @@ def register_status_routes(
                     "active_only": active_only,
                     "completed_only": completed_only,
                 }
-                return await cache_middleware.cache_job_status_response(
+                cached_results = await cache_middleware.cache_job_status_response(
                     results,
                     hostname=host,
                     filters=cache_filters,
                     since=since,
                     verify_active_jobs=safe_for_cache_verification,
                 )
+                return await _json_status_response(cached_results)
 
-            return await cache_middleware.cache_job_status_response(
+            cached_results = await cache_middleware.cache_job_status_response(
                 results, verify_active_jobs=safe_for_cache_verification
             )
+            return await _json_status_response(cached_results)
         except HTTPException:
             raise
         except Exception as e:

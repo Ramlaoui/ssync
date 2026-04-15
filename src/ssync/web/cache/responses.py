@@ -28,6 +28,10 @@ class CacheResponseService:
         enhanced_responses = []
 
         for response in responses:
+            if response.cached:
+                enhanced_responses.append(response)
+                continue
+
             response_hostname = response.hostname
             current_jobs = []
             job_ids_for_range = []
@@ -65,7 +69,7 @@ class CacheResponseService:
                 JobStatusResponse(
                     hostname=response_hostname,
                     jobs=current_jobs,
-                    total_jobs=len(current_jobs),
+                    total_jobs=response.total_jobs,
                     query_time=response.query_time,
                     group_array_jobs=response.group_array_jobs,
                     array_groups=response.array_groups,

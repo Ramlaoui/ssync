@@ -156,6 +156,9 @@ export interface JobOutputResponse {
   stderr: string | null;
   stdout_metadata: FileMetadata | null;
   stderr_metadata: FileMetadata | null;
+  cached?: boolean;
+  stale?: boolean;
+  refresh_queued?: boolean;
 }
 
 export interface JobScriptResponse {

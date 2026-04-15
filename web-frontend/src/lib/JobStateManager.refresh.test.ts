@@ -526,6 +526,24 @@ describe('JobStateManager - Refresh Timing and API Calls', () => {
       // Should have made API call
       // Using mock API call tracking
       expect(testSetup.mocks.api.getCallCount()).toBeGreaterThan(0);
+
+      const calls = vi.mocked(testSetup.mocks.api.get).mock.calls;
+      const jobCall = calls.find(call => call[0].includes('/api/jobs/'));
+      expect(jobCall).toBeDefined();
+      expect(jobCall![0]).toContain('cache_first=true');
+    });
+
+    it('should use backend cache_first on cold frontend cache', async () => {
+      vi.mocked(testSetup.mocks.api.get).mockClear();
+
+      await manager.fetchSingleJob('123', 'test.com', false);
+
+      const calls = vi.mocked(testSetup.mocks.api.get).mock.calls;
+      const jobCall = calls.find(call => call[0].includes('/api/jobs/'));
+
+      expect(jobCall).toBeDefined();
+      expect(jobCall![0]).toContain('cache_first=true');
+      expect(jobCall![0]).not.toContain('force=true');
     });
 
     it('should force fetch from API when forceRefresh is true', async () => {

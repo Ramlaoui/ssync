@@ -1,18 +1,25 @@
 """Regression tests for blocking web handlers and request coalescing."""
 
 import asyncio
+import json
 import sys
 import threading
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from fastapi import WebSocketDisconnect
 
 from ssync.models.cluster import Host, SlurmHost
 from ssync.models.job import JobInfo, JobState
 from ssync.request_coalescer import JobRequestCoalescer
 from ssync.web.models import JobInfoWeb
 from ssync.web import app as web_app
+from ssync.web.realtime import handlers as realtime_handlers
+from ssync.web.realtime import monitor as realtime_monitor
+from ssync.web.realtime.state import all_jobs_state
+from ssync.web.services import jobs as job_services
 
 
 def _make_slurm_host(hostname: str) -> SlurmHost:
@@ -43,6 +50,21 @@ def _get_route_endpoint(path: str, method: str):
             continue
         return route.endpoint
     raise AssertionError(f"Route {method} {path} not found")
+
+
+class _FakeAllJobsWebSocket:
+    def __init__(self):
+        self.accepted = False
+        self.messages = []
+
+    async def accept(self):
+        self.accepted = True
+
+    async def send_json(self, message):
+        self.messages.append(message)
+
+    async def receive_text(self):
+        raise WebSocketDisconnect()
 
 
 @pytest.mark.unit
@@ -210,3 +232,248 @@ async def test_request_coalescer_duplicate_request_does_not_deadlock():
     assert fetch_calls["count"] == 1
     assert first_result.job_id == "8001"
     assert second_result.job_id == "8001"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_queue_job_refresh_reuses_existing_background_task(monkeypatch):
+    hostname = "cluster-refresh.example.com"
+    job_id = "8002"
+    key = (hostname, job_id)
+    created = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    def fake_refresh_job_in_background(**kwargs):
+        created.append(kwargs)
+
+        async def _runner():
+            started.set()
+            await release.wait()
+
+        return _runner()
+
+    job_services._JOB_REFRESH_TASKS.pop(key, None)
+    monkeypatch.setattr(
+        "ssync.web.services.jobs.refresh_job_in_background",
+        fake_refresh_job_in_background,
+    )
+
+    try:
+        assert job_services.queue_job_refresh(
+            job_id=job_id,
+            host=hostname,
+            get_slurm_manager=lambda: None,
+            cache_middleware=None,
+            job_manager=None,
+        )
+        assert job_services.queue_job_refresh(
+            job_id=job_id,
+            host=hostname,
+            get_slurm_manager=lambda: None,
+            cache_middleware=None,
+            job_manager=None,
+        )
+
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert len(created) == 1
+        assert key in job_services._JOB_REFRESH_TASKS
+    finally:
+        release.set()
+        task = job_services._JOB_REFRESH_TASKS.get(key)
+        if task is not None:
+            await task
+        await asyncio.sleep(0)
+        job_services._JOB_REFRESH_TASKS.pop(key, None)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_job_status_single_host_uses_cached_snapshot(monkeypatch, test_cache):
+    hostname = "cluster-status.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    cached_job = _make_job("9001", hostname)
+    test_cache.cache_job(cached_job)
+    test_cache.update_host_fetch_state(
+        hostname=hostname,
+        fetch_time=datetime.now(),
+        fetch_time_utc=datetime.now(timezone.utc),
+    )
+
+    manager = web_app.get_slurm_manager()
+
+    async def fail_get_all_jobs(*args, **kwargs):
+        raise AssertionError("single-host status cache hit should not fetch inline")
+
+    monkeypatch.setattr(manager, "slurm_hosts", [slurm_host])
+    monkeypatch.setattr(manager, "get_all_jobs", fail_get_all_jobs)
+    monkeypatch.setattr(web_app._cache_middleware, "cache", test_cache)
+    manager.slurm_client.query._username_cache[hostname] = cached_job.user
+
+    get_job_status = _get_route_endpoint("/api/status", "GET")
+    request = types.SimpleNamespace(client=types.SimpleNamespace(host="127.0.0.1"))
+    result = await get_job_status(
+        request=request,
+        host=hostname,
+        user=None,
+        since=None,
+        limit=None,
+        job_ids=None,
+        state=None,
+        active_only=False,
+        completed_only=False,
+        search=None,
+        group_array_jobs=True,
+        force_refresh=False,
+        profile=False,
+        _authenticated=True,
+    )
+
+    payload = json.loads(result.body)
+
+    assert result.media_type == "application/json"
+    assert len(payload) == 1
+    assert payload[0]["hostname"] == hostname
+    assert payload[0]["cached"] is True
+    assert [job["job_id"] for job in payload[0]["jobs"]] == ["9001"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_all_jobs_websocket_sends_empty_initial_without_inline_fetch(
+    monkeypatch,
+):
+    websocket = _FakeAllJobsWebSocket()
+    manager = types.SimpleNamespace(
+        slurm_hosts=[_make_slurm_host("adastra"), _make_slurm_host("jz")]
+    )
+    fetch_calls = {"count": 0}
+
+    class _FakeJobDataManager:
+        async def fetch_all_jobs(self, **kwargs):
+            fetch_calls["count"] += 1
+            raise AssertionError("WebSocket bootstrap should not fetch inline")
+
+    async def fake_verify(_websocket):
+        return True
+
+    async def fake_monitor_all_jobs_singleton(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "ssync.job_data_manager.get_job_data_manager",
+        lambda: _FakeJobDataManager(),
+    )
+    monkeypatch.setattr(
+        realtime_handlers,
+        "get_cache",
+        lambda: types.SimpleNamespace(get_cached_jobs=lambda **kwargs: []),
+    )
+    monkeypatch.setattr(
+        realtime_handlers,
+        "monitor_all_jobs_singleton",
+        fake_monitor_all_jobs_singleton,
+    )
+
+    previous_monitor_task = all_jobs_state.monitor_task
+    previous_websockets = set(all_jobs_state.websockets)
+    all_jobs_state.monitor_task = None
+    all_jobs_state.websockets.clear()
+
+    try:
+        await realtime_handlers.websocket_all_jobs_handler(
+            websocket,
+            verify_websocket_api_key=fake_verify,
+            get_slurm_manager=lambda: manager,
+            cache_middleware=types.SimpleNamespace(),
+        )
+    finally:
+        if all_jobs_state.monitor_task is not None:
+            await all_jobs_state.monitor_task
+        all_jobs_state.monitor_task = previous_monitor_task
+        all_jobs_state.websockets = previous_websockets
+
+    assert websocket.accepted is True
+    assert fetch_calls["count"] == 0
+    assert websocket.messages[0] == {
+        "type": "initial",
+        "jobs": {"adastra": [], "jz": []},
+        "total": 0,
+        "array_groups": {},
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_all_jobs_monitor_uses_cache_only_on_first_cycle(monkeypatch):
+    fetch_calls = {"count": 0}
+    cached_job = _make_job("9100", "adastra")
+    broadcasts = []
+
+    class _FakeJobDataManager:
+        _placeholder_active_cache_ttl_seconds = 90
+
+        def _is_launch_placeholder_job(self, _job):
+            return False
+
+        async def fetch_all_jobs(self, **kwargs):
+            fetch_calls["count"] += 1
+            return []
+
+    async def fake_sleep(_seconds, *args, **kwargs):
+        all_jobs_state.websockets.clear()
+
+    async def fake_broadcast(_websockets, message):
+        broadcasts.append(message)
+        return set()
+
+    monkeypatch.setattr(
+        "ssync.job_data_manager.get_job_data_manager",
+        lambda: _FakeJobDataManager(),
+    )
+    monkeypatch.setattr(
+        realtime_monitor,
+        "get_cache",
+        lambda: types.SimpleNamespace(
+            get_cached_jobs=lambda **kwargs: [
+                types.SimpleNamespace(
+                    job_info=cached_job,
+                    is_active=True,
+                    cached_at=datetime.now(),
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(realtime_monitor.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        realtime_monitor,
+        "broadcast_json_to_websockets",
+        fake_broadcast,
+    )
+    async def fake_completed_updates(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(
+        realtime_monitor,
+        "_fetch_completed_job_updates",
+        fake_completed_updates,
+    )
+
+    previous_monitor_task = all_jobs_state.monitor_task
+    previous_websockets = set(all_jobs_state.websockets)
+    all_jobs_state.monitor_task = None
+    all_jobs_state.websockets = {object()}
+
+    try:
+        await realtime_monitor.monitor_all_jobs_singleton(
+            get_slurm_manager=lambda: types.SimpleNamespace(slurm_hosts=[]),
+            cache_middleware=types.SimpleNamespace(),
+        )
+    finally:
+        all_jobs_state.monitor_task = previous_monitor_task
+        all_jobs_state.websockets = previous_websockets
+
+    assert fetch_calls["count"] == 0
+    assert broadcasts
+    assert broadcasts[0]["type"] == "batch_update"
+    assert broadcasts[0]["updates"][0]["job_id"] == "9100"

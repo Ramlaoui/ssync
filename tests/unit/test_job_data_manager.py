@@ -127,7 +127,7 @@ async def test_fetch_all_jobs_concurrent_requests_use_cache_for_second_request(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_completion(
+async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_immediately(
     monkeypatch, test_cache
 ):
     hostname = "cluster-timeout.example.com"
@@ -168,9 +168,10 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_comp
 
     result = await job_data_manager.fetch_all_jobs(hostname=hostname)
 
-    # Fast response with cached data while slow fetch continues in background.
+    # Fast response with cached data while the slow fetch is put into backoff and
+    # the host reservation is released immediately.
     assert [job.job_id for job in result] == ["3001"]
-    assert hostname in job_data_manager._fetching_hosts
+    assert hostname not in job_data_manager._fetching_hosts
     assert hostname in job_data_manager._host_failure_until
     assert fetch_calls["count"] == 1
 
@@ -180,14 +181,11 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_after_comp
     assert busy_cache_calls["count"] == 0
 
     release.set()
-
-    # Background task completion should release host reservation.
     for _ in range(50):
-        if hostname not in job_data_manager._fetching_hosts:
+        if hostname not in job_data_manager._host_failure_until:
             break
         await asyncio.sleep(0.01)
 
-    assert hostname not in job_data_manager._fetching_hosts
     assert hostname not in job_data_manager._host_failure_until
 
 

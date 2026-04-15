@@ -1335,7 +1335,9 @@ class JobStateManager {
     // Fetch from API
     try {
       this.updateMetric('apiCalls', 1);
-      const response = await this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}`);
+      const response = await this.api.get<JobInfo>(
+        `/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}&cache_first=true`
+      );
       const job = response.data;
 
       // Update cache
@@ -1717,10 +1719,19 @@ class JobStateManager {
       return cached.job;
     }
 
-    // Fetch from API (traditional blocking call)
+    // Ask the backend for cached data first even when the frontend cache is cold.
+    // This avoids blocking after a full page reload when the server already has the job cached.
     try {
       this.updateMetric('apiCalls', 1);
-      const response = await this.api.get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}?host=${hostname}${forceRefresh ? '&force=true' : ''}`);
+      const params = new URLSearchParams({ host: hostname });
+      if (forceRefresh) {
+        params.append('force', 'true');
+      } else {
+        params.append('cache_first', 'true');
+      }
+      const response = await this.api.get<JobInfo>(
+        `/api/jobs/${encodeURIComponent(jobId)}?${params.toString()}`
+      );
       const job = response.data;
 
       // Update cache immediately for current job (bypass batch delay)

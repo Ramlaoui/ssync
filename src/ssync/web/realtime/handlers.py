@@ -352,13 +352,7 @@ async def websocket_all_jobs_handler(
 
             if not all_jobs:
                 logger.info(
-                    "No suitable cache available, fetching jobs for WebSocket initial data"
-                )
-                all_jobs = await job_data_manager.fetch_all_jobs(
-                    hostname=None,
-                    limit=500,
-                    active_only=False,
-                    since="1d",
+                    "No suitable cache available for WebSocket initial data; sending empty initial snapshot and relying on background monitor refresh"
                 )
 
             jobs_by_host = {}
