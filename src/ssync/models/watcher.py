@@ -57,6 +57,7 @@ class WatcherDefinition:
     trigger_job_states: List[str] = field(
         default_factory=lambda: ["completed", "failed", "timeout"]
     )
+    remaining_resubmits: Optional[int] = None  # Countdown for chained resubmits
     is_array_template: bool = False  # Whether this is a template for array jobs
     array_spec: Optional[str] = None  # Original array spec (e.g., "0-5" or "1,3,5")
 

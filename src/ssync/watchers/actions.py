@@ -4,11 +4,14 @@ import asyncio
 import json
 import os
 import re
-import tempfile
+from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, Tuple
 
+from ..launch import LaunchManager
 from ..models.watcher import ActionType
+from ..parsers.script_processor import ScriptProcessor
+from ..slurm.params import SlurmParams
 from ..utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -24,6 +27,7 @@ class ActionExecutor:
         job_id: str,
         hostname: str,
         variables: Dict[str, Any],
+        watcher: Any | None = None,
     ) -> Tuple[bool, str]:
         """
         Execute an action.
@@ -40,7 +44,9 @@ class ActionExecutor:
                 return await self._cancel_job(job_id, hostname, params)
 
             elif action_type == ActionType.RESUBMIT:
-                return await self._resubmit_job(job_id, hostname, params, variables)
+                return await self._resubmit_job(
+                    job_id, hostname, params, variables, watcher
+                )
 
             elif action_type == ActionType.NOTIFY_EMAIL:
                 return await self._notify_email(job_id, hostname, params, variables)
@@ -193,6 +199,7 @@ class ActionExecutor:
         hostname: str,
         params: Dict[str, Any],
         variables: Dict[str, Any] | None = None,
+        watcher: Any | None = None,
     ) -> Tuple[bool, str]:
         """Resubmit a job with modified parameters and per-host throttling."""
         try:
@@ -210,6 +217,29 @@ class ActionExecutor:
                 return False, "Original script not found in cache"
 
             script_content = cached_job.script_content
+            remaining_resubmits = params.get("remaining_resubmits")
+            if remaining_resubmits is not None:
+                try:
+                    remaining_resubmits = int(remaining_resubmits)
+                except (TypeError, ValueError):
+                    return (
+                        False,
+                        f"Invalid remaining_resubmits value: {remaining_resubmits}",
+                    )
+
+                if remaining_resubmits <= 0:
+                    return False, "No resubmits remaining for this watcher"
+
+                if watcher is None:
+                    return False, "Cannot decrement resubmit counter without watcher context"
+
+                script_content = ScriptProcessor.decrement_watcher_resubmit_counter(
+                    script_content,
+                    watcher_name=watcher.definition.name,
+                    watcher_pattern=watcher.definition.pattern,
+                    trigger_on_job_end=watcher.definition.trigger_on_job_end,
+                    current_remaining=remaining_resubmits,
+                )
 
             # Modify script with new parameters
             modifications = params.get("modifications", {})
@@ -219,105 +249,43 @@ class ActionExecutor:
                 replacement = f"#SBATCH --{key}={value}"
                 script_content = re.sub(pattern, replacement, script_content)
 
-            # Interpolate captured variables into the script body
-            # Supports ${var} and ${var:-default} syntax
             all_vars = {"JOB_ID": job_id, "HOSTNAME": hostname, **(variables or {})}
-            logger.info(f"Interpolating variables into script: {all_vars}")
-            for var_name, var_value in all_vars.items():
-                if var_name.startswith("_") or var_name.isdigit():
-                    continue
-                # ${var:+word} — "if set, substitute word (with ${var} expanded inside)"
-                # e.g. ${ckpt_path:+checkpoint.resume_from=${ckpt_path}}
-                # On resubmit: expands inner ${var} refs within word
-                # On first launch (bash): unset var → expands to nothing
-                # Allow nested ${...} inside the word by matching balanced braces
-                cond_pattern = re.compile(
-                    re.escape("${" + var_name + ":+")
-                    + r"((?:[^{}]|\$\{[^}]*\})*)"
-                    + re.escape("}")
-                )
+            logger.info(f"Rendering resubmitted script with variables: {all_vars}")
 
-                def _expand_conditional(m: re.Match) -> str:
-                    word = m.group(1)
-                    # Expand ${var} references within the word
-                    for vn, vv in all_vars.items():
-                        if not vn.startswith("_") and not vn.isdigit():
-                            word = word.replace(f"${{{vn}}}", str(vv))
-                    return word
-
-                before = script_content
-                script_content = cond_pattern.sub(_expand_conditional, script_content)
-                if script_content != before:
-                    logger.info(f"Expanded ${{${var_name}:+...}}")
-
-                # ${var:-default} — replace with captured value (ignore default)
-                default_pattern = re.compile(
-                    re.escape("${" + var_name + ":-") + r"[^}]*" + re.escape("}")
-                )
-                before = script_content
-                script_content = default_pattern.sub(str(var_value), script_content)
-                if script_content != before:
-                    logger.info(f"Replaced ${{${var_name}:-...}} with {var_value}")
-
-                # Plain ${var}
-                script_content = script_content.replace(
-                    f"${{{var_name}}}", str(var_value)
-                )
-
-            # Cancel previous job first if requested (already throttled)
-            if params.get("cancel_previous", True):
+            # Cancel previous job first if requested (already throttled).
+            # Skip cancel when triggered by job-end (job is already terminal) —
+            # avoids a wasted scancel SSH call and, critically, prevents
+            # stop_watchers_for_job from killing sibling watchers.
+            job_already_ended = bool(variables and variables.get("job_end_state"))
+            if params.get("cancel_previous", True) and not job_already_ended:
                 await self._cancel_job(job_id, hostname, {"reason": "Resubmitting"})
 
-            # Submit new job
             slurm_host = manager.get_host_by_name(hostname)
-            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+            source_dir = (
+                Path(cached_job.local_source_dir)
+                if cached_job.local_source_dir
+                else None
+            )
+            work_dir = cached_job.job_info.work_dir
+            if not work_dir and source_dir is not None:
+                work_dir = str(Path(slurm_host.work_dir) / source_dir.name)
 
-            # Import throttler for rate limiting SSH commands per host
-            from .engine import get_host_throttler
+            launch_manager = LaunchManager(manager)
+            new_job = await launch_manager.launch_job(
+                script_path=None,
+                script_content=script_content,
+                script_variables=all_vars,
+                source_dir=source_dir,
+                host=hostname,
+                slurm_params=SlurmParams(),
+                sync_enabled=False,
+                work_dir_override=work_dir,
+            )
+            if not new_job:
+                return False, "Launch manager did not return a resubmitted job"
 
-            throttler = get_host_throttler()
-
-            # Write script to temp file and submit
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
-                f.write(script_content)
-                temp_path = f.name
-
-            try:
-                # Transfer script and submit with throttling
-                def do_transfer_and_submit():
-                    conn.put(temp_path, f"/tmp/resubmit_{job_id}.sh")
-                    return conn.run(
-                        f"sbatch /tmp/resubmit_{job_id}.sh", hide=True, warn=True
-                    )
-
-                async with throttler.throttle(hostname):
-                    result = await asyncio.to_thread(do_transfer_and_submit)
-
-                if result.ok:
-                    # Extract new job ID
-                    match = re.search(r"Submitted batch job (\d+)", result.stdout)
-                    new_job_id = match.group(1) if match else "unknown"
-
-                    logger.info(f"Resubmitted job {job_id} as {new_job_id}")
-                    return True, f"Resubmitted as job {new_job_id}"
-                else:
-                    return False, f"Failed to resubmit: {result.stderr}"
-
-            finally:
-                # Clean up temp file
-                os.unlink(temp_path)
-
-                # Cleanup remote file with throttling
-                async def cleanup_remote():
-                    async with throttler.throttle(hostname):
-                        await asyncio.to_thread(
-                            conn.run, f"rm -f /tmp/resubmit_{job_id}.sh", warn=True
-                        )
-
-                try:
-                    await cleanup_remote()
-                except Exception:
-                    pass  # Ignore cleanup errors
+            logger.info(f"Resubmitted job {job_id} as {new_job.job_id}")
+            return True, f"Resubmitted as job {new_job.job_id}"
 
         except Exception as e:
             logger.error(f"Failed to resubmit job {job_id}: {e}")

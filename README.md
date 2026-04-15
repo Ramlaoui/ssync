@@ -156,6 +156,7 @@ The synchronization process automatically respects `.gitignore` patterns, preven
 
 Watchers can capture values from job output and resubmit the original script with
 those values interpolated back into the script body. See
+[`docs/watchers.md`](docs/watchers.md) for the full watcher guide and
 [`docs/watcher-resubmit.md`](docs/watcher-resubmit.md) for the recommended
 pattern for checkpoint-based continuation.
 
