@@ -204,11 +204,13 @@ class JobDataManager:
     async def _run_in_executor(self, func, *args, **kwargs):
         """Run a blocking function in the thread pool if available."""
         try:
-            # Try to get the executor from the web app
-            from .web.app import executor
+            # Prefer the background pool so bulk refresh work cannot starve
+            # interactive launch/status requests.
+            from .web.app import background_executor, executor
 
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+            pool = background_executor or executor
+            return await loop.run_in_executor(pool, lambda: func(*args, **kwargs))
         except ImportError:
             # If not running in web context, run directly (blocking)
             logger.debug(

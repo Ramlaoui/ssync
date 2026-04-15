@@ -52,12 +52,18 @@ async def test_launch_job_offloads_connection_acquisition(monkeypatch, temp_dir)
     def fake_submit(*_args, **_kwargs):
         return types.SimpleNamespace(job_id="12345")
 
+    async def fake_capture_submission(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(
         "ssync.launch.ScriptProcessor.prepare_script",
         lambda clean_script_path, _temp_dir, params=None: clean_script_path,
     )
     monkeypatch.setattr("ssync.launch.send_file", lambda *_args, **_kwargs: "/remote/work/scripts/job.sh")
     monkeypatch.setattr(LaunchManager, "_submit_script_in_workdir", fake_submit)
+    monkeypatch.setattr(
+        LaunchManager, "_capture_submission_in_background", fake_capture_submission
+    )
 
     launch_manager = LaunchManager(_FakeManager(), executor=ThreadPoolExecutor(max_workers=2))
     try:
@@ -170,6 +176,7 @@ async def test_capture_job_submission_offloads_connection_acquisition(
     fake_module = types.ModuleType("ssync.web.app")
     fake_module.get_slurm_manager = lambda: _FakeManager()
     fake_module.executor = executor
+    fake_module.background_executor = executor
     monkeypatch.setitem(sys.modules, "ssync.web.app", fake_module)
 
     manager = JobDataManager()

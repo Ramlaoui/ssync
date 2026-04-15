@@ -6,7 +6,6 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 
-from ...utils.async_helpers import create_task
 from ...utils.logging import setup_logger
 from ..models import (
     CompleteJobDataResponse,
@@ -22,7 +21,8 @@ from ..services.jobs import (
     get_job_data_with_optional_host_search,
     get_job_output_response,
     get_job_script_payload,
-    refresh_job_in_background,
+    mark_job_response_cached,
+    queue_job_refresh,
 )
 
 logger = setup_logger(__name__)
@@ -85,7 +85,7 @@ def register_job_routes(
         job_id: str,
         host: Optional[str] = Query(None, description="Specific host to search"),
         cache_first: bool = Query(
-            False,
+            True,
             description="Return cached data immediately if available, then refresh in background",
         ),
         force_refresh: bool = Query(
@@ -103,24 +103,34 @@ def register_job_routes(
                 host = InputSanitizer.sanitize_hostname(host)
             force_refresh = force_refresh or force
 
-            if cache_first and not force_refresh:
+            cached_job = None
+            if cache_first or force_refresh:
                 cached_job = await cache_middleware.get_job_with_cache_fallback(
-                    job_id, host, allow_stale_active=True
+                    job_id,
+                    host,
+                    allow_stale_active=True,
                 )
                 if cached_job:
+                    refresh_host = host or cached_job.hostname
+                    refresh_queued = queue_job_refresh(
+                        job_id=job_id,
+                        host=refresh_host,
+                        get_slurm_manager=get_slurm_manager,
+                        cache_middleware=cache_middleware,
+                        job_manager=job_manager,
+                    )
                     logger.info(
-                        f"Returning cached job {job_id} immediately (cache_first=true)"
+                        "Returning cached job %s immediately "
+                        "(cache_first=%s force_refresh=%s refresh_queued=%s)",
+                        job_id,
+                        cache_first,
+                        force_refresh,
+                        refresh_queued,
                     )
-                    create_task(
-                        refresh_job_in_background(
-                            job_id=job_id,
-                            host=host,
-                            get_slurm_manager=get_slurm_manager,
-                            cache_middleware=cache_middleware,
-                            job_manager=job_manager,
-                        )
+                    return mark_job_response_cached(
+                        cached_job,
+                        refresh_queued=refresh_queued,
                     )
-                    return cached_job
 
             manager = get_slurm_manager()
             slurm_hosts = manager.slurm_hosts
@@ -166,7 +176,10 @@ def register_job_routes(
                 )
                 if cached_job:
                     logger.info(f"Returning cached job {job_id}")
-                    return cached_job
+                    return mark_job_response_cached(
+                        cached_job,
+                        refresh_queued=False,
+                    )
 
             raise HTTPException(status_code=404, detail="Job not found")
         except HTTPException:
@@ -250,6 +263,7 @@ def register_job_routes(
                 force_refresh=force_refresh,
                 get_slurm_manager=get_slurm_manager,
                 cache_middleware=cache_middleware,
+                job_manager=job_manager,
             )
         except HTTPException:
             raise

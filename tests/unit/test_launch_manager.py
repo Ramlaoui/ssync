@@ -52,10 +52,13 @@ def test_submit_script_in_workdir_reuses_existing_connection(monkeypatch):
         params,
         "/tmp/job.slurm",
         Path("/tmp"),
+        "#!/bin/bash\necho hello\n",
+        [],
     )
 
     assert job is not None
     assert job.job_id == "4242"
+    fake_conn.run.assert_not_called()
     args, kwargs = fake_submit.call_args
     assert args == (fake_conn, params, "/tmp/job.slurm")
     assert kwargs == {"work_dir": "/tmp", "warn": True}
