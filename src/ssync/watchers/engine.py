@@ -5,11 +5,13 @@ import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 from ..cache import get_cache
 from ..models.job import JobInfo, JobState
 from ..models.watcher import (
+    ActionType,
     WatcherDefinition,
     WatcherInstance,
     WatcherState,
@@ -106,6 +108,13 @@ def get_host_throttler() -> HostCommandThrottler:
     if _host_throttler is None:
         _host_throttler = HostCommandThrottler(max_concurrent_per_host=3)
     return _host_throttler
+
+
+class JobEndHandlingResult(Enum):
+    """Outcome of processing terminal-state watcher actions."""
+
+    COMPLETE = "complete"
+    RETRY_PENDING = "retry_pending"
 
 
 class WatcherEngine:
@@ -268,6 +277,21 @@ class WatcherEngine:
                     JobState.CANCELLED,
                     JobState.TIMEOUT,
                 ]:
+                    watcher = self._get_watcher(watcher_id)
+                    if watcher:
+                        terminal_variables = {
+                            **watcher.variables,
+                            "job_end_state": self._job_end_state_name(job_info.state),
+                        }
+                        if self._has_pending_job_end_resubmit(
+                            watcher, terminal_variables
+                        ):
+                            logger.info(
+                                f"Job {job_id} is {job_info.state}, keeping watcher "
+                                f"{watcher_id} active until resubmit succeeds"
+                            )
+                            continue
+
                     logger.info(
                         f"Job {job_id} is {job_info.state}, stopping watcher {watcher_id}"
                     )
@@ -625,7 +649,17 @@ class WatcherEngine:
                             self._update_watcher_position(watcher_id, new_position)
                             self._check_patterns(watcher, final_content)
 
-                        await self._handle_job_end_trigger(watcher, job_info.state)
+                        job_end_result = await self._handle_job_end_trigger(
+                            watcher, job_info.state
+                        )
+                        if job_end_result == JobEndHandlingResult.RETRY_PENDING:
+                            logger.info(
+                                f"Watcher {watcher_id} will retry job-end actions for "
+                                f"job {job_id} after {watcher.definition.interval_seconds}s"
+                            )
+                            await asyncio.sleep(watcher.definition.interval_seconds)
+                            continue
+
                         self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
                         break
 
@@ -886,63 +920,155 @@ class WatcherEngine:
         }
         return state_map.get(job_state, str(job_state).lower())
 
-    async def _handle_job_end_trigger(
-        self, watcher: WatcherInstance, job_state: JobState
+    @staticmethod
+    def _job_end_action_success_key(action_index: int) -> str:
+        """Internal watcher variable used to mark completed job-end actions."""
+        return f"__ssync_job_end_action_success_{action_index}"
+
+    @staticmethod
+    def _job_end_completion_key() -> str:
+        """Internal watcher variable used to mark terminal handling completion."""
+        return "__ssync_job_end_completed"
+
+    @staticmethod
+    def _job_end_marker_is_set(value: Any) -> bool:
+        """Interpret persisted watcher markers as booleans."""
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _job_end_action_succeeded(
+        self, variables: Dict[str, Any], action_index: int
     ) -> bool:
-        """Execute watcher actions once when the job reaches a matching terminal state."""
-        if not watcher.definition.trigger_on_job_end:
+        """Return True when the indexed job-end action already succeeded."""
+        return self._job_end_marker_is_set(
+            variables.get(self._job_end_action_success_key(action_index))
+        )
+
+    def _job_end_trigger_completed(self, variables: Dict[str, Any]) -> bool:
+        """Return True when terminal handling has already been finalized."""
+        return self._job_end_marker_is_set(
+            variables.get(self._job_end_completion_key())
+        )
+
+    def _has_pending_job_end_resubmit(
+        self, watcher: WatcherInstance, variables: Dict[str, Any]
+    ) -> bool:
+        """Return True when a job-end resubmit action has not succeeded yet."""
+        if (
+            not watcher.definition.trigger_on_job_end
+            or self._job_end_trigger_completed(variables)
+        ):
             return False
 
-        if not self._claim_job_end_trigger(watcher.id):
-            logger.info(
-                f"Watcher {watcher.id} terminal trigger already claimed, skipping"
+        state_name = str(variables.get("job_end_state", "")).strip().lower()
+        if state_name:
+            allowed_states = self._normalize_trigger_job_states(
+                watcher.definition.trigger_job_states
             )
+            if state_name not in allowed_states:
+                return False
+
+        if watcher.definition.condition and not self._evaluate_condition(
+            watcher.definition.condition, variables
+        ):
             return False
+
+        for action_index, action in enumerate(watcher.definition.actions):
+            if action.type != ActionType.RESUBMIT:
+                continue
+            if action.condition and not self._evaluate_condition(
+                action.condition, variables
+            ):
+                continue
+            if not self._job_end_action_succeeded(variables, action_index):
+                return True
+
+        return False
+
+    def _should_retry_failed_job_end_action(self, action: Any, result: str) -> bool:
+        """Return True when a failed job-end action should be retried later."""
+        if action.type != ActionType.RESUBMIT:
+            return False
+
+        result_text = str(result or "")
+        non_retryable_prefixes = (
+            "No resubmits remaining for this watcher",
+            "Invalid remaining_resubmits value:",
+            "Cannot decrement resubmit counter without watcher context",
+        )
+        return not any(
+            result_text.startswith(prefix) for prefix in non_retryable_prefixes
+        )
+
+    async def _handle_job_end_trigger(
+        self, watcher: WatcherInstance, job_state: JobState
+    ) -> JobEndHandlingResult:
+        """Execute terminal-state actions, retrying resubmit until it succeeds."""
+        if not watcher.definition.trigger_on_job_end:
+            return JobEndHandlingResult.COMPLETE
 
         state_name = self._job_end_state_name(job_state)
         allowed_states = self._normalize_trigger_job_states(
             watcher.definition.trigger_job_states
         )
         if state_name not in allowed_states:
-            return False
+            return JobEndHandlingResult.COMPLETE
 
         fresh_variables = {
             **watcher.variables,
             **self._get_watcher_variables(watcher.id),
             "job_end_state": state_name,
         }
+        if self._job_end_trigger_completed(fresh_variables):
+            return JobEndHandlingResult.COMPLETE
 
         if watcher.definition.condition and not self._evaluate_condition(
             watcher.definition.condition, fresh_variables
         ):
-            return False
+            return JobEndHandlingResult.COMPLETE
 
-        actions_executed = 0
-        for action in watcher.definition.actions:
+        any_action_succeeded = False
+        retry_pending = False
+        for action_index, action in enumerate(watcher.definition.actions):
+            if self._job_end_action_succeeded(fresh_variables, action_index):
+                any_action_succeeded = True
+                continue
+
             if action.condition and not self._evaluate_condition(
                 action.condition, fresh_variables
             ):
                 continue
 
             try:
-                success, _ = await self._execute_action(
+                success, result = await self._execute_action(
                     watcher,
                     action,
                     f"[Job End: {state_name}]",
                     fresh_variables,
                 )
                 if success:
-                    actions_executed += 1
+                    any_action_succeeded = True
+                    success_key = self._job_end_action_success_key(action_index)
+                    self._update_watcher_variables(watcher.id, {success_key: "1"})
+                    fresh_variables[success_key] = "1"
+                elif self._should_retry_failed_job_end_action(action, result):
+                    retry_pending = True
             except Exception as e:
                 logger.error(
                     f"Failed to execute job-end action for watcher {watcher.id}: {e}"
                 )
+                if self._should_retry_failed_job_end_action(action, f"Error: {e}"):
+                    retry_pending = True
 
-        if actions_executed > 0:
+        if retry_pending:
+            return JobEndHandlingResult.RETRY_PENDING
+
+        if any_action_succeeded and not self._job_end_trigger_completed(fresh_variables):
+            completion_key = self._job_end_completion_key()
+            self._update_watcher_variables(watcher.id, {completion_key: "1"})
             self._update_watcher_trigger_count(watcher.id, watcher.trigger_count + 1)
-            return True
+            fresh_variables[completion_key] = "1"
 
-        return False
+        return JobEndHandlingResult.COMPLETE
 
     def _evaluate_condition(self, condition: str, variables: Dict[str, Any]) -> bool:
         """Safely evaluate a condition with variables."""
@@ -1377,28 +1503,6 @@ class WatcherEngine:
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} state: {e}")
-
-    def _claim_job_end_trigger(self, watcher_id: int) -> bool:
-        """Atomically claim one terminal execution for a watcher."""
-        try:
-            with self.cache._get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    UPDATE job_watchers
-                    SET state = ?
-                    WHERE id = ? AND state = ?
-                    """,
-                    (
-                        WatcherState.TRIGGERED.value,
-                        watcher_id,
-                        WatcherState.ACTIVE.value,
-                    ),
-                )
-                conn.commit()
-                return cursor.rowcount == 1
-        except Exception as e:
-            logger.error(f"Failed to claim terminal trigger for watcher {watcher_id}: {e}")
-            return False
 
     def _update_watcher_position(self, watcher_id: int, position: int):
         """Update watcher last read position."""

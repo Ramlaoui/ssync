@@ -376,6 +376,7 @@ def get_job_watchers_payload(
                 SELECT watcher_id, variable_name, variable_value
                 FROM watcher_variables
                 WHERE watcher_id IN ({placeholders})
+                  AND variable_name NOT LIKE '__ssync_%'
                 """,
                 watcher_ids,
             )
