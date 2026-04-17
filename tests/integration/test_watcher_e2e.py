@@ -71,7 +71,6 @@ async def test_full_capture_and_interpolation_flow(monkeypatch, test_cache):
     monkeypatch.setattr(
         engine, "_update_watcher_trigger_count", lambda wid, c: None
     )
-    monkeypatch.setattr(engine, "_claim_job_end_trigger", lambda wid: True)
 
     action_calls: list[dict] = []
 
