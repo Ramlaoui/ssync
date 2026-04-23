@@ -197,6 +197,12 @@ def register_job_routes(
         host: str = Query(..., description="Host where job is running"),
         output_type: str = Query("stdout", regex="^(stdout|stderr)$"),
         chunk_size: int = Query(default=8192, ge=1024, le=1048576),
+        max_initial_bytes: int = Query(
+            default=524288,
+            ge=1024,
+            le=4194304,
+            description="Maximum initial tail window to stream",
+        ),
         api_key: Optional[str] = Query(None, description="API key for EventSource"),
         _authenticated: bool = Depends(verify_api_key_flexible_dependency),
     ):
@@ -209,6 +215,7 @@ def register_job_routes(
             host=host,
             output_type=output_type,
             chunk_size=chunk_size,
+            max_initial_bytes=max_initial_bytes,
             get_slurm_manager=get_slurm_manager,
         )
 
@@ -235,8 +242,19 @@ def register_job_routes(
     async def get_job_output(
         job_id: str,
         host: Optional[str] = Query(None, description="Specific host to search"),
+        output_type: str = Query(
+            "both",
+            regex="^(stdout|stderr|both)$",
+            description="Which output stream to return",
+        ),
         lines: Optional[int] = Query(
             None, description="Number of lines to return (tail)"
+        ),
+        max_bytes: Optional[int] = Query(
+            524288,
+            ge=1024,
+            le=4194304,
+            description="Maximum number of trailing bytes to return when lines is not set",
         ),
         metadata_only: bool = Query(
             False, description="Return only metadata about output files, not content"
@@ -259,6 +277,8 @@ def register_job_routes(
                 job_id=job_id,
                 host=host,
                 lines=lines,
+                output_type=output_type,
+                max_bytes=max_bytes,
                 metadata_only=metadata_only,
                 force_refresh=force_refresh,
                 get_slurm_manager=get_slurm_manager,

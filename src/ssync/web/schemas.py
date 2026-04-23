@@ -253,10 +253,13 @@ class JobOutputResponse(BaseModel):
 
     job_id: str
     hostname: str
+    output_type: str = "both"
     stdout: Optional[str] = None
     stderr: Optional[str] = None
     stdout_metadata: Optional[FileMetadata] = None
     stderr_metadata: Optional[FileMetadata] = None
+    content_truncated: bool = False
+    content_limit_bytes: Optional[int] = None
     cached: bool = False
     stale: bool = False
     refresh_queued: bool = False

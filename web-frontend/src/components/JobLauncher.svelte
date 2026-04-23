@@ -886,9 +886,16 @@ echo "Starting job..."
 
   function saveScriptToLocalHistory() {
     try {
+      const MAX_LOCAL_HISTORY_ENTRIES = 20;
+      const MAX_LOCAL_HISTORY_CHARS = 12_000;
       const history = JSON.parse(localStorage.getItem("scriptHistory") || "[]");
+      const contentTruncated = script.length > MAX_LOCAL_HISTORY_CHARS;
       const entry = {
-        script_content: script,
+        script_content: contentTruncated
+          ? `${script.slice(0, MAX_LOCAL_HISTORY_CHARS)}\n\n# [Preview truncated in local history]`
+          : script,
+        content_truncated: contentTruncated,
+        original_length: script.length,
         job_name: parameters.jobName || "Unnamed Job",
         hostname: selectedHost || "unknown",
         submit_time: new Date().toISOString(),
@@ -899,9 +906,9 @@ echo "Starting job..."
       // Add to beginning of history
       history.unshift(entry);
 
-      // Keep only last 50 scripts
-      if (history.length > 50) {
-        history.length = 50;
+      // Keep only a small recent window to avoid localStorage bloat.
+      if (history.length > MAX_LOCAL_HISTORY_ENTRIES) {
+        history.length = MAX_LOCAL_HISTORY_ENTRIES;
       }
 
       localStorage.setItem("scriptHistory", JSON.stringify(history));

@@ -104,6 +104,11 @@
           {/if}
         </div>
       {/if}
+      {#if outputData?.content_truncated}
+        <div class="output-notice">
+          Showing a bounded tail for speed. Use the raw file link for the full log.
+        </div>
+      {/if}
       <OutputViewer
         content={outputData?.stdout || ''}
         isLoading={loadingOutput}
@@ -151,6 +156,11 @@
               <a class="metadata-link" href={outputData.stderr_metadata.access_path} target="_blank" rel="noopener noreferrer">raw file</a>
             </div>
           {/if}
+        </div>
+      {/if}
+      {#if outputData?.content_truncated}
+        <div class="output-notice">
+          Showing a bounded tail for speed. Use the raw file link for the full log.
         </div>
       {/if}
       <OutputViewer
@@ -231,6 +241,16 @@
     border: 1px solid var(--border);
     border-radius: 0.625rem;
     background: var(--secondary);
+  }
+
+  .output-notice {
+    margin-bottom: 0.5rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+    border-radius: 0.625rem;
+    background: color-mix(in srgb, var(--accent) 7%, var(--card));
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
   }
 
   .metadata-row {

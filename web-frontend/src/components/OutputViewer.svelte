@@ -69,12 +69,9 @@
   let showSizeWarning: boolean = $state(false);
   let warningDismissTimer: NodeJS.Timeout | null = null;
   let userInteractionCount: number = $state(0);
-  let virtualScrollOffset: number = 0; // Virtual scroll position
-  let scrollPlaceholder: HTMLDivElement; // Placeholder to maintain scroll height
   
   // Line processing
   let lines: string[] = $state([]);
-  let filteredLines: { lineNumber: number; content: string; matches: number[] }[] = [];
 
 
   function initializeContent() {
@@ -111,8 +108,6 @@
 
     // Use untrack to prevent tracking searchQuery when this is called from content effect
     untrack(() => {
-      updateFilteredLines();
-
       if (searchQuery) {
         highlightSearchResults();
       } else if (!disableHighlighting) {
@@ -120,43 +115,6 @@
       } else {
         // Skip highlighting for large files
         highlightedContent = escapeHtml(renderedContent);
-      }
-    });
-  }
-
-
-  
-  function updateFilteredLines() {
-    if (!searchQuery) {
-      filteredLines = lines.map((line, index) => ({
-        lineNumber: index + 1,
-        content: line,
-        matches: []
-      }));
-      return;
-    }
-    
-    const query = searchQuery.toLowerCase();
-    filteredLines = [];
-    
-    lines.forEach((line, index) => {
-      const lowerLine = line.toLowerCase();
-      const matches: number[] = [];
-      let pos = 0;
-      
-      while (pos < lowerLine.length) {
-        const found = lowerLine.indexOf(query, pos);
-        if (found === -1) break;
-        matches.push(found);
-        pos = found + 1;
-      }
-      
-      if (matches.length > 0) {
-        filteredLines.push({
-          lineNumber: index + 1,
-          content: line,
-          matches
-        });
       }
     });
   }
@@ -333,7 +291,6 @@
 
     // Load new content
     renderedContent = content.slice(windowStart, windowEnd);
-    virtualScrollOffset = windowStart;
 
     // Update display
     await updateRenderedContent();
@@ -373,7 +330,6 @@
       const removeSize = nextChunk.length;
       windowStart += removeSize;
       renderedContent = content.slice(windowStart, nextChunkEnd);
-      virtualScrollOffset = windowStart;
     } else {
       renderedContent += nextChunk;
     }
