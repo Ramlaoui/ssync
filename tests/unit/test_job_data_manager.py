@@ -1,6 +1,7 @@
 """Unit tests for JobDataManager concurrency and timeout behavior."""
 
 import asyncio
+import json
 import sys
 import threading
 import time
@@ -53,6 +54,40 @@ def _make_job(
         hostname=hostname,
         user="testuser",
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_job_data_ignores_unknown_cached_job_fields(test_cache):
+    hostname = "cluster-forward-fields.example.com"
+    job = _make_job("41257_[0-5]", hostname)
+    test_cache.cache_job(job)
+
+    with test_cache._get_connection() as conn:
+        row = conn.execute(
+            "SELECT job_info_json FROM cached_jobs WHERE job_id = ? AND hostname = ?",
+            (job.job_id, hostname),
+        ).fetchone()
+        payload = json.loads(row["job_info_json"])
+        payload["node_hostnames"] = ["node001", "node002"]
+        conn.execute(
+            """
+            UPDATE cached_jobs
+            SET job_info_json = ?
+            WHERE job_id = ? AND hostname = ?
+            """,
+            (json.dumps(payload), job.job_id, hostname),
+        )
+        conn.commit()
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    job_data = await job_data_manager.get_job_data(job.job_id, hostname)
+
+    assert job_data is not None
+    assert job_data.job_info.job_id == job.job_id
+    assert job_data.job_info.hostname == hostname
 
 
 @pytest.mark.unit

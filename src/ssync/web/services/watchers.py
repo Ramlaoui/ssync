@@ -135,6 +135,35 @@ def format_watcher_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     return response
 
 
+def format_watcher_event_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": row_dict["id"],
+        "watcher_id": row_dict["watcher_id"],
+        "watcher_name": format_watcher_name(
+            row_dict["watcher_id"], row_dict.get("watcher_name")
+        ),
+        "job_id": row_dict["job_id"],
+        "hostname": row_dict["hostname"],
+        "timestamp": row_dict["timestamp"],
+        "matched_text": row_dict["matched_text"],
+        "captured_vars": parse_json_field(row_dict.get("captured_vars_json"), {}),
+        "action_type": row_dict["action_type"],
+        "action_result": row_dict["action_result"],
+        "success": bool(row_dict["success"]),
+    }
+
+
+def get_watcher_payload_by_id(*, cache, watcher_id: int) -> Optional[Dict[str, Any]]:
+    with cache._get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM job_watchers WHERE id = ?",
+            (watcher_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return format_watcher_row(dict(row))
+
+
 def cancel_watcher_task(watcher_id: int) -> None:
     try:
         from ...watchers import get_watcher_engine
@@ -438,23 +467,7 @@ def get_watcher_events_payload(
         query += f" ORDER BY e.timestamp DESC LIMIT {min(limit, 500)}"
 
         for row in conn.execute(query, params).fetchall():
-            events.append(
-                {
-                    "id": row["id"],
-                    "watcher_id": row["watcher_id"],
-                    "watcher_name": format_watcher_name(
-                        row["watcher_id"], row["watcher_name"]
-                    ),
-                    "job_id": row["job_id"],
-                    "hostname": row["hostname"],
-                    "timestamp": row["timestamp"],
-                    "matched_text": row["matched_text"],
-                    "captured_vars": parse_json_field(row["captured_vars_json"], {}),
-                    "action_type": row["action_type"],
-                    "action_result": row["action_result"],
-                    "success": bool(row["success"]),
-                }
-            )
+            events.append(format_watcher_event_row(dict(row)))
     return {"events": events, "count": len(events)}
 
 

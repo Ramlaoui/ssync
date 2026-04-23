@@ -38,6 +38,8 @@ export interface Watcher {
   timer_mode_enabled?: boolean;
   timer_interval_seconds?: number;
   timer_mode_active?: boolean;
+  trigger_on_job_end?: boolean;
+  trigger_job_states?: string[];
   // Captured variables
   variables?: Record<string, string>;
   // Array template fields

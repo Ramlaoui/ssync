@@ -1117,7 +1117,7 @@ class WatcherEngine:
             )
 
             # Log event
-            self._log_watcher_event(
+            event_payload = self._log_watcher_event(
                 watcher_id=watcher.id,
                 job_id=watcher.job_id,
                 hostname=watcher.hostname,
@@ -1127,6 +1127,11 @@ class WatcherEngine:
                 action_result=result,
                 success=success,
             )
+            if event_payload is not None:
+                event_payload["watcher_name"] = (
+                    watcher.definition.name or f"watcher_{watcher.id}"
+                )
+                await self._broadcast_watcher_event(event_payload)
 
             logger.info(
                 f"Executed action {action.type.value} for watcher {watcher.id}: "
@@ -1491,6 +1496,70 @@ class WatcherEngine:
             logger.error(f"Failed to get watcher IDs for job {job_id}: {e}")
             return []
 
+    def _schedule_watcher_refresh(self, watcher_id: int):
+        """Schedule a websocket refresh for a watcher if a loop is available."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(
+            self._broadcast_watcher_snapshot(watcher_id),
+            name=f"watcher-refresh-{watcher_id}",
+        )
+
+    async def _broadcast_watcher_snapshot(self, watcher_id: int):
+        """Broadcast the latest watcher snapshot to any connected web clients."""
+        try:
+            from ..web.realtime.state import watcher_manager
+            from ..web.services.watchers import get_watcher_payload_by_id
+
+            if not watcher_manager.active_connections:
+                return
+
+            watcher_payload = get_watcher_payload_by_id(
+                cache=self.cache,
+                watcher_id=watcher_id,
+            )
+            if watcher_payload is None:
+                await watcher_manager.broadcast(
+                    {"type": "watcher_deleted", "watcher_id": watcher_id}
+                )
+                return
+
+            await watcher_manager.broadcast(
+                {"type": "watcher_update", "watcher": watcher_payload}
+            )
+        except Exception as e:
+            logger.debug(
+                f"Failed to broadcast watcher snapshot for watcher {watcher_id}: {e}"
+            )
+
+    async def _broadcast_watcher_event(self, event_payload: Dict[str, Any]):
+        """Broadcast a watcher event and the latest watcher snapshot."""
+        try:
+            from ..web.realtime.state import watcher_manager
+            from ..web.services.watchers import get_watcher_payload_by_id
+
+            if not watcher_manager.active_connections:
+                return
+
+            payload = {"type": "watcher_event", "event": event_payload}
+            watcher_payload = get_watcher_payload_by_id(
+                cache=self.cache,
+                watcher_id=event_payload["watcher_id"],
+            )
+            if watcher_payload is not None:
+                payload["watcher"] = watcher_payload
+
+            await watcher_manager.broadcast(payload)
+        except Exception as e:
+            logger.debug(
+                "Failed to broadcast watcher event %s for watcher %s: %s",
+                event_payload.get("id"),
+                event_payload.get("watcher_id"),
+                e,
+            )
+
     def _update_watcher_state(self, watcher_id: int, state: WatcherState):
         """Update watcher state."""
         try:
@@ -1500,6 +1569,7 @@ class WatcherEngine:
                     (state.value, watcher_id),
                 )
                 conn.commit()
+            self._schedule_watcher_refresh(watcher_id)
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} state: {e}")
@@ -1530,6 +1600,7 @@ class WatcherEngine:
                     (count, watcher_id),
                 )
                 conn.commit()
+            self._schedule_watcher_refresh(watcher_id)
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} trigger count: {e}")
@@ -1561,6 +1632,7 @@ class WatcherEngine:
                     (1 if timer_mode_active else 0, watcher_id),
                 )
                 conn.commit()
+            self._schedule_watcher_refresh(watcher_id)
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} timer mode: {e}")
@@ -1586,6 +1658,7 @@ class WatcherEngine:
                     (count, watcher_id),
                 )
                 conn.commit()
+            self._schedule_watcher_refresh(watcher_id)
         except Exception as e:
             logger.error(
                 f"Failed to update watcher {watcher_id} discovered task count: {e}"
@@ -1600,6 +1673,7 @@ class WatcherEngine:
                     (count, watcher_id),
                 )
                 conn.commit()
+            self._schedule_watcher_refresh(watcher_id)
         except Exception as e:
             logger.error(
                 f"Failed to update watcher {watcher_id} expected task count: {e}"
@@ -1631,11 +1705,12 @@ class WatcherEngine:
         action_type: str,
         action_result: str,
         success: bool,
-    ):
+    ) -> Optional[Dict[str, Any]]:
         """Log a watcher event."""
         try:
+            timestamp = datetime.now().isoformat()
             with self.cache._get_connection() as conn:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO watcher_events
                     (watcher_id, job_id, hostname, timestamp, matched_text,
@@ -1646,7 +1721,7 @@ class WatcherEngine:
                         watcher_id,
                         job_id,
                         hostname,
-                        datetime.now().isoformat(),
+                        timestamp,
                         matched_text[:1000],  # Limit size
                         json.dumps(captured_vars),
                         action_type,
@@ -1655,9 +1730,22 @@ class WatcherEngine:
                     ),
                 )
                 conn.commit()
+                return {
+                    "id": cursor.lastrowid,
+                    "watcher_id": watcher_id,
+                    "job_id": job_id,
+                    "hostname": hostname,
+                    "timestamp": timestamp,
+                    "matched_text": matched_text[:1000],
+                    "captured_vars": captured_vars,
+                    "action_type": action_type,
+                    "action_result": action_result[:1000],
+                    "success": success,
+                }
 
         except Exception as e:
             logger.error(f"Failed to log watcher event: {e}")
+            return None
 
     async def shutdown(self):
         """Shutdown the watcher engine."""

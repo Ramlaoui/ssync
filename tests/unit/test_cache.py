@@ -187,6 +187,46 @@ class TestBasicJobCaching:
         assert cached.is_active is False
         cache.close()
 
+    @pytest.mark.unit
+    def test_get_cached_jobs_ignores_unknown_job_info_fields(
+        self, tmp_path, sample_job_info, caplog
+    ):
+        """Test forward-compatible cache reads when job_info_json has extra fields."""
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+        cache.cache_job(sample_job_info)
+
+        with cache._get_connection() as conn:
+            row = conn.execute(
+                "SELECT job_info_json FROM cached_jobs WHERE job_id = ? AND hostname = ?",
+                (sample_job_info.job_id, sample_job_info.hostname),
+            ).fetchone()
+            payload = json.loads(row["job_info_json"])
+            payload["node_hostnames"] = ["node001", "node002"]
+            conn.execute(
+                """
+                UPDATE cached_jobs
+                SET job_info_json = ?
+                WHERE job_id = ? AND hostname = ?
+                """,
+                (
+                    json.dumps(payload),
+                    sample_job_info.job_id,
+                    sample_job_info.hostname,
+                ),
+            )
+            conn.commit()
+
+        with caplog.at_level("WARNING"):
+            cached_jobs = cache.get_cached_jobs(
+                hostname=sample_job_info.hostname,
+                limit=10,
+            )
+
+        assert len(cached_jobs) == 1
+        assert cached_jobs[0].job_info.job_id == sample_job_info.job_id
+        assert "Ignoring unsupported cached job fields" in caplog.text
+        cache.close()
+
 
 class TestNotificationDevices:
     """Tests for notification device storage."""

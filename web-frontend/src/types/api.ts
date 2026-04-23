@@ -238,6 +238,7 @@ export interface LaunchJobRequest {
 export interface LaunchJobResponse {
   success: boolean;
   job_id?: string;
+  launch_id?: string;
   message: string;
   hostname: string;
 
@@ -250,6 +251,32 @@ export interface LaunchJobResponse {
     gitignore_applied?: boolean;
   };
   requires_confirmation?: boolean;
+}
+
+export interface LaunchEvent {
+  type: 'launch_stage' | 'launch_log' | 'launch_result';
+  launch_id: string;
+  hostname: string;
+  sequence: number;
+  timestamp: string;
+  stage?: string;
+  source?: string;
+  stream?: string;
+  level?: string;
+  message?: string;
+  job_id?: string;
+  success?: boolean;
+}
+
+export interface LaunchStatusResponse {
+  launch_id: string;
+  hostname: string;
+  stage: string;
+  terminal: boolean;
+  success?: boolean;
+  job_id?: string;
+  message?: string;
+  events: LaunchEvent[];
 }
 
 // Type aliases for component usage

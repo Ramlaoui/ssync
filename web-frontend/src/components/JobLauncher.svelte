@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { createEventDispatcher, onDestroy, onMount } from "svelte";
   import { push } from "svelte-spa-router";
   import { createBubbler, run } from "svelte/legacy";
   import { fade, fly, slide } from "svelte/transition";
@@ -16,12 +16,16 @@
     parseSbatchDirectives,
     type JobParameters,
   } from "../lib/sbatch-parser";
+  import { LaunchEventStream, fetchLaunchStatus } from "../lib/launchStreaming";
   import { validateParameters } from "../lib/sbatchUtils";
   import { api } from "../services/api";
-  import { launchProgressStore, launchStateStore } from "../stores/jobWebSocket";
-  import type { LaunchEvent } from "../stores/jobWebSocket";
   import { resubmitStore } from "../stores/resubmit";
-  import type { HostInfo } from "../types/api";
+  import type {
+    HostInfo,
+    LaunchEvent,
+    LaunchJobRequest,
+    LaunchJobResponse,
+  } from "../types/api";
   import CodeMirrorEditor from "./CodeMirrorEditor.svelte";
   import FileBrowser from "./FileBrowser.svelte";
   import LaunchStatusToast from "./LaunchStatusToast.svelte";
@@ -101,6 +105,8 @@ echo "Starting job..."
   let pendingJobNavigation: { jobId: string; host: string } | null =
     $state(null);
   let activeLaunchId: string | null = $state(null);
+  const launchEventStream = new LaunchEventStream();
+  let seenLaunchSequences = new Set<number>();
 
   function formatLaunchLogLine(event: LaunchEvent): string {
     const source = event.source || "launch";
@@ -108,6 +114,116 @@ echo "Starting job..."
     const message = event.message || "";
     return `[${source}/${stream}] ${message}`;
   }
+
+  function cleanupLaunchTracking() {
+    launchEventStream.close();
+    seenLaunchSequences = new Set<number>();
+    activeLaunchId = null;
+  }
+
+  function handleLaunchSuccess(
+    jobId: string | undefined,
+    host: string,
+    message?: string,
+  ) {
+    launchToastStatus = "success";
+    launchToastMessage = message || "Job launched successfully";
+    launching = false;
+
+    if (jobId) {
+      pendingJobNavigation = { jobId, host };
+    }
+
+    cleanupLaunchTracking();
+
+    setTimeout(() => {
+      if (showLaunchToast && launchToastStatus === "success") {
+        showLaunchToast = false;
+      }
+    }, 5000);
+  }
+
+  function handleLaunchFailure(message?: string) {
+    launchToastStatus = "error";
+    launchToastMessage = message || "Launch failed";
+    launching = false;
+    cleanupLaunchTracking();
+  }
+
+  function consumeLaunchEvent(event: LaunchEvent) {
+    if (!activeLaunchId || event.launch_id !== activeLaunchId) {
+      return;
+    }
+
+    if (seenLaunchSequences.has(event.sequence)) {
+      return;
+    }
+    seenLaunchSequences.add(event.sequence);
+
+    if (event.type === "launch_log" && event.message) {
+      launchToastLogLines = [
+        ...launchToastLogLines,
+        formatLaunchLogLine(event),
+      ].slice(-8);
+    }
+
+    if (event.message) {
+      launchToastMessage = event.message;
+    }
+
+    if (event.type === "launch_result") {
+      if (event.success) {
+        handleLaunchSuccess(
+          event.job_id,
+          event.hostname || selectedHost,
+          event.message,
+        );
+      } else {
+        handleLaunchFailure(event.message);
+      }
+      return;
+    }
+
+    launchToastStatus = "launching";
+  }
+
+  async function recoverLaunchProgress(launchId: string) {
+    try {
+      const status = await fetchLaunchStatus(launchId);
+
+      for (const event of status.events) {
+        consumeLaunchEvent(event);
+      }
+
+      if (status.terminal) {
+        if (status.success) {
+          handleLaunchSuccess(
+            status.job_id,
+            status.hostname || selectedHost,
+            status.message,
+          );
+        } else {
+          handleLaunchFailure(status.message);
+        }
+        return;
+      }
+
+      if (status.message) {
+        launchToastMessage = status.message;
+      }
+
+      launchEventStream.start(launchId, consumeLaunchEvent, () => {
+        void recoverLaunchProgress(launchId);
+      });
+    } catch (error) {
+      console.error("Failed to recover launch progress:", error);
+      handleLaunchFailure("Lost launch progress connection");
+    }
+  }
+
+  onDestroy(() => {
+    launchEventStream.close();
+  });
 
   // Script Templates
   interface ScriptTemplate {
@@ -637,6 +753,8 @@ echo "Starting job..."
   async function handleLaunch() {
     if (!canLaunch) return;
 
+    cleanupLaunchTracking();
+
     // Show launching toast immediately
     showLaunchToast = true;
     launchToastStatus = "launching";
@@ -666,32 +784,15 @@ echo "Starting job..."
         throw new Error("Host is required");
       }
 
-      // Define proper interface for launch data
-      interface LaunchData {
-        script_content: string;
-        source_dir: string;
-        host: string;
-        job_name: string;
-        partition?: string;
-        account?: string;
-        constraint?: string;
-        cpus?: number;
-        mem?: number;
-        time?: number;
-        nodes?: number;
-        ntasks_per_node?: number;
-        gpus_per_node?: number;
-        gres?: string;
-        output?: string;
-        error?: string;
-      }
-
-      // Prepare the launch request with correct field names for API
-      const launchData: LaunchData = {
+      // Prepare the launch request with the backend contract
+      const launchData: LaunchJobRequest = {
         script_content: originalScript,
         source_dir: sourceDir,
         host: selectedHost,
         job_name: parameters.jobName || "Unnamed Job",
+        exclude: excludePatterns,
+        include: includePatterns,
+        no_gitignore: noGitignore,
       };
 
       // Only add optional parameters if they have values
@@ -702,35 +803,36 @@ echo "Starting job..."
       if (parameters.memory) launchData.mem = parameters.memory; // API expects 'mem'
       if (parameters.timeLimit) launchData.time = parameters.timeLimit; // API expects 'time'
       if (parameters.nodes) launchData.nodes = parameters.nodes;
-      if (parameters.ntasksPerNode)
+      if (parameters.ntasksPerNode) {
         launchData.ntasks_per_node = parameters.ntasksPerNode;
+        launchData.n_tasks_per_node = parameters.ntasksPerNode;
+      }
       if (parameters.gpusPerNode)
         launchData.gpus_per_node = parameters.gpusPerNode;
       if (parameters.gres) launchData.gres = parameters.gres;
       if (parameters.outputFile) launchData.output = parameters.outputFile;
       if (parameters.errorFile) launchData.error = parameters.errorFile;
 
-      // Call the launch API - now returns immediately with a launch_id
-      const response = await api.post("/api/jobs/launch", launchData);
+      // Call the launch API - returns immediately with a launch_id
+      const response = await api.post<LaunchJobResponse>(
+        "/api/jobs/launch",
+        launchData,
+      );
 
       if (response.data?.success && response.data.launch_id) {
-        // Server accepted the launch - progress will arrive via WebSocket
         activeLaunchId = response.data.launch_id;
+        seenLaunchSequences = new Set<number>();
         launchToastMessage = response.data.message || "Syncing files and submitting job...";
+        launchEventStream.start(activeLaunchId, consumeLaunchEvent, () => {
+          if (activeLaunchId) {
+            void recoverLaunchProgress(activeLaunchId);
+          }
+        });
       } else if (response.data?.success && response.data.job_id) {
         // Backward compat: server returned a job_id directly (no sync needed)
         const jobId = response.data.job_id;
         const host = response.data.hostname || selectedHost;
-        launchToastStatus = "success";
-        launchToastMessage = `Job ${jobId} launched successfully`;
-        pendingJobNavigation = { jobId, host };
-        launching = false;
-
-        setTimeout(() => {
-          if (showLaunchToast && launchToastStatus === "success") {
-            showLaunchToast = false;
-          }
-        }, 5000);
+        handleLaunchSuccess(jobId, host, `Job ${jobId} launched successfully`);
       } else {
         throw new Error("Invalid response from server");
       }
@@ -762,18 +864,15 @@ echo "Starting job..."
       }
 
       // Update toast with error
-      launchToastStatus = "error";
-      launchToastMessage = launchError;
-      launching = false;
-      activeLaunchId = null;
+      handleLaunchFailure(launchError);
     }
   }
 
   function handleDismissToast() {
     showLaunchToast = false;
     pendingJobNavigation = null;
-    activeLaunchId = null;
     launchToastLogLines = [];
+    cleanupLaunchTracking();
   }
 
   function handleNavigateToJob() {
@@ -978,95 +1077,6 @@ echo "Starting job..."
       // Not critical - we can continue without recent watchers
     }
   }
-
-  // Watch for launch progress from WebSocket
-  $effect(() => {
-    if (!activeLaunchId) return;
-    const launchState = $launchStateStore[activeLaunchId];
-    if (launchState) {
-      const logEvents = launchState.events.filter(
-        (event) => event.type === "launch_log" && event.message,
-      );
-      launchToastLogLines = logEvents.slice(-8).map(formatLaunchLogLine);
-
-      if (launchState.message) {
-        launchToastMessage = launchState.message;
-      }
-
-      if (launchState.terminal) {
-        const completedLaunchId = activeLaunchId;
-        launching = false;
-        if (launchState.success) {
-          launchToastStatus = "success";
-          launchToastMessage =
-            launchState.message || "Job launched successfully";
-          if (launchState.job_id) {
-            pendingJobNavigation = {
-              jobId: launchState.job_id,
-              host: launchState.hostname,
-            };
-          }
-          setTimeout(() => {
-            if (showLaunchToast && launchToastStatus === "success") {
-              showLaunchToast = false;
-            }
-          }, 5000);
-        } else {
-          launchToastStatus = "error";
-          launchToastMessage = launchState.message || "Launch failed";
-        }
-        activeLaunchId = null;
-        launchStateStore.update((state) => {
-          const { [completedLaunchId!]: _, ...rest } = state;
-          return rest;
-        });
-        launchProgressStore.update((state) => {
-          const { [completedLaunchId!]: _, ...rest } = state;
-          return rest;
-        });
-        return;
-      }
-
-      launchToastStatus = "launching";
-    }
-
-    const progress = $launchProgressStore[activeLaunchId];
-    if (!progress) return;
-
-    if (progress.stage === 'syncing') {
-      launchToastStatus = 'launching';
-      launchToastMessage = progress.message || 'Syncing files to remote host...';
-    } else if (progress.stage === 'completed') {
-      launchToastStatus = 'success';
-      launchToastMessage = progress.message || 'Job launched successfully';
-      launching = false;
-      if (progress.job_id) {
-        pendingJobNavigation = { jobId: progress.job_id, host: progress.hostname };
-      }
-      // Auto-dismiss after 5 seconds
-      setTimeout(() => {
-        if (showLaunchToast && launchToastStatus === 'success') {
-          showLaunchToast = false;
-        }
-      }, 5000);
-      // Clean up from the store
-      launchProgressStore.update(s => {
-        const { [activeLaunchId!]: _, ...rest } = s;
-        return rest;
-      });
-      activeLaunchId = null;
-    } else if (progress.stage === 'failed') {
-      launchToastStatus = 'error';
-      launchToastMessage = progress.message || 'Launch failed';
-      launching = false;
-      // Clean up from the store
-      launchProgressStore.update(s => {
-        const { [activeLaunchId!]: _, ...rest } = s;
-        return rest;
-      });
-      activeLaunchId = null;
-    }
-  });
 
   // Initialize component - ensure FileBrowser uses persisted directory
   onMount(() => {

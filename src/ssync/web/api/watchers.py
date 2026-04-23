@@ -14,6 +14,7 @@ from ..services.watchers import (
     discover_array_tasks_payload,
     get_all_watchers_payload,
     get_job_watchers_payload,
+    get_watcher_payload_by_id,
     get_watcher_events_payload,
     get_watcher_stats_payload,
     trigger_watcher_manually_payload,
@@ -33,6 +34,7 @@ from ..services.watchers import (
 from ..services.watchers import (
     update_watcher as update_watcher_record,
 )
+from ..realtime.state import watcher_manager
 
 logger = setup_logger(__name__)
 
@@ -44,6 +46,19 @@ def register_watcher_routes(
     get_slurm_manager,
 ) -> None:
     """Register watcher-related routes."""
+
+    async def broadcast_watcher_update(watcher_id: int) -> None:
+        watcher_payload = get_watcher_payload_by_id(cache=get_cache(), watcher_id=watcher_id)
+        if watcher_payload is None:
+            return
+        await watcher_manager.broadcast(
+            {"type": "watcher_update", "watcher": watcher_payload}
+        )
+
+    async def broadcast_watcher_deleted(watcher_id: int) -> None:
+        await watcher_manager.broadcast(
+            {"type": "watcher_deleted", "watcher_id": watcher_id}
+        )
 
     @app.get("/api/jobs/{job_id}/watchers")
     async def get_job_watchers(
@@ -143,7 +158,9 @@ def register_watcher_routes(
     ):
         """Pause a watcher."""
         try:
-            return pause_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            response = pause_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            await broadcast_watcher_update(watcher_id)
+            return response
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -185,7 +202,9 @@ def register_watcher_routes(
     ):
         """Resume a paused watcher."""
         try:
-            return resume_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            response = resume_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            await broadcast_watcher_update(watcher_id)
+            return response
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -201,7 +220,9 @@ def register_watcher_routes(
     ):
         """Manually trigger array task discovery for a template watcher."""
         try:
-            return await discover_array_tasks_payload(watcher_id=watcher_id)
+            response = await discover_array_tasks_payload(watcher_id=watcher_id)
+            await broadcast_watcher_update(watcher_id)
+            return response
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -219,11 +240,13 @@ def register_watcher_routes(
     ):
         """Create a new watcher."""
         try:
-            return create_watcher_record(
+            response = create_watcher_record(
                 cache=get_cache(),
                 watcher_config=watcher_config,
                 get_slurm_manager=get_slurm_manager,
             )
+            await watcher_manager.broadcast({"type": "watcher_update", "watcher": response})
+            return response
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except HTTPException:
@@ -243,11 +266,13 @@ def register_watcher_routes(
     ):
         """Update a watcher configuration."""
         try:
-            return update_watcher_record(
+            response = update_watcher_record(
                 cache=get_cache(),
                 watcher_id=watcher_id,
                 watcher_update=watcher_update,
             )
+            await watcher_manager.broadcast({"type": "watcher_update", "watcher": response})
+            return response
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -263,7 +288,9 @@ def register_watcher_routes(
     ):
         """Delete a watcher."""
         try:
-            return delete_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            response = delete_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            await broadcast_watcher_deleted(watcher_id)
+            return response
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:

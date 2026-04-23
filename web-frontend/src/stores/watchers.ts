@@ -53,6 +53,22 @@ function validateWatchers(watchers: any[], source: string): Watcher[] {
   return validated;
 }
 
+function upsertWatcher(current: Watcher[], watcher: Watcher): Watcher[] {
+  const index = current.findIndex(existing => existing.id === watcher.id);
+  if (index === -1) {
+    return [watcher, ...current];
+  }
+
+  const next = [...current];
+  next[index] = watcher;
+  return next;
+}
+
+function mergeWatcherEvent(current: WatcherEvent[], nextEvent: WatcherEvent): WatcherEvent[] {
+  const deduped = current.filter(event => event.id !== nextEvent.id);
+  return [nextEvent, ...deduped].slice(0, 300);
+}
+
 // Store for all watchers
 export const watchers = writable<Watcher[]>([]);
 
@@ -69,6 +85,7 @@ export const selectedWatcher = writable<Watcher | null>(null);
 export const watchersLoading = writable(false);
 export const eventsLoading = writable(false);
 export const statsLoading = writable(false);
+export const watcherSocketConnected = writable(false);
 
 // Derived store for active watchers
 export const activeWatchers = derived(
@@ -128,7 +145,7 @@ export async function fetchAllWatchers(): Promise<void> {
   watchersLoading.set(true);
   try {
     const response = await api.get<WatchersResponse>('/api/watchers', {
-      params: { limit: 100 }
+      params: { limit: 300 }
     });
 
     const validatedWatchers = validateWatchers(response.data.watchers || [], 'fetchAllWatchers');
@@ -150,7 +167,7 @@ export async function fetchAllWatchers(): Promise<void> {
 export async function fetchWatcherEvents(
   jobId?: string,
   watcherId?: number,
-  limit: number = 50
+  limit: number = 300
 ): Promise<void> {
   eventsLoading.set(true);
   try {
@@ -224,8 +241,19 @@ export async function resumeWatcher(watcherId: number): Promise<void> {
 
 // WebSocket connection for real-time updates
 let watcherWs: WebSocket | null = null;
+let watcherReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let watcherReconnectJobId: string | undefined;
+let watcherShouldReconnect = false;
 
 export function connectWatcherWebSocket(jobId?: string): void {
+  watcherShouldReconnect = true;
+  watcherReconnectJobId = jobId;
+
+  if (watcherReconnectTimer) {
+    clearTimeout(watcherReconnectTimer);
+    watcherReconnectTimer = null;
+  }
+
   if (watcherWs) {
     watcherWs.close();
   }
@@ -236,11 +264,13 @@ export function connectWatcherWebSocket(jobId?: string): void {
   const config = get(apiConfig);
   const apiKeyParam = config.apiKey ? `?api_key=${encodeURIComponent(config.apiKey)}` : '';
 
-  const wsUrl = jobId
-    ? `${protocol}//${window.location.host}/ws/watchers/${jobId}${apiKeyParam}`
-    : `${protocol}//${window.location.host}/ws/watchers${apiKeyParam}`;
+  const wsUrl = `${protocol}//${window.location.host}/ws/watchers${apiKeyParam}`;
 
   watcherWs = new WebSocket(wsUrl);
+
+  watcherWs.onopen = () => {
+    watcherSocketConnected.set(true);
+  };
   
   watcherWs.onmessage = (event) => {
     try {
@@ -250,18 +280,54 @@ export function connectWatcherWebSocket(jobId?: string): void {
         console.log('[Watchers] WebSocket message:', data);
       }
 
-      if (data.type === 'watcher_event') {
-        // Add new event to the store
-        watcherEvents.update(events => [data.event, ...events]);
+      if (data.type === 'initial') {
+        if (Array.isArray(data.watchers)) {
+          const initialWatchers = validateWatchers(data.watchers, 'WebSocket initial');
+          if (initialWatchers.length > 0) {
+            watchers.update(current => {
+              let next = [...current];
+              for (const watcher of initialWatchers) {
+                next = upsertWatcher(next, watcher);
+              }
+              return next;
+            });
+          }
+        }
 
-        // Update watcher trigger count
-        watchers.update(current =>
-          current.map(w =>
-            w.id === data.event.watcher_id
-              ? { ...w, trigger_count: w.trigger_count + 1 }
-              : w
-          )
-        );
+        if (Array.isArray(data.events)) {
+          watcherEvents.update(current => {
+            let next = [...current];
+            for (const initialEvent of data.events as WatcherEvent[]) {
+              next = mergeWatcherEvent(next, initialEvent);
+            }
+            return next;
+          });
+        }
+      } else if (data.type === 'watcher_event') {
+        if (data.event) {
+          watcherEvents.update(events => mergeWatcherEvent(events, data.event as WatcherEvent));
+        }
+
+        const validatedWatcher = data.watcher
+          ? validateWatcher(data.watcher, 'WebSocket watcher_event')
+          : null;
+        if (validatedWatcher) {
+          watchers.update(current => upsertWatcher(current, {
+            ...validatedWatcher,
+            trigger_count: Math.max(
+              validatedWatcher.trigger_count,
+              (current.find(w => w.id === validatedWatcher.id)?.trigger_count || 0) + 1
+            )
+          }));
+        } else if (data.event?.watcher_id != null) {
+          watchers.update(current =>
+            current.map(w =>
+              w.id === data.event.watcher_id
+                ? { ...w, trigger_count: w.trigger_count + 1 }
+                : w
+            )
+          );
+        }
       } else if (data.type === 'watcher_state_change') {
         if (!data.state) {
           console.error('[Watchers] WebSocket watcher_state_change with undefined state:', data);
@@ -280,12 +346,11 @@ export function connectWatcherWebSocket(jobId?: string): void {
         // Full watcher update from WebSocket
         const validatedWatcher = validateWatcher(data.watcher, 'WebSocket watcher_update');
         if (validatedWatcher) {
-          watchers.update(current =>
-            current.map(w =>
-              w.id === validatedWatcher.id ? validatedWatcher : w
-            )
-          );
+          watchers.update(current => upsertWatcher(current, validatedWatcher));
         }
+      } else if (data.type === 'watcher_deleted') {
+        watchers.update(current => current.filter(w => w.id !== data.watcher_id));
+        watcherEvents.update(events => events.filter(event => event.watcher_id !== data.watcher_id));
       }
     } catch (error) {
       console.error('[Watchers] Failed to parse WebSocket message:', error);
@@ -297,11 +362,29 @@ export function connectWatcherWebSocket(jobId?: string): void {
   };
   
   watcherWs.onclose = () => {
+    watcherSocketConnected.set(false);
     watcherWs = null;
+
+    if (!watcherShouldReconnect) {
+      return;
+    }
+
+    watcherReconnectTimer = setTimeout(() => {
+      connectWatcherWebSocket(watcherReconnectJobId);
+    }, 1500);
   };
 }
 
 export function disconnectWatcherWebSocket(): void {
+  watcherShouldReconnect = false;
+  watcherReconnectJobId = undefined;
+  watcherSocketConnected.set(false);
+
+  if (watcherReconnectTimer) {
+    clearTimeout(watcherReconnectTimer);
+    watcherReconnectTimer = null;
+  }
+
   if (watcherWs) {
     watcherWs.close();
     watcherWs = null;
