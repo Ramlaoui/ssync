@@ -1,6 +1,8 @@
 /* Global styles for Slurm Manager */
 
 :root {
+    color-scheme: light;
+
     /* Base colors */
     --white: #ffffff;
 
@@ -61,6 +63,8 @@
 
 /* Dark Theme */
 .dark {
+    color-scheme: dark;
+
     /* Base colors */
     --white: #0a0a0a;
 
@@ -161,6 +165,16 @@ body {
     font-weight: 400;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+    background: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent-foreground);
+}
+
+::-moz-selection {
+    background: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent-foreground);
 }
 
 /* Mobile responsive typography and layout */
