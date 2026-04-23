@@ -1,115 +1,127 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
-  import { push } from 'svelte-spa-router';
   import { navigationActions } from '../stores/navigation';
-  import { fade, fly, slide } from 'svelte/transition';
   import {
-    watchers,
-    watcherEvents,
-    watchersLoading,
+    connectWatcherWebSocket,
+    disconnectWatcherWebSocket,
     eventsLoading,
     fetchAllWatchers,
     fetchWatcherEvents,
-    connectWatcherWebSocket,
-    disconnectWatcherWebSocket
+    watcherEvents,
+    watchers,
+    watchersLoading,
+    watcherSocketConnected,
   } from '../stores/watchers';
   import { jobStateManager } from '../lib/JobStateManager';
   import { api } from '../services/api';
+  import type { Watcher, WatcherEvent } from '../types/watchers';
   import WatcherCard from '../components/WatcherCard.svelte';
-  import WatcherEvents from '../components/WatcherEvents.svelte';
-  import EventsView from '../components/EventsView.svelte';
-  import AttachWatchersDialog from '../components/AttachWatchersDialog.svelte';
+  import WatcherActivityFeed from '../components/WatcherActivityFeed.svelte';
   import WatcherCreator from '../components/WatcherCreator.svelte';
   import JobSelectionDialog from '../components/JobSelectionDialog.svelte';
   import NavigationHeader from '../components/NavigationHeader.svelte';
-
   import {
-    RefreshCw,
+    Clock3,
+    Eye,
+    Filter,
     Plus,
     Search,
-    X,
-    Eye,
-    Activity,
-    Clock,
-    ArrowLeft,
-    Filter,
-    Grid3X3,
-    List,
-    ChevronDown
+    Server,
+    Zap,
   } from 'lucide-svelte';
 
-  // Get jobs store
   const allCurrentJobs = jobStateManager.getAllJobs();
 
+  type FilterState = 'all' | 'active' | 'paused' | 'static' | 'completed';
+  type SortMode = 'activity' | 'recent' | 'name';
+  type EnhancedWatcher = Watcher & { job_name?: string | null };
 
-  let activeTab: 'watchers' | 'events' = $state('watchers');
-  let viewMode: 'grid' | 'grouped' = $state('grid');
   let searchQuery = $state('');
-  let filterState: 'all' | 'active' | 'paused' | 'completed' = $state('all');
-  let isMobile = $state(false);
-  let showMobileFilters = false;
-  let collapsedJobs: Set<string> = $state(new Set());
+  let filterState: FilterState = $state('all');
+  let sortMode: SortMode = $state('activity');
+  let selectedWatcherId: number | null = $state(null);
   let error: string | null = $state(null);
 
-  // Dialog state
-  let showAttachDialog = $state(false);
   let showStreamlinedCreator = $state(false);
   let showJobSelectionDialog = $state(false);
+  let copiedWatcherConfig: any = $state(null);
   let selectedJobId: string | null = $state(null);
   let selectedHostname: string | null = $state(null);
-  let useStreamlinedInterface = true; // Toggle between old and new interface
-  let useModernEvents = true; // Toggle between old and new events view
-  let copiedWatcherConfig: any = $state(null);
+  let pendingMultiJobSelection: any[] = [];
 
-  // Fuzzy search scoring function - returns relevance score (lower is better)
-  function getWatcherSearchScore(watcher: any, searchTerm: string): number {
-    if (!searchTerm) return 0;
-    const term = searchTerm.toLowerCase();
-
-    // Exact match scores
-    if (watcher.job_id?.toString() === term) return 0;
-    if (watcher.name?.toLowerCase() === term) return 1;
-    if (watcher.hostname?.toLowerCase() === term) return 2;
-    if (watcher.pattern?.toLowerCase() === term) return 3;
-
-    // Starts with scores
-    if (watcher.job_id?.toString().startsWith(term)) return 10;
-    if (watcher.name?.toLowerCase().startsWith(term)) return 11;
-    if (watcher.hostname?.toLowerCase().startsWith(term)) return 12;
-    if (watcher.pattern?.toLowerCase().startsWith(term)) return 13;
-
-    // Contains scores
-    if (watcher.job_id?.toString().includes(term)) return 20;
-    if (watcher.name?.toLowerCase().includes(term)) return 21;
-    if (watcher.hostname?.toLowerCase().includes(term)) return 22;
-    if (watcher.pattern?.toLowerCase().includes(term)) return 23;
-
-    // No match
-    return 999;
+  function getWatcherSearchText(
+    watcher: EnhancedWatcher,
+    latestEvent: WatcherEvent | undefined,
+  ): string {
+    return [
+      watcher.name,
+      watcher.job_id,
+      watcher.hostname,
+      watcher.job_name,
+      watcher.pattern,
+      watcher.actions?.map((action) => action.type).join(' '),
+      latestEvent?.action_type,
+      latestEvent?.matched_text,
+      latestEvent?.action_result,
+      watcher.trigger_on_job_end ? 'job end terminal states' : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
   }
 
+  function formatRelativeTime(timestamp?: string | null): string {
+    if (!timestamp) return 'No activity yet';
+    const date = new Date(timestamp);
+    const diffMinutes = Math.floor((Date.now() - date.getTime()) / 60000);
 
+    if (diffMinutes < 1) return 'just now';
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
 
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
 
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}d ago`;
 
-  function checkMobile() {
-    isMobile = window.innerWidth < 768;
-    if (!isMobile) {
-      showMobileFilters = false;
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function updateSelectionInUrl(watcherId: number | null) {
+    if (typeof window === 'undefined') return;
+
+    const url = new URL(window.location.href);
+    if (watcherId == null) {
+      url.searchParams.delete('watcher');
+    } else {
+      url.searchParams.set('watcher', String(watcherId));
+    }
+    url.searchParams.delete('tab');
+
+    const nextQuery = url.searchParams.toString();
+    const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
+    window.history.replaceState({}, '', nextUrl);
+  }
+
+  function readSelectionFromUrl() {
+    if (typeof window === 'undefined') return;
+    const watcherParam = new URLSearchParams(window.location.search).get('watcher');
+    if (!watcherParam) return;
+    const parsed = Number(watcherParam);
+    if (!Number.isNaN(parsed)) {
+      selectedWatcherId = parsed;
     }
   }
 
   async function refreshData() {
-    error = null; // Clear any existing errors
+    error = null;
     try {
-      // Fetch jobs and watchers in parallel for better performance
       await Promise.all([
         jobStateManager.syncAllHosts(),
-        fetchAllWatchers()
+        fetchAllWatchers(),
+        fetchWatcherEvents(undefined, undefined, 300),
       ]);
-      // Always fetch events to populate the latest events for each watcher
-      await fetchWatcherEvents(undefined, undefined, 200);
     } catch (err) {
       console.error('Failed to refresh watcher data:', err);
       error = 'Failed to refresh watcher data. Please try again.';
@@ -117,121 +129,52 @@
   }
 
   async function openAttachDialog() {
-    console.log('openAttachDialog called');
     error = null;
 
-    // Get current cached jobs
-    const allJobs = jobStateManager.getAllJobs();
-    const cachedJobs = get(allJobs);
-    const runningJobs = cachedJobs.filter(job =>
-      job.state === 'R' || job.state === 'PD'
+    const cachedJobs = get(allCurrentJobs);
+    const runningJobs = cachedJobs.filter(
+      (job) => job.state === 'R' || job.state === 'PD',
     );
 
-    // If we have exactly one job, open the creator directly
     if (runningJobs.length === 1) {
       selectedJobId = runningJobs[0].job_id;
       selectedHostname = runningJobs[0].hostname;
-      console.log('Single job - setting selectedJobId:', selectedJobId, 'hostname:', selectedHostname);
-
-      if (useStreamlinedInterface) {
-        console.log('Opening streamlined creator');
-        showStreamlinedCreator = true;
-      } else {
-        showAttachDialog = true;
-      }
-    } else {
-      // Show job selection dialog immediately with whatever jobs we have
-      // The dialog will fetch fresh jobs in the background
-      showJobSelectionDialog = true;
-    }
-  }
-
-  // Store selected jobs for multi-job watcher creation
-  let pendingMultiJobSelection: any[] = [];
-
-  async function handleJobSelection(event: CustomEvent) {
-    const selection = event.detail;
-    showJobSelectionDialog = false;
-
-    // Handle multi-select payload format: { jobs: [...], action: 'apply'/'edit' }
-    let jobs: any[];
-    let action: 'apply' | 'edit' = 'apply';
-
-    if (selection.jobs && selection.action) {
-      // Multi-select payload
-      jobs = selection.jobs;
-      action = selection.action;
-    } else if (Array.isArray(selection)) {
-      // Legacy array format
-      jobs = selection;
-    } else {
-      // Single job
-      jobs = [selection];
+      showStreamlinedCreator = true;
+      return;
     }
 
-    if (jobs.length === 1) {
-      // Single job - open creator
-      selectedJobId = jobs[0].job_id;
-      selectedHostname = jobs[0].hostname;
-
-      if (useStreamlinedInterface) {
-        showStreamlinedCreator = true;
-      } else {
-        showAttachDialog = true;
-      }
-    } else if (jobs.length > 1) {
-      // Store the selected jobs
-      pendingMultiJobSelection = jobs;
-
-      if (copiedWatcherConfig) {
-        if (action === 'edit') {
-          // Open creator for editing before applying to multiple jobs
-          // Use the first job for the creator context
-          selectedJobId = jobs[0].job_id;
-          selectedHostname = jobs[0].hostname;
-          showStreamlinedCreator = true;
-        } else {
-          // Apply directly without editing
-          await applyWatcherToMultipleJobs(jobs, copiedWatcherConfig);
-        }
-      } else {
-        // No config - prompt user to create watcher first for one job
-        error = 'Please configure a watcher on one job first, then copy it to multiple jobs.';
-        setTimeout(() => error = null, 5000);
-        pendingMultiJobSelection = [];
-      }
-    }
+    showJobSelectionDialog = true;
   }
 
   async function applyWatcherToMultipleJobs(jobs: any[], config: any) {
     try {
-      const promises = jobs.map(job =>
-        api.post('/api/watchers', {
-          job_id: job.job_id,
-          hostname: job.hostname,
-          name: config.name,
-          pattern: config.pattern,
-          captures: config.captures || [],
-          interval_seconds: config.interval || 60,
-          condition: config.condition,
-          actions: config.actions || [],
-          timer_mode_enabled: config.timer_mode_enabled || false,
-          timer_interval_seconds: config.timer_interval_seconds || 30
-        }).catch((err: any) => ({ error: err }))
+      const promises = jobs.map((job) =>
+        api
+          .post('/api/watchers', {
+            job_id: job.job_id,
+            hostname: job.hostname,
+            name: config.name,
+            pattern: config.pattern,
+            captures: config.captures || [],
+            interval_seconds: config.interval || 60,
+            condition: config.condition,
+            actions: config.actions || [],
+            timer_mode_enabled: config.timer_mode_enabled || false,
+            timer_interval_seconds: config.timer_interval_seconds || 30,
+            trigger_on_job_end: config.trigger_on_job_end || false,
+            trigger_job_states: config.trigger_job_states || [],
+          })
+          .catch((requestError: any) => ({ error: requestError })),
       );
 
       const results = await Promise.all(promises);
+      const failed = results.filter((result: any) => result?.error).length;
 
-      const successful = results.filter((r: any) => !r.error).length;
-      const failed = results.filter((r: any) => r.error).length;
-
-      if (successful > 0) {
-        console.log(`Successfully created ${successful} watcher(s)`);
-      }
       if (failed > 0) {
-        console.error(`Failed to create ${failed} watcher(s)`);
-        error = `Created ${successful} watcher(s), but ${failed} failed.`;
-        setTimeout(() => error = null, 5000);
+        error = `Created ${results.length - failed} watcher(s), but ${failed} failed.`;
+        setTimeout(() => {
+          error = null;
+        }, 5000);
       }
 
       copiedWatcherConfig = null;
@@ -240,576 +183,531 @@
     } catch (err) {
       console.error('Failed to create watchers:', err);
       error = 'Failed to create watchers for selected jobs.';
-      setTimeout(() => error = null, 5000);
+      setTimeout(() => {
+        error = null;
+      }, 5000);
       pendingMultiJobSelection = [];
     }
+  }
+
+  async function handleJobSelection(event: CustomEvent) {
+    const selection = event.detail;
+    showJobSelectionDialog = false;
+
+    let jobs: any[];
+    let action: 'apply' | 'edit' = 'apply';
+
+    if (selection.jobs && selection.action) {
+      jobs = selection.jobs;
+      action = selection.action;
+    } else if (Array.isArray(selection)) {
+      jobs = selection;
+    } else {
+      jobs = [selection];
+    }
+
+    if (jobs.length === 1) {
+      selectedJobId = jobs[0].job_id;
+      selectedHostname = jobs[0].hostname;
+      showStreamlinedCreator = true;
+      return;
+    }
+
+    pendingMultiJobSelection = jobs;
+
+    if (!copiedWatcherConfig) {
+      error = 'Please configure a watcher on one job first, then copy it to multiple jobs.';
+      setTimeout(() => {
+        error = null;
+      }, 5000);
+      pendingMultiJobSelection = [];
+      return;
+    }
+
+    if (action === 'edit') {
+      selectedJobId = jobs[0].job_id;
+      selectedHostname = jobs[0].hostname;
+      showStreamlinedCreator = true;
+      return;
+    }
+
+    await applyWatcherToMultipleJobs(jobs, copiedWatcherConfig);
   }
 
   async function handleWatcherCopy(event: CustomEvent) {
     copiedWatcherConfig = event.detail;
 
-    // Get current cached jobs immediately
-    const allJobs = jobStateManager.getAllJobs();
-    const cachedJobs = get(allJobs);
-    const runningJobs = cachedJobs.filter(job =>
-      job.state === 'R' || job.state === 'PD'
+    const cachedJobs = get(allCurrentJobs);
+    const runningJobs = cachedJobs.filter(
+      (job) => job.state === 'R' || job.state === 'PD',
     );
 
-    // Store the original job info for pre-selection if it's still running
     if (copiedWatcherConfig.job_id && copiedWatcherConfig.hostname) {
-      const originalJob = runningJobs.find(job =>
-        job.job_id === copiedWatcherConfig.job_id &&
-        job.hostname === copiedWatcherConfig.hostname
+      const originalJob = runningJobs.find(
+        (job) =>
+          job.job_id === copiedWatcherConfig.job_id &&
+          job.hostname === copiedWatcherConfig.hostname,
       );
-
-      // Pre-select the original job if it's still running (for the dialog)
       if (originalJob) {
         selectedJobId = originalJob.job_id;
         selectedHostname = originalJob.hostname;
       }
     }
 
-    // Always show job selection dialog when copying
-    // This allows users to choose whether to copy to the same job or a different one
     if (runningJobs.length === 0) {
-      // No jobs running, need to inform user
       error = 'No running jobs available. Please start a job first.';
-      setTimeout(() => error = null, 5000);
-    } else {
-      // Show job selection dialog with pre-selected job (if available)
-      showJobSelectionDialog = true;
+      setTimeout(() => {
+        error = null;
+      }, 5000);
+      return;
     }
+
+    showJobSelectionDialog = true;
   }
 
   async function handleAttachSuccess(event?: CustomEvent) {
-    error = null; // Clear any existing errors
-    showAttachDialog = false;
     showStreamlinedCreator = false;
 
-    // If we have pending multi-job selections, apply the watcher to all of them
     if (pendingMultiJobSelection.length > 1 && copiedWatcherConfig) {
-      // Get the updated config from the event if available
       const updatedConfig = event?.detail || copiedWatcherConfig;
-
-      // Apply to all pending jobs except the first one (already created)
       const remainingJobs = pendingMultiJobSelection.slice(1);
 
       if (remainingJobs.length > 0) {
         await applyWatcherToMultipleJobs(remainingJobs, updatedConfig);
       }
-
-      pendingMultiJobSelection = [];
     }
 
     selectedJobId = null;
     selectedHostname = null;
     copiedWatcherConfig = null;
+    pendingMultiJobSelection = [];
     await refreshData();
   }
 
-  function clearSearch() {
-    searchQuery = '';
+  function selectWatcher(watcherId: number) {
+    selectedWatcherId = watcherId;
+    updateSelectionInUrl(watcherId);
   }
 
-  function toggleJobGroup(jobKey: string) {
-    if (collapsedJobs.has(jobKey)) {
-      collapsedJobs.delete(jobKey);
-    } else {
-      collapsedJobs.add(jobKey);
+  let eventSummaryByWatcher = $derived(
+    (() => {
+      const summary: Record<number, { count: number; latest?: WatcherEvent }> = {};
+
+      for (const event of $watcherEvents) {
+        const existing = summary[event.watcher_id];
+        if (!existing) {
+          summary[event.watcher_id] = { count: 1, latest: event };
+          continue;
+        }
+
+        existing.count += 1;
+        if (
+          !existing.latest ||
+          new Date(event.timestamp).getTime() >
+            new Date(existing.latest.timestamp).getTime()
+        ) {
+          existing.latest = event;
+        }
+      }
+
+      return summary;
+    })(),
+  );
+
+  let enhancedWatchers = $derived(
+    (() => {
+      const jobs = get(allCurrentJobs);
+      return $watchers.map((watcher) => {
+        const job = jobs.find(
+          (candidate) =>
+            candidate.job_id === watcher.job_id &&
+            candidate.hostname === watcher.hostname,
+        );
+
+        return {
+          ...watcher,
+          job_name: job?.name || watcher.job_name || null,
+        } as EnhancedWatcher;
+      });
+    })(),
+  );
+
+  let filteredWatchers = $derived(
+    (() => {
+      let nextWatchers = enhancedWatchers.filter((watcher) => {
+        if (filterState === 'all') return true;
+        return watcher.state === filterState;
+      });
+
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim().toLowerCase();
+        nextWatchers = nextWatchers.filter((watcher) =>
+          getWatcherSearchText(
+            watcher,
+            eventSummaryByWatcher[watcher.id]?.latest,
+          ).includes(term),
+        );
+      }
+
+      return [...nextWatchers].sort((left, right) => {
+        if (sortMode === 'name') {
+          return left.name.localeCompare(right.name);
+        }
+
+        if (sortMode === 'recent') {
+          return (
+            new Date(right.created_at || 0).getTime() -
+            new Date(left.created_at || 0).getTime()
+          );
+        }
+
+        const leftActivity =
+          eventSummaryByWatcher[left.id]?.latest?.timestamp ||
+          left.last_check ||
+          left.created_at ||
+          '';
+        const rightActivity =
+          eventSummaryByWatcher[right.id]?.latest?.timestamp ||
+          right.last_check ||
+          right.created_at ||
+          '';
+
+        return (
+          new Date(rightActivity || 0).getTime() -
+          new Date(leftActivity || 0).getTime()
+        );
+      });
+    })(),
+  );
+
+  let selectedWatcher = $derived(
+    filteredWatchers.find((watcher) => watcher.id === selectedWatcherId) || null,
+  );
+
+  let selectedWatcherEvents = $derived(
+    selectedWatcher
+      ? $watcherEvents
+          .filter((event) => event.watcher_id === selectedWatcher.id)
+          .slice(0, 60)
+      : [],
+  );
+
+  let sameJobWatchers = $derived(
+    selectedWatcher
+      ? filteredWatchers.filter(
+          (watcher) =>
+            watcher.id !== selectedWatcher.id &&
+            watcher.job_id === selectedWatcher.job_id &&
+            watcher.hostname === selectedWatcher.hostname,
+        )
+      : [],
+  );
+
+  let watcherCounts = $derived({
+    total: $watchers.length,
+    active: $watchers.filter((watcher) => watcher.state === 'active').length,
+    paused: $watchers.filter((watcher) => watcher.state === 'paused').length,
+    static: $watchers.filter((watcher) => watcher.state === 'static').length,
+    completed: $watchers.filter((watcher) => watcher.state === 'completed').length,
+  });
+
+  let hostCount = $derived(new Set($watchers.map((watcher) => watcher.hostname)).size);
+  let recentEventCount = $derived($watcherEvents.length);
+
+  $effect(() => {
+    if (filteredWatchers.length === 0) {
+      if (selectedWatcherId !== null) {
+        selectedWatcherId = null;
+        updateSelectionInUrl(null);
+      }
+      return;
     }
-    collapsedJobs = collapsedJobs;
-  }
 
-  function handleTabClick(tab: 'watchers' | 'events') {
-    activeTab = tab;
-    // Events are now fetched automatically during refreshData()
-  }
+    if (
+      selectedWatcherId !== null &&
+      filteredWatchers.some((watcher) => watcher.id === selectedWatcherId)
+    ) {
+      return;
+    }
+
+    selectedWatcherId = filteredWatchers[0].id;
+    updateSelectionInUrl(selectedWatcherId);
+  });
 
   onMount(async () => {
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-
-    // Set navigation context for proper back navigation
     navigationActions.setContext('watcher', {
-      previousRoute: window.location.pathname
+      previousRoute: window.location.pathname,
     });
 
-    // Initial data load
+    readSelectionFromUrl();
     await refreshData();
-
-    // Connect WebSocket
     connectWatcherWebSocket();
   });
 
   onDestroy(() => {
-    window.removeEventListener('resize', checkMobile);
     disconnectWatcherWebSocket();
   });
-  // Computed values with fuzzy search
-  let sortedWatchers = $derived((() => {
-    let filtered = $watchers.filter(w => {
-      if (filterState === 'all') return true;
-      return w.state === filterState;
-    });
-
-    // Apply search with ranking
-    if (searchQuery) {
-      const scoredWatchers = filtered
-        .map(watcher => ({ watcher, score: getWatcherSearchScore(watcher, searchQuery) }))
-        .filter(item => item.score < 999)
-        .sort((a, b) => a.score - b.score)
-        .map(item => item.watcher);
-
-      filtered = scoredWatchers;
-    } else {
-      // Default sort by creation date when no search
-      filtered = filtered.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-    }
-
-    return filtered;
-  })());
-  // Enhance watchers with job names from current jobs
-  let enhancedWatchers = $derived(sortedWatchers.map(watcher => {
-    const jobInfo = get(allCurrentJobs).find(job =>
-      job.job_id === watcher.job_id && job.hostname === watcher.hostname
-    );
-    return {
-      ...watcher,
-      job_name: jobInfo?.name || watcher.job_name || null
-    };
-  }));
-  let activeCount = $derived($watchers.filter(w => w && w.state === 'active').length);
-  let pausedCount = $derived($watchers.filter(w => w && w.state === 'paused').length);
-  let staticCount = $derived($watchers.filter(w => w && w.state === 'static').length);
-  let completedCount = $derived($watchers.filter(w => w && w.state === 'completed').length);
-  let totalCount = $derived($watchers.length);
-  // Create a map of latest events by watcher_id for quick lookup
-  let latestEventsByWatcher = $derived((() => {
-    const eventMap: Record<number, any> = {};
-    $watcherEvents.forEach(event => {
-      if (!eventMap[event.watcher_id] || new Date(event.timestamp) > new Date(eventMap[event.watcher_id].timestamp)) {
-        eventMap[event.watcher_id] = event;
-      }
-    });
-    return eventMap;
-  })());
-  // Group watchers by job
-  let watchersByJob = $derived((() => {
-    const groups: Record<string, {
-      job_id: string;
-      job_name?: string | null;
-      hostname: string;
-      watchers: typeof sortedWatchers;
-      stats: { active: number; paused: number; static: number; completed: number };
-    }> = {};
-
-    sortedWatchers.forEach(watcher => {
-      const jobKey = `${watcher.job_id}-${watcher.hostname}`;
-
-      if (!groups[jobKey]) {
-        // Try to find job info from current jobs to get the job name
-        const jobInfo = get(allCurrentJobs).find(job =>
-          job.job_id === watcher.job_id && job.hostname === watcher.hostname
-        );
-
-        groups[jobKey] = {
-          job_id: watcher.job_id || 'unknown',
-          job_name: jobInfo?.name || watcher.job_name || null,
-          hostname: watcher.hostname || 'unknown',
-          watchers: [],
-          stats: { active: 0, paused: 0, static: 0, completed: 0 }
-        };
-      }
-
-      groups[jobKey].watchers.push(watcher);
-
-      // Update stats (check for undefined state)
-      if (watcher.state) {
-        if (watcher.state === 'active') groups[jobKey].stats.active++;
-        else if (watcher.state === 'paused') groups[jobKey].stats.paused++;
-        else if (watcher.state === 'static') groups[jobKey].stats.static++;
-        else if (watcher.state === 'completed') groups[jobKey].stats.completed++;
-      }
-    });
-
-    return groups;
-  })());
 </script>
 
-<div class="h-full flex flex-col bg-[var(--background)]">
-  {#if !isMobile}
-    <NavigationHeader
-      showRefresh={true}
-      refreshing={$watchersLoading || $eventsLoading}
-      on:refresh={refreshData}
-    >
-      {#snippet left()}
-            <div  class="flex items-center space-x-4">
-          <!-- Tab Navigation -->
-          <div class="flex items-center bg-[var(--secondary)] rounded-lg p-1">
-              <button
-                class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
-                onclick={() => handleTabClick('watchers')}
-              >
-                <Eye class="w-4 h-4" />
-                Watchers
-              </button>
-              <button
-                class="header-tab {activeTab === 'events' ? 'header-tab-active' : ''}"
-                onclick={() => handleTabClick('events')}
-              >
-                <Activity class="w-4 h-4" />
-                Events
-              </button>
-            </div>
-
-          <!-- Search Bar -->
-          {#if activeTab === 'watchers'}
-            <div class="header-search">
-              <div class="search-bar">
-                <div class="search-icon">
-                  <Search size={16} />
-                </div>
-                <input
-                  type="text"
-                  class="search-input"
-                  placeholder="Search watchers..."
-                  bind:value={searchQuery}
-                />
-                {#if searchQuery}
-                  <button class="clear-btn" onclick={clearSearch}>
-                    <X size={14} />
-                  </button>
-                {/if}
-              </div>
-            </div>
-          {/if}
+<div class="watchers-page">
+  <NavigationHeader
+    showRefresh={true}
+    refreshing={$watchersLoading || $eventsLoading}
+    on:refresh={refreshData}
+  >
+    {#snippet left()}
+      <div class="page-copy">
+        <div class="page-title-row">
+          <Eye class="w-4 h-4" />
+          <span>Watchers</span>
         </div>
-          {/snippet}
+        <p>Monitor watcher state and related events in the same workspace.</p>
+      </div>
+    {/snippet}
 
-      {#snippet actions()}
-            <div >
-          <button
-            onclick={openAttachDialog}
-            class="inline-flex items-center gap-2 px-3 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
-          >
-            <Plus class="w-4 h-4" />
-            Create
-          </button>
-        </div>
-          {/snippet}
+    {#snippet actions()}
+      <button class="create-button" onclick={openAttachDialog}>
+        <Plus class="w-4 h-4" />
+        Create
+      </button>
+    {/snippet}
 
-      <!-- Filters in additional slot -->
-      {#snippet additional()}
-            <div  class="bg-[var(--secondary)] border-t border-[var(--border)] py-3" class:hidden={activeTab !== 'watchers'}>
-          <div class="flex justify-between items-center">
-            <!-- Filter Tabs -->
-            <div class="flex gap-2">
-              <button
-                class="filter-tab-modern {filterState === 'all' ? 'filter-tab-active' : ''}"
-                onclick={() => filterState = 'all'}
-              >
-                <div class="w-2 h-2 bg-[var(--muted)] rounded-full"></div>
-                All
-                <span class="filter-count">{totalCount}</span>
-              </button>
-              <button
-                class="filter-tab-modern {filterState === 'active' ? 'filter-tab-active' : ''}"
-                onclick={() => filterState = 'active'}
-              >
-                <div class="w-2 h-2 bg-[var(--success)] rounded-full"></div>
-                Active
-                <span class="filter-count">{activeCount}</span>
-              </button>
-              <button
-                class="filter-tab-modern {filterState === 'paused' ? 'filter-tab-active' : ''}"
-                onclick={() => filterState = 'paused'}
-              >
-                <div class="w-2 h-2 bg-[var(--warning)] rounded-full"></div>
-                Paused
-                <span class="filter-count">{pausedCount}</span>
-              </button>
-              <button
-                class="filter-tab-modern {filterState === 'completed' ? 'filter-tab-active' : ''}"
-                onclick={() => filterState = 'completed'}
-              >
-                <div class="w-2 h-2 bg-[var(--accent)] rounded-full"></div>
-                Completed
-                <span class="filter-count">{completedCount}</span>
-              </button>
-            </div>
+    {#snippet additional()}
+      <div class="toolbar">
+        <label class="toolbar-search">
+          <Search class="w-4 h-4" />
+          <input
+            type="text"
+            bind:value={searchQuery}
+            placeholder="Search watchers, actions, jobs, or event text"
+          />
+        </label>
 
-            <!-- View Toggle -->
-            <div class="flex gap-1 bg-[var(--secondary)] rounded-lg p-1">
-              <button
-                class="view-toggle {viewMode === 'grid' ? 'view-toggle-active' : ''}"
-                onclick={() => viewMode = 'grid'}
-                title="Grid view"
-              >
-                <Grid3X3 class="w-4 h-4" />
-                <span class="view-toggle-label">Grid</span>
-              </button>
-              <button
-                class="view-toggle {viewMode === 'grouped' ? 'view-toggle-active' : ''}"
-                onclick={() => viewMode = 'grouped'}
-                title="Grouped by job"
-              >
-                <List class="w-4 h-4" />
-                <span class="view-toggle-label">By Job</span>
-              </button>
-            </div>
+        <div class="toolbar-controls">
+          <label class="toolbar-select">
+            <Filter class="w-4 h-4" />
+            <select bind:value={filterState}>
+              <option value="all">All states</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="static">Static</option>
+              <option value="completed">Completed</option>
+            </select>
+          </label>
+
+          <label class="toolbar-select">
+            <Clock3 class="w-4 h-4" />
+            <select bind:value={sortMode}>
+              <option value="activity">Sort by activity</option>
+              <option value="recent">Sort by created</option>
+              <option value="name">Sort by name</option>
+            </select>
+          </label>
+
+          <div class:connected={$watcherSocketConnected} class="live-indicator">
+            <span class="live-dot"></span>
+            {$watcherSocketConnected ? 'Live updates' : 'Reconnecting'}
           </div>
-        </div>
-          {/snippet}
-    </NavigationHeader>
-  {:else}
-    <!-- Mobile header -->
-    <div class="header mobile-header">
-      <div class="flex items-center justify-between">
-        <!-- Tab Navigation -->
-        <div class="flex items-center bg-[var(--secondary)] rounded-lg p-1">
-          <button
-            class="header-tab {activeTab === 'watchers' ? 'header-tab-active' : ''}"
-            onclick={() => handleTabClick('watchers')}
-          >
-            <Eye class="w-4 h-4" />
-            Watchers
-          </button>
-          <button
-            class="header-tab {activeTab === 'events' ? 'header-tab-active' : ''}"
-            onclick={() => handleTabClick('events')}
-          >
-            <Activity class="w-4 h-4" />
-            Events
-          </button>
-        </div>
-
-        <!-- Actions -->
-        <div class="flex items-center space-x-2">
-          <button
-            onclick={refreshData}
-            disabled={$watchersLoading || $eventsLoading}
-            class="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw class="w-4 h-4 {$watchersLoading || $eventsLoading ? 'animate-spin' : ''}" />
-          </button>
-
-          <button
-            onclick={openAttachDialog}
-            class="inline-flex items-center gap-2 px-3 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-800 transition-colors"
-          >
-            <Plus class="w-4 h-4" />
-            Create
-          </button>
         </div>
       </div>
-    </div>
+    {/snippet}
+  </NavigationHeader>
+
+  {#if error}
+    <div class="error-banner">{error}</div>
   {/if}
-  <!-- Main Content -->
-  <main class="flex-1 flex flex-col overflow-hidden">
-    {#if activeTab === 'watchers'}
-      <!-- Error Banner -->
-      {#if error}
-        <div class="bg-[var(--error-bg)] border-b border-[var(--destructive)] flex-shrink-0">
-          <div class="px-4 sm:px-6 lg:px-8 py-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center space-x-3">
-                <svg class="h-5 w-5 text-[var(--destructive)]" fill="currentColor" viewBox="0 0 20 20">
-                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-                </svg>
-                <p class="text-sm font-medium text-[var(--destructive)]">{error}</p>
+
+  <main class="workspace">
+    <aside class="list-panel">
+      <div class="summary-grid">
+        <article class="summary-card">
+          <span class="summary-label">Active</span>
+          <strong>{watcherCounts.active}</strong>
+          <small>{watcherCounts.total} total watchers</small>
+        </article>
+        <article class="summary-card">
+          <span class="summary-label">Events</span>
+          <strong>{recentEventCount}</strong>
+          <small>recent watcher events</small>
+        </article>
+        <article class="summary-card">
+          <span class="summary-label">Hosts</span>
+          <strong>{hostCount}</strong>
+          <small>clusters with watchers</small>
+        </article>
+        <article class="summary-card">
+          <span class="summary-label">Static</span>
+          <strong>{watcherCounts.static}</strong>
+          <small>manual-only watchers</small>
+        </article>
+      </div>
+
+      <div class="list-header">
+        <div>
+          <h2>{filteredWatchers.length} watcher{filteredWatchers.length === 1 ? '' : 's'}</h2>
+          <p>Searchable list ordered by recent activity.</p>
+        </div>
+      </div>
+
+      {#if $watchersLoading && $watchers.length === 0}
+        <div class="panel-empty">Loading watchers…</div>
+      {:else if filteredWatchers.length === 0}
+        <div class="panel-empty">
+          {#if searchQuery}
+            No watchers match this search.
+          {:else}
+            No watchers yet. Create one from a running job.
+          {/if}
+        </div>
+      {:else}
+        <div class="watcher-list">
+          {#each filteredWatchers as watcher (watcher.id)}
+            {@const latestEvent = eventSummaryByWatcher[watcher.id]?.latest}
+            <button
+              class:selected={selectedWatcher?.id === watcher.id}
+              class="watcher-list-item"
+              onclick={() => selectWatcher(watcher.id)}
+            >
+              <div class="item-row">
+                <div class="item-title-group">
+                  <div class="item-state" data-state={watcher.state}></div>
+                  <div>
+                    <div class="item-title">{watcher.name}</div>
+                    <div class="item-subtitle">
+                      Job #{watcher.job_id}
+                      {#if watcher.job_name}
+                        <span>• {watcher.job_name}</span>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+
+                <span class="item-count">
+                  {eventSummaryByWatcher[watcher.id]?.count || 0}
+                </span>
               </div>
-              <button
-                onclick={() => error = null}
-                class="inline-flex items-center text-sm font-medium text-[var(--destructive)] hover:opacity-80"
-                aria-label="Dismiss error"
-              >
-                <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-              </button>
-            </div>
-          </div>
+
+              <div class="item-body">
+                <span>{watcher.hostname}</span>
+                <span>
+                  {watcher.trigger_on_job_end
+                    ? `job end: ${(watcher.trigger_job_states || []).join(', ')}`
+                    : watcher.pattern || 'manual trigger'}
+                </span>
+              </div>
+
+              <div class="item-footer">
+                <span>{watcher.actions?.length || 0} action{watcher.actions?.length === 1 ? '' : 's'}</span>
+                <span>{watcher.interval_seconds}s interval</span>
+                <span>{formatRelativeTime(latestEvent?.timestamp || watcher.last_check)}</span>
+              </div>
+            </button>
+          {/each}
         </div>
       {/if}
+    </aside>
 
-      <!-- Scrollable Watchers Container -->
-      <div class="flex-1 overflow-y-auto">
-        <div class="p-4 sm:p-6 lg:p-8">
-        <!-- Watchers Content -->
-        {#if $watchersLoading}
-          <div class="flex items-center justify-center py-16">
-            <div class="text-center">
-              <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--foreground)] mx-auto mb-4"></div>
-              <p class="text-[var(--muted-foreground)]">Loading watchers...</p>
-            </div>
-          </div>
-        {:else if sortedWatchers.length === 0}
-          <div class="flex items-center justify-center py-16" in:fade>
-            <div class="text-center">
-              <Eye class="mx-auto h-12 w-12 text-[var(--muted-foreground)] mb-4" />
-              <h3 class="text-lg font-medium text-[var(--foreground)] mb-2">
-                {#if searchQuery}
-                  No watchers found
-                {:else if filterState !== 'all'}
-                  No {filterState} watchers
-                {:else}
-                  No watchers yet
-                {/if}
-              </h3>
-              <p class="text-[var(--muted-foreground)] mb-6">
-                {#if searchQuery}
-                  Try adjusting your search criteria
-                {:else if filterState !== 'all'}
-                  No watchers match this status
-                {:else}
-                  Create your first watcher to start monitoring jobs
-                {/if}
-              </p>
-              {#if !searchQuery && filterState === 'all'}
-                <button
-                  onclick={openAttachDialog}
-                  class="inline-flex items-center gap-2 px-4 py-2 bg-[var(--foreground)] text-[var(--background)] text-sm rounded-lg hover:opacity-90 transition-colors"
-                >
-                  <Plus class="w-4 h-4" />
-                  Create Watcher
-                </button>
+    <section class="detail-panel">
+      {#if !$watchersLoading && !selectedWatcher}
+        <div class="detail-empty">
+          <Zap class="w-8 h-8" />
+          <h2>No watcher selected</h2>
+          <p>Pick a watcher from the list to inspect its actions and related events.</p>
+        </div>
+      {:else if selectedWatcher}
+        <div class="detail-header">
+          <div>
+            <h2>{selectedWatcher.name}</h2>
+            <p>
+              Job #{selectedWatcher.job_id} on {selectedWatcher.hostname}
+              {#if selectedWatcher.job_name}
+                • {selectedWatcher.job_name}
               {/if}
-            </div>
+            </p>
           </div>
-        {:else if viewMode === 'grid'}
-          <!-- Grid View (Flat) -->
-          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
-            {#each enhancedWatchers as watcher, i}
-              <div
-                class="transition-all duration-200 hover:scale-[1.02] min-w-0"
-                in:fly={{ y: 20, duration: 300, delay: i * 50 }}
-              >
-                <WatcherCard
-                  {watcher}
-                  showJobLink={true}
-                  lastEvent={latestEventsByWatcher[watcher.id]}
-                  on:copy={handleWatcherCopy}
-                />
-              </div>
-            {/each}
-          </div>
-        {:else if viewMode === 'grouped'}
-          <!-- Grouped View (By Job) -->
-          <div class="space-y-6">
-            {#each Object.entries(watchersByJob) as [jobKey, jobGroup], i}
-              <div
-                class="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200"
-                in:fly={{ y: 20, duration: 300, delay: i * 100 }}
-              >
-                <!-- Job Header -->
-                <button
-                  class="w-full p-4 bg-[var(--secondary)] hover:bg-[var(--muted)] transition-colors text-left flex justify-between items-center border-b border-[var(--border)]"
-                  onclick={() => toggleJobGroup(jobKey)}
-                >
-                  <div class="space-y-1">
-                    <h3 class="text-lg font-semibold flex items-center gap-2 text-[var(--foreground)]">
-                      Job #{jobGroup.job_id}
-                      {#if jobGroup.job_name && jobGroup.job_name !== 'N/A'}
-                        <span class="text-[var(--muted-foreground)] font-normal">• {jobGroup.job_name}</span>
-                      {/if}
-                    </h3>
-                    <p class="text-sm text-[var(--muted-foreground)]">{jobGroup.hostname}</p>
-                  </div>
 
-                  <div class="flex items-center gap-6">
-                    <div class="text-center">
-                      <div class="text-lg font-semibold text-[var(--foreground)]">{jobGroup.watchers.length}</div>
-                      <div class="text-xs text-[var(--muted-foreground)]">watchers</div>
-                    </div>
-                    {#if jobGroup.stats.active > 0}
-                      <div class="text-center">
-                        <div class="text-lg font-semibold text-[var(--success)]">{jobGroup.stats.active}</div>
-                        <div class="text-xs text-[var(--success)]">active</div>
-                      </div>
-                    {/if}
-                    {#if jobGroup.stats.paused > 0}
-                      <div class="text-center">
-                        <div class="text-lg font-semibold text-[var(--warning)]">{jobGroup.stats.paused}</div>
-                        <div class="text-xs text-[var(--warning)]">paused</div>
-                      </div>
-                    {/if}
-                    <ChevronDown
-                      class="h-5 w-5 text-[var(--muted-foreground)] transition-transform duration-300 {!collapsedJobs.has(jobKey) ? 'rotate-180' : ''}"
-                    />
-                  </div>
-                </button>
-
-                <!-- Watchers Grid -->
-                {#if !collapsedJobs.has(jobKey)}
-                  <div class="p-6 grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-4" transition:slide={{ duration: 250 }}>
-                    {#each jobGroup.watchers as watcher, j}
-                      <div
-                        class="transition-all duration-200 hover:scale-[1.02] min-w-0"
-                        in:fly={{ x: -20, duration: 200, delay: j * 50 }}
-                      >
-                        <WatcherCard
-                          {watcher}
-                          showJobLink={false}
-                          lastEvent={latestEventsByWatcher[watcher.id]}
-                          on:copy={handleWatcherCopy}
-                        />
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/each}
+          <div class="detail-pills">
+            <span class="detail-pill">{selectedWatcher.state}</span>
+            <span class="detail-pill">
+              {eventSummaryByWatcher[selectedWatcher.id]?.count || 0} recent event(s)
+            </span>
+            <span class="detail-pill">
+              created {formatRelativeTime(selectedWatcher.created_at)}
+            </span>
           </div>
-        {/if}
         </div>
-      </div>
 
-    {:else if activeTab === 'events'}
-      <!-- Scrollable Events Container -->
-      <div class="flex-1 overflow-y-auto">
-        <div class="p-4 sm:p-6 lg:p-8">
-          {#if useModernEvents}
-            <EventsView />
-          {:else if $eventsLoading}
-            <div class="flex items-center justify-center py-16">
-              <div class="text-center">
-                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-                <p class="text-gray-500">Loading events...</p>
-              </div>
+        <div class="detail-grid">
+          <div class="detail-card">
+            <WatcherCard
+              watcher={selectedWatcher}
+              showJobLink={true}
+              lastEvent={eventSummaryByWatcher[selectedWatcher.id]?.latest}
+              on:copy={handleWatcherCopy}
+              on:refresh={refreshData}
+            />
+          </div>
+
+          <div class="insights-card">
+            <div class="insight-block">
+              <span class="insight-label">Last activity</span>
+              <strong>
+                {formatRelativeTime(
+                  eventSummaryByWatcher[selectedWatcher.id]?.latest?.timestamp ||
+                    selectedWatcher.last_check,
+                )}
+              </strong>
             </div>
-          {:else}
-            <WatcherEvents />
-          {/if}
-        </div>
-      </div>
-    {/if}
+            <div class="insight-block">
+              <span class="insight-label">Host</span>
+              <strong>{selectedWatcher.hostname}</strong>
+            </div>
+            <div class="insight-block">
+              <span class="insight-label">Mode</span>
+              <strong>
+                {selectedWatcher.trigger_on_job_end
+                  ? 'Terminal-state trigger'
+                  : selectedWatcher.timer_mode_enabled
+                    ? 'Pattern + timer'
+                    : 'Pattern monitor'}
+              </strong>
+            </div>
+            <div class="insight-block">
+              <span class="insight-label">Same job</span>
+              <strong>{sameJobWatchers.length} peer watcher(s)</strong>
+            </div>
 
-    <!-- Streamlined Watcher Creator -->
-    {#if showStreamlinedCreator && selectedJobId && selectedHostname}
-      <WatcherCreator
-        jobId={selectedJobId}
-        hostname={selectedHostname}
-        {copiedWatcherConfig}
-        isVisible={true}
-        on:created={handleAttachSuccess}
-        on:close={() => {
-          showStreamlinedCreator = false;
-          selectedJobId = null;
-          selectedHostname = null;
-          copiedWatcherConfig = null;
-        }}
-      />
-    {/if}
+            {#if sameJobWatchers.length > 0}
+              <div class="peer-list">
+                {#each sameJobWatchers as peer (peer.id)}
+                  <button class="peer-chip" onclick={() => selectWatcher(peer.id)}>
+                    <Server class="w-3.5 h-3.5" />
+                    {peer.name}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <div class="activity-card">
+          <WatcherActivityFeed
+            watcher={selectedWatcher}
+            events={selectedWatcherEvents}
+            loading={$eventsLoading && $watcherEvents.length === 0}
+          />
+        </div>
+      {/if}
+    </section>
   </main>
 </div>
 
-<!-- Dialogs -->
 {#if showJobSelectionDialog}
   <JobSelectionDialog
-    title={copiedWatcherConfig ? "Select Job(s) for Copied Watcher" : "Select Job(s)"}
-    description={copiedWatcherConfig ? "Choose which job(s) to attach the copied watcher to (including completed jobs for static watchers)" : "Choose job(s) to attach watchers to (including completed jobs for static watchers)"}
+    title={copiedWatcherConfig ? 'Select Job(s) for Copied Watcher' : 'Select Job(s)'}
+    description={copiedWatcherConfig
+      ? 'Choose which job(s) to attach the copied watcher to.'
+      : 'Choose job(s) to attach watchers to.'}
     preSelectedJobId={selectedJobId}
     preSelectedHostname={selectedHostname}
     allowMultiSelect={true}
@@ -824,253 +722,477 @@
   />
 {/if}
 
-{#if showAttachDialog && selectedJobId && selectedHostname}
-  <AttachWatchersDialog
+{#if showStreamlinedCreator && selectedJobId && selectedHostname}
+  <WatcherCreator
     jobId={selectedJobId}
     hostname={selectedHostname}
-    copiedConfig={copiedWatcherConfig}
-    on:close={() => showAttachDialog = false}
-    on:success={handleAttachSuccess}
+    {copiedWatcherConfig}
+    isVisible={true}
+    on:created={handleAttachSuccess}
+    on:close={() => {
+      showStreamlinedCreator = false;
+      selectedJobId = null;
+      selectedHostname = null;
+      copiedWatcherConfig = null;
+      pendingMultiJobSelection = [];
+    }}
   />
 {/if}
 
 <style>
-  /* Header tab styles */
-  .header-tab {
+  .watchers-page {
+    min-height: 100%;
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    border-radius: 0.375rem;
-    transition: all 0.15s;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-  }
-
-  .header-tab:hover {
-    color: var(--foreground);
-    background: color-mix(in srgb, var(--background) 50%, transparent);
-  }
-
-  .header-tab-active {
+    flex-direction: column;
     background: var(--background);
-    color: var(--foreground);
-    box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--foreground) 10%, transparent);
   }
 
-  /* Search bar styles */
-  .search-bar {
-    position: relative;
-    width: 300px;
+  .page-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
   }
 
-  .search-icon {
-    position: absolute;
-    left: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--muted-foreground);
-    pointer-events: none;
+  .page-title-row {
     display: flex;
     align-items: center;
-    justify-content: center;
-  }
-
-  .search-input {
-    width: 100%;
-    padding: 0.5rem 2.5rem 0.5rem 2.5rem;
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    transition: all 0.15s;
-    background: var(--secondary);
-  }
-
-  .search-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    background: var(--background);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
-  }
-
-  .search-input::placeholder {
-    color: var(--muted-foreground);
-  }
-
-  .clear-btn {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    padding: 0.25rem;
-    background: none;
-    border: none;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    border-radius: 0.25rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-  }
-
-  .clear-btn:hover {
-    background: var(--secondary);
-    color: var(--destructive);
-  }
-
-  /* Modern filter tab styles */
-  .filter-tab-modern {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    background: transparent;
-    border: none;
-    border-radius: 0.5rem;
-    transition: all 0.15s;
-    cursor: pointer;
-  }
-
-  .filter-tab-modern:hover {
-    background: var(--secondary);
-    color: var(--foreground);
-  }
-
-  .filter-tab-modern.filter-tab-active {
-    background: var(--foreground);
-    color: white;
-  }
-
-  .filter-tab-modern.filter-tab-active:hover {
-    background: var(--foreground);
-  }
-
-  .filter-count {
-    background: rgba(0, 0, 0, 0.1);
-    color: inherit;
-    padding: 0.125rem 0.5rem;
-    border-radius: 9999px;
-    font-size: 0.75rem;
+    gap: 0.45rem;
     font-weight: 600;
-    min-width: 1.5rem;
-    text-align: center;
+    color: var(--foreground);
   }
 
-  .filter-tab-active .filter-count {
-    background: rgba(255, 255, 255, 0.2);
+  .page-copy p {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.84rem;
   }
 
-  .view-toggle {
+  .create-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: none;
+    border-radius: 0.75rem;
+    padding: 0.72rem 1rem;
+    background: var(--foreground);
+    color: var(--background);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .toolbar {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 0.375rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 0.375rem;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0 0 1rem;
+  }
+
+  .toolbar-search {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+    padding: 0.8rem 0.95rem;
+    border: 1px solid var(--border);
+    border-radius: 0.9rem;
+    background: var(--background);
     color: var(--muted-foreground);
-    transition: all 0.2s;
-    font-size: 0.875rem;
-    font-weight: 500;
+  }
+
+  .toolbar-search input,
+  .toolbar-select select {
+    width: 100%;
     border: none;
     background: transparent;
-    cursor: pointer;
-  }
-
-  .view-toggle:hover {
     color: var(--foreground);
-    background: color-mix(in srgb, var(--background) 50%, transparent);
+    font-size: 0.88rem;
   }
 
-  .view-toggle-active {
-    background: var(--background);
-    color: var(--foreground);
-    box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--foreground) 5%, transparent);
-  }
-
-  .view-toggle-active:hover {
-    color: var(--foreground);
-  }
-
-  .view-toggle-label {
-    white-space: nowrap;
-  }
-
-  /* Header search styling similar to JobsPage */
-  .header-search {
-    flex: 1;
-    max-width: 400px;
-  }
-
-  .search-bar {
-    position: relative;
-    width: 100%;
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--muted-foreground);
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .search-input {
-    width: 100%;
-    padding: 0.5rem 2.5rem;
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    transition: all 0.15s;
-    background: var(--secondary);
-  }
-
-  .search-input:focus {
+  .toolbar-search input:focus,
+  .toolbar-select select:focus {
     outline: none;
-    border-color: var(--accent);
+  }
+
+  .toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .toolbar-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 180px;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 0.9rem;
     background: var(--background);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
-  }
-
-  .search-input::placeholder {
     color: var(--muted-foreground);
   }
 
-  .clear-btn {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    padding: 0.25rem;
-    background: none;
-    border: none;
+  .live-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.7rem 0.85rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--secondary) 85%, transparent);
     color: var(--muted-foreground);
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+
+  .live-indicator.connected {
+    color: var(--foreground);
+  }
+
+  .live-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    background: var(--warning);
+  }
+
+  .live-indicator.connected .live-dot {
+    background: var(--success);
+    box-shadow: 0 0 0 0.24rem color-mix(in srgb, var(--success) 20%, transparent);
+  }
+
+  .error-banner {
+    margin: 0 1.5rem;
+    padding: 0.85rem 1rem;
+    border-radius: 0.9rem;
+    background: color-mix(in srgb, var(--destructive) 12%, transparent);
+    color: var(--destructive);
+    font-size: 0.9rem;
+  }
+
+  .workspace {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(320px, 390px) minmax(0, 1fr);
+    gap: 1.25rem;
+    padding: 1.25rem 1.5rem 1.5rem;
+  }
+
+  .list-panel,
+  .detail-panel {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .list-panel {
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 1.2rem;
+    background: var(--card);
+    overflow: hidden;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+  }
+
+  .summary-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: color-mix(in srgb, var(--background) 92%, transparent);
+  }
+
+  .summary-label {
+    color: var(--muted-foreground);
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .summary-card strong {
+    font-size: 1.15rem;
+    color: var(--foreground);
+  }
+
+  .summary-card small {
+    color: var(--muted-foreground);
+    font-size: 0.76rem;
+  }
+
+  .list-header h2,
+  .detail-empty h2,
+  .detail-header h2 {
+    margin: 0;
+    color: var(--foreground);
+    font-size: 1.1rem;
+  }
+
+  .list-header p,
+  .detail-empty p,
+  .detail-header p {
+    margin: 0.3rem 0 0;
+    color: var(--muted-foreground);
+    font-size: 0.84rem;
+  }
+
+  .watcher-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-right: 0.2rem;
+  }
+
+  .watcher-list-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 0.95rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--background);
+    color: inherit;
+    text-align: left;
     cursor: pointer;
-    border-radius: 0.25rem;
+    transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  }
+
+  .watcher-list-item:hover,
+  .watcher-list-item.selected {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    box-shadow: 0 12px 28px color-mix(in srgb, var(--foreground) 8%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .item-row,
+  .item-title-group,
+  .item-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+  }
+
+  .item-title-group {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .item-state {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 999px;
+    flex-shrink: 0;
+    background: var(--muted-foreground);
+  }
+
+  .item-state[data-state='active'] {
+    background: var(--success);
+  }
+
+  .item-state[data-state='paused'] {
+    background: var(--warning);
+  }
+
+  .item-state[data-state='static'],
+  .item-state[data-state='completed'] {
+    background: var(--accent);
+  }
+
+  .item-title {
+    font-weight: 600;
+    color: var(--foreground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-subtitle,
+  .item-body,
+  .item-footer {
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+  }
+
+  .item-body {
+    display: grid;
+    gap: 0.35rem;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .item-body span,
+  .item-footer span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.9rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--secondary) 88%, transparent);
+    color: var(--foreground);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+
+  .detail-panel {
+    overflow: auto;
+  }
+
+  .detail-empty,
+  .panel-empty {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.15s;
+    min-height: 220px;
+    border: 1px dashed var(--border);
+    border-radius: 1.2rem;
+    background: var(--card);
+    color: var(--muted-foreground);
+    text-align: center;
+    padding: 1.2rem;
   }
 
-  .clear-btn:hover {
-    background: var(--secondary);
-    color: var(--destructive);
+  .detail-empty {
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
-  .header.mobile-header {
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  .detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .detail-pills {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.55rem;
+  }
+
+  .detail-pill,
+  .peer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--secondary) 88%, transparent);
+    color: var(--foreground);
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: none;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .detail-card,
+  .insights-card,
+  .activity-card {
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 1.2rem;
+    background: var(--card);
+  }
+
+  .insights-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .insight-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+  }
+
+  .insight-label {
+    color: var(--muted-foreground);
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .insight-block strong {
+    color: var(--foreground);
+    font-size: 0.94rem;
+    line-height: 1.4;
+  }
+
+  .peer-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+
+  .peer-chip {
+    cursor: pointer;
+  }
+
+  @media (max-width: 1100px) {
+    .workspace {
+      grid-template-columns: 1fr;
+    }
+
+    .detail-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .toolbar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .toolbar-controls {
+      width: 100%;
+    }
+
+    .toolbar-select {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .workspace {
+      padding: 1rem;
+    }
+
+    .summary-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .detail-header {
+      flex-direction: column;
+    }
+
+    .detail-pills {
+      justify-content: flex-start;
+    }
   }
 </style>

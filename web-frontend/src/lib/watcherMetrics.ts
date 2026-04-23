@@ -54,14 +54,14 @@ export function summarizeMetricPoints(points: MetricPoint[]): MetricSummary | nu
   if (points.length === 0) return null;
 
   const values = points.map((point) => point.value);
-  const latest = points.at(-1)?.value ?? 0;
+  const latest = points[points.length - 1]?.value ?? 0;
   const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
   const min = Math.min(...values);
   const max = Math.max(...values);
 
   const recentWindow = points.slice(-Math.min(points.length, 10));
   const firstValue = recentWindow[0]?.value ?? latest;
-  const lastValue = recentWindow.at(-1)?.value ?? latest;
+  const lastValue = recentWindow[recentWindow.length - 1]?.value ?? latest;
   const rawDelta = lastValue - firstValue;
   const deltaPercent =
     Math.abs(firstValue) < 1e-9
@@ -103,8 +103,8 @@ export function buildMetricSeries(events: WatcherEvent[]): MetricSeries[] {
       summary: summarizeMetricPoints(points)!,
     }))
     .sort((left, right) => {
-      const leftTime = new Date(left.points.at(-1)?.timestamp ?? 0).getTime();
-      const rightTime = new Date(right.points.at(-1)?.timestamp ?? 0).getTime();
+      const leftTime = new Date(left.points[left.points.length - 1]?.timestamp ?? 0).getTime();
+      const rightTime = new Date(right.points[right.points.length - 1]?.timestamp ?? 0).getTime();
       return rightTime - leftTime;
     });
 }

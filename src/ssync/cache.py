@@ -10,13 +10,13 @@ import json
 import sqlite3
 import threading
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .models.job import JobInfo
+from .models.job import JobInfo, JobState
 from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -488,8 +488,6 @@ class JobDataCache:
         2. Existing non-None/non-empty values (preservation)
         3. New None/empty values (fallback)
         """
-        from dataclasses import fields
-
         merged_data = {}
         for field in fields(JobInfo):
             new_val = getattr(new_job, field.name)
@@ -519,6 +517,35 @@ class JobDataCache:
                 )
 
         return JobInfo(**merged_data)
+
+    def _deserialize_job_info(self, job_info_dict: Dict[str, Any]) -> JobInfo:
+        """Convert cached JSON back into JobInfo while tolerating forward fields."""
+        normalized = dict(job_info_dict)
+
+        if "state" in normalized and isinstance(normalized["state"], str):
+            from .models.job import JobState
+
+            try:
+                normalized["state"] = JobState(normalized["state"])
+            except ValueError:
+                normalized["state"] = JobState.UNKNOWN
+
+        valid_field_names = {field.name for field in fields(JobInfo)}
+        unknown_fields = sorted(set(normalized) - valid_field_names)
+        if unknown_fields:
+            job_id = normalized.get("job_id", "<unknown>")
+            logger.warning(
+                "Ignoring unsupported cached job fields for job %s: %s",
+                job_id,
+                ", ".join(unknown_fields),
+            )
+            normalized = {
+                key: value
+                for key, value in normalized.items()
+                if key in valid_field_names
+            }
+
+        return JobInfo(**normalized)
 
     def cache_job(
         self,
@@ -880,15 +907,7 @@ class JobDataCache:
             for row in cursor.fetchall():
                 try:
                     job_dict = json.loads(row["job_info_json"])
-                    # Convert state string back to JobState enum
-                    if "state" in job_dict and isinstance(job_dict["state"], str):
-                        from .models.job import JobState
-
-                        try:
-                            job_dict["state"] = JobState(job_dict["state"])
-                        except ValueError:
-                            job_dict["state"] = JobState.UNKNOWN
-                    jobs.append(JobInfo(**job_dict))
+                    jobs.append(self._deserialize_job_info(job_dict))
                 except Exception as e:
                     logger.warning(f"Failed to parse array task: {e}")
 
@@ -1108,19 +1127,9 @@ class JobDataCache:
 
     def _row_to_cached_data(self, row: sqlite3.Row) -> CachedJobData:
         """Convert database row to CachedJobData."""
-        from .models.job import JobState
-
         job_info_dict = json.loads(row["job_info_json"])
 
-        # Convert string back to enum for JobState
-        if "state" in job_info_dict and isinstance(job_info_dict["state"], str):
-            try:
-                job_info_dict["state"] = JobState(job_info_dict["state"])
-            except ValueError:
-                # Fallback for unknown states
-                job_info_dict["state"] = JobState.UNKNOWN
-
-        job_info = JobInfo(**job_info_dict)
+        job_info = self._deserialize_job_info(job_info_dict)
         is_active = bool(row["is_active"])
 
         # Defensive normalization for historical cache corruption:
@@ -2444,16 +2453,7 @@ class JobDataCache:
             for row in cursor.fetchall():
                 try:
                     job_dict = json.loads(row["job_info_json"])
-                    # Convert state string back to JobState enum if needed
-                    if "state" in job_dict and isinstance(job_dict["state"], str):
-                        from .models.job import JobState
-
-                        try:
-                            job_dict["state"] = JobState(job_dict["state"])
-                        except ValueError:
-                            # Fallback for unknown states
-                            job_dict["state"] = JobState.UNKNOWN
-                    job_info = JobInfo(**job_dict)
+                    job_info = self._deserialize_job_info(job_dict)
                     jobs.append(job_info)
                 except Exception as e:
                     logger.warning(f"Failed to parse cached job: {e}")
