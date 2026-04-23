@@ -201,7 +201,9 @@ class TestBasicJobCaching:
                 (sample_job_info.job_id, sample_job_info.hostname),
             ).fetchone()
             payload = json.loads(row["job_info_json"])
-            payload["node_hostnames"] = ["node001", "node002"]
+            payload["future_scheduler_field"] = {
+                "reservation_nodes": ["node001", "node002"]
+            }
             conn.execute(
                 """
                 UPDATE cached_jobs

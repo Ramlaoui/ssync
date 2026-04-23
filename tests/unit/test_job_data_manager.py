@@ -69,7 +69,9 @@ async def test_get_job_data_ignores_unknown_cached_job_fields(test_cache):
             (job.job_id, hostname),
         ).fetchone()
         payload = json.loads(row["job_info_json"])
-        payload["node_hostnames"] = ["node001", "node002"]
+        payload["future_scheduler_field"] = {
+            "reservation_nodes": ["node001", "node002"]
+        }
         conn.execute(
             """
             UPDATE cached_jobs
