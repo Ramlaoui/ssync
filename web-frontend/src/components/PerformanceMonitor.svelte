@@ -160,9 +160,10 @@
 <style>
   .performance-monitor {
     position: fixed;
-    background: white;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+    box-shadow: 0 2px 12px color-mix(in srgb, var(--foreground) 18%, transparent);
     z-index: 999;
     transition: all 0.3s;
     font-size: 0.875rem;
@@ -199,17 +200,17 @@
   .monitor-toggle svg {
     width: 20px;
     height: 20px;
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
   
   .brief-stats {
-    color: #374151;
+    color: var(--foreground);
     font-weight: 500;
   }
   
   .monitor-details {
     padding: 12px;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
     max-height: 500px;
     overflow-y: auto;
     min-width: 280px;
@@ -226,7 +227,7 @@
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
   }
   
   .reset-btn {
@@ -236,14 +237,14 @@
     background: none;
     border: none;
     cursor: pointer;
-    color: #6b7280;
+    color: var(--muted-foreground);
     border-radius: 4px;
     transition: all 0.2s;
   }
   
   .reset-btn:hover {
-    background: #f3f4f6;
-    color: #374151;
+    background: var(--secondary);
+    color: var(--foreground);
   }
   
   .reset-btn svg {
@@ -254,7 +255,7 @@
   .metric-section {
     margin-bottom: 16px;
     padding-bottom: 12px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid var(--border);
   }
   
   .metric-section:last-child {
@@ -268,7 +269,7 @@
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
-    color: #6b7280;
+    color: var(--muted-foreground);
     letter-spacing: 0.05em;
   }
   
@@ -280,12 +281,12 @@
   }
   
   .metric-label {
-    color: #6b7280;
+    color: var(--muted-foreground);
   }
   
   .metric-value {
     font-weight: 600;
-    color: #374151;
+    color: var(--foreground);
     font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
   }
   

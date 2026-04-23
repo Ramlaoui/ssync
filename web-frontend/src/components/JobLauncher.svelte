@@ -277,16 +277,38 @@ echo "Starting job..."
     parseSbatchFromScript(script);
   }
 
+  function getDefaultEditorTheme(): string {
+    if (typeof localStorage === "undefined") {
+      return "light";
+    }
+
+    const storedEditorTheme = localStorage.getItem("editor-theme");
+    if (storedEditorTheme) {
+      return storedEditorTheme;
+    }
+
+    const storedAppTheme = localStorage.getItem("theme");
+    if (storedAppTheme === "dark" || storedAppTheme === "light") {
+      return storedAppTheme;
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    ) {
+      return "dark";
+    }
+
+    return "light";
+  }
+
   // Editor options with localStorage persistence
   let editorOptions = $state({
     vimMode:
       typeof localStorage !== "undefined"
         ? localStorage.getItem("editor-vim-mode") === "true"
         : true,
-    theme:
-      typeof localStorage !== "undefined"
-        ? localStorage.getItem("editor-theme") || "light"
-        : "light",
+    theme: getDefaultEditorTheme(),
     fontSize:
       typeof localStorage !== "undefined"
         ? parseInt(localStorage.getItem("editor-font-size") || "14")
@@ -4021,8 +4043,13 @@ echo "Starting job..."
     border-radius: 0.5rem;
     font-family: "SF Mono", "Monaco", "Courier New", monospace;
     font-size: 0.875rem;
-    background: white;
+    background: var(--input);
+    color: var(--foreground);
     transition: all 0.15s;
+  }
+
+  .directory-input-full::placeholder {
+    color: var(--muted-foreground);
   }
 
   .directory-input-full:focus {
@@ -4042,7 +4069,7 @@ echo "Starting job..."
     align-items: center;
     gap: 0.375rem;
     padding: 0.5rem 0.875rem;
-    background: white;
+    background: var(--card);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     color: var(--muted-foreground);
@@ -4448,7 +4475,7 @@ echo "Starting job..."
   .mobile-divider-vertical {
     width: 1px;
     height: 16px;
-    background: rgba(0, 0, 0, 0.1);
+    background: color-mix(in srgb, var(--foreground) 12%, transparent);
     margin: 0 0.25rem;
   }
 
@@ -4458,11 +4485,11 @@ echo "Starting job..."
     left: 0.75rem;
     right: 0.75rem;
     z-index: 50;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 6px -1px color-mix(in srgb, var(--foreground) 16%, transparent);
   }
 
   .mobile-options-backdrop {
@@ -4479,11 +4506,11 @@ echo "Starting job..."
     position: absolute;
     top: 44px;
     right: 0.75rem;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 6px -1px color-mix(in srgb, var(--foreground) 16%, transparent);
     z-index: 50;
     min-width: 250px;
     max-width: calc(100vw - 1.5rem);
@@ -4500,11 +4527,11 @@ echo "Starting job..."
     position: absolute;
     top: 44px;
     right: 0.75rem;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.5rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 6px -1px color-mix(in srgb, var(--foreground) 16%, transparent);
     z-index: 50;
     min-width: 200px;
     max-width: calc(100vw - 1.5rem);
@@ -4554,10 +4581,10 @@ echo "Starting job..."
     position: absolute;
     top: 44px;
     right: 0.75rem;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 6px -1px color-mix(in srgb, var(--foreground) 16%, transparent);
     z-index: 50;
     padding: 0;
     min-width: 240px;
@@ -4731,11 +4758,11 @@ echo "Starting job..."
   .preset-select {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    border: 1px solid var(--muted);
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     font-size: 0.875rem;
     color: var(--foreground);
-    background: white;
+    background: var(--input);
     transition: all 0.15s;
   }
 
@@ -4757,12 +4784,13 @@ echo "Starting job..."
     gap: 0.5rem;
     width: 100%;
     padding: 0.5rem 0.75rem;
-    background: white;
+    background: var(--input);
     border: 1px solid var(--border);
     border-radius: 0.375rem;
     cursor: pointer;
     transition: all 0.2s;
     font-size: 0.875rem;
+    color: var(--foreground);
   }
 
   .dropdown-trigger:hover {
@@ -4775,10 +4803,10 @@ echo "Starting job..."
     top: calc(100% + 0.25rem);
     left: 0;
     right: 0;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 25px color-mix(in srgb, var(--foreground) 16%, transparent);
     max-height: 250px;
     overflow-y: auto;
     z-index: 100;
@@ -4790,12 +4818,13 @@ echo "Starting job..."
     gap: 0.75rem;
     width: 100%;
     padding: 0.625rem 0.75rem;
-    background: white;
+    background: var(--popover);
     border: none;
     cursor: pointer;
     transition: all 0.15s;
     font-size: 0.875rem;
     text-align: left;
+    color: var(--foreground);
   }
 
   .dropdown-item:hover {
@@ -5386,7 +5415,7 @@ echo "Starting job..."
   .mobile-var-tag {
     font-size: 0.75rem;
     padding: 0.25rem 0.5rem;
-    background: white;
+    background: var(--input);
     border: 1px solid var(--border);
     border-radius: 0.25rem;
     color: var(--foreground);
@@ -5564,8 +5593,8 @@ echo "Starting job..."
     width: 380px;
     max-width: 90%;
     height: 100%;
-    background: white;
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+    background: var(--popover);
+    box-shadow: -4px 0 24px color-mix(in srgb, var(--foreground) 16%, transparent);
     display: flex;
     flex-direction: column;
     animation: slideIn 0.3s ease-out;
@@ -5586,7 +5615,7 @@ echo "Starting job..."
     justify-content: space-between;
     padding: 1.25rem 1.5rem;
     border-bottom: 1px solid var(--border);
-    background: white;
+    background: var(--popover);
   }
 
   .preset-manager-header h3 {
