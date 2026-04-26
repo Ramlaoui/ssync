@@ -327,7 +327,7 @@ async def stat_remote_file_size(conn, file_path: Optional[str]) -> int:
         return 0
 
 
-async def read_remote_file_chunk_base64(
+async def read_remote_file_chunk_text(
     conn,
     file_path: Optional[str],
     start_offset: int,
@@ -346,7 +346,13 @@ async def read_remote_file_chunk_base64(
         timeout=30,
     )
     encoded = (result.stdout or "").strip()
-    return encoded or None
+    if not encoded:
+        return None
+    try:
+        return base64.b64decode(encoded).decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning(f"Failed to decode remote output chunk from {file_path}: {exc}")
+        return None
 
 
 async def build_stream_job_output_response(
@@ -421,7 +427,7 @@ async def build_stream_job_output_response(
                     {"type": "truncation_notice", "original_size": current_size}
                 )
 
-            initial_payload = await read_remote_file_chunk_base64(
+            initial_payload = await read_remote_file_chunk_text(
                 conn,
                 file_path,
                 start_offset,
@@ -458,7 +464,7 @@ async def build_stream_job_output_response(
 
                 while file_path and current_size > position:
                     read_size = min(current_size - position, max_live_chunk_bytes)
-                    payload = await read_remote_file_chunk_base64(
+                    payload = await read_remote_file_chunk_text(
                         conn,
                         file_path,
                         position,
