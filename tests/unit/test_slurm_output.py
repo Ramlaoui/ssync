@@ -101,6 +101,35 @@ class TestSlurmOutput:
         assert details.stderr_path == "/work/slurm-123.err"
 
     @pytest.mark.unit
+    def test_scontrol_metadata_expands_job_name_and_user_placeholders(self):
+        output = SlurmOutput()
+
+        class _PlaceholderConn(_FakeConn):
+            def run(self, command: str, **kwargs):
+                self.calls.append(command)
+                if command == "scontrol show job 789":
+                    return _FakeResult(
+                        ok=True,
+                        stdout=(
+                            "JobId=789 JobName=clean_tmp UserId=ujv38uq(1000)\n"
+                            "   StdOut=/work/logs/%u/%x-%j.out "
+                            "StdErr=/work/logs/%u/%x-%j.err\n"
+                        ),
+                    )
+                return _FakeResult(ok=False, stderr="unexpected command", exited=1)
+
+        conn = _PlaceholderConn()
+
+        details = output.get_job_metadata_from_scontrol(
+            conn=conn,
+            job_id="789",
+            hostname="cluster.example.com",
+        )
+
+        assert details.stdout_path == "/work/logs/ujv38uq/clean_tmp-789.out"
+        assert details.stderr_path == "/work/logs/ujv38uq/clean_tmp-789.err"
+
+    @pytest.mark.unit
     def test_resolve_node_hostnames_expands_node_list(self):
         output = SlurmOutput()
         conn = _FakeConn()

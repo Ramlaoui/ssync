@@ -20,6 +20,55 @@ logger = setup_logger(__name__)
 class ActionExecutor:
     """Executes watcher actions."""
 
+    @staticmethod
+    def _referenced_script_variables(script_content: str) -> set[str]:
+        """Extract named shell-style variables referenced in a script body."""
+        referenced: set[str] = set()
+        for match in re.finditer(
+            r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[-+][^}]*)?\}", script_content
+        ):
+            referenced.add(match.group(1))
+        for match in re.finditer(r"\$([A-Za-z_][A-Za-z0-9_]*)", script_content):
+            referenced.add(match.group(1))
+        return referenced
+
+    def _validate_required_resubmit_captures(
+        self,
+        script_content: str,
+        variables: Dict[str, Any] | None,
+        watcher: Any | None,
+    ) -> str | None:
+        """Fail closed when a job-end resubmit is missing named captures it uses."""
+        if watcher is None or not watcher.definition.trigger_on_job_end:
+            return None
+
+        named_captures = {
+            str(capture_name)
+            for capture_name in watcher.definition.captures
+            if str(capture_name) and not str(capture_name).isdigit()
+        }
+        if not named_captures:
+            return None
+
+        referenced_captures = (
+            self._referenced_script_variables(script_content) & named_captures
+        )
+        if not referenced_captures:
+            return None
+
+        missing = sorted(
+            name
+            for name in referenced_captures
+            if variables is None or variables.get(name) in (None, "")
+        )
+        if not missing:
+            return None
+
+        return (
+            "Missing required watcher capture(s) for resubmit: "
+            + ", ".join(missing)
+        )
+
     async def execute(
         self,
         action_type: ActionType,
@@ -240,6 +289,14 @@ class ActionExecutor:
                     trigger_on_job_end=watcher.definition.trigger_on_job_end,
                     current_remaining=remaining_resubmits,
                 )
+
+            missing_capture_error = self._validate_required_resubmit_captures(
+                script_content=script_content,
+                variables=variables,
+                watcher=watcher,
+            )
+            if missing_capture_error:
+                return False, missing_capture_error
 
             # Modify script with new parameters
             modifications = params.get("modifications", {})

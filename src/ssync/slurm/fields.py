@@ -14,8 +14,8 @@ SQUEUE_FIELDS = [
     "%M",  # Runtime
     "%r",  # Reason
     "%Z",  # WorkDir
-    "%o",  # StdOut
-    "%e",  # StdErr
+    "%o",  # Command
+    "%e",  # ExpectedEndTime
     "%V",  # SubmitTime
     "%S",  # StartTime
     "%a",  # Account

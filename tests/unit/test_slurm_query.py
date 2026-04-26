@@ -164,3 +164,40 @@ def test_get_job_details_uses_array_query_to_match_specific_task(monkeypatch):
     assert job.job_id == "6001_0"
     assert job.state == JobState.FAILED
     assert any("--jobs=6001 --array" in command for command in conn.commands)
+
+
+@pytest.mark.unit
+def test_get_active_jobs_uses_scontrol_paths_instead_of_squeue_command_field(caplog):
+    query = SlurmQuery()
+
+    conn = _FakeConn(
+        [
+            (
+                "squeue -r --format=",
+                _FakeResult(
+                    stdout=(
+                        "139439|clean_tmp|RUNNING|ujv38uq|gpu|1|4|8G|01:00:00|00:15:30||"
+                        "/workdir|/workdir/scripts/clean_tmp8849d6wa.slurm|2099-01-01T00:00:00|"
+                        "2026-04-23T16:34:47|2026-04-23T16:34:48|default|normal|1000|node001"
+                    )
+                ),
+            ),
+            (
+                "scontrol show job 139439",
+                _FakeResult(
+                    stdout=(
+                        "JobId=139439 StdOut=/workdir/logs/%x-%j.out "
+                        "StdErr=/workdir/logs/%x-%j.err "
+                        "Command=/workdir/scripts/clean_tmp8849d6wa.slurm"
+                    )
+                ),
+            ),
+        ]
+    )
+
+    jobs = query.get_active_jobs(conn, "cluster.example.com", user="ujv38uq")
+
+    assert len(jobs) == 1
+    assert jobs[0].stdout_file == "/workdir/logs/clean_tmp-139439.out"
+    assert jobs[0].stderr_file == "/workdir/logs/clean_tmp-139439.err"
+    assert "suspicious stdout path" not in caplog.text

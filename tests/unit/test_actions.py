@@ -327,3 +327,54 @@ class TestResubmitLaunchDelegation:
 
         assert success is False
         assert message == "No resubmits remaining for this watcher"
+
+    @pytest.mark.asyncio
+    async def test_resubmit_requires_named_capture_used_by_script(self, monkeypatch):
+        executor = ActionExecutor()
+
+        cached_job = SimpleNamespace(
+            script_content=(
+                "#!/bin/bash\n"
+                "python main.py "
+                "+checkpoint.config_dir=${resume_run_dir:-/previous/run}\n"
+            ),
+            local_source_dir="/home/aliramlaoui/work/triforces",
+            job_info=JobInfo(
+                job_id="12345",
+                name="train",
+                state=JobState.TIMEOUT,
+                hostname="adastra",
+                work_dir="/lus/work/CT10/cad16353/aramlaoui/triforces",
+            ),
+        )
+
+        mock_cache = MagicMock()
+        mock_cache.get_cached_job.return_value = cached_job
+        monkeypatch.setattr(cache_module, "get_cache", lambda: mock_cache)
+
+        mock_manager = MagicMock()
+        monkeypatch.setattr(app_module, "get_slurm_manager", lambda: mock_manager)
+
+        watcher = WatcherInstance(
+            id=1,
+            job_id="12345",
+            hostname="adastra",
+            definition=WatcherDefinition(
+                name="auto resubmit",
+                pattern="HYDRA_OUTPUT_DIR=(.+)",
+                captures=["resume_run_dir"],
+                trigger_on_job_end=True,
+                actions=[WatcherAction(type=ActionType.RESUBMIT, params={})],
+            ),
+        )
+
+        success, message = await executor._resubmit_job(
+            "12345",
+            "adastra",
+            {},
+            {"job_end_state": "timeout"},
+            watcher,
+        )
+
+        assert success is False
+        assert message == "Missing required watcher capture(s) for resubmit: resume_run_dir"

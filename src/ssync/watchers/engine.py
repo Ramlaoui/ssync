@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
@@ -16,6 +17,7 @@ from ..models.watcher import (
     WatcherInstance,
     WatcherState,
 )
+from ..parsers.slurm import SlurmParser
 from ..utils.async_helpers import create_task
 from ..utils.logging import setup_logger
 
@@ -117,6 +119,15 @@ class JobEndHandlingResult(Enum):
     RETRY_PENDING = "retry_pending"
 
 
+@dataclass
+class OutputReadResult:
+    """Result of reading output for a watcher scan."""
+
+    content: Optional[str]
+    next_position: int
+    file_path: Optional[str] = None
+
+
 class WatcherEngine:
     """Engine for running and managing watchers."""
 
@@ -142,6 +153,56 @@ class WatcherEngine:
             r"^\[\.\*\]$",
         )
         return any(re.match(pattern, text) for pattern in placeholder_patterns)
+
+    @staticmethod
+    def _is_suspicious_output_path(path: Optional[str]) -> bool:
+        """Return True when a path looks like a submission script, not a log file."""
+        if not path:
+            return False
+        return (
+            path.endswith(".sh")
+            or path.endswith(".sbatch")
+            or path.endswith(".bash")
+            or path.endswith(".slurm")
+            or "/submit/" in path
+            or "/scripts/" in path
+            or "%" in path
+        )
+
+    @staticmethod
+    def _watcher_output_path_key(output_type: str) -> str:
+        """Internal watcher variable name for the last scanned output path."""
+        return f"__ssync_last_{output_type}_path"
+
+    @staticmethod
+    def _is_terminal_state(job_state: JobState) -> bool:
+        """Return True when the job is in a terminal state."""
+        return job_state in {
+            JobState.COMPLETED,
+            JobState.FAILED,
+            JobState.CANCELLED,
+            JobState.TIMEOUT,
+        }
+
+    @staticmethod
+    def _slice_output_from_position(
+        output_text: Optional[str], position: int, max_read_size: int
+    ) -> tuple[Optional[str], int]:
+        """Slice text by UTF-8 byte offset and return the next offset."""
+        if not output_text:
+            return None, position
+
+        output_bytes = output_text.encode("utf-8", "ignore")
+        if len(output_bytes) < position:
+            position = 0
+        if len(output_bytes) == position:
+            return None, position
+
+        chunk = output_bytes[position : position + max_read_size]
+        if not chunk:
+            return None, position
+
+        return chunk.decode("utf-8", "ignore"), position + len(chunk)
 
     def _merge_captured_vars(
         self, watcher: WatcherInstance, captured_vars: Dict[str, Any]
@@ -625,29 +686,27 @@ class WatcherEngine:
                         break
 
                     # Check if job has finished (any terminal state)
-                    if job_info.state in [
-                        JobState.COMPLETED,
-                        JobState.FAILED,
-                        JobState.CANCELLED,
-                        JobState.TIMEOUT,
-                    ]:
+                    if self._is_terminal_state(job_info.state):
                         logger.info(
                             f"Job {job_id} finished with state {job_info.state}, "
                             f"performing final output scan for watcher {watcher_id}"
                         )
                         # Final output scan before stopping — ensures we don't
                         # miss patterns printed near the end of the job
-                        final_content = await self._get_new_output(
+                        final_result = await self._get_new_output(
                             job_info,
                             watcher.definition.output_type,
                             watcher.last_position,
+                            watcher.id,
                         )
-                        if final_content:
-                            new_position = watcher.last_position + len(
-                                final_content.encode()
-                            )
-                            self._update_watcher_position(watcher_id, new_position)
-                            self._check_patterns(watcher, final_content)
+                        if final_result:
+                            if final_result.next_position != watcher.last_position:
+                                watcher.last_position = final_result.next_position
+                                self._update_watcher_position(
+                                    watcher_id, final_result.next_position
+                                )
+                            if final_result.content:
+                                self._check_patterns(watcher, final_result.content)
 
                         job_end_result = await self._handle_job_end_trigger(
                             watcher, job_info.state
@@ -736,21 +795,25 @@ class WatcherEngine:
                     else:
                         # Pattern matching mode
                         # Get new output content
-                        new_content = await self._get_new_output(
+                        read_result = await self._get_new_output(
                             job_info,
                             watcher.definition.output_type,
                             watcher.last_position,
+                            watcher.id,
                         )
 
-                        if new_content:
-                            # Update last position
-                            new_position = watcher.last_position + len(
-                                new_content.encode()
-                            )
-                            self._update_watcher_position(watcher_id, new_position)
+                        if read_result:
+                            if read_result.next_position != watcher.last_position:
+                                watcher.last_position = read_result.next_position
+                                self._update_watcher_position(
+                                    watcher_id, read_result.next_position
+                                )
 
-                            # Check for pattern matches
-                            matches_found = self._check_patterns(watcher, new_content)
+                            matches_found = (
+                                self._check_patterns(watcher, read_result.content)
+                                if read_result.content
+                                else False
+                            )
 
                             if matches_found:
                                 # Reset backoff on successful match
@@ -814,7 +877,6 @@ class WatcherEngine:
             regex = self._pattern_cache[pattern]
 
             for match in regex.finditer(content):
-                matches_found = True
                 matched_text = match.group(0)
 
                 # Extract captured groups
@@ -854,6 +916,8 @@ class WatcherEngine:
                         watcher.definition.condition, watcher.variables
                     ):
                         continue
+
+                matches_found = True
 
                 if watcher.definition.trigger_on_job_end:
                     continue
@@ -994,6 +1058,7 @@ class WatcherEngine:
             "No resubmits remaining for this watcher",
             "Invalid remaining_resubmits value:",
             "Cannot decrement resubmit counter without watcher context",
+            "Missing required watcher capture(s) for resubmit:",
         )
         return not any(
             result_text.startswith(prefix) for prefix in non_retryable_prefixes
@@ -1250,8 +1315,12 @@ class WatcherEngine:
             return None
 
     async def _get_new_output(
-        self, job_info: JobInfo, output_type: str, last_position: int
-    ) -> Optional[str]:
+        self,
+        job_info: JobInfo,
+        output_type: str,
+        last_position: int,
+        watcher_id: Optional[int] = None,
+    ) -> Optional[OutputReadResult]:
         """Get new output content since last position."""
         try:
             from ..web.app import get_slurm_manager
@@ -1260,18 +1329,130 @@ class WatcherEngine:
             if not manager:
                 return None
 
-            def read_new_output() -> Optional[str]:
+            def read_new_output() -> Optional[OutputReadResult]:
+                max_read_size = 1024 * 1024
                 slurm_host = manager.get_host_by_name(job_info.hostname)
                 conn = manager._get_connection(slurm_host.host)
 
-                if output_type == "stderr" and job_info.stderr_file:
-                    file_path = job_info.stderr_file
-                elif job_info.stdout_file:
-                    file_path = job_info.stdout_file
-                else:
+                def select_file_path() -> Optional[str]:
+                    if output_type == "stderr" and job_info.stderr_file:
+                        return job_info.stderr_file
+                    if job_info.stdout_file:
+                        return job_info.stdout_file
                     return None
 
+                def expand_placeholder_paths() -> None:
+                    var_dict = {
+                        "j": job_info.job_id,
+                        "i": job_info.job_id,
+                    }
+                    if job_info.user:
+                        var_dict["u"] = job_info.user
+                    if job_info.name:
+                        var_dict["x"] = job_info.name
+                    if job_info.stdout_file and "%" in job_info.stdout_file:
+                        job_info.stdout_file = SlurmParser.expand_slurm_path_vars(
+                            job_info.stdout_file, var_dict
+                        )
+                    if job_info.stderr_file and "%" in job_info.stderr_file:
+                        job_info.stderr_file = SlurmParser.expand_slurm_path_vars(
+                            job_info.stderr_file, var_dict
+                        )
+
+                def read_cached_output(position: int) -> Optional[OutputReadResult]:
+                    if not self._is_terminal_state(job_info.state):
+                        return None
+
+                    try:
+                        from ..job_data_manager import get_job_data_manager
+
+                        data_manager = get_job_data_manager()
+                        cached_output = data_manager._get_cached_output_content(
+                            job_info.job_id, job_info.hostname, output_type
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"Failed cached output fallback for watcher job "
+                            f"{job_info.job_id}: {e}"
+                        )
+                        return None
+
+                    cached_chunk, cached_next_position = (
+                        self._slice_output_from_position(
+                            cached_output, position, max_read_size
+                        )
+                    )
+                    if cached_chunk is None and cached_next_position == position:
+                        return None
+
+                    logger.info(
+                        f"Using cached {output_type} for watcher job {job_info.job_id}"
+                    )
+                    return OutputReadResult(
+                        content=cached_chunk,
+                        next_position=cached_next_position,
+                        file_path=file_path,
+                    )
+
+                file_path = select_file_path()
+                original_file_path = file_path
+                if not file_path or self._is_suspicious_output_path(file_path):
+                    try:
+                        refreshed_stdout, refreshed_stderr = (
+                            manager.slurm_client.get_job_output_files(
+                                conn,
+                                job_info.job_id,
+                                job_info.hostname,
+                            )
+                        )
+                        if refreshed_stdout:
+                            job_info.stdout_file = refreshed_stdout
+                        if refreshed_stderr:
+                            job_info.stderr_file = refreshed_stderr
+                        expand_placeholder_paths()
+                        if refreshed_stdout or refreshed_stderr:
+                            self.cache.cache_job(job_info, script_content=None)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to refresh output paths for watcher job "
+                            f"{job_info.job_id}: {e}"
+                        )
+                    file_path = select_file_path()
+
+                if not file_path:
+                    return read_cached_output(last_position)
+
+                if self._is_suspicious_output_path(file_path):
+                    logger.warning(
+                        f"Watcher for job {job_info.job_id} resolved a suspicious "
+                        f"output path ({file_path}); skipping output scan"
+                    )
+                    return read_cached_output(last_position)
+
                 position = last_position
+                previous_path = None
+                path_key = self._watcher_output_path_key(output_type)
+                if watcher_id is not None:
+                    previous_path = self._get_watcher_variables(watcher_id).get(path_key)
+
+                path_changed = bool(
+                    file_path
+                    and (
+                        (previous_path and previous_path != file_path)
+                        or original_file_path != file_path
+                    )
+                )
+                if path_changed:
+                    logger.info(
+                        f"Watcher {watcher_id} switched {output_type} path for job "
+                        f"{job_info.job_id} from {original_file_path!r} to {file_path!r}; "
+                        f"resetting read position"
+                    )
+                    position = 0
+
+                if watcher_id is not None and previous_path != file_path:
+                    self._update_watcher_variables(watcher_id, {path_key: file_path})
+
                 size_result = conn.run(
                     f"stat -c %s '{file_path}' 2>/dev/null || echo 0",
                     hide=True,
@@ -1288,11 +1469,17 @@ class WatcherEngine:
                             )
                             position = 0
                         if file_size == position:
-                            return None
+                            cached_result = read_cached_output(position)
+                            if cached_result:
+                                return cached_result
+                            return OutputReadResult(
+                                content=None,
+                                next_position=position,
+                                file_path=file_path,
+                            )
                     except ValueError:
                         pass
 
-                max_read_size = 1024 * 1024
                 result = conn.run(
                     f"tail -c +{position + 1} '{file_path}' 2>/dev/null | head -c {max_read_size}",
                     hide=True,
@@ -1301,13 +1488,31 @@ class WatcherEngine:
 
                 if result.ok and result.stdout:
                     try:
-                        return result.stdout.encode("utf-8", "ignore").decode(
+                        content = result.stdout.encode("utf-8", "ignore").decode(
                             "utf-8", "ignore"
                         )
+                        return OutputReadResult(
+                            content=content,
+                            next_position=position + len(content.encode("utf-8")),
+                            file_path=file_path,
+                        )
                     except Exception:
-                        return result.stdout
+                        return OutputReadResult(
+                            content=result.stdout,
+                            next_position=position
+                            + len(result.stdout.encode("utf-8", "ignore")),
+                            file_path=file_path,
+                        )
 
-                return None
+                cached_result = read_cached_output(position)
+                if cached_result:
+                    return cached_result
+
+                return OutputReadResult(
+                    content=None,
+                    next_position=position,
+                    file_path=file_path,
+                )
 
             return await asyncio.to_thread(read_new_output)
 
