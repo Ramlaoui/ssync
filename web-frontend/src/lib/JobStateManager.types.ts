@@ -44,6 +44,8 @@ export interface MockWebSocket {
  */
 export interface IPreferences {
   groupArrayJobs: boolean;
+  defaultSince: string;
+  jobsPerPage: number;
 }
 
 /**

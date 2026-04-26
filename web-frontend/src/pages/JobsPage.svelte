@@ -55,34 +55,6 @@
   const arrayJobGroups = jobStateManager.getArrayJobGroups();
   const hostStates = jobStateManager.getHostStates();
 
-  // Debug reactive jobs - check for duplicates
-  run(() => {
-    if ($allJobs.length > 0) {
-      const uniqueKeys = new Set(
-        $allJobs.map((j) => `${j.hostname}:${j.job_id}`),
-      );
-      const hasDuplicates = uniqueKeys.size !== $allJobs.length;
-      console.log(
-        `[JobsPage] Received ${$allJobs.length} jobs from store (${uniqueKeys.size} unique) ${hasDuplicates ? "⚠️ DUPLICATES DETECTED" : "✓"}`,
-      );
-      if (hasDuplicates) {
-        // Find and log duplicates
-        const jobKeys = $allJobs.map((j) => `${j.hostname}:${j.job_id}`);
-        const duplicates = jobKeys.filter(
-          (key, index) => jobKeys.indexOf(key) !== index,
-        );
-        console.log(`[JobsPage] Duplicate keys:`, [...new Set(duplicates)]);
-      }
-    }
-  });
-  run(() => {
-    if ($arrayJobGroups.length > 0) {
-      console.log(
-        `[JobsPage] Received ${$arrayJobGroups.length} array job groups`,
-      );
-    }
-  });
-
   // Search scoring function - returns relevance score (lower is better)
   function getSearchScore(job: any, searchTerm: string): number {
     if (!searchTerm) return 0;

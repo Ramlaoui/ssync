@@ -178,6 +178,8 @@ export function createMockWebSocketFactory(): IWebSocketFactory & {
 export function createMockPreferencesStore(): IPreferencesStore {
   const store = writable({
     groupArrayJobs: true,
+    defaultSince: '14d',
+    jobsPerPage: 50,
   });
 
   return {
