@@ -1,6 +1,7 @@
 """Unit tests for web job output response shaping."""
 
 import asyncio
+import base64
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,42 @@ class _FakeCacheMiddleware:
 
     async def cache_job_output(self, job_id, host, response):
         return None
+
+
+class _FakeRemoteResult:
+    def __init__(self, stdout):
+        self.stdout = stdout
+
+
+class _FakeConnection:
+    def __init__(self, stdout):
+        self.stdout = stdout
+        self.commands = []
+
+    def run(self, command, **kwargs):
+        self.commands.append((command, kwargs))
+        return _FakeRemoteResult(self.stdout)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_live_stream_remote_chunk_decodes_base64_transport():
+    payload = "Training Epoch 2: 7%\nValidation metrics: ok\n"
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    conn = _FakeConnection(encoded)
+
+    decoded = await job_services.read_remote_file_chunk_text(
+        conn,
+        "/remote/slurm.out",
+        start_offset=12,
+        max_bytes=4096,
+    )
+
+    assert decoded == payload
+    command, kwargs = conn.commands[0]
+    assert "base64 -w0" in command
+    assert "tail -c +13" in command
+    assert kwargs["timeout"] == 30
 
 
 @pytest.mark.unit
