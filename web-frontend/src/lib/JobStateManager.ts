@@ -1509,7 +1509,12 @@ class JobStateManager {
 
     debugLog('[JobStateManager] ⚡ Connecting WebSocket and starting API sync...');
     this.connectWebSocket();
-    void this.syncAllHosts(false, false);
+    const initialPreferences = get(this.preferences);
+    void this.syncAllHosts(false, false, {
+      since: initialPreferences.defaultSince,
+      limit: initialPreferences.jobsPerPage,
+      groupArrayJobs: initialPreferences.groupArrayJobs,
+    });
     debugLog('[JobStateManager] ✅ Initialization complete - API sync and WebSocket are both active');
   }
 
