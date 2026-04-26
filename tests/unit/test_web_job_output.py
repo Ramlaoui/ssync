@@ -45,6 +45,8 @@ async def test_cached_metadata_only_skips_output_decode(
         job_id=sample_job_info.job_id,
         host=sample_job_info.hostname,
         lines=None,
+        output_type="both",
+        max_bytes=None,
         metadata_only=True,
         force_refresh=False,
         get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
@@ -81,6 +83,8 @@ async def test_cached_lines_returns_tail_without_losing_file_size(
         job_id=sample_job_info.job_id,
         host=sample_job_info.hostname,
         lines=2,
+        output_type="both",
+        max_bytes=None,
         metadata_only=False,
         force_refresh=False,
         get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
@@ -122,6 +126,8 @@ async def test_force_refresh_returns_cached_output_and_queues_background_refresh
         job_id=sample_job_info.job_id,
         host=sample_job_info.hostname,
         lines=None,
+        output_type="both",
+        max_bytes=None,
         metadata_only=False,
         force_refresh=True,
         get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
@@ -134,6 +140,54 @@ async def test_force_refresh_returns_cached_output_and_queues_background_refresh
     assert response.cached is True
     assert response.stale is True
     assert response.refresh_queued is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cached_stdout_only_respects_requested_stream_and_max_bytes(
+    monkeypatch, test_cache, sample_job_info
+):
+    sample_job_info.state = JobState.COMPLETED
+    test_cache.cache_job(sample_job_info)
+    stdout_text = "0123456789"
+    stderr_text = "stderr should stay untouched\n"
+    test_cache.update_job_outputs(
+        sample_job_info.job_id,
+        sample_job_info.hostname,
+        stdout_content=stdout_text,
+        stderr_content=stderr_text,
+        mark_fetched_after_completion=True,
+    )
+
+    original_decode = job_services.decode_cached_output
+
+    def fail_decode_stderr(compressed_data, compression, output_type):
+        if output_type == "stderr":
+            raise AssertionError("stderr should not be decoded for stdout-only requests")
+        return original_decode(compressed_data, compression, output_type)
+
+    monkeypatch.setattr("ssync.web.services.jobs.decode_cached_output", fail_decode_stderr)
+
+    response = await get_job_output_response(
+        job_id=sample_job_info.job_id,
+        host=sample_job_info.hostname,
+        lines=None,
+        output_type="stdout",
+        max_bytes=4,
+        metadata_only=False,
+        force_refresh=False,
+        get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
+        cache_middleware=_FakeCacheMiddleware(test_cache),
+        job_manager=None,
+    )
+
+    assert response.output_type == "stdout"
+    assert response.stdout == "6789"
+    assert response.stderr is None
+    assert response.stdout_metadata.size_bytes == len(stdout_text)
+    assert response.stderr_metadata is None
+    assert response.content_truncated is True
+    assert response.content_limit_bytes == 4
 
 
 @pytest.mark.unit

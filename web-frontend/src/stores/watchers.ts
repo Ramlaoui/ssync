@@ -2,8 +2,10 @@ import { writable, derived, get } from 'svelte/store';
 import type { Watcher, WatcherEvent, WatcherStats, WatchersResponse, WatcherEventsResponse } from '../types/watchers';
 import { api, apiConfig } from '../services/api';
 
-// Debug mode - set to true to enable verbose logging
-const DEBUG_WATCHERS = true;
+const DEBUG_WATCHERS =
+  typeof window !== 'undefined' &&
+  import.meta.env.DEV &&
+  window.location.search.includes('debug');
 
 // Validate and sanitize watcher data
 function validateWatcher(watcher: any, source: string): Watcher | null {

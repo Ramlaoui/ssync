@@ -5,9 +5,10 @@
   import { onMount, onDestroy } from "svelte";
   import { push } from "svelte-spa-router";
   import type { AxiosError } from "axios";
-  import { api, apiConfig } from "../services/api";
+  import { api } from "../services/api";
   import type { JobInfo, OutputData, ScriptData } from "../types/api";
   import { jobStateManager } from "../lib/JobStateManager";
+  import { streamJobOutput, type OutputStreamSession } from "../lib/streaming";
   import type { Readable } from "svelte/store";
   import JobSidebar from "../components/JobSidebar.svelte";
   import JobHeader from "../components/JobHeader.svelte";
@@ -16,7 +17,7 @@
   import WatcherAttachmentDialog from "../components/WatcherAttachmentDialog.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
   import { Info, Terminal, AlertTriangle, Code, ArrowLeft, Eye } from 'lucide-svelte';
-  import { navigationState, navigationActions } from '../stores/navigation';
+  import { navigationActions } from '../stores/navigation';
 
   interface Props {
     params?: any;
@@ -38,6 +39,10 @@
   let isClosingSidebar = $state(false);
 
   // Output related state
+  type OutputStreamType = 'stdout' | 'stderr';
+  const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
+  const MAX_OUTPUT_BUFFER_CHARS = 768 * 1024;
+
   let outputData: OutputData | null = $state(null);
   let outputError: string | null = $state(null);
   let loadingOutput = $state(false);
@@ -45,6 +50,9 @@
   let refreshingOutput = $state(false);
   let outputBackgroundRetryCount = $state(0);
   let outputRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentOutputType: OutputStreamType | null = $state(null);
+  let outputStreamSession: OutputStreamSession | null = null;
+  let outputRequestVersion = 0;
 
   // Script related state
   let scriptData: ScriptData | null = $state(null);
@@ -115,47 +123,229 @@
     }
   }
 
-  function scheduleOutputRetry() {
+  function stopOutputStream() {
+    outputStreamSession?.close();
+    outputStreamSession = null;
+  }
+
+  function getActiveOutputType(tab: string = activeTab): OutputStreamType | null {
+    if (tab === 'output') return 'stdout';
+    if (tab === 'errors') return 'stderr';
+    return null;
+  }
+
+  function emptyOutputData(outputType: OutputStreamType): OutputData {
+    return {
+      job_id: params.id,
+      hostname: params.host,
+      output_type: outputType,
+      stdout: null,
+      stderr: null,
+      stdout_metadata: null,
+      stderr_metadata: null,
+      content_truncated: false,
+      content_limit_bytes: DEFAULT_OUTPUT_MAX_BYTES,
+      cached: false,
+      stale: false,
+      refresh_queued: false,
+    };
+  }
+
+  function mergeOutputData(
+    outputType: OutputStreamType,
+    patch: Partial<OutputData>,
+  ): OutputData {
+    const base =
+      outputData && outputData.output_type === outputType
+        ? outputData
+        : emptyOutputData(outputType);
+    return {
+      ...base,
+      ...patch,
+      output_type: outputType,
+    };
+  }
+
+  function appendBoundedChunk(
+    current: string | null | undefined,
+    chunk: string,
+  ): string {
+    if (!chunk) {
+      return current || '';
+    }
+
+    const next = `${current || ''}${chunk}`;
+    if (next.length <= MAX_OUTPUT_BUFFER_CHARS) {
+      return next;
+    }
+    return next.slice(next.length - MAX_OUTPUT_BUFFER_CHARS);
+  }
+
+  function resetOutputState(options: { clearError?: boolean } = {}) {
+    stopOutputStream();
+    clearOutputRetryTimer();
+    outputBackgroundRetryCount = 0;
+    outputData = null;
+    currentOutputType = null;
+    loadingOutput = false;
+    refreshingOutput = false;
+    if (options.clearError !== false) {
+      outputError = null;
+    }
+    outputRequestVersion += 1;
+  }
+
+  function scheduleOutputRetry(outputType: OutputStreamType) {
     if (outputBackgroundRetryCount >= 2) return;
     clearOutputRetryTimer();
     outputRetryTimer = setTimeout(() => {
+      if (getActiveOutputType() !== outputType) {
+        return;
+      }
       outputBackgroundRetryCount += 1;
-      loadOutput({ backgroundRetry: true });
+      void loadOutput(outputType, { backgroundRetry: true });
     }, 1200);
   }
 
-  async function loadOutput(options: { backgroundRetry?: boolean } = {}) {
+  async function loadOutput(
+    outputType: OutputStreamType,
+    options: { backgroundRetry?: boolean; forceRefresh?: boolean } = {},
+  ) {
     if (!job) return;
 
     if (!options.backgroundRetry) {
       outputBackgroundRetryCount = 0;
       clearOutputRetryTimer();
+      stopOutputStream();
     }
 
     loadingOutput = !options.backgroundRetry;
     outputError = null;
+    currentOutputType = outputType;
+    if (!options.backgroundRetry || !outputData || outputData.output_type !== outputType) {
+      outputData = emptyOutputData(outputType);
+    }
+    const requestVersion = ++outputRequestVersion;
 
     try {
-      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}`);
-      outputData = response.data;
-      if (response.data.refresh_queued) {
-        scheduleOutputRetry();
+      if (job.state === 'R') {
+        const metadataResponse = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
+          params: {
+            host: params.host,
+            output_type: outputType,
+            metadata_only: true,
+            max_bytes: DEFAULT_OUTPUT_MAX_BYTES,
+            force_refresh: options.forceRefresh ? 'true' : undefined,
+          },
+        });
+
+        if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+          return;
+        }
+
+        outputData = mergeOutputData(outputType, metadataResponse.data);
+        loadingOutput = false;
+        refreshingOutput = false;
+
+        outputStreamSession = streamJobOutput(
+          params.id,
+          params.host,
+          outputType,
+          {
+            onMetadata: (metadata) => {
+              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+                return;
+              }
+              outputData = mergeOutputData(outputType, {
+                content_truncated: Boolean(metadata.truncated),
+                content_limit_bytes: DEFAULT_OUTPUT_MAX_BYTES,
+              });
+            },
+            onChunk: (chunk) => {
+              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+                return;
+              }
+              const currentContent = (
+                outputType === 'stdout' ? outputData?.stdout : outputData?.stderr
+              ) || '';
+              const willTrim =
+                currentContent.length + chunk.length > MAX_OUTPUT_BUFFER_CHARS;
+              outputData = mergeOutputData(outputType, {
+                stdout:
+                  outputType === 'stdout'
+                    ? appendBoundedChunk(currentContent, chunk)
+                    : null,
+                stderr:
+                  outputType === 'stderr'
+                    ? appendBoundedChunk(currentContent, chunk)
+                    : null,
+                content_truncated: Boolean(outputData?.content_truncated || willTrim),
+              });
+            },
+            onTruncationNotice: () => {
+              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+                return;
+              }
+              outputData = mergeOutputData(outputType, {
+                content_truncated: true,
+              });
+            },
+            onComplete: () => {
+              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+                return;
+              }
+              stopOutputStream();
+              loadingOutput = false;
+              refreshingOutput = false;
+            },
+            onError: (message) => {
+              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+                return;
+              }
+              stopOutputStream();
+              outputError = message;
+              loadingOutput = false;
+              refreshingOutput = false;
+            },
+          },
+          DEFAULT_OUTPUT_MAX_BYTES,
+        );
       } else {
-        clearOutputRetryTimer();
+        const response = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
+          params: {
+            host: params.host,
+            output_type: outputType,
+            max_bytes: DEFAULT_OUTPUT_MAX_BYTES,
+            force_refresh: options.forceRefresh ? 'true' : undefined,
+          },
+        });
+
+        if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+          return;
+        }
+
+        outputData = response.data;
+        if (response.data.refresh_queued) {
+          scheduleOutputRetry(outputType);
+        } else {
+          clearOutputRetryTimer();
+        }
       }
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
       outputError = `Failed to load output: ${axiosError.message}`;
     } finally {
-      if (!options.backgroundRetry) {
+      if (requestVersion === outputRequestVersion) {
         loadingOutput = false;
+        refreshingOutput = false;
       }
     }
   }
 
   // Refresh output data
   async function refreshOutput() {
-    if (!job) return;
+    const outputType = getActiveOutputType();
+    if (!job || !outputType) return;
 
     refreshingOutput = true;
     outputError = null;
@@ -163,13 +353,10 @@
     clearOutputRetryTimer();
 
     try {
-      const response = await api.get<OutputData>(`/api/jobs/${params.id}/output?host=${params.host}&force_refresh=true`);
-      outputData = response.data;
+      await loadOutput(outputType, { forceRefresh: true });
     } catch (err: unknown) {
       const axiosError = err as AxiosError;
       outputError = `Failed to refresh output: ${axiosError.message}`;
-    } finally {
-      refreshingOutput = false;
     }
   }
 
@@ -233,16 +420,11 @@
     if (params.id && params.host && !showSidebarOnly) {
       // Only set up store if params actually changed
       if (params.id !== prevParamsId || params.host !== prevParamsHost) {
-        console.log(`[JobPage] Params changed from ${prevParamsHost}:${prevParamsId} to ${params.host}:${params.id}`);
-
         // Clear previous data when switching jobs
-        outputData = null;
+        resetOutputState();
         scriptData = null;
-        outputError = null;
         scriptError = null;
         error = null;
-        outputBackgroundRetryCount = 0;
-        clearOutputRetryTimer();
         activeTab = 'details';
         initialLoadComplete = false;
 
@@ -271,8 +453,22 @@
 
   // Reactive block 3: Load output data when tab changes
   run(() => {
-    if (job && activeTab === 'output' && !outputData && !outputError && !loadingOutput) {
-      loadOutput();
+    const outputType = getActiveOutputType();
+
+    if (!job || !outputType) {
+      if (activeTab !== 'output' && activeTab !== 'errors' && (outputData || outputError || currentOutputType)) {
+        resetOutputState();
+      }
+      return;
+    }
+
+    if (currentOutputType !== outputType && (outputData || outputError)) {
+      resetOutputState();
+      currentOutputType = outputType;
+    }
+
+    if (!outputData && !outputError && !loadingOutput) {
+      void loadOutput(outputType);
     }
   });
 
@@ -300,7 +496,7 @@
 
   onDestroy(() => {
     window.removeEventListener("resize", checkMobile);
-    clearOutputRetryTimer();
+    resetOutputState();
 
     // Clear current view job
     jobStateManager.setCurrentViewJob(null, null);
@@ -491,7 +687,12 @@
                   {scriptData}
                   {scriptError}
                   {loadingScript}
-                  onRetryLoadOutput={loadOutput}
+                  onRetryLoadOutput={() => {
+                    const outputType = getActiveOutputType();
+                    if (outputType) {
+                      void loadOutput(outputType);
+                    }
+                  }}
                   onLoadMoreOutput={() => {}}
                   onScrollToTop={() => {}}
                   onScrollToBottom={() => {}}

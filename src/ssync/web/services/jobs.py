@@ -29,6 +29,9 @@ logger = setup_logger(__name__)
 _OUTPUT_THROTTLE_CACHE: dict[str, float] = {}
 _JOB_REFRESH_TASKS: dict[tuple[str, str], asyncio.Task] = {}
 _OUTPUT_REFRESH_TASKS: dict[tuple[str, str], asyncio.Task] = {}
+DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024
+MAX_OUTPUT_MAX_BYTES = 4 * 1024 * 1024
+OUTPUT_TYPES = {"stdout", "stderr", "both"}
 
 
 def build_output_metadata(
@@ -101,25 +104,66 @@ def limit_output_lines(content: Optional[str], lines: Optional[int]) -> Optional
     return "".join(chunks[-lines:])
 
 
+def limit_output_bytes(
+    content: Optional[str], max_bytes: Optional[int]
+) -> tuple[Optional[str], bool]:
+    if content is None or max_bytes is None:
+        return content, False
+    if max_bytes <= 0:
+        return "", bool(content)
+
+    encoded = content.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return content, False
+
+    tail = encoded[-max_bytes:]
+    return tail.decode("utf-8", errors="ignore"), True
+
+
+def limit_output_content(
+    content: Optional[str],
+    *,
+    lines: Optional[int],
+    max_bytes: Optional[int],
+) -> tuple[Optional[str], bool]:
+    if content is None:
+        return None, False
+
+    if lines is not None:
+        limited = limit_output_lines(content, lines)
+        return limited, limited != content
+
+    if max_bytes is not None:
+        return limit_output_bytes(content, max_bytes)
+
+    return content, False
+
+
+def should_include_output(output_type: str, stream: str) -> bool:
+    return output_type == "both" or output_type == stream
+
+
 def decode_cached_output_for_response(
     *,
     compressed_data: Optional[bytes],
     compression: str,
     output_type: str,
     lines: Optional[int],
+    max_bytes: Optional[int],
     metadata_only: bool,
-) -> Optional[str]:
+) -> tuple[Optional[str], bool]:
     if metadata_only or compressed_data is None:
-        return None
+        return None, False
 
     content = decode_cached_output(compressed_data, compression, output_type)
-    return limit_output_lines(content, lines)
+    return limit_output_content(content, lines=lines, max_bytes=max_bytes)
 
 
 def build_job_output_response(
     *,
     job_id: str,
     host: str,
+    output_type: str,
     stdout_path: Optional[str],
     stderr_path: Optional[str],
     stdout_content: Optional[str],
@@ -129,6 +173,8 @@ def build_job_output_response(
     stderr_size_bytes: Optional[int] = None,
     stdout_exists: Optional[bool] = None,
     stderr_exists: Optional[bool] = None,
+    content_truncated: bool = False,
+    content_limit_bytes: Optional[int] = None,
     cached: bool = False,
     stale: bool = False,
     refresh_queued: bool = False,
@@ -136,6 +182,7 @@ def build_job_output_response(
     return JobOutputResponse(
         job_id=job_id,
         hostname=host,
+        output_type=output_type,
         stdout=stdout_content if not metadata_only else None,
         stderr=stderr_content if not metadata_only else None,
         stdout_metadata=build_output_metadata(
@@ -156,6 +203,8 @@ def build_job_output_response(
             size_bytes=stderr_size_bytes,
             exists=stderr_exists,
         ),
+        content_truncated=content_truncated,
+        content_limit_bytes=content_limit_bytes,
         cached=cached,
         stale=stale,
         refresh_queued=refresh_queued,
@@ -307,13 +356,14 @@ async def build_stream_job_output_response(
     host: str,
     output_type: str,
     chunk_size: int,
+    max_initial_bytes: int,
     get_slurm_manager,
 ) -> StreamingResponse:
     manager = get_slurm_manager()
     slurm_host = manager.get_host_by_name(host)
     conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
-    max_initial_bytes = 1024 * 1024
+    max_initial_bytes = max(1024, min(max_initial_bytes, MAX_OUTPUT_MAX_BYTES))
     max_live_chunk_bytes = min(chunk_size, 256 * 1024)
 
     async def generate():
@@ -462,23 +512,35 @@ async def build_stream_job_output_response(
                 output_type,
             )
             if compressed_data:
-                encoded_data, is_compressed = encode_cached_output_for_stream(
+                content = decode_cached_output(
                     compressed_data,
                     compression,
+                    output_type,
+                )
+                limited_content, truncated = limit_output_content(
+                    content,
+                    lines=None,
+                    max_bytes=max_initial_bytes,
                 )
                 metadata.update(
                     {
                         "original_size": original_size,
-                        "compression": compression,
+                        "compression": "none",
+                        "truncated": truncated,
                         "source": "cache",
                     }
                 )
                 yield format_sse_event(metadata)
 
+                if truncated:
+                    yield format_sse_event(
+                        {"type": "truncation_notice", "original_size": original_size}
+                    )
+
                 for chunk_payload in iter_chunk_payloads(
-                    encoded_data,
+                    limited_content or "",
                     chunk_size,
-                    compressed=is_compressed,
+                    compressed=False,
                 ):
                     yield format_sse_event(chunk_payload)
                     await asyncio.sleep(0)
@@ -505,26 +567,36 @@ async def build_stream_job_output_response(
             metadata.update(
                 {
                     "original_size": result.get("original_size", 0),
-                    "compression": "gzip" if result.get("compressed") else "none",
-                    "truncated": result.get("truncated", False),
+                    "compression": "none",
                     "source": "fresh",
                 }
             )
+            content_bytes = base64.b64decode(result["data"])
+            if result.get("compressed"):
+                content_text = gzip.decompress(content_bytes).decode("utf-8")
+            else:
+                content_text = content_bytes.decode("utf-8", errors="replace")
+            limited_content, truncated = limit_output_content(
+                content_text,
+                lines=None,
+                max_bytes=max_initial_bytes,
+            )
+            metadata["truncated"] = truncated
             yield format_sse_event(metadata)
 
             for chunk_payload in iter_chunk_payloads(
-                result["data"],
+                limited_content or "",
                 chunk_size,
-                compressed=result.get("compressed", False),
+                compressed=False,
             ):
                 yield format_sse_event(chunk_payload)
                 await asyncio.sleep(0)
 
-            if result.get("truncated"):
+            if truncated:
                 yield format_sse_event(
                     {
                         "type": "truncation_notice",
-                        "original_size": result["original_size"],
+                        "original_size": result.get("original_size", 0),
                     }
                 )
             yield format_sse_event({"type": "complete"})
@@ -680,6 +752,7 @@ async def refresh_job_output_in_background(
         output_response = build_job_output_response(
             job_id=job_info.job_id,
             host=job_info.hostname,
+            output_type="both",
             stdout_path=job_info.stdout_file,
             stderr_path=job_info.stderr_file,
             stdout_content=None,
@@ -797,11 +870,12 @@ def get_file_metadata_and_content(
     job_id: str,
     hostname: str,
     lines: Optional[int] = None,
+    max_bytes: Optional[int] = None,
     metadata_only: bool = False,
-) -> tuple[Optional[str], Optional[FileMetadata]]:
+) -> tuple[Optional[str], Optional[FileMetadata], bool]:
     """Return file content and metadata for a remote stdout/stderr path."""
     if not file_path or file_path == "N/A":
-        return None, None
+        return None, None, False
 
     try:
         metadata = FileMetadata(path=file_path)
@@ -809,7 +883,7 @@ def get_file_metadata_and_content(
             f"test -f {file_path} && echo 'exists' || echo 'not found'", hide=True
         )
         if "exists" not in file_check.stdout:
-            return None, metadata
+            return None, metadata, False
 
         metadata.exists = True
         stat_result = conn.run(f"stat -c '%s %Y' {file_path}", hide=True)
@@ -821,15 +895,23 @@ def get_file_metadata_and_content(
         metadata.access_path = f"/api/jobs/{job_id}/files/{file_type}?host={hostname}"
 
         content = None
+        truncated = False
         if not metadata_only:
-            cmd = f"tail -n {lines} {file_path}" if lines else f"cat {file_path}"
+            if lines:
+                cmd = f"tail -n {lines} {file_path}"
+            elif max_bytes:
+                cmd = f"tail -c {max_bytes} {file_path}"
+            else:
+                cmd = f"cat {file_path}"
             result = conn.run(cmd, hide=True)
             content = result.stdout
+            if max_bytes and metadata.size_bytes is not None:
+                truncated = metadata.size_bytes > len(content.encode("utf-8"))
 
-        return content, metadata
+        return content, metadata, truncated
     except Exception as exc:
         logger.error(f"Error reading {file_type} file {file_path}: {exc}")
-        return f"[Error reading {file_type} file: {str(exc)}]", None
+        return f"[Error reading {file_type} file: {str(exc)}]", None, False
 
 
 async def get_job_output_response(
@@ -837,6 +919,8 @@ async def get_job_output_response(
     job_id: str,
     host: Optional[str],
     lines: Optional[int],
+    output_type: str,
+    max_bytes: Optional[int],
     metadata_only: bool,
     force_refresh: bool,
     get_slurm_manager,
@@ -844,6 +928,11 @@ async def get_job_output_response(
     job_manager,
 ) -> JobOutputResponse:
     try:
+        if output_type not in OUTPUT_TYPES:
+            raise HTTPException(status_code=400, detail="Invalid output_type")
+        if max_bytes is not None:
+            max_bytes = max(1, min(max_bytes, MAX_OUTPUT_MAX_BYTES))
+
         cached_job = (
             cache_middleware.cache.get_cached_job(job_id, host) if host else None
         )
@@ -874,20 +963,30 @@ async def get_job_output_response(
             stdout_exists = has_cached_output_payload(stdout_payload, stdout_size)
             stderr_exists = has_cached_output_payload(stderr_payload, stderr_size)
 
-            stdout_content = decode_cached_output_for_response(
-                compressed_data=stdout_payload,
-                compression=stdout_compression,
-                output_type="stdout",
-                lines=lines,
-                metadata_only=metadata_only,
-            )
-            stderr_content = decode_cached_output_for_response(
-                compressed_data=stderr_payload,
-                compression=stderr_compression,
-                output_type="stderr",
-                lines=lines,
-                metadata_only=metadata_only,
-            )
+            stdout_content = None
+            stderr_content = None
+            stdout_truncated = False
+            stderr_truncated = False
+
+            if should_include_output(output_type, "stdout"):
+                stdout_content, stdout_truncated = decode_cached_output_for_response(
+                    compressed_data=stdout_payload,
+                    compression=stdout_compression,
+                    output_type="stdout",
+                    lines=lines,
+                    max_bytes=max_bytes,
+                    metadata_only=metadata_only,
+                )
+
+            if should_include_output(output_type, "stderr"):
+                stderr_content, stderr_truncated = decode_cached_output_for_response(
+                    compressed_data=stderr_payload,
+                    compression=stderr_compression,
+                    output_type="stderr",
+                    lines=lines,
+                    max_bytes=max_bytes,
+                    metadata_only=metadata_only,
+                )
             refresh_queued = False
 
             if is_running:
@@ -895,11 +994,13 @@ async def get_job_output_response(
                 min_interval = 10
                 now = time.time()
                 last_fetch = _OUTPUT_THROTTLE_CACHE.get(throttle_key, 0)
+                needs_stdout = should_include_output(output_type, "stdout") and not stdout_exists
+                needs_stderr = should_include_output(output_type, "stderr") and not stderr_exists
                 should_refresh = (
                     force_refresh
                     or now - last_fetch >= min_interval
-                    or not stdout_exists
-                    or not stderr_exists
+                    or needs_stdout
+                    or needs_stderr
                 )
                 if should_refresh:
                     refresh_reason = (
@@ -928,7 +1029,15 @@ async def get_job_output_response(
                         host,
                     )
                 )
-                if force_refresh or not stdout_fetched_after or not stderr_fetched_after:
+                needs_stdout_refresh = (
+                    should_include_output(output_type, "stdout")
+                    and not stdout_fetched_after
+                )
+                needs_stderr_refresh = (
+                    should_include_output(output_type, "stderr")
+                    and not stderr_fetched_after
+                )
+                if force_refresh or needs_stdout_refresh or needs_stderr_refresh:
                     logger.info(
                         "Job %s completed output request served from cache "
                         "(force_refresh=%s, stdout_fetched=%s, stderr_fetched=%s); "
@@ -950,12 +1059,22 @@ async def get_job_output_response(
                 return build_job_output_response(
                     job_id=job_id,
                     host=host,
-                    stdout_path=cached_job.job_info.stdout_file,
-                    stderr_path=cached_job.job_info.stderr_file,
+                    output_type=output_type,
+                    stdout_path=(
+                        cached_job.job_info.stdout_file
+                        if should_include_output(output_type, "stdout")
+                        else None
+                    ),
+                    stderr_path=(
+                        cached_job.job_info.stderr_file
+                        if should_include_output(output_type, "stderr")
+                        else None
+                    ),
                     stdout_content=None,
                     stderr_content=None,
-                    stdout_exists=False,
-                    stderr_exists=False,
+                    stdout_exists=False if should_include_output(output_type, "stdout") else None,
+                    stderr_exists=False if should_include_output(output_type, "stderr") else None,
+                    content_limit_bytes=max_bytes,
                     cached=True,
                     stale=True,
                     refresh_queued=False,
@@ -964,15 +1083,26 @@ async def get_job_output_response(
             return build_job_output_response(
                 job_id=job_id,
                 host=host,
-                stdout_path=cached_job.job_info.stdout_file,
-                stderr_path=cached_job.job_info.stderr_file,
-                stdout_content=limit_output_lines(stdout_content, lines),
-                stderr_content=limit_output_lines(stderr_content, lines),
+                output_type=output_type,
+                stdout_path=(
+                    cached_job.job_info.stdout_file
+                    if should_include_output(output_type, "stdout")
+                    else None
+                ),
+                stderr_path=(
+                    cached_job.job_info.stderr_file
+                    if should_include_output(output_type, "stderr")
+                    else None
+                ),
+                stdout_content=stdout_content,
+                stderr_content=stderr_content,
                 metadata_only=metadata_only,
-                stdout_size_bytes=stdout_size,
-                stderr_size_bytes=stderr_size,
-                stdout_exists=stdout_exists,
-                stderr_exists=stderr_exists,
+                stdout_size_bytes=stdout_size if should_include_output(output_type, "stdout") else None,
+                stderr_size_bytes=stderr_size if should_include_output(output_type, "stderr") else None,
+                stdout_exists=stdout_exists if should_include_output(output_type, "stdout") else None,
+                stderr_exists=stderr_exists if should_include_output(output_type, "stderr") else None,
+                content_truncated=stdout_truncated or stderr_truncated,
+                content_limit_bytes=max_bytes,
                 cached=True,
                 stale=True,
                 refresh_queued=refresh_queued,
@@ -1017,40 +1147,62 @@ async def get_job_output_response(
             if stderr_path and not job_info.stderr_file:
                 job_info.stderr_file = stderr_path
 
-        stdout_content, stdout_metadata = await asyncio.to_thread(
-            get_file_metadata_and_content,
-            conn=conn,
-            file_path=job_info.stdout_file,
-            file_type="stdout",
-            job_id=job_id,
-            hostname=target_host.host.hostname,
-            lines=lines,
-            metadata_only=metadata_only,
-        )
-        stderr_content, stderr_metadata = await asyncio.to_thread(
-            get_file_metadata_and_content,
-            conn=conn,
-            file_path=job_info.stderr_file,
-            file_type="stderr",
-            job_id=job_id,
-            hostname=target_host.host.hostname,
-            lines=lines,
-            metadata_only=metadata_only,
-        )
+        stdout_content = None
+        stderr_content = None
+        stdout_metadata = None
+        stderr_metadata = None
+        stdout_truncated = False
+        stderr_truncated = False
+
+        if should_include_output(output_type, "stdout"):
+            stdout_content, stdout_metadata, stdout_truncated = await asyncio.to_thread(
+                get_file_metadata_and_content,
+                conn=conn,
+                file_path=job_info.stdout_file,
+                file_type="stdout",
+                job_id=job_id,
+                hostname=target_host.host.hostname,
+                lines=lines,
+                max_bytes=max_bytes,
+                metadata_only=metadata_only,
+            )
+        if should_include_output(output_type, "stderr"):
+            stderr_content, stderr_metadata, stderr_truncated = await asyncio.to_thread(
+                get_file_metadata_and_content,
+                conn=conn,
+                file_path=job_info.stderr_file,
+                file_type="stderr",
+                job_id=job_id,
+                hostname=target_host.host.hostname,
+                lines=lines,
+                max_bytes=max_bytes,
+                metadata_only=metadata_only,
+            )
 
         response = JobOutputResponse(
             job_id=job_id,
             hostname=target_host.host.hostname,
+            output_type=output_type,
             stdout=stdout_content,
             stderr=stderr_content,
             stdout_metadata=stdout_metadata,
             stderr_metadata=stderr_metadata,
+            content_truncated=stdout_truncated or stderr_truncated,
+            content_limit_bytes=max_bytes,
         )
-        await cache_middleware.cache_job_output(
-            job_id,
-            target_host.host.hostname,
-            response,
+
+        should_cache_full_response = (
+            output_type == "both"
+            and not metadata_only
+            and lines is None
+            and max_bytes is None
         )
+        if should_cache_full_response:
+            await cache_middleware.cache_job_output(
+                job_id,
+                target_host.host.hostname,
+                response,
+            )
         return response
     except HTTPException:
         raise

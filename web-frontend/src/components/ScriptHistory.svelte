@@ -9,6 +9,23 @@
   import { jobUtils } from '../lib/jobUtils';
   import { X, History, FileText, Calendar, Server, Hash, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-svelte';
 
+  const DEBUG_SCRIPT_HISTORY =
+    typeof window !== 'undefined' &&
+    import.meta.env.DEV &&
+    window.location.search.includes('debug');
+
+  function debugLog(...args: any[]) {
+    if (DEBUG_SCRIPT_HISTORY) {
+      console.log(...args);
+    }
+  }
+
+  function debugWarn(...args: any[]) {
+    if (DEBUG_SCRIPT_HISTORY) {
+      console.warn(...args);
+    }
+  }
+
   const dispatch = createEventDispatcher();
 
   interface Props {
@@ -33,6 +50,8 @@
     state: string;
     script_content?: string;
     cached_at?: string;
+    content_truncated?: boolean;
+    original_length?: number;
   }
   
   let loading = $state(true);
@@ -64,13 +83,13 @@
   }
   
   async function loadScriptHistory() {
-    console.log('=== Loading script history ===');
-    console.log('Current host:', currentHost);
-    console.log('isOpen:', isOpen);
+    debugLog('=== Loading script history ===');
+    debugLog('Current host:', currentHost);
+    debugLog('isOpen:', isOpen);
 
     // Debug localStorage
     const localStorageData = localStorage.getItem('scriptHistory');
-    console.log('localStorage scriptHistory raw:', localStorageData);
+    debugLog('localStorage scriptHistory raw:', localStorageData);
 
     loading = true;
     errorMessage = '';
@@ -81,10 +100,10 @@
         hosts = [currentHost];
       } else {
         try {
-          console.log('Fetching available hosts...');
+          debugLog('Fetching available hosts...');
           const hostsResponse = await api.get('/api/hosts');
           hosts = hostsResponse.data.map((host: { hostname: string }) => host.hostname);
-          console.log('Available hosts:', hosts);
+          debugLog('Available hosts:', hosts);
         } catch (e) {
           console.error('Failed to fetch hosts:', e);
           errorMessage = 'Failed to fetch hosts. Please check your connection and try again.';
@@ -93,10 +112,10 @@
         }
       }
 
-      console.log('Will check hosts:', hosts);
+      debugLog('Will check hosts:', hosts);
 
       if (hosts.length === 0) {
-        console.warn('No hosts available to check for script history');
+        debugWarn('No hosts available to check for script history');
         errorMessage = 'No Slurm hosts are configured or available';
         scripts = [];
         return;
@@ -106,7 +125,7 @@
 
       for (const host of hosts) {
         try {
-          console.log(`\nFetching jobs from ${host}...`);
+          debugLog(`\nFetching jobs from ${host}...`);
           const response = await api.get(`/api/status`, {
             params: {
               host: host,
@@ -116,32 +135,32 @@
           
           // The API returns a list of JobStatusResponse objects
           // Each has a hostname and jobs array
-          console.log(`Response type: ${typeof response.data}, isArray: ${Array.isArray(response.data)}`);
-          console.log('Response data:', response.data);
+          debugLog(`Response type: ${typeof response.data}, isArray: ${Array.isArray(response.data)}`);
+          debugLog('Response data:', response.data);
           
           let jobs = [];
           if (Array.isArray(response.data)) {
             // Find the response for this host
             const hostResponse = response.data.find(r => r.hostname === host);
-            console.log(`Host response for ${host}:`, hostResponse);
+            debugLog(`Host response for ${host}:`, hostResponse);
             jobs = hostResponse?.jobs || [];
           } else if (response.data?.jobs) {
             jobs = response.data.jobs;
           }
-          console.log(`Found ${jobs.length} jobs from ${host}`);
+          debugLog(`Found ${jobs.length} jobs from ${host}`);
           
           for (const job of jobs) {
             // Try to fetch script from cache
             try {
-              console.log(`  Fetching script for job ${job.job_id}...`);
+              debugLog(`  Fetching script for job ${job.job_id}...`);
               const scriptResponse = await api.get(`/api/jobs/${job.job_id}/script`, {
                 params: { host: host }
               });
-              console.log(`  Script response:`, scriptResponse.data);
+              debugLog(`  Script response:`, scriptResponse.data);
               
               // The API returns script_content, not script
               if (scriptResponse.data?.script_content) {
-                console.log(`  ✓ Script found for job ${job.job_id} (${scriptResponse.data.script_content.length} chars)`);
+                debugLog(`  ✓ Script found for job ${job.job_id} (${scriptResponse.data.script_content.length} chars)`);
                 allScripts.push({
                   job_id: job.job_id,
                   job_name: job.name || 'Unnamed Job',
@@ -152,11 +171,11 @@
                   cached_at: scriptResponse.data.cached_at
                 });
               } else {
-                console.log(`  ✗ No script_content field in response for job ${job.job_id}`);
+                debugLog(`  ✗ No script_content field in response for job ${job.job_id}`);
               }
             } catch (e) {
               // Script not available, don't add to the list
-              console.log(`  ✗ Error fetching script for job ${job.job_id}:`, e);
+              debugLog(`  ✗ Error fetching script for job ${job.job_id}:`, e);
             }
           }
         } catch (err) {
@@ -164,27 +183,27 @@
         }
       }
       
-      console.log(`\n=== Total scripts loaded from API: ${allScripts.length} ===`);
+      debugLog(`\n=== Total scripts loaded from API: ${allScripts.length} ===`);
 
       // Always also check localStorage (not just when API returns 0)
-      console.log('Checking localStorage for additional scripts...');
+      debugLog('Checking localStorage for additional scripts...');
       try {
         const localHistory = JSON.parse(localStorage.getItem('scriptHistory') || '[]');
-        console.log(`Found ${localHistory.length} scripts in localStorage`);
+        debugLog(`Found ${localHistory.length} scripts in localStorage`);
 
         // Add localStorage scripts that aren't already in allScripts
         const existingIds = new Set(allScripts.map((s) => s.job_id));
         const newScripts = (localHistory as ScriptHistoryItem[]).filter(
           (s) => !existingIds.has(s.job_id),
         );
-        console.log(`Adding ${newScripts.length} unique scripts from localStorage`);
+        debugLog(`Adding ${newScripts.length} unique scripts from localStorage`);
         allScripts.push(...newScripts);
       } catch (e) {
         console.error('Failed to load from localStorage:', e);
       }
 
-      console.log(`Total scripts after localStorage: ${allScripts.length}`);
-      console.log('All scripts:', allScripts);
+      debugLog(`Total scripts after localStorage: ${allScripts.length}`);
+      debugLog('All scripts:', allScripts);
 
       // Sort by submit time (newest first)
       scripts = allScripts.sort((a, b) => {
@@ -195,12 +214,12 @@
 
       // Extract unique hosts from scripts for the filter dropdown
       availableHosts = Array.from(new Set(scripts.map(s => s.hostname))).sort();
-      console.log('Available hosts for filter:', availableHosts);
+      debugLog('Available hosts for filter:', availableHosts);
 
-      console.log('After sorting, scripts array:', scripts);
+      debugLog('After sorting, scripts array:', scripts);
       filterScripts();
-      console.log('After filtering, filteredScripts:', filteredScripts);
-      console.log('Displayed scripts:', displayedScripts);
+      debugLog('After filtering, filteredScripts:', filteredScripts);
+      debugLog('Displayed scripts:', displayedScripts);
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error('Unknown error');
       console.error('Failed to load script history:', error);
@@ -212,7 +231,7 @@
   }
   
   function filterScripts() {
-    console.log('Filtering scripts with:', { searchTerm, filterHost, filterState });
+    debugLog('Filtering scripts with:', { searchTerm, filterHost, filterState });
     
     filteredScripts = scripts.filter(script => {
       // Search filter
@@ -241,13 +260,15 @@
       return true;
     });
     
-    console.log(`Filtered to ${filteredScripts.length} scripts from ${scripts.length} total`);
+    debugLog(`Filtered to ${filteredScripts.length} scripts from ${scripts.length} total`);
   }
   
   function selectScript(script: ScriptHistoryItem) {
     selectedScript = script;
     if (script.script_content) {
-      previewContent = script.script_content;
+      previewContent = script.content_truncated
+        ? `${script.script_content}\n\n# Local history stores a preview only for large drafts.`
+        : script.script_content;
       showPreview = true;
     }
   }
@@ -302,7 +323,7 @@
   // Watch for changes to isOpen and load history when opened
   run(() => {
     if (isOpen) {
-      console.log('ScriptHistory isOpen changed, loading scripts...');
+      debugLog('ScriptHistory isOpen changed, loading scripts...');
       loadScriptHistory();
     }
   });
@@ -473,8 +494,10 @@
                     </span>
                   </div>
                 </div>
-                {#if script.script_content}
+                {#if script.script_content && !script.content_truncated}
                   <div class="script-badge">Script Available</div>
+                {:else if script.script_content}
+                  <div class="script-badge preview-only">Preview Only</div>
                 {:else}
                   <div class="script-badge unavailable">No Script</div>
                 {/if}
@@ -522,10 +545,10 @@
       <button class="cancel-btn" onclick={close}>Cancel</button>
       <button
         class="use-btn"
-        disabled={!selectedScript?.script_content}
+        disabled={!selectedScript?.script_content || Boolean(selectedScript?.content_truncated)}
         onclick={useScript}
       >
-        Use This Script
+        {selectedScript?.content_truncated ? 'Preview Only' : 'Use This Script'}
       </button>
     </div>
   </div>
@@ -785,6 +808,11 @@
   .script-badge.unavailable {
     background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
     color: var(--muted-foreground);
+  }
+
+  .script-badge.preview-only {
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+    color: var(--warning);
   }
 
   .script-footer {

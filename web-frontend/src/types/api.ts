@@ -156,10 +156,13 @@ export interface FileMetadata {
 export interface JobOutputResponse {
   job_id: string;
   hostname: string;
+  output_type: 'stdout' | 'stderr' | 'both';
   stdout: string | null;
   stderr: string | null;
   stdout_metadata: FileMetadata | null;
   stderr_metadata: FileMetadata | null;
+  content_truncated?: boolean;
+  content_limit_bytes?: number | null;
   cached?: boolean;
   stale?: boolean;
   refresh_queued?: boolean;
