@@ -175,18 +175,6 @@ class SlurmParser:
             except (ValueError, IndexError):
                 return None
 
-        var_dict = cls.create_var_dict(fields)
-        stdout_file = (
-            cls.expand_slurm_path_vars(get_field("%o") or "", var_dict)
-            if get_field("%o")
-            else None
-        )
-        stderr_file = (
-            cls.expand_slurm_path_vars(get_field("%e") or "", var_dict)
-            if get_field("%e")
-            else None
-        )
-
         job_id_str = get_field("%i") or ""
         array_job_id = None
         array_task_id = None
@@ -210,8 +198,10 @@ class SlurmParser:
             runtime=get_field("%M"),
             reason=get_field("%r"),
             work_dir=get_field("%Z"),
-            stdout_file=stdout_file,
-            stderr_file=stderr_file,
+            # squeue's %o/%e fields are command/expected-end-time, not stdout/stderr.
+            # Real output paths are resolved later via sacct/scontrol.
+            stdout_file=None,
+            stderr_file=None,
             submit_time=get_field("%V"),
             start_time=get_field("%S"),
             account=get_field("%a"),

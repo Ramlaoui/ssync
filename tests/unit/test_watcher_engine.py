@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from ssync.models.job import JobState
@@ -8,8 +10,9 @@ from ssync.models.watcher import (
     WatcherInstance,
     WatcherState,
 )
+from ssync.web import app as app_module
 from ssync.watchers import engine as engine_module
-from ssync.watchers.engine import JobEndHandlingResult
+from ssync.watchers.engine import JobEndHandlingResult, OutputReadResult
 
 
 @pytest.mark.unit
@@ -196,8 +199,9 @@ def test_placeholder_capture_does_not_overwrite_valid_value(monkeypatch, test_ca
         lambda watcher_id, variables: persisted_variables.update(variables),
     )
 
-    engine._check_patterns(watcher, 'HYDRA_OUTPUT_DIR=(.+)"\n')
+    matches_found = engine._check_patterns(watcher, 'HYDRA_OUTPUT_DIR=(.+)"\n')
 
+    assert matches_found is False
     assert watcher.variables["resume_run_dir"] == "/scratch/run-123"
     assert persisted_variables == {}
 
@@ -336,3 +340,160 @@ async def test_monitor_watcher_retries_terminal_resubmit_until_success(
 
     assert sleeps == [5, 7]
     assert completed_states == [WatcherState.COMPLETED]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_new_output_refreshes_suspicious_script_path(monkeypatch, test_cache):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    persisted_paths = []
+    watcher_variables = {}
+    monkeypatch.setattr(
+        engine.cache,
+        "cache_job",
+        lambda job_info, script_content=None: persisted_paths.append(
+            (job_info.stdout_file, job_info.stderr_file, script_content)
+        ),
+    )
+    monkeypatch.setattr(
+        engine, "_get_watcher_variables", lambda watcher_id: dict(watcher_variables)
+    )
+    monkeypatch.setattr(
+        engine,
+        "_update_watcher_variables",
+        lambda watcher_id, variables: watcher_variables.update(variables),
+    )
+
+    class FakeResult:
+        def __init__(self, stdout="", ok=True):
+            self.stdout = stdout
+            self.ok = ok
+
+    class FakeConn:
+        def run(self, command, **kwargs):
+            if "stat -c %s '/workdir/logs/train-12345.out'" in command:
+                return FakeResult(stdout="34")
+            if "tail -c +1 '/workdir/logs/train-12345.out'" in command:
+                return FakeResult(stdout="HYDRA_OUTPUT_DIR=/scratch/run-123\n")
+            if "tail -c +21 '/workdir/logs/train-12345.out'" in command:
+                return FakeResult(stdout="T_DIR=/scratch/run-123\n")
+            return FakeResult(stdout="", ok=False)
+
+    fake_manager = SimpleNamespace(
+        get_host_by_name=lambda hostname: SimpleNamespace(host="cluster-host"),
+        _get_connection=lambda host: FakeConn(),
+        slurm_client=SimpleNamespace(
+            get_job_output_files=lambda conn, job_id, hostname: (
+                "/workdir/logs/%x-%j.out",
+                "/workdir/logs/%x-%j.err",
+            )
+        ),
+    )
+    monkeypatch.setattr(app_module, "get_slurm_manager", lambda: fake_manager)
+
+    job_info = engine_module.JobInfo(
+        job_id="12345",
+        name="train",
+        state=JobState.RUNNING,
+        hostname="cluster",
+        stdout_file="/workdir/scripts/clean_inline_script.slurm",
+    )
+
+    read_result = await engine._get_new_output(job_info, "stdout", 20, watcher_id=6)
+
+    assert read_result == OutputReadResult(
+        content="HYDRA_OUTPUT_DIR=/scratch/run-123\n",
+        next_position=len("HYDRA_OUTPUT_DIR=/scratch/run-123\n".encode("utf-8")),
+        file_path="/workdir/logs/train-12345.out",
+    )
+    assert job_info.stdout_file == "/workdir/logs/train-12345.out"
+    assert job_info.stderr_file == "/workdir/logs/train-12345.err"
+    assert watcher_variables["__ssync_last_stdout_path"] == "/workdir/logs/train-12345.out"
+    assert persisted_paths == [
+        ("/workdir/logs/train-12345.out", "/workdir/logs/train-12345.err", None)
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_monitor_watcher_persists_reset_position_without_new_content(
+    monkeypatch, test_cache
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_state = {"value": WatcherState.ACTIVE}
+    watcher = WatcherInstance(
+        id=7,
+        job_id="10003",
+        hostname="cluster",
+        definition=WatcherDefinition(
+            name="resume",
+            interval_seconds=7,
+            actions=[WatcherAction(type=ActionType.RESUBMIT, params={})],
+            trigger_on_job_end=True,
+        ),
+        state=WatcherState.ACTIVE,
+        last_position=2627,
+    )
+    job_info = engine_module.JobInfo(
+        job_id="10003",
+        name="train",
+        state=JobState.TIMEOUT,
+        hostname="cluster",
+    )
+
+    updated_positions = []
+    completed_states = []
+
+    def fake_get_watcher(_watcher_id):
+        watcher.state = watcher_state["value"]
+        return watcher
+
+    async def fake_get_job_info(_job_id, _hostname):
+        return job_info
+
+    async def fake_get_new_output(*_args, **_kwargs):
+        return OutputReadResult(content=None, next_position=0)
+
+    async def fake_handle_job_end(_watcher, _state):
+        return JobEndHandlingResult.COMPLETE
+
+    def fake_update_position(_watcher_id, position):
+        updated_positions.append(position)
+        watcher.last_position = position
+
+    def fake_update_state(_watcher_id, state):
+        completed_states.append(state)
+        watcher_state["value"] = state
+
+    monkeypatch.setattr(engine, "_get_watcher", fake_get_watcher)
+    monkeypatch.setattr(engine, "_get_job_info", fake_get_job_info)
+    monkeypatch.setattr(engine, "_get_new_output", fake_get_new_output)
+    monkeypatch.setattr(engine, "_handle_job_end_trigger", fake_handle_job_end)
+    monkeypatch.setattr(engine, "_update_watcher_position", fake_update_position)
+    monkeypatch.setattr(engine, "_update_watcher_last_check", lambda watcher_id: None)
+    monkeypatch.setattr(engine, "_update_watcher_state", fake_update_state)
+
+    await engine._monitor_watcher(watcher.id, watcher.job_id, watcher.hostname)
+
+    assert updated_positions == [0]
+    assert completed_states == [WatcherState.COMPLETED]
+
+
+@pytest.mark.unit
+def test_missing_required_capture_is_not_retried(monkeypatch, test_cache):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    action = WatcherAction(type=ActionType.RESUBMIT, params={})
+
+    assert (
+        engine._should_retry_failed_job_end_action(
+            action,
+            "Missing required watcher capture(s) for resubmit: resume_run_dir",
+        )
+        is False
+    )

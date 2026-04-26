@@ -290,7 +290,7 @@ class TestFromSqueuFields:
         assert job_info.array_task_id == "0-9"
 
     @pytest.mark.unit
-    def test_parse_squeue_expands_path_variables(self):
+    def test_parse_squeue_does_not_treat_command_and_end_time_as_output_paths(self):
 
         fields = [
             "12345",
@@ -305,14 +305,14 @@ class TestFromSqueuFields:
             "00:15:30",
             "",
             "/home/testuser/work",
-            "output-%j.log",
-            "error-%j.log",
+            "/workdir/scripts/clean_inline_script.slurm",
+            "2099-01-01T00:00:00",
         ]
 
         job_info = SlurmParser.from_squeue_fields(fields, "cluster.example.com")
 
-        assert job_info.stdout_file == "output-12345.log"
-        assert job_info.stderr_file == "error-12345.log"
+        assert job_info.stdout_file is None
+        assert job_info.stderr_file is None
 
 
 class TestFromSacctFields:

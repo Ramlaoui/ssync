@@ -24,6 +24,8 @@ class JobScontrolDetails:
     stdout_path: Optional[str] = None
     stderr_path: Optional[str] = None
     submit_line: Optional[str] = None
+    job_name: Optional[str] = None
+    user_name: Optional[str] = None
     batch_host: Optional[str] = None
     node_list: Optional[str] = None
     num_nodes: Optional[str] = None
@@ -41,6 +43,8 @@ class SlurmOutput:
         job_id: str,
         stdout_path: Optional[str],
         stderr_path: Optional[str],
+        job_name: Optional[str] = None,
+        user_name: Optional[str] = None,
     ) -> tuple[Optional[str], Optional[str]]:
         """Expand Slurm path vars like %A/%a using the job_id."""
         if not stdout_path and not stderr_path:
@@ -60,6 +64,10 @@ class SlurmOutput:
             "A": array_job_id or job_id,
             "a": array_task_id,
         }
+        if user_name:
+            var_dict["u"] = user_name
+        if job_name:
+            var_dict["x"] = job_name
 
         if stdout_path and "%" in stdout_path:
             stdout_path = SlurmParser.expand_slurm_path_vars(stdout_path, var_dict)
@@ -96,11 +104,15 @@ class SlurmOutput:
                         parsed_job_id,
                         parsed_details.stdout_path,
                         parsed_details.stderr_path,
+                        job_name=parsed_details.job_name,
+                        user_name=parsed_details.user_name,
                     )
                     details[parsed_job_id] = JobScontrolDetails(
                         stdout_path=expanded_stdout,
                         stderr_path=expanded_stderr,
                         submit_line=parsed_details.submit_line,
+                        job_name=parsed_details.job_name,
+                        user_name=parsed_details.user_name,
                         batch_host=parsed_details.batch_host,
                         node_list=parsed_details.node_list,
                         num_nodes=parsed_details.num_nodes,
@@ -209,12 +221,18 @@ class SlurmOutput:
                     details = next(iter(parsed.values()))
 
             stdout_path, stderr_path = self._expand_paths(
-                job_id, details.stdout_path, details.stderr_path
+                job_id,
+                details.stdout_path,
+                details.stderr_path,
+                job_name=details.job_name,
+                user_name=details.user_name,
             )
             enriched_details = JobScontrolDetails(
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
                 submit_line=details.submit_line,
+                job_name=details.job_name,
+                user_name=details.user_name,
                 batch_host=details.batch_host,
                 node_list=details.node_list,
                 num_nodes=details.num_nodes,
@@ -271,6 +289,11 @@ class SlurmOutput:
                 current_details.stderr_path = token.split("=", 1)[1]
             elif token.startswith("Command="):
                 current_details.submit_line = token.split("=", 1)[1]
+            elif token.startswith("JobName="):
+                current_details.job_name = token.split("=", 1)[1]
+            elif token.startswith("UserId="):
+                user_name = token.split("=", 1)[1]
+                current_details.user_name = user_name.split("(", 1)[0]
             elif token.startswith("BatchHost="):
                 current_details.batch_host = token.split("=", 1)[1]
             elif token.startswith("NodeList="):

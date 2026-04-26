@@ -37,6 +37,34 @@ class SlurmQuery:
             os.getenv("SSYNC_SCONTROL_FALLBACK_MAX_JOBS", "5")
         )
 
+    @staticmethod
+    def _expand_job_output_placeholders(job_info: JobInfo) -> None:
+        """Expand any remaining Slurm path placeholders using known job metadata."""
+        var_dict = {
+            "j": job_info.job_id,
+            "i": job_info.job_id,
+        }
+        if job_info.user:
+            var_dict["u"] = job_info.user
+        if job_info.name:
+            var_dict["x"] = job_info.name
+
+        if job_info.stdout_file and "%" in job_info.stdout_file:
+            expanded_stdout = SlurmParser.expand_slurm_path_vars(
+                job_info.stdout_file, var_dict
+            )
+            if expanded_stdout != job_info.stdout_file:
+                job_info.stdout_file = expanded_stdout
+                logger.debug(f"Expanded stdout path for job {job_info.job_id}")
+
+        if job_info.stderr_file and "%" in job_info.stderr_file:
+            expanded_stderr = SlurmParser.expand_slurm_path_vars(
+                job_info.stderr_file, var_dict
+            )
+            if expanded_stderr != job_info.stderr_file:
+                job_info.stderr_file = expanded_stderr
+                logger.debug(f"Expanded stderr path for job {job_info.job_id}")
+
     def get_available_sacct_fields(
         self, conn: SSHConnection, hostname: str
     ) -> List[str]:
@@ -353,6 +381,7 @@ class SlurmQuery:
                                 job.stderr_file = stderr_path
                             if submit_line and not job.submit_line:
                                 job.submit_line = submit_line
+                            self._expand_job_output_placeholders(job)
             except Exception as e:
                 logger.debug(f"Batch scontrol failed for active jobs: {e}")
 
@@ -1140,30 +1169,9 @@ class SlurmQuery:
                             conn, resolved_node_list
                         )
                 except Exception:
-                    if job_info.stdout_file and "%" in job_info.stdout_file:
-                        var_dict = {
-                            "j": job_info.job_id,
-                            "i": job_info.job_id,
-                            "u": job_info.user or "",
-                            "x": job_info.name or "",
-                        }
-                        expanded_stdout = SlurmParser.expand_slurm_path_vars(
-                            job_info.stdout_file, var_dict
-                        )
-                        if expanded_stdout != job_info.stdout_file:
-                            job_info.stdout_file = expanded_stdout
-                            logger.debug(
-                                f"Expanded stdout path for job {job_info.job_id}"
-                            )
-                        if job_info.stderr_file and "%" in job_info.stderr_file:
-                            expanded_stderr = SlurmParser.expand_slurm_path_vars(
-                                job_info.stderr_file, var_dict
-                            )
-                            if expanded_stderr != job_info.stderr_file:
-                                job_info.stderr_file = expanded_stderr
-                                logger.debug(
-                                    f"Expanded stderr path for job {job_info.job_id}"
-                                )
+                    pass
+
+                self._expand_job_output_placeholders(job_info)
 
                 if not job_info.submit_line:
                     try:
