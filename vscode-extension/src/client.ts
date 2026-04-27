@@ -88,6 +88,7 @@ export interface WebSocketHandlers {
   onInitial: (data: { jobs: Record<string, JobInfo[]>; total: number }) => void;
   onUpdate: (updates: Array<{ type: string; job_id: string; hostname: string; job: JobInfo }>) => void;
   onConnect: () => void;
+  onPong?: () => void;
   onClose: () => void;
   onError: (err: Error) => void;
 }
@@ -204,7 +205,10 @@ export class SsyncClient {
     ws.on('message', (raw) => {
       try {
         const data = JSON.parse(raw.toString());
-        if (data.type === 'pong') return;
+        if (data.type === 'pong') {
+          handlers.onPong?.();
+          return;
+        }
         if (data.type === 'initial') {
           handlers.onInitial(data);
         } else if (data.type === 'batch_update' && Array.isArray(data.updates)) {

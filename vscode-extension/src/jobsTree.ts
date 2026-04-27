@@ -105,6 +105,7 @@ export class JobsTreeProvider implements vscode.TreeDataProvider<AnyItem> {
   /** hostname → (job_id → JobInfo) */
   private jobsByHost = new Map<string, Map<string, JobInfo>>();
   private status: 'unknown' | 'online' | 'offline' = 'unknown';
+  private started = false;
 
   // WebSocket state
   private wsConn: WebSocketConnection | null = null;
@@ -112,9 +113,13 @@ export class JobsTreeProvider implements vscode.TreeDataProvider<AnyItem> {
   private pingTimer?: ReturnType<typeof setInterval>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectAttempts = 0;
+  private lastPongAt = 0;
+  private readonly heartbeatIntervalMs = 30_000;
+  private readonly heartbeatTimeoutMs = 75_000;
 
-  // HTTP fallback polling
-  private pollTimer?: ReturnType<typeof setInterval>;
+  // HTTP fallback polling, enabled only while WebSocket is unhealthy.
+  private fallbackTimer?: ReturnType<typeof setTimeout>;
+  private fallbackPollInFlight = false;
   private fallbackIntervalMs = 120_000;
 
   constructor(private client: SsyncClient) {}
@@ -122,39 +127,59 @@ export class JobsTreeProvider implements vscode.TreeDataProvider<AnyItem> {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   start(fallbackIntervalSecs: number) {
-    this.fallbackIntervalMs = fallbackIntervalSecs * 1000;
+    this.fallbackIntervalMs = Math.max(30, fallbackIntervalSecs) * 1000;
+    if (this.started) return;
 
-    // Initial HTTP fetch for full history (since=3d), then connect WebSocket
-    this.httpPoll().then(() => this.connectWebSocket());
+    this.started = true;
+    this.status = 'unknown';
+    this.fireChange();
 
-    // Slow HTTP fallback — ensures completeness even if WS misses something
-    this.pollTimer = setInterval(() => this.httpPoll(), this.fallbackIntervalMs);
+    // Initial HTTP fetch for full history (since=3d), then use WebSocket for live updates.
+    void this.httpPoll().finally(() => {
+      if (this.started) this.connectWebSocket();
+    });
   }
 
   stop() {
+    if (!this.started) return;
+    this.started = false;
+    this.stopFallbackPolling();
     this.disconnectWebSocket();
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.clearReconnectTimer();
   }
 
   /** Manual refresh — always does a full HTTP fetch. */
   async refresh() {
     await this.httpPoll();
+    if (this.started && !this.wsConn) this.connectWebSocket();
   }
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
 
   private connectWebSocket() {
+    if (!this.started) return;
+
+    this.clearReconnectTimer();
     this.disconnectWebSocket();
 
-    this.wsConn = this.client.connectWebSocket({
+    let connection: WebSocketConnection | null = null;
+    connection = this.client.connectWebSocket({
       onConnect: () => {
+        if (!this.started || this.wsConn !== connection) return;
         this.wsConnected = true;
         this.reconnectAttempts = 0;
+        this.lastPongAt = Date.now();
+        this.stopFallbackPolling();
         this.startPing();
       },
 
+      onPong: () => {
+        if (this.wsConn !== connection) return;
+        this.lastPongAt = Date.now();
+      },
+
       onInitial: (data) => {
+        if (this.wsConn !== connection) return;
         // Merge WS initial data into existing store (don't replace — HTTP has fuller history)
         for (const [hostname, jobs] of Object.entries(data.jobs)) {
           if (!Array.isArray(jobs)) continue;
@@ -171,6 +196,7 @@ export class JobsTreeProvider implements vscode.TreeDataProvider<AnyItem> {
       },
 
       onUpdate: (updates) => {
+        if (this.wsConn !== connection) return;
         for (const update of updates) {
           if (!update.hostname || !update.job_id || !update.job) continue;
           if (!this.jobsByHost.has(update.hostname)) {
@@ -182,40 +208,105 @@ export class JobsTreeProvider implements vscode.TreeDataProvider<AnyItem> {
       },
 
       onClose: () => {
-        this.wsConnected = false;
-        this.stopPing();
-        this.scheduleReconnect();
+        if (this.wsConn !== connection) return;
+        this.handleWebSocketClose();
       },
 
       onError: () => {
-        // onClose will fire after this — reconnect handled there
+        if (this.wsConn !== connection) return;
+        if (!this.wsConnected) this.startFallbackPolling();
       },
     });
+    this.wsConn = connection;
   }
 
   private disconnectWebSocket() {
     this.stopPing();
-    if (this.wsConn) {
-      this.wsConn.close();
-      this.wsConn = null;
-    }
+    const connection = this.wsConn;
+    this.wsConn = null;
     this.wsConnected = false;
+    if (connection) connection.close();
+  }
+
+  private handleWebSocketClose() {
+    this.wsConnected = false;
+    this.stopPing();
+
+    if (!this.started) return;
+    this.startFallbackPolling();
+    this.scheduleReconnect();
   }
 
   private startPing() {
     this.stopPing();
-    this.pingTimer = setInterval(() => this.wsConn?.ping(), 30_000);
+    this.pingTimer = setInterval(() => {
+      if (!this.wsConn) return;
+      if (Date.now() - this.lastPongAt > this.heartbeatTimeoutMs) {
+        this.disconnectWebSocket();
+        this.startFallbackPolling();
+        this.scheduleReconnect();
+        return;
+      }
+      this.wsConn.ping();
+    }, this.heartbeatIntervalMs);
+    this.wsConn?.ping();
   }
 
   private stopPing() {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = undefined; }
   }
 
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+  }
+
   private scheduleReconnect() {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (!this.started) return;
+    this.clearReconnectTimer();
     const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 60_000);
     this.reconnectAttempts++;
     this.reconnectTimer = setTimeout(() => this.connectWebSocket(), delay);
+  }
+
+  private startFallbackPolling() {
+    if (!this.started || this.wsConnected || this.fallbackTimer) return;
+    this.scheduleFallbackPoll(true);
+  }
+
+  private stopFallbackPolling() {
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = undefined;
+    }
+    this.fallbackPollInFlight = false;
+  }
+
+  private scheduleFallbackPoll(immediate: boolean) {
+    if (!this.started || this.wsConnected || this.fallbackTimer) return;
+
+    const jitterMs = Math.min(15_000, this.fallbackIntervalMs * 0.25);
+    const delay = immediate
+      ? 500 + Math.floor(Math.random() * 2_000)
+      : this.fallbackIntervalMs + Math.floor(Math.random() * jitterMs);
+
+    this.fallbackTimer = setTimeout(async () => {
+      this.fallbackTimer = undefined;
+      if (!this.started || this.wsConnected) return;
+
+      if (!this.fallbackPollInFlight) {
+        this.fallbackPollInFlight = true;
+        try {
+          await this.httpPoll();
+        } finally {
+          this.fallbackPollInFlight = false;
+        }
+      }
+
+      this.scheduleFallbackPoll(false);
+    }, delay);
   }
 
   // ── HTTP polling ───────────────────────────────────────────────────────────
@@ -298,8 +389,11 @@ export class JobsTreeProvider implements vscode.TreeDataProvider<AnyItem> {
 
   updateClient(client: SsyncClient) {
     this.client = client;
-    // Reconnect WebSocket with new client
+    if (!this.started) return;
+
+    this.stopFallbackPolling();
     this.connectWebSocket();
+    void this.httpPoll();
   }
 
   // ── Helpers for status bar ─────────────────────────────────────────────────

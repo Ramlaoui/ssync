@@ -13,6 +13,10 @@ function buildClient(): SsyncClient {
   return new SsyncClient(apiUrl, apiKey);
 }
 
+function getPollInterval(): number {
+  return vscode.workspace.getConfiguration('ssync').get<number>('pollInterval', 120);
+}
+
 // ─── Activation ───────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext) {
@@ -34,8 +38,19 @@ export function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(treeView);
 
-  const pollInterval = vscode.workspace.getConfiguration('ssync').get<number>('pollInterval', 120);
-  tree.start(pollInterval);
+  const syncTreeMonitoring = () => {
+    if (treeView.visible) {
+      tree.start(getPollInterval());
+    } else {
+      tree.stop();
+    }
+  };
+
+  context.subscriptions.push(
+    treeView.onDidChangeVisibility(syncTreeMonitoring),
+    { dispose: () => tree.stop() },
+  );
+  syncTreeMonitoring();
 
   // ── Update status bar on tree refresh ─────────────────────────────────────
   tree.onDidChangeTreeData(() => {
@@ -60,7 +75,8 @@ export function activate(context: vscode.ExtensionContext) {
     if (e.affectsConfiguration('ssync')) {
       client = buildClient();
       tree.updateClient(client);
-      tree.refresh();
+      syncTreeMonitoring();
+      if (treeView.visible) void tree.refresh();
     }
   }, null, context.subscriptions);
 
@@ -70,7 +86,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Refresh tree
     vscode.commands.registerCommand('ssync.refreshJobs', () => {
-      tree.refresh();
+      if (treeView.visible) tree.start(getPollInterval());
+      void tree.refresh();
     }),
 
     // View logs for a job (called from tree item click or context menu)
@@ -179,14 +196,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Start ssync api server in a terminal
     vscode.commands.registerCommand('ssync.startServer', () => {
-      const existing = vscode.window.terminals.find(t => t.name === 'ssync api');
+      const existing = vscode.window.terminals.find(t => t.name === 'ssync web' || t.name === 'ssync api');
       if (existing) {
         existing.show();
         return;
       }
-      const term = vscode.window.createTerminal({ name: 'ssync api' });
+      const term = vscode.window.createTerminal({ name: 'ssync web' });
       term.show();
-      term.sendText('ssync api --foreground');
+      term.sendText('ssync web --foreground --no-browser');
     }),
   );
 }
@@ -215,4 +232,3 @@ async function pickHost(client: SsyncClient): Promise<string | undefined> {
     { placeHolder: 'Select target host' },
   );
 }
-

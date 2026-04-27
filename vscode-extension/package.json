@@ -10,7 +10,13 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:ssync.jobsView",
+    "onCommand:ssync.syncWorkspace",
+    "onCommand:ssync.submitScript",
+    "onCommand:ssync.refreshJobs",
+    "onCommand:ssync.viewLogs",
+    "onCommand:ssync.cancelJob",
+    "onCommand:ssync.startServer"
   ],
   "main": "./out/extension.js",
   "contributes": {
