@@ -1,7 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { api } from "../services/api";
-  import type { Watcher, WatchersResponse } from "../types/watchers";
+  import {
+    fetchJobWatchers,
+    getWatcherJobKey,
+    jobWatchersErrors,
+    jobWatchersLoading,
+    watcherEvents,
+    watchers as watcherStore,
+  } from "../stores/watchers";
+  import type { Watcher, WatcherEvent } from "../types/watchers";
   import type { JobInfo } from "../types/api";
   import {
     Eye,
@@ -14,7 +20,10 @@
     AlertCircle,
     Play,
     Variable,
-    Hash
+    Hash,
+    Radio,
+    RefreshCw,
+    Zap
   } from "lucide-svelte";
   import LoadingSpinner from "./LoadingSpinner.svelte";
 
@@ -24,27 +33,36 @@
 
   let { job }: Props = $props();
 
-  let watchers: Watcher[] = $state([]);
-  let loading = $state(true);
-  let error: string | null = $state(null);
   let expandedWatchers = $state(new Set<number>());
+  let jobKey = $derived(getWatcherJobKey(job.job_id, job.hostname));
+  let jobWatchers = $derived(
+    $watcherStore.filter(
+      (watcher) =>
+        watcher.job_id === job.job_id && watcher.hostname === job.hostname
+    )
+  );
+  let relatedEvents = $derived(
+    $watcherEvents
+      .filter((event) => event.job_id === job.job_id && event.hostname === job.hostname)
+      .slice(0, 6)
+  );
+  let loading = $derived(Boolean($jobWatchersLoading[jobKey]) && jobWatchers.length === 0);
+  let refreshing = $derived(Boolean($jobWatchersLoading[jobKey]) && jobWatchers.length > 0);
+  let error = $derived($jobWatchersErrors[jobKey] || null);
+  let activeCount = $derived(jobWatchers.filter((watcher) => watcher.state === 'active').length);
+  let pausedCount = $derived(jobWatchers.filter((watcher) => watcher.state === 'paused').length);
+  let totalTriggers = $derived(
+    jobWatchers.reduce((count, watcher) => count + (watcher.trigger_count || 0), 0)
+  );
+  let nextCheck = $derived(
+    jobWatchers
+      .filter((watcher) => watcher.state === 'active')
+      .map((watcher) => watcher.interval_seconds)
+      .sort((left, right) => left - right)[0]
+  );
 
   async function loadWatchers() {
-    try {
-      loading = true;
-      error = null;
-
-      const response = await api.get<WatchersResponse>(
-        `/api/jobs/${job.job_id}/watchers?host=${job.hostname}`
-      );
-
-      // Filter out any null/undefined watchers and ensure required properties exist
-      watchers = (response.data.watchers || []).filter(w => w != null && w.state != null && w.id != null);
-    } catch (err: any) {
-      error = err.response?.data?.detail || err.message || "Failed to load watchers";
-    } finally {
-      loading = false;
-    }
+    await fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 0 });
   }
 
   function toggleWatcher(watcherId: number) {
@@ -74,19 +92,19 @@
   }
 
   function getStateColor(state: string | undefined) {
-    if (!state) return 'text-gray-600';
+    if (!state) return 'state-unknown';
 
     switch (state) {
       case 'active':
-        return 'text-green-600';
+        return 'state-active';
       case 'paused':
-        return 'text-yellow-600';
+        return 'state-paused';
       case 'completed':
-        return 'text-blue-600';
+        return 'state-completed';
       case 'triggered':
-        return 'text-purple-600';
+        return 'state-triggered';
       default:
-        return 'text-gray-600';
+        return 'state-unknown';
     }
   }
 
@@ -98,6 +116,29 @@
     } catch {
       return 'Invalid date';
     }
+  }
+
+  function formatRelativeTime(timestamp?: string | null): string {
+    if (!timestamp) return 'No activity yet';
+    const date = new Date(timestamp);
+    const diffMinutes = Math.floor((Date.now() - date.getTime()) / 60000);
+
+    if (diffMinutes < 1) return 'just now';
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}d ago`;
+
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function eventSummary(event: WatcherEvent): string {
+    if (event.matched_text) return event.matched_text;
+    if (event.action_result) return event.action_result;
+    return event.action_type.replace(/_/g, ' ');
   }
 
   function getActionDescription(action: any): string {
@@ -122,21 +163,21 @@
     }
   }
 
-  onMount(() => {
-    loadWatchers();
+  $effect(() => {
+    void fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 15_000 }).catch(() => {});
   });
 </script>
 
 <div class="watchers-tab">
   {#if loading}
-    <LoadingSpinner message="Loading watchers..." />
+    <LoadingSpinner message="Preparing watchers..." />
   {:else if error}
     <div class="error-container">
       <AlertCircle class="w-5 h-5 text-red-500" />
       <span class="text-red-700">{error}</span>
       <button class="btn btn-sm" onclick={loadWatchers}>Retry</button>
     </div>
-  {:else if watchers.length === 0}
+  {:else if jobWatchers.length === 0}
     <div class="empty-state">
       <Eye class="w-12 h-12 text-gray-400 mx-auto" />
       <h3 class="text-lg font-medium text-gray-900 mt-2">No watchers configured</h3>
@@ -145,12 +186,60 @@
       </p>
     </div>
   {:else}
-    <div class="watchers-list">
-      <div class="header">
-        <h3 class="text-lg font-semibold">Job Watchers ({watchers.length})</h3>
+    <div class="job-watchers-overview">
+      <div class="overview-title">
+        <div>
+          <h3>Job Watchers</h3>
+          <p>{job.hostname} · job #{job.job_id}</p>
+        </div>
+        <button class="refresh-button" onclick={loadWatchers} disabled={refreshing}>
+          <RefreshCw class={`w-4 h-4${refreshing ? ' spin' : ''}`} />
+          <span>{refreshing ? 'Refreshing' : 'Refresh'}</span>
+        </button>
       </div>
 
-      {#each watchers as watcher}
+      <div class="metric-strip">
+        <div class="metric-tile active">
+          <Activity class="w-4 h-4" />
+          <span>Active</span>
+          <strong>{activeCount}</strong>
+        </div>
+        <div class="metric-tile paused">
+          <PauseCircle class="w-4 h-4" />
+          <span>Paused</span>
+          <strong>{pausedCount}</strong>
+        </div>
+        <div class="metric-tile">
+          <Zap class="w-4 h-4" />
+          <span>Triggers</span>
+          <strong>{totalTriggers}</strong>
+        </div>
+        <div class="metric-tile">
+          <Radio class="w-4 h-4" />
+          <span>Fastest check</span>
+          <strong>{nextCheck ? `${nextCheck}s` : 'manual'}</strong>
+        </div>
+      </div>
+
+      {#if relatedEvents.length > 0}
+        <div class="event-ribbon">
+          {#each relatedEvents as event (event.id)}
+            <div class="event-chip" class:failed={!event.success}>
+              <span>{formatRelativeTime(event.timestamp)}</span>
+              <strong>{event.action_type.replace(/_/g, ' ')}</strong>
+              <em>{eventSummary(event)}</em>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <div class="watchers-list">
+      <div class="header">
+        <h3 class="text-lg font-semibold">Configured watchers ({jobWatchers.length})</h3>
+      </div>
+
+      {#each jobWatchers as watcher}
         {#if watcher}
         {@const SvelteComponent = getStateIcon(watcher.state)}
         <div class="watcher-card" class:expanded={expandedWatchers.has(watcher.id)}>
@@ -299,6 +388,153 @@
     overflow-y: auto;
     padding: 1rem;
     background: var(--secondary);
+    color: var(--foreground);
+  }
+
+  .job-watchers-overview {
+    max-width: 1200px;
+    margin: 0 auto 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .overview-title {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background: var(--card);
+  }
+
+  .overview-title h3 {
+    margin: 0;
+    color: var(--foreground);
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  .overview-title p {
+    margin: 0.25rem 0 0;
+    color: var(--muted-foreground);
+    font-size: 0.8rem;
+  }
+
+  .refresh-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 0.45rem 0.65rem;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .refresh-button:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .spin {
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .metric-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.7rem;
+  }
+
+  .metric-tile {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 0.25rem 0.5rem;
+    min-width: 0;
+    padding: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background: var(--card);
+    color: var(--muted-foreground);
+  }
+
+  .metric-tile strong {
+    grid-column: 1 / -1;
+    color: var(--foreground);
+    font-size: 1.1rem;
+  }
+
+  .metric-tile span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .metric-tile.active {
+    border-color: color-mix(in srgb, var(--success) 38%, var(--border));
+  }
+
+  .metric-tile.paused {
+    border-color: color-mix(in srgb, var(--warning) 38%, var(--border));
+  }
+
+  .event-ribbon {
+    display: flex;
+    gap: 0.6rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+  }
+
+  .event-chip {
+    flex: 0 0 240px;
+    min-width: 0;
+    display: grid;
+    gap: 0.18rem;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--success) 28%, var(--border));
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--success) 7%, var(--card));
+  }
+
+  .event-chip.failed {
+    border-color: color-mix(in srgb, var(--destructive) 32%, var(--border));
+    background: color-mix(in srgb, var(--destructive) 7%, var(--card));
+  }
+
+  .event-chip span,
+  .event-chip em {
+    color: var(--muted-foreground);
+    font-size: 0.72rem;
+    font-style: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .event-chip strong {
+    color: var(--foreground);
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .error-container {
@@ -306,18 +542,28 @@
     align-items: center;
     gap: 0.75rem;
     padding: 1rem;
-    background: white;
-    border: 1px solid #fecaca;
+    background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+    border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));
     border-radius: 0.5rem;
     margin: 1rem;
+    color: var(--destructive);
   }
 
   .empty-state {
     text-align: center;
     padding: 3rem 1rem;
-    background: white;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     margin: 1rem;
+  }
+
+  .empty-state h3 {
+    color: var(--foreground);
+  }
+
+  .empty-state p {
+    color: var(--muted-foreground);
   }
 
   .watchers-list {
@@ -330,16 +576,21 @@
     padding: 0 0.5rem;
   }
 
+  .header h3 {
+    color: var(--foreground);
+  }
+
   .watcher-card {
-    background: white;
+    background: var(--card);
     border-radius: 0.5rem;
     margin-bottom: 0.75rem;
     border: 1px solid var(--border);
-    transition: box-shadow 0.2s;
+    transition: border-color 0.2s, box-shadow 0.2s;
   }
 
   .watcher-card.expanded {
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+    box-shadow: 0 1px 3px 0 color-mix(in srgb, var(--foreground) 10%, transparent);
   }
 
   .watcher-header {
@@ -371,6 +622,7 @@
 
   .watcher-info {
     flex: 1;
+    min-width: 0;
   }
 
   .watcher-name {
@@ -385,6 +637,7 @@
     align-items: center;
     gap: 1rem;
     font-size: 0.875rem;
+    color: var(--muted-foreground);
   }
 
   .state-badge {
@@ -392,6 +645,23 @@
     align-items: center;
     gap: 0.25rem;
     font-weight: 500;
+  }
+
+  .state-active {
+    color: var(--success);
+  }
+
+  .state-paused {
+    color: var(--warning);
+  }
+
+  .state-completed,
+  .state-triggered {
+    color: var(--accent);
+  }
+
+  .state-unknown {
+    color: var(--muted-foreground);
   }
 
   .trigger-count {
@@ -405,7 +675,7 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    color: #8b5cf6;
+    color: var(--accent);
   }
 
   .watcher-details {
@@ -447,18 +717,18 @@
 
   .capture-badge {
     padding: 0.25rem 0.5rem;
-    background: #dbeafe;
-    color: #1e40af;
+    background: color-mix(in srgb, var(--accent) 14%, var(--card));
+    color: var(--accent);
     border-radius: 0.25rem;
     font-size: 0.875rem;
     font-family: monospace;
   }
 
   .variables-section {
-    background: #f0fdf4;
+    background: color-mix(in srgb, var(--success) 9%, var(--card));
     padding: 0.75rem;
     border-radius: 0.375rem;
-    border: 1px solid #bbf7d0;
+    border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
   }
 
   .variables-grid {
@@ -475,13 +745,13 @@
 
   .variable-name {
     font-weight: 600;
-    color: #15803d;
+    color: var(--success);
     font-family: monospace;
     min-width: 100px;
   }
 
   .variable-value {
-    color: #166534;
+    color: var(--foreground);
     font-family: monospace;
     word-break: break-all;
     flex: 1;
@@ -554,6 +824,14 @@
   @media (max-width: 640px) {
     .watchers-tab {
       padding: 0.5rem;
+    }
+
+    .overview-title {
+      flex-direction: column;
+    }
+
+    .metric-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .watcher-details {

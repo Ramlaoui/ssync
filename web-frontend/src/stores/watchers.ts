@@ -88,6 +88,27 @@ export const watchersLoading = writable(false);
 export const eventsLoading = writable(false);
 export const statsLoading = writable(false);
 export const watcherSocketConnected = writable(false);
+export const jobWatchersLoading = writable<Record<string, boolean>>({});
+export const jobWatchersErrors = writable<Record<string, string | null>>({});
+export const jobWatchersLoadedAt = writable<Record<string, number>>({});
+
+const jobWatcherRequests = new Map<string, Promise<void>>();
+
+export function getWatcherJobKey(jobId: string, host?: string | null): string {
+  return `${host || '*'}::${jobId}`;
+}
+
+function setJobWatcherLoading(jobKey: string, loading: boolean): void {
+  jobWatchersLoading.update(current => ({ ...current, [jobKey]: loading }));
+}
+
+function setJobWatcherError(jobKey: string, message: string | null): void {
+  jobWatchersErrors.update(current => ({ ...current, [jobKey]: message }));
+}
+
+function markJobWatchersLoaded(jobKey: string): void {
+  jobWatchersLoadedAt.update(current => ({ ...current, [jobKey]: Date.now() }));
+}
 
 // Derived store for active watchers
 export const activeWatchers = derived(
@@ -110,36 +131,93 @@ export const watchersByJob = derived(
   }
 );
 
+export const watchersByJobHost = derived(
+  watchers,
+  $watchers => {
+    const grouped: Record<string, Watcher[]> = {};
+    $watchers.forEach(w => {
+      const key = getWatcherJobKey(w.job_id, w.hostname);
+      if (!grouped[key]) {
+        grouped[key] = [];
+      }
+      grouped[key].push(w);
+    });
+    return grouped;
+  }
+);
+
 // Fetch watchers for a job
-export async function fetchJobWatchers(jobId: string, host?: string): Promise<void> {
-  watchersLoading.set(true);
-  try {
-    const params = host ? { host } : {};
-    const response = await api.get<WatchersResponse>(
-      `/api/jobs/${encodeURIComponent(jobId)}/watchers`,
-      { params }
-    );
-    
-    // Update watchers store with job-specific watchers
-    watchers.update(current => {
-      // Validate incoming watchers
-      const newWatchers = validateWatchers(response.data.watchers || [], `fetchJobWatchers(${jobId})`);
+export async function fetchJobWatchers(
+  jobId: string,
+  host?: string,
+  options: { silent?: boolean; maxAgeMs?: number } = {}
+): Promise<void> {
+  const jobKey = getWatcherJobKey(jobId, host);
+  const loadedAt = get(jobWatchersLoadedAt)[jobKey] || 0;
+  const maxAgeMs = options.maxAgeMs ?? 0;
+
+  if (maxAgeMs > 0 && Date.now() - loadedAt < maxAgeMs) {
+    return;
+  }
+
+  const existingRequest = jobWatcherRequests.get(jobKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = (async () => {
+    if (!options.silent) {
+      watchersLoading.set(true);
+    }
+    setJobWatcherLoading(jobKey, true);
+    setJobWatcherError(jobKey, null);
+
+    try {
+      const params = host ? { host } : {};
+      const response = await api.get<WatchersResponse>(
+        `/api/jobs/${encodeURIComponent(jobId)}/watchers`,
+        { params }
+      );
+
+      const newWatchers = validateWatchers(
+        response.data.watchers || [],
+        `fetchJobWatchers(${jobId})`
+      );
 
       if (DEBUG_WATCHERS) {
         console.log(`[Watchers] Fetched ${newWatchers.length} watchers for job ${jobId}`, newWatchers);
       }
 
-      // Remove old watchers for this job
-      const filtered = current.filter(w => w.job_id !== jobId);
-      // Add new validated watchers
-      return [...filtered, ...newWatchers];
-    });
-  } catch (error) {
-    console.error('Failed to fetch job watchers:', error);
-    throw error;
-  } finally {
-    watchersLoading.set(false);
-  }
+      watchers.update(current => {
+        const filtered = current.filter(w => {
+          if (w.job_id !== jobId) return true;
+          return host ? w.hostname !== host : false;
+        });
+        return [...filtered, ...newWatchers];
+      });
+      markJobWatchersLoaded(jobKey);
+    } catch (error: any) {
+      console.error('Failed to fetch job watchers:', error);
+      setJobWatcherError(
+        jobKey,
+        error?.response?.data?.detail || error?.message || 'Failed to load watchers'
+      );
+      throw error;
+    } finally {
+      setJobWatcherLoading(jobKey, false);
+      if (!options.silent) {
+        watchersLoading.set(false);
+      }
+      jobWatcherRequests.delete(jobKey);
+    }
+  })();
+
+  jobWatcherRequests.set(jobKey, request);
+  return request;
+}
+
+export async function prefetchJobWatchers(jobId: string, host?: string): Promise<void> {
+  await fetchJobWatchers(jobId, host, { silent: true, maxAgeMs: 30_000 });
 }
 
 // Fetch all watchers using the global endpoint

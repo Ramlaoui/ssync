@@ -18,6 +18,7 @@
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
   import { Info, Terminal, AlertTriangle, Code, ArrowLeft, Eye } from 'lucide-svelte';
   import { navigationActions } from '../stores/navigation';
+  import { fetchJobWatchers, prefetchJobWatchers } from '../stores/watchers';
 
   interface Props {
     params?: any;
@@ -31,7 +32,10 @@
   let loading = $state(false);
   let initialLoadComplete = $state(false);
   let error: string | null = $state(null);
-  let activeTab = $state('details');
+  type JobTab = 'details' | 'output' | 'errors' | 'script' | 'watchers';
+  const validTabs: JobTab[] = ['details', 'output', 'errors', 'script', 'watchers'];
+
+  let activeTab = $state<JobTab>('details');
   let sidebarCollapsed = $state(false);
   let isMobile = $state(false);
   let showMobileSidebar = $state(false);
@@ -62,6 +66,37 @@
   // Check mobile
   function checkMobile() {
     isMobile = window.innerWidth < 768;
+  }
+
+  function getRouteSearchParams(): URLSearchParams {
+    if (typeof window === 'undefined') return new URLSearchParams();
+
+    const hashQueryIndex = window.location.hash.indexOf('?');
+    if (hashQueryIndex >= 0) {
+      return new URLSearchParams(window.location.hash.slice(hashQueryIndex + 1));
+    }
+
+    return new URLSearchParams(window.location.search);
+  }
+
+  function getInitialActiveTab(): JobTab {
+    const routeTab = getRouteSearchParams().get('tab');
+    return validTabs.includes(routeTab as JobTab) ? (routeTab as JobTab) : 'details';
+  }
+
+  function updateActiveTabInUrl(tab: JobTab) {
+    if (typeof window === 'undefined' || !params.id || !params.host) return;
+
+    const routeParams = getRouteSearchParams();
+    if (tab === 'details') {
+      routeParams.delete('tab');
+    } else {
+      routeParams.set('tab', tab);
+    }
+
+    const nextQuery = routeParams.toString();
+    const nextUrl = `${window.location.origin}/#/jobs/${encodeURIComponent(params.id)}/${encodeURIComponent(params.host)}${nextQuery ? `?${nextQuery}` : ''}`;
+    window.history.replaceState({}, '', nextUrl);
   }
 
   // Handle mobile sidebar closure without navigation
@@ -402,8 +437,9 @@
   }
 
   // Tab management
-  function handleTabClick(tab: string) {
+  function handleTabClick(tab: JobTab) {
     activeTab = tab;
+    updateActiveTabInUrl(tab);
   }
 
   function handleBackNavigation() {
@@ -414,6 +450,19 @@
   // Track previous params to avoid recreating store on every reactive run
   let prevParamsId: string | undefined = $state();
   let prevParamsHost: string | undefined = $state();
+  let prefetchedWatcherKey: string | undefined = $state();
+
+  function prefetchWatchersForJob(jobId: string, hostname: string) {
+    const key = `${hostname}::${jobId}`;
+    if (prefetchedWatcherKey === key) return;
+
+    prefetchedWatcherKey = key;
+    queueMicrotask(() => {
+      void prefetchJobWatchers(jobId, hostname).catch((err) => {
+        console.warn('Failed to prefetch job watchers:', err);
+      });
+    });
+  }
 
   // Reactive block 1: Set up job store when params change (not on every run)
   run(() => {
@@ -425,7 +474,7 @@
         scriptData = null;
         scriptError = null;
         error = null;
-        activeTab = 'details';
+        activeTab = getInitialActiveTab();
         initialLoadComplete = false;
 
         // Update tracked params
@@ -440,6 +489,7 @@
 
         // Load the job data
         loadJob();
+        prefetchWatchersForJob(params.id, params.host);
       }
     }
   });
@@ -719,6 +769,9 @@
     on:success={() => {
       showAttachWatchersDialog = false;
       loadJob(true);
+      if (job) {
+        void fetchJobWatchers(job.job_id, params.host, { silent: true, maxAgeMs: 0 });
+      }
     }}
   />
 {/if}
