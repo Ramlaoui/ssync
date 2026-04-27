@@ -139,9 +139,23 @@
     }
     window.addEventListener('resize', checkMobile);
 
-    const browserRoute = `${window.location.pathname}${window.location.search}`;
-    if (browserRoute !== '/' && browserRoute !== $location) {
-      push(browserRoute);
+    const rootSearchParams = new URLSearchParams(window.location.search);
+    const hasRootWatcherDeepLink = rootSearchParams.has('watcher');
+    const hashIsRoot =
+      !window.location.hash ||
+      window.location.hash === '#/' ||
+      window.location.hash.startsWith('#/?');
+
+    if (hasRootWatcherDeepLink && hashIsRoot) {
+      const nextRoute = `/watchers?${rootSearchParams.toString()}`;
+      void push(nextRoute).then(() => {
+        window.history.replaceState({}, '', `/#${nextRoute}`);
+      });
+    } else {
+      const browserRoute = `${window.location.pathname}${window.location.search}`;
+      if (browserRoute !== '/' && browserRoute !== $location) {
+        push(browserRoute);
+      }
     }
 
     // Initialize theme from store (already happens in theme.ts module load, but ensure it's applied)

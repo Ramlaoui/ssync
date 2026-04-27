@@ -22,10 +22,13 @@
   import JobSelectionDialog from '../components/JobSelectionDialog.svelte';
   import NavigationHeader from '../components/NavigationHeader.svelte';
   import {
+    BarChart3,
     Clock3,
     Eye,
     Filter,
+    Layers,
     Plus,
+    Radio,
     Search,
     Server,
     Zap,
@@ -36,12 +39,23 @@
   type FilterState = 'all' | 'active' | 'paused' | 'static' | 'completed';
   type SortMode = 'activity' | 'recent' | 'name';
   type EnhancedWatcher = Watcher & { job_name?: string | null };
+  type HostSummary = {
+    host: string;
+    total: number;
+    active: number;
+    paused: number;
+    recentEvents: number;
+    latest?: string;
+  };
 
   let searchQuery = $state('');
   let filterState: FilterState = $state('all');
   let sortMode: SortMode = $state('activity');
   let selectedWatcherId: number | null = $state(null);
   let error: string | null = $state(null);
+  let watcherItems = $state<Watcher[]>([]);
+  let watcherEventItems = $state<WatcherEvent[]>([]);
+  let jobItems = $state<any[]>([]);
 
   let showStreamlinedCreator = $state(false);
   let showJobSelectionDialog = $state(false);
@@ -49,6 +63,7 @@
   let selectedJobId: string | null = $state(null);
   let selectedHostname: string | null = $state(null);
   let pendingMultiJobSelection: any[] = [];
+  let unsubscribePageStores: Array<() => void> = [];
 
   function getWatcherSearchText(
     watcher: EnhancedWatcher,
@@ -88,25 +103,45 @@
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
+  function getStateLabel(state: FilterState): string {
+    if (state === 'all') return 'All';
+    return state.charAt(0).toUpperCase() + state.slice(1);
+  }
+
+  function truncateInline(value?: string | null, fallback = 'No event payload'): string {
+    const text = value?.trim() || fallback;
+    return text.length > 84 ? `${text.slice(0, 81)}...` : text;
+  }
+
+  function getWatcherRouteParams(): URLSearchParams {
+    if (typeof window === 'undefined') return new URLSearchParams();
+    const hashQueryIndex = window.location.hash.indexOf('?');
+    if (hashQueryIndex >= 0) {
+      return new URLSearchParams(window.location.hash.slice(hashQueryIndex + 1));
+    }
+    return new URLSearchParams(window.location.search);
+  }
+
   function updateSelectionInUrl(watcherId: number | null) {
     if (typeof window === 'undefined') return;
 
     const url = new URL(window.location.href);
+    const routeParams = getWatcherRouteParams();
     if (watcherId == null) {
-      url.searchParams.delete('watcher');
+      routeParams.delete('watcher');
     } else {
-      url.searchParams.set('watcher', String(watcherId));
+      routeParams.set('watcher', String(watcherId));
     }
-    url.searchParams.delete('tab');
+    routeParams.delete('tab');
 
-    const nextQuery = url.searchParams.toString();
-    const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
+    const nextQuery = routeParams.toString();
+    const nextUrl = `${url.origin}/#/watchers${nextQuery ? `?${nextQuery}` : ''}`;
     window.history.replaceState({}, '', nextUrl);
   }
 
   function readSelectionFromUrl() {
     if (typeof window === 'undefined') return;
-    const watcherParam = new URLSearchParams(window.location.search).get('watcher');
+    const watcherParam = getWatcherRouteParams().get('watcher');
     if (!watcherParam) return;
     const parsed = Number(watcherParam);
     if (!Number.isNaN(parsed)) {
@@ -114,14 +149,20 @@
     }
   }
 
+  function refreshJobNamesInBackground() {
+    void jobStateManager.syncAllHosts(false, false, { limit: 50 }).catch((err) => {
+      console.warn('Failed to refresh job names for watchers:', err);
+    });
+  }
+
   async function refreshData() {
     error = null;
     try {
       await Promise.all([
-        jobStateManager.syncAllHosts(),
         fetchAllWatchers(),
         fetchWatcherEvents(undefined, undefined, 300),
       ]);
+      refreshJobNamesInBackground();
     } catch (err) {
       console.error('Failed to refresh watcher data:', err);
       error = 'Failed to refresh watcher data. Please try again.';
@@ -289,110 +330,102 @@
     updateSelectionInUrl(watcherId);
   }
 
-  let eventSummaryByWatcher = $derived(
-    (() => {
-      const summary: Record<number, { count: number; latest?: WatcherEvent }> = {};
-
-      for (const event of $watcherEvents) {
-        const existing = summary[event.watcher_id];
-        if (!existing) {
-          summary[event.watcher_id] = { count: 1, latest: event };
-          continue;
-        }
-
-        existing.count += 1;
-        if (
-          !existing.latest ||
-          new Date(event.timestamp).getTime() >
-            new Date(existing.latest.timestamp).getTime()
-        ) {
-          existing.latest = event;
-        }
+  let eventSummaryByWatcher = $derived.by(() => {
+    const summary: Record<number, { count: number; latest?: WatcherEvent }> = {};
+    for (const event of watcherEventItems) {
+      const existing = summary[event.watcher_id];
+      if (!existing) {
+        summary[event.watcher_id] = { count: 1, latest: event };
+        continue;
       }
 
-      return summary;
-    })(),
-  );
+      existing.count += 1;
+      if (
+        !existing.latest ||
+        new Date(event.timestamp).getTime() >
+          new Date(existing.latest.timestamp).getTime()
+      ) {
+        existing.latest = event;
+      }
+    }
 
-  let enhancedWatchers = $derived(
-    (() => {
-      const jobs = get(allCurrentJobs);
-      return $watchers.map((watcher) => {
-        const job = jobs.find(
-          (candidate) =>
-            candidate.job_id === watcher.job_id &&
-            candidate.hostname === watcher.hostname,
-        );
+    return summary;
+  });
 
-        return {
-          ...watcher,
-          job_name: job?.name || watcher.job_name || null,
-        } as EnhancedWatcher;
-      });
-    })(),
-  );
+  let enhancedWatchers = $derived.by(() => {
+    return watcherItems.map((watcher) => {
+      const job = jobItems.find(
+        (candidate) =>
+          candidate.job_id === watcher.job_id &&
+          candidate.hostname === watcher.hostname,
+      );
 
-  let filteredWatchers = $derived(
-    (() => {
-      let nextWatchers = enhancedWatchers.filter((watcher) => {
-        if (filterState === 'all') return true;
-        return watcher.state === filterState;
-      });
+      return {
+        ...watcher,
+        job_name: job?.name || watcher.job_name || null,
+      } as EnhancedWatcher;
+    });
+  });
 
-      if (searchQuery.trim()) {
-        const term = searchQuery.trim().toLowerCase();
-        nextWatchers = nextWatchers.filter((watcher) =>
-          getWatcherSearchText(
-            watcher,
-            eventSummaryByWatcher[watcher.id]?.latest,
-          ).includes(term),
-        );
+  let filteredWatchers = $derived.by(() => {
+    let nextWatchers = enhancedWatchers.filter((watcher) => {
+      if (filterState === 'all') return true;
+      return watcher.state === filterState;
+    });
+
+    if (searchQuery.trim()) {
+      const term = searchQuery.trim().toLowerCase();
+      nextWatchers = nextWatchers.filter((watcher) =>
+        getWatcherSearchText(
+          watcher,
+          eventSummaryByWatcher[watcher.id]?.latest,
+        ).includes(term),
+      );
+    }
+
+    return [...nextWatchers].sort((left, right) => {
+      if (sortMode === 'name') {
+        return left.name.localeCompare(right.name);
       }
 
-      return [...nextWatchers].sort((left, right) => {
-        if (sortMode === 'name') {
-          return left.name.localeCompare(right.name);
-        }
-
-        if (sortMode === 'recent') {
-          return (
-            new Date(right.created_at || 0).getTime() -
-            new Date(left.created_at || 0).getTime()
-          );
-        }
-
-        const leftActivity =
-          eventSummaryByWatcher[left.id]?.latest?.timestamp ||
-          left.last_check ||
-          left.created_at ||
-          '';
-        const rightActivity =
-          eventSummaryByWatcher[right.id]?.latest?.timestamp ||
-          right.last_check ||
-          right.created_at ||
-          '';
-
+      if (sortMode === 'recent') {
         return (
-          new Date(rightActivity || 0).getTime() -
-          new Date(leftActivity || 0).getTime()
+          new Date(right.created_at || 0).getTime() -
+          new Date(left.created_at || 0).getTime()
         );
-      });
-    })(),
-  );
+      }
 
-  let selectedWatcher = $derived(
+      const leftActivity =
+        eventSummaryByWatcher[left.id]?.latest?.timestamp ||
+        left.last_check ||
+        left.created_at ||
+        '';
+      const rightActivity =
+        eventSummaryByWatcher[right.id]?.latest?.timestamp ||
+        right.last_check ||
+        right.created_at ||
+        '';
+
+      return (
+        new Date(rightActivity || 0).getTime() -
+        new Date(leftActivity || 0).getTime()
+      );
+    });
+  });
+
+  let selectedWatcher = $derived.by(() =>
     filteredWatchers.find((watcher) => watcher.id === selectedWatcherId) || null,
   );
 
-  let selectedWatcherEvents = $derived(
+  let selectedWatcherEvents = $derived.by(() =>
     selectedWatcher
-      ? $watcherEvents
+      ? watcherEventItems
           .filter((event) => event.watcher_id === selectedWatcher.id)
           .slice(0, 60)
       : [],
   );
 
-  let sameJobWatchers = $derived(
+  let sameJobWatchers = $derived.by(() =>
     selectedWatcher
       ? filteredWatchers.filter(
           (watcher) =>
@@ -403,19 +436,87 @@
       : [],
   );
 
-  let watcherCounts = $derived({
-    total: $watchers.length,
-    active: $watchers.filter((watcher) => watcher.state === 'active').length,
-    paused: $watchers.filter((watcher) => watcher.state === 'paused').length,
-    static: $watchers.filter((watcher) => watcher.state === 'static').length,
-    completed: $watchers.filter((watcher) => watcher.state === 'completed').length,
+  let watcherCounts = $derived.by(() => {
+    return {
+      total: watcherItems.length,
+      active: watcherItems.filter((watcher) => watcher.state === 'active').length,
+      paused: watcherItems.filter((watcher) => watcher.state === 'paused').length,
+      static: watcherItems.filter((watcher) => watcher.state === 'static').length,
+      completed: watcherItems.filter((watcher) => watcher.state === 'completed').length,
+    };
   });
 
-  let hostCount = $derived(new Set($watchers.map((watcher) => watcher.hostname)).size);
-  let recentEventCount = $derived($watcherEvents.length);
+  let hostCount = $derived.by(() => {
+    return new Set(watcherItems.map((watcher) => watcher.hostname)).size;
+  });
+  let recentEventCount = $derived.by(() => watcherEventItems.length);
+  let stateFilterChips = $derived.by(() =>
+    (['all', 'active', 'paused', 'static', 'completed'] as FilterState[]).map((state) => ({
+      state,
+      label: getStateLabel(state),
+      count: state === 'all' ? watcherCounts.total : watcherCounts[state],
+    })),
+  );
+  let latestEvents = $derived.by(() => watcherEventItems.slice(0, 8));
+  let hostSummaries = $derived.by(() => {
+    const summaries: Record<string, HostSummary> = {};
+
+    for (const watcher of watcherItems) {
+      const host = watcher.hostname || 'unknown';
+      summaries[host] ||= {
+        host,
+        total: 0,
+        active: 0,
+        paused: 0,
+        recentEvents: 0,
+      };
+      summaries[host].total += 1;
+      if (watcher.state === 'active') summaries[host].active += 1;
+      if (watcher.state === 'paused') summaries[host].paused += 1;
+      const latest = eventSummaryByWatcher[watcher.id]?.latest?.timestamp || watcher.last_check;
+      if (
+        latest &&
+        (!summaries[host].latest ||
+          new Date(latest).getTime() > new Date(summaries[host].latest || 0).getTime())
+      ) {
+        summaries[host].latest = latest;
+      }
+    }
+
+    for (const event of watcherEventItems) {
+      const host = event.hostname || 'unknown';
+      summaries[host] ||= {
+        host,
+        total: 0,
+        active: 0,
+        paused: 0,
+        recentEvents: 0,
+      };
+      summaries[host].recentEvents += 1;
+      if (
+        !summaries[host].latest ||
+        new Date(event.timestamp).getTime() > new Date(summaries[host].latest || 0).getTime()
+      ) {
+        summaries[host].latest = event.timestamp;
+      }
+    }
+
+    return Object.values(summaries)
+      .sort(
+        (left, right) =>
+          right.active - left.active ||
+          right.recentEvents - left.recentEvents ||
+          right.total - left.total ||
+          left.host.localeCompare(right.host),
+      )
+      .slice(0, 6);
+  });
 
   $effect(() => {
     if (filteredWatchers.length === 0) {
+      if ($watchersLoading || $eventsLoading) {
+        return;
+      }
       if (selectedWatcherId !== null) {
         selectedWatcherId = null;
         updateSelectionInUrl(null);
@@ -435,16 +536,30 @@
   });
 
   onMount(async () => {
+    const unsubscribeWatchers = watchers.subscribe((value) => {
+      watcherItems = value ?? [];
+    });
+    const unsubscribeEvents = watcherEvents.subscribe((value) => {
+      watcherEventItems = value ?? [];
+    });
+    const unsubscribeJobs = allCurrentJobs.subscribe((value) => {
+      jobItems = value ?? [];
+    });
+
+    unsubscribePageStores = [unsubscribeWatchers, unsubscribeEvents, unsubscribeJobs];
+
     navigationActions.setContext('watcher', {
       previousRoute: window.location.pathname,
     });
 
     readSelectionFromUrl();
-    await refreshData();
     connectWatcherWebSocket();
+    await refreshData();
   });
 
   onDestroy(() => {
+    unsubscribePageStores.forEach((unsubscribe) => unsubscribe());
+    unsubscribePageStores = [];
     disconnectWatcherWebSocket();
   });
 </script>
@@ -509,6 +624,23 @@
             {$watcherSocketConnected ? 'Live updates' : 'Reconnecting'}
           </div>
         </div>
+      </div>
+
+      <div class="state-chips" aria-label="Watcher state filters">
+        {#each stateFilterChips as chip}
+          <button
+            class:active={filterState === chip.state}
+            class="state-chip"
+            data-state={chip.state}
+            onclick={() => {
+              filterState = chip.state;
+            }}
+          >
+            <span class="state-chip-dot"></span>
+            <span>{chip.label}</span>
+            <strong>{chip.count}</strong>
+          </button>
+        {/each}
       </div>
     {/snippet}
   </NavigationHeader>
@@ -698,6 +830,107 @@
           />
         </div>
       {/if}
+
+      <div class="activity-column" aria-label="Watcher activity overview">
+      {#if $watchers.length > 0 || latestEvents.length > 0}
+        <div class="board-panel host-panel">
+          <div class="board-heading">
+            <Layers class="w-4 h-4" />
+            <span>Hosts</span>
+          </div>
+
+          {#if hostSummaries.length === 0}
+            <p class="board-empty">No host activity yet.</p>
+          {:else}
+            <div class="host-lanes">
+              {#each hostSummaries as host (host.host)}
+                <button
+                  class="host-lane"
+                  onclick={() => {
+                    searchQuery = host.host;
+                  }}
+                >
+                  <div class="host-lane-title">
+                    <Server class="w-3.5 h-3.5" />
+                    <strong>{host.host}</strong>
+                    <span>{host.total} watcher{host.total === 1 ? '' : 's'}</span>
+                  </div>
+                  <div class="host-lane-meter">
+                    <span
+                      class="host-lane-fill"
+                      style={`width: ${host.total ? Math.max(8, Math.round((host.active / host.total) * 100)) : 0}%`}
+                    ></span>
+                  </div>
+                  <div class="host-lane-meta">
+                    <span>{host.active} active</span>
+                    <span>{host.recentEvents} events</span>
+                    <span>{formatRelativeTime(host.latest)}</span>
+                  </div>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="board-panel stream-panel">
+          <div class="board-heading">
+            <Radio class="w-4 h-4" />
+            <span>Live stream</span>
+            <span class:connected={$watcherSocketConnected} class="stream-status">
+              {$watcherSocketConnected ? 'connected' : 'waiting'}
+            </span>
+          </div>
+
+          {#if latestEvents.length === 0}
+            <p class="board-empty">Events will appear here as watchers fire.</p>
+          {:else}
+            <div class="event-stream">
+              {#each latestEvents as event (event.id)}
+                <button
+                  class:failed={!event.success}
+                  class="event-stream-item"
+                  onclick={() => selectWatcher(event.watcher_id)}
+                >
+                  <span class="event-dot"></span>
+                  <div>
+                    <strong>{event.watcher_name || `Watcher #${event.watcher_id}`}</strong>
+                    <p>{truncateInline(event.matched_text || event.action_result, event.action_type)}</p>
+                  </div>
+                  <time>{formatRelativeTime(event.timestamp)}</time>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="board-panel pulse-panel">
+          <div class="board-heading">
+            <BarChart3 class="w-4 h-4" />
+            <span>State mix</span>
+          </div>
+          <div class="state-bars">
+            {#each stateFilterChips.filter((chip) => chip.state !== 'all') as chip}
+              <button
+                class="state-bar-row"
+                data-state={chip.state}
+                onclick={() => {
+                  filterState = chip.state;
+                }}
+              >
+                <span>{chip.label}</span>
+                <div class="state-bar-track">
+                  <span
+                    class="state-bar-fill"
+                    style={`width: ${watcherCounts.total ? Math.round((chip.count / watcherCounts.total) * 100) : 0}%`}
+                  ></span>
+                </div>
+                <strong>{chip.count}</strong>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+      </div>
     </section>
   </main>
 </div>
@@ -788,6 +1021,62 @@
     padding: 0 0 1rem;
   }
 
+  .state-chips {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .state-chip {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.42rem 0.65rem;
+    background: var(--background);
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+  }
+
+  .state-chip:hover,
+  .state-chip.active {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--background));
+    color: var(--foreground);
+  }
+
+  .state-chip strong {
+    color: var(--foreground);
+    font-size: 0.76rem;
+  }
+
+  .state-chip-dot {
+    width: 0.48rem;
+    height: 0.48rem;
+    border-radius: 999px;
+    background: var(--muted-foreground);
+  }
+
+  .state-chip[data-state='active'] .state-chip-dot {
+    background: var(--success);
+  }
+
+  .state-chip[data-state='paused'] .state-chip-dot {
+    background: var(--warning);
+  }
+
+  .state-chip[data-state='static'] .state-chip-dot,
+  .state-chip[data-state='completed'] .state-chip-dot {
+    background: var(--accent);
+  }
+
   .toolbar-search {
     flex: 1;
     display: flex;
@@ -875,20 +1164,213 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(320px, 390px) minmax(0, 1fr);
-    gap: 1.25rem;
+    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
     padding: 1.25rem 1.5rem 1.5rem;
   }
 
-  .list-panel,
-  .detail-panel {
-    min-height: 0;
+  .board-panel {
+    min-width: 0;
+    padding: 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--card);
+  }
+
+  .activity-column {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 1rem;
   }
 
+  .board-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-bottom: 0.75rem;
+    color: var(--foreground);
+    font-size: 0.86rem;
+    font-weight: 700;
+  }
+
+  .stream-status {
+    margin-left: auto;
+    color: var(--muted-foreground);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .stream-status.connected {
+    color: var(--success);
+  }
+
+  .board-empty {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.82rem;
+  }
+
+  .host-lanes,
+  .event-stream,
+  .state-bars {
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .host-lane,
+  .event-stream-item,
+  .state-bar-row {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background: var(--background);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .host-lane {
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.7rem;
+  }
+
+  .host-lane-title,
+  .host-lane-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .host-lane-title strong {
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .host-lane-title span,
+  .host-lane-meta {
+    color: var(--muted-foreground);
+    font-size: 0.74rem;
+  }
+
+  .host-lane-meta {
+    justify-content: space-between;
+    gap: 0.7rem;
+  }
+
+  .host-lane-meta span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .host-lane-meter,
+  .state-bar-track {
+    height: 0.4rem;
+    border-radius: 999px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--secondary) 90%, transparent);
+  }
+
+  .host-lane-fill,
+  .state-bar-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--success);
+    transition: width 0.22s ease;
+  }
+
+  .event-stream-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.62rem 0.7rem;
+  }
+
+  .event-stream-item:hover,
+  .host-lane:hover,
+  .state-bar-row:hover {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  }
+
+  .event-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    background: var(--success);
+    box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--success) 16%, transparent);
+  }
+
+  .event-stream-item.failed .event-dot {
+    background: var(--destructive);
+    box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--destructive) 16%, transparent);
+  }
+
+  .event-stream-item strong,
+  .event-stream-item p,
+  .event-stream-item time {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .event-stream-item strong {
+    display: block;
+    color: var(--foreground);
+    font-size: 0.82rem;
+  }
+
+  .event-stream-item p,
+  .event-stream-item time {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.74rem;
+  }
+
+  .state-bar-row {
+    display: grid;
+    grid-template-columns: 74px minmax(0, 1fr) 2rem;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.55rem 0.65rem;
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  .state-bar-row strong {
+    color: var(--foreground);
+    text-align: right;
+  }
+
+  .state-bar-row[data-state='paused'] .state-bar-fill {
+    background: var(--warning);
+  }
+
+  .state-bar-row[data-state='static'] .state-bar-fill,
+  .state-bar-row[data-state='completed'] .state-bar-fill {
+    background: var(--accent);
+  }
+
+  .list-panel,
+  .detail-panel,
+  .activity-column {
+    min-height: 0;
+  }
+
   .list-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
     padding: 1rem;
     border: 1px solid var(--border);
     border-radius: 1.2rem;
@@ -1053,6 +1535,9 @@
   }
 
   .detail-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
     overflow: auto;
   }
 
@@ -1105,7 +1590,7 @@
 
   .detail-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+    grid-template-columns: 1fr;
     gap: 1rem;
     align-items: start;
   }
@@ -1120,8 +1605,8 @@
   }
 
   .insights-card {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.9rem;
   }
 
@@ -1148,19 +1633,20 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.55rem;
+    grid-column: 1 / -1;
   }
 
   .peer-chip {
     cursor: pointer;
   }
 
-  @media (max-width: 1100px) {
-    .workspace {
-      grid-template-columns: 1fr;
+  @media (max-width: 1400px) {
+    .activity-column {
+      display: flex;
     }
 
-    .detail-grid {
-      grid-template-columns: 1fr;
+    .insights-card {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
@@ -1180,7 +1666,22 @@
     }
 
     .workspace {
+      grid-template-columns: 1fr;
       padding: 1rem;
+    }
+
+    .list-panel {
+      order: 1;
+    }
+
+    .detail-panel {
+      order: 2;
+      overflow: visible;
+    }
+
+    .activity-column {
+      order: 3;
+      display: flex;
     }
 
     .summary-grid {
@@ -1193,6 +1694,10 @@
 
     .detail-pills {
       justify-content: flex-start;
+    }
+
+    .insights-card {
+      grid-template-columns: 1fr 1fr;
     }
   }
 </style>
