@@ -68,6 +68,8 @@
 
   // Close context menu when clicking outside
   function handleDocumentClick(event: MouseEvent) {
+    if (event.button !== 0) return;
+
     if (showContextMenu) {
       closeContextMenu();
     }

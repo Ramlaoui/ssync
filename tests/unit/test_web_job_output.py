@@ -60,6 +60,34 @@ async def test_live_stream_remote_chunk_decodes_base64_transport():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_live_stream_resolves_missing_output_path_from_slurm_client(sample_job_info):
+    sample_job_info.stdout_file = None
+    sample_job_info.stderr_file = None
+    conn = SimpleNamespace()
+
+    class _FakeSlurmClient:
+        def get_job_output_files(self, received_conn, job_id, hostname):
+            assert received_conn is conn
+            assert job_id == sample_job_info.job_id
+            assert hostname == sample_job_info.hostname
+            return "/remote/slurm.out", "/remote/slurm.err"
+
+    manager = SimpleNamespace(slurm_client=_FakeSlurmClient())
+
+    output_path = await job_services.ensure_output_path(
+        manager,
+        conn,
+        sample_job_info,
+        "stdout",
+    )
+
+    assert output_path == "/remote/slurm.out"
+    assert sample_job_info.stdout_file == "/remote/slurm.out"
+    assert sample_job_info.stderr_file == "/remote/slurm.err"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_cached_metadata_only_skips_output_decode(
     monkeypatch, test_cache, sample_job_info
 ):
@@ -225,6 +253,51 @@ async def test_cached_stdout_only_respects_requested_stream_and_max_bytes(
     assert response.stderr_metadata is None
     assert response.content_truncated is True
     assert response.content_limit_bytes == 4
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_running_output_refresh_can_be_disabled(
+    monkeypatch, test_cache, sample_job_info
+):
+    sample_job_info.state = JobState.RUNNING
+    test_cache.cache_job(sample_job_info)
+    test_cache.update_job_outputs(
+        sample_job_info.job_id,
+        sample_job_info.hostname,
+        stdout_content="cached stdout\n",
+        stderr_content="cached stderr\n",
+    )
+
+    monkeypatch.setattr(
+        job_services.app_config,
+        "cache_settings",
+        SimpleNamespace(
+            refresh_running_outputs=False,
+            running_output_refresh_interval_seconds=10,
+        ),
+    )
+
+    def fail_queue(*args, **kwargs):
+        raise AssertionError("running output refresh should be disabled")
+
+    monkeypatch.setattr("ssync.web.services.jobs.queue_job_output_refresh", fail_queue)
+
+    response = await get_job_output_response(
+        job_id=sample_job_info.job_id,
+        host=sample_job_info.hostname,
+        lines=None,
+        output_type="stdout",
+        max_bytes=None,
+        metadata_only=False,
+        force_refresh=True,
+        get_slurm_manager=lambda: SimpleNamespace(slurm_hosts=[]),
+        cache_middleware=_FakeCacheMiddleware(test_cache),
+        job_manager=None,
+    )
+
+    assert response.stdout == "cached stdout\n"
+    assert response.refresh_queued is False
 
 
 @pytest.mark.unit

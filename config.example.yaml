@@ -70,6 +70,8 @@ cache:
   cleanup_interval_hours: 168  # Run cleanup weekly
   max_size_mb: 1024  # Maximum cache size in MB
   auto_cleanup: false  # Whether to automatically cleanup old entries
+  refresh_running_outputs: true  # Refresh cached .out/.err files for running jobs when output is requested
+  running_output_refresh_interval_seconds: 10  # Per-job throttle for running-output cache refreshes
 
 # Connection settings
 connections:

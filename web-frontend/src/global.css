@@ -141,8 +141,12 @@
 .dark .cm-editor,
 .dark .cm-content,
 .dark .cm-gutters {
-    background: var(--input) !important;
+    background: #171717 !important;
     color: var(--foreground) !important;
+}
+
+.dark .cm-gutters {
+    background: #1f1f1f !important;
 }
 
 /* Select/datalist options - Keep these as they're hard to style otherwise */

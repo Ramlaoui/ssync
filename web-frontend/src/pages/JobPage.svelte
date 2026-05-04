@@ -57,6 +57,7 @@
   let currentOutputType: OutputStreamType | null = $state(null);
   let outputStreamSession: OutputStreamSession | null = null;
   let outputRequestVersion = 0;
+  const OUTPUT_RETRY_DELAYS_MS = [1500, 2500, 4000, 6000, 8000, 10000, 15000, 20000];
 
   // Script related state
   let scriptData: ScriptData | null = $state(null);
@@ -231,15 +232,16 @@
   }
 
   function scheduleOutputRetry(outputType: OutputStreamType) {
-    if (outputBackgroundRetryCount >= 2) return;
+    if (outputBackgroundRetryCount >= OUTPUT_RETRY_DELAYS_MS.length) return;
     clearOutputRetryTimer();
+    const retryDelay = OUTPUT_RETRY_DELAYS_MS[outputBackgroundRetryCount];
     outputRetryTimer = setTimeout(() => {
       if (getActiveOutputType() !== outputType) {
         return;
       }
       outputBackgroundRetryCount += 1;
       void loadOutput(outputType, { backgroundRetry: true });
-    }, 1200);
+    }, retryDelay);
   }
 
   async function loadOutput(
@@ -264,11 +266,10 @@
 
     try {
       if (job.state === 'R') {
-        const metadataResponse = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
+        const cachedResponse = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
           params: {
             host: params.host,
             output_type: outputType,
-            metadata_only: true,
             max_bytes: DEFAULT_OUTPUT_MAX_BYTES,
             force_refresh: options.forceRefresh ? 'true' : undefined,
           },
@@ -278,9 +279,12 @@
           return;
         }
 
-        outputData = mergeOutputData(outputType, metadataResponse.data);
+        outputData = mergeOutputData(outputType, cachedResponse.data);
         loadingOutput = false;
         refreshingOutput = false;
+        const cachedContent =
+          (outputType === 'stdout' ? outputData.stdout : outputData.stderr) || '';
+        const streamInitialBytes = cachedContent ? 1024 : DEFAULT_OUTPUT_MAX_BYTES;
 
         outputStreamSession = streamJobOutput(
           params.id,
@@ -338,12 +342,17 @@
                 return;
               }
               stopOutputStream();
-              outputError = message;
+              const currentContent = (
+                outputType === 'stdout' ? outputData?.stdout : outputData?.stderr
+              ) || '';
+              if (!currentContent) {
+                outputError = message;
+              }
               loadingOutput = false;
               refreshingOutput = false;
             },
           },
-          DEFAULT_OUTPUT_MAX_BYTES,
+          streamInitialBytes,
         );
       } else {
         const response = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
@@ -360,7 +369,11 @@
         }
 
         outputData = response.data;
-        if (response.data.refresh_queued) {
+        const receivedContent =
+          outputType === 'stdout'
+            ? Boolean(response.data.stdout)
+            : Boolean(response.data.stderr);
+        if (response.data.refresh_queued && !receivedContent) {
           scheduleOutputRetry(outputType);
         } else {
           clearOutputRetryTimer();

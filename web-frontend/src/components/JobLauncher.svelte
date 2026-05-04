@@ -3491,10 +3491,10 @@ echo "Starting job..."
     position: absolute;
     top: calc(100% + 0.5rem);
     right: 0;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 12px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 25px color-mix(in srgb, var(--foreground) 14%, transparent);
     padding: 0.5rem;
     min-width: 250px;
     z-index: 50;
@@ -3619,10 +3619,10 @@ echo "Starting job..."
     position: absolute;
     top: calc(100% + 0.5rem);
     right: 0;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 12px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 25px color-mix(in srgb, var(--foreground) 14%, transparent);
     padding: 0.75rem;
     min-width: 280px;
     max-width: calc(100vw - 2rem);
@@ -3719,7 +3719,7 @@ echo "Starting job..."
   .option-select {
     padding: 0.375rem 0.5rem;
     font-size: 0.875rem;
-    background: white;
+    background: var(--input);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--foreground);
@@ -3804,10 +3804,10 @@ echo "Starting job..."
     position: absolute;
     top: calc(100% + 0.5rem);
     right: 0;
-    background: white;
+    background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 25px color-mix(in srgb, var(--foreground) 14%, transparent);
     padding: 0.5rem;
     min-width: 200px;
     z-index: 50;
@@ -4288,7 +4288,7 @@ echo "Starting job..."
     align-items: center;
     gap: 0.25rem;
     padding: 0.375rem 0.75rem;
-    background: white;
+    background: var(--card);
     border: 1px solid var(--border);
     border-radius: 0.375rem;
     color: var(--muted-foreground);
@@ -4346,7 +4346,7 @@ echo "Starting job..."
   }
 
   .var-mini {
-    background: white;
+    background: var(--input);
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.75rem;
@@ -4403,7 +4403,7 @@ echo "Starting job..."
     align-items: center;
     height: 52px;
     padding: 0 0.75rem;
-    background: white;
+    background: var(--card);
     border-bottom: 1px solid var(--border);
     gap: 0.5rem;
   }
@@ -4439,7 +4439,7 @@ echo "Starting job..."
     font-size: 0.6875rem;
     border: 1px solid var(--border);
     border-radius: 0.375rem;
-    background: white;
+    background: var(--input);
     color: var(--foreground);
   }
 
@@ -4702,8 +4702,8 @@ echo "Starting job..."
     width: 380px;
     max-width: 90%;
     height: 100%;
-    background: white;
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+    background: var(--popover);
+    box-shadow: -4px 0 24px color-mix(in srgb, var(--foreground) 16%, transparent);
     display: flex;
     flex-direction: column;
   }
@@ -4872,7 +4872,7 @@ echo "Starting job..."
     align-items: center;
     gap: 0.75rem;
     padding: 0.75rem;
-    background: white;
+    background: var(--card);
     border: 1px solid var(--border);
     border-radius: 0.375rem;
     margin-bottom: 1rem;
@@ -4932,7 +4932,7 @@ echo "Starting job..."
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem;
-    background: white;
+    background: var(--card);
     border: 1px solid var(--border);
     border-radius: 0.375rem;
     margin-bottom: 0.5rem;
@@ -5044,8 +5044,8 @@ echo "Starting job..."
     bottom: 0;
     width: 85%;
     max-width: 320px;
-    background: white;
-    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+    background: var(--popover);
+    box-shadow: -2px 0 8px color-mix(in srgb, var(--foreground) 16%, transparent);
     display: flex;
     flex-direction: column;
     animation: slideInRight 0.3s ease-out;
@@ -5325,7 +5325,7 @@ echo "Starting job..."
     color: var(--muted-foreground);
     word-break: break-all;
     font-family: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace;
-    background: white;
+    background: var(--input);
     padding: 0.5rem;
     border-radius: 0.375rem;
   }
@@ -5837,7 +5837,7 @@ echo "Starting job..."
   }
 
   .save-template-dialog {
-    background: white;
+    background: var(--popover);
     border-radius: 12px;
     box-shadow:
       0 20px 25px -5px rgba(0, 0, 0, 0.1),
@@ -5885,7 +5885,7 @@ echo "Starting job..."
   }
 
   .template-action-btn {
-    background: white;
+    background: var(--card);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.375rem;
@@ -6002,7 +6002,7 @@ echo "Starting job..."
   }
 
   .btn-secondary {
-    background: white;
+    background: var(--card);
     color: var(--foreground);
     border: 1px solid var(--muted);
   }

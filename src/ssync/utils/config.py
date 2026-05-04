@@ -198,6 +198,17 @@ class Config:
                         auto_cleanup=cache_config.get(
                             "auto_cleanup", settings.auto_cleanup
                         ),
+                        zombie_cleanup_days=cache_config.get(
+                            "zombie_cleanup_days", settings.zombie_cleanup_days
+                        ),
+                        refresh_running_outputs=cache_config.get(
+                            "refresh_running_outputs",
+                            settings.refresh_running_outputs,
+                        ),
+                        running_output_refresh_interval_seconds=cache_config.get(
+                            "running_output_refresh_interval_seconds",
+                            settings.running_output_refresh_interval_seconds,
+                        ),
                     )
             except Exception:
                 # If there's any error loading cache settings, use defaults
@@ -232,7 +243,20 @@ class Config:
             settings.auto_cleanup = os.getenv(
                 "SSYNC_CACHE_AUTO_CLEANUP", "false"
             ).lower() in ("true", "1", "yes")
+        if os.getenv("SSYNC_CACHE_ZOMBIE_CLEANUP_DAYS"):
+            settings.zombie_cleanup_days = int(
+                os.getenv("SSYNC_CACHE_ZOMBIE_CLEANUP_DAYS")
+            )
+        if os.getenv("SSYNC_CACHE_REFRESH_RUNNING_OUTPUTS"):
+            settings.refresh_running_outputs = os.getenv(
+                "SSYNC_CACHE_REFRESH_RUNNING_OUTPUTS", "true"
+            ).lower() in ("true", "1", "yes")
+        if os.getenv("SSYNC_CACHE_RUNNING_OUTPUT_REFRESH_INTERVAL_SECONDS"):
+            settings.running_output_refresh_interval_seconds = int(
+                os.getenv("SSYNC_CACHE_RUNNING_OUTPUT_REFRESH_INTERVAL_SECONDS")
+            )
 
+        settings.__post_init__()
         return settings
 
     def load_api_key(self) -> str:

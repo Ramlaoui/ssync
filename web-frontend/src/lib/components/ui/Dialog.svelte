@@ -119,10 +119,13 @@
 <style>
   .dialog-container {
     position: relative;
-    background: white;
+    background: var(--popover);
+    color: var(--popover-foreground);
     border-radius: 0.75rem;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1),
-                0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    border: 1px solid var(--border);
+    box-shadow:
+      0 20px 25px -5px color-mix(in srgb, var(--foreground) 18%, transparent),
+      0 10px 10px -5px color-mix(in srgb, var(--foreground) 10%, transparent);
     max-height: 90vh;
     display: flex;
     flex-direction: column;
@@ -135,7 +138,7 @@
     align-items: flex-start;
     justify-content: space-between;
     padding: 1.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     gap: 1rem;
   }
 
@@ -147,13 +150,13 @@
   .dialog-title {
     font-size: 1.25rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--foreground);
     margin: 0;
   }
 
   .dialog-description {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     margin-top: 0.25rem;
     margin-bottom: 0;
   }
@@ -166,19 +169,19 @@
     border: none;
     background: transparent;
     border-radius: 0.375rem;
-    color: #6b7280;
+    color: var(--muted-foreground);
     cursor: pointer;
     transition: all 0.15s;
     flex-shrink: 0;
   }
 
   .dialog-close-button:hover {
-    background: #f3f4f6;
-    color: #111827;
+    background: var(--secondary);
+    color: var(--foreground);
   }
 
   .dialog-close-button:focus {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
@@ -195,7 +198,7 @@
     justify-content: flex-end;
     gap: 0.75rem;
     padding: 1.5rem;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid var(--border);
     flex-wrap: wrap;
   }
 

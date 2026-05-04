@@ -127,9 +127,11 @@
   }
 
   // Close dropdown when clicking outside
-  function handleClickOutside(event: Event) {
+  function handleClickOutside(event: MouseEvent) {
     if (showDropdown) {
-      const target = event.target as HTMLElement;
+      if (event.button !== 0 || !(event.target instanceof Element)) return;
+
+      const target = event.target;
       const dropdown = target.closest('.relative');
       if (!dropdown) {
         showDropdown = false;

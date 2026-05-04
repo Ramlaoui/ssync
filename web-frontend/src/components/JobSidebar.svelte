@@ -8,6 +8,7 @@
   import { debounce } from "../lib/debounce";
   import { jobStateManager } from "../lib/JobStateManager";
   import { jobUtils } from "../lib/jobUtils";
+  import { safeGetItem, safeSetItem } from "../lib/safeStorage";
   import { navigationActions } from "../stores/navigation";
   import { preferences, preferencesActions } from "../stores/preferences";
   import { sidebarOpen } from "../stores/sidebar";
@@ -41,6 +42,8 @@
   const runningJobs = jobStateManager.getJobsByState('R');
   const pendingJobs = jobStateManager.getJobsByState('PD');
   const managerState = jobStateManager.getState();
+  const hostStates = jobStateManager.getHostStates();
+  const HOST_FILTER_STORAGE_KEY = "sidebar-excluded-hosts";
 
   // Derive hasArrayJobGrouping from arrayJobGroups store
   import { derived } from "svelte/store";
@@ -63,6 +66,8 @@
   let searchInputValue = $state("");
   let searchQuery = $state("");
   let searchFocused = $state(false);
+  let excludedHosts = $state<Set<string>>(new Set());
+  let showHostFilter = $state(false);
 
   // Component state
   let loading = $state(false);
@@ -74,6 +79,103 @@
   // For array job groups
   let filteredArrayGroups = $state<any[]>([]);
   let arrayTaskIds = new Set<string>();
+
+  type HostOption = {
+    hostname: string;
+    total: number;
+    running: number;
+    pending: number;
+    recent: number;
+  };
+
+  let hostOptions = $derived.by<HostOption[]>(() => {
+    const hosts = new Map<string, HostOption>();
+
+    function ensureHost(hostname: string | undefined | null): HostOption | null {
+      if (!hostname) return null;
+      let host = hosts.get(hostname);
+      if (!host) {
+        host = {
+          hostname,
+          total: 0,
+          running: 0,
+          pending: 0,
+          recent: 0,
+        };
+        hosts.set(hostname, host);
+      }
+      return host;
+    }
+
+    $hostStates.forEach((_, hostname) => {
+      ensureHost(hostname);
+    });
+
+    $allJobs.forEach((job) => {
+      const host = ensureHost(job.hostname);
+      if (!host) return;
+      host.total += 1;
+      if (job.state === "R") host.running += 1;
+      if (job.state === "PD") host.pending += 1;
+      if (job.state && jobUtils.isTerminalState(job.state)) host.recent += 1;
+    });
+
+    return Array.from(hosts.values()).sort((a, b) =>
+      a.hostname.localeCompare(b.hostname),
+    );
+  });
+
+  let selectedHostCount = $derived(
+    hostOptions.filter((host) => !excludedHosts.has(host.hostname)).length,
+  );
+  let hiddenHostCount = $derived(hostOptions.length - selectedHostCount);
+  let hasHostFilter = $derived(hiddenHostCount > 0);
+
+  function persistHostFilter(nextExcludedHosts: Set<string>) {
+    safeSetItem(HOST_FILTER_STORAGE_KEY, JSON.stringify(Array.from(nextExcludedHosts)));
+  }
+
+  function isHostSelected(hostname: string): boolean {
+    return !excludedHosts.has(hostname);
+  }
+
+  function toggleHost(hostname: string) {
+    const nextExcludedHosts = new Set(excludedHosts);
+    if (nextExcludedHosts.has(hostname)) {
+      nextExcludedHosts.delete(hostname);
+    } else {
+      nextExcludedHosts.add(hostname);
+    }
+    excludedHosts = nextExcludedHosts;
+    persistHostFilter(nextExcludedHosts);
+  }
+
+  function selectAllHosts() {
+    excludedHosts = new Set();
+    persistHostFilter(excludedHosts);
+  }
+
+  function selectNoHosts() {
+    const nextExcludedHosts = new Set(hostOptions.map((host) => host.hostname));
+    excludedHosts = nextExcludedHosts;
+    persistHostFilter(nextExcludedHosts);
+  }
+
+  function invertHostSelection() {
+    const nextExcludedHosts = new Set<string>();
+    hostOptions.forEach((host) => {
+      if (isHostSelected(host.hostname)) {
+        nextExcludedHosts.add(host.hostname);
+      }
+    });
+    excludedHosts = nextExcludedHosts;
+    persistHostFilter(nextExcludedHosts);
+  }
+
+  function filterBySelectedHosts<T extends { hostname: string }>(items: T[]): T[] {
+    if (excludedHosts.size === 0) return items;
+    return items.filter((item) => !excludedHosts.has(item.hostname));
+  }
 
   // Track which jobs are part of array groups
   $effect(() => {
@@ -152,9 +254,9 @@
 
   // Use $effect to handle filtering synchronously (no requestAnimationFrame needed)
   $effect(() => {
-    const baseRunning = filterOutArrayTasks($runningJobs);
-    const basePending = filterOutArrayTasks($pendingJobs);
-    const baseRecent = filterOutArrayTasks(recentJobs);
+    const baseRunning = filterBySelectedHosts(filterOutArrayTasks($runningJobs));
+    const basePending = filterBySelectedHosts(filterOutArrayTasks($pendingJobs));
+    const baseRecent = filterBySelectedHosts(filterOutArrayTasks(recentJobs));
     const limitCount = $preferences.jobsPerPage ?? 50;
     const limitedRecent = searchQuery ? baseRecent : baseRecent.slice(0, limitCount);
 
@@ -178,8 +280,10 @@
       ) {
         filteredArrayGroups = $arrayJobGroups.filter(
           (group) =>
-            group.array_job_id.toLowerCase().includes(query) ||
-            group.job_name.toLowerCase().includes(query),
+            !excludedHosts.has(group.hostname) &&
+            (group.array_job_id.toLowerCase().includes(query) ||
+              group.job_name.toLowerCase().includes(query) ||
+              group.hostname.toLowerCase().includes(query)),
         );
       } else {
         filteredArrayGroups = [];
@@ -190,7 +294,9 @@
       filteredRecentJobs = limitedRecent;
       // Only populate array groups when grouping is enabled
       filteredArrayGroups =
-        $preferences.groupArrayJobs && $arrayJobGroups ? $arrayJobGroups : [];
+        $preferences.groupArrayJobs && $arrayJobGroups
+          ? $arrayJobGroups.filter((group) => !excludedHosts.has(group.hostname))
+          : [];
     }
   });
 
@@ -346,6 +452,17 @@
 
   onMount(() => {
     // JobStateManager automatically handles initial load
+    try {
+      const savedExcludedHosts = safeGetItem(HOST_FILTER_STORAGE_KEY);
+      if (savedExcludedHosts) {
+        const parsed = JSON.parse(savedExcludedHosts);
+        if (Array.isArray(parsed)) {
+          excludedHosts = new Set(parsed.filter((host) => typeof host === "string"));
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to load sidebar host filter:", error);
+    }
   });
 
   onDestroy(() => {
@@ -384,6 +501,26 @@
   <div class="sidebar-header">
     {#if !actuallyCollapsed}
       <div class="header-actions">
+        <!-- Host filter button -->
+        <button
+          class="icon-btn host-filter-toggle"
+          class:active={showHostFilter || hasHostFilter}
+          onclick={() => (showHostFilter = !showHostFilter)}
+          aria-label="Filter cluster hosts"
+          title={hasHostFilter
+            ? `${selectedHostCount} of ${hostOptions.length} hosts selected`
+            : "Filter cluster hosts"}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path
+              d="M3,5H21L14,13V19L10,21V13L3,5M7.5,7L12,12.05L16.5,7H7.5Z"
+            />
+          </svg>
+          {#if hasHostFilter}
+            <span class="host-filter-badge">{selectedHostCount}</span>
+          {/if}
+        </button>
+
         <!-- Search button -->
         <button
           class="icon-btn search-toggle"
@@ -450,6 +587,36 @@
             </svg>
           </button>
         {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if !actuallyCollapsed && showHostFilter && hostOptions.length > 0}
+    <div class="host-filter-panel">
+      <div class="host-filter-header">
+        <span>{selectedHostCount}/{hostOptions.length} hosts</span>
+        <div class="host-filter-actions">
+          <button onclick={selectAllHosts} disabled={selectedHostCount === hostOptions.length}>
+            All
+          </button>
+          <button onclick={selectNoHosts} disabled={selectedHostCount === 0}>
+            None
+          </button>
+          <button onclick={invertHostSelection}>Invert</button>
+        </div>
+      </div>
+      <div class="host-chip-list">
+        {#each hostOptions as host (host.hostname)}
+          <button
+            class="host-chip"
+            class:active={isHostSelected(host.hostname)}
+            onclick={() => toggleHost(host.hostname)}
+            title={`${host.hostname}: ${host.total} jobs`}
+          >
+            <span class="host-chip-name">{host.hostname}</span>
+            <span class="host-chip-count">{host.total}</span>
+          </button>
+        {/each}
       </div>
     </div>
   {/if}
@@ -743,6 +910,34 @@
             </p>
             <button class="clear-search-btn" onclick={clearSearch}>
               Clear search
+            </button>
+          </div>
+        {/if}
+
+        {#if !searchQuery && !hasSearchResults && $allJobs.length > 0 && selectedHostCount === 0}
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M3,5H21L14,13V19L10,21V13L3,5M7.5,7L12,12.05L16.5,7H7.5Z"
+              />
+            </svg>
+            <p>No hosts selected</p>
+            <button class="clear-search-btn" onclick={selectAllHosts}>
+              Select all hosts
+            </button>
+          </div>
+        {/if}
+
+        {#if !searchQuery && !hasSearchResults && $allJobs.length > 0 && selectedHostCount > 0}
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M3,5H21L14,13V19L10,21V13L3,5M7.5,7L12,12.05L16.5,7H7.5Z"
+              />
+            </svg>
+            <p>No jobs on selected hosts</p>
+            <button class="clear-search-btn" onclick={selectAllHosts}>
+              Show all hosts
             </button>
           </div>
         {/if}
@@ -1267,6 +1462,34 @@
     position: relative;
   }
 
+  .host-filter-toggle {
+    position: relative;
+  }
+
+  .host-filter-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: white;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 14px;
+  }
+
+  .icon-btn.active {
+    background: var(--accent);
+    color: white;
+  }
+
+  .icon-btn.active:hover {
+    background: color-mix(in srgb, var(--accent) 90%, black);
+  }
+
   .search-toggle.active {
     background: var(--accent);
     color: white;
@@ -1348,6 +1571,115 @@
     height: 14px;
   }
 
+  .host-filter-panel {
+    padding: 0.5rem 0.75rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--secondary) 96%, var(--foreground) 4%);
+  }
+
+  .host-filter-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--muted-foreground);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .host-filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .host-filter-actions button {
+    height: 24px;
+    min-width: 36px;
+    padding: 0 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    background: var(--secondary);
+    color: var(--foreground);
+    cursor: pointer;
+    font-size: 0.68rem;
+    font-weight: 700;
+  }
+
+  .host-filter-actions button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .host-filter-actions button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .host-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+
+  .host-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    height: 28px;
+    padding: 0 0.35rem 0 0.5rem;
+    gap: 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: var(--secondary);
+    color: var(--muted-foreground);
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 700;
+    transition:
+      border-color 0.15s ease,
+      background 0.15s ease,
+      color 0.15s ease,
+      opacity 0.15s ease;
+  }
+
+  .host-chip:hover {
+    border-color: var(--accent);
+    color: var(--foreground);
+  }
+
+  .host-chip.active {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    background: color-mix(in srgb, var(--accent) 12%, var(--secondary));
+    color: var(--foreground);
+  }
+
+  .host-chip:not(.active) {
+    background: color-mix(in srgb, var(--secondary) 92%, var(--foreground) 8%);
+    opacity: 0.62;
+  }
+
+  .host-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 132px;
+  }
+
+  .host-chip-count {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 0.25rem;
+    border-radius: 999px;
+    background: var(--muted);
+    color: var(--foreground);
+    font-size: 0.65rem;
+    line-height: 18px;
+    text-align: center;
+  }
+
   /* No search results state */
   .no-search-results {
     display: flex;
@@ -1392,6 +1724,14 @@
   /* Mobile adjustments */
   .job-sidebar.mobile .search-container {
     padding: 0 0.5rem;
+  }
+
+  .job-sidebar.mobile .host-filter-panel {
+    padding: 0.5rem;
+  }
+
+  .job-sidebar.mobile .host-chip-name {
+    max-width: 108px;
   }
 
   .job-sidebar.mobile .sidebar-search-input {

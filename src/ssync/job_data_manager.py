@@ -1288,7 +1288,7 @@ class JobDataManager:
                 or (
                     is_completed and not stdout_fetched_after
                 )  # Fetch if not fetched after completion
-            ) and job_info.stdout_file
+            )
 
             should_fetch_stderr = (
                 force_fetch
@@ -1296,7 +1296,7 @@ class JobDataManager:
                 or (
                     is_completed and not stderr_fetched_after
                 )  # Fetch if not fetched after completion
-            ) and job_info.stderr_file
+            )
 
             # If nothing to fetch, return existing cached content
             if not should_fetch_stdout and not should_fetch_stderr:
@@ -1373,6 +1373,11 @@ class JobDataManager:
 
             stdout_content = None
             stderr_content = None
+            if should_fetch_stdout and not job_info.stdout_file:
+                should_fetch_stdout = False
+            if should_fetch_stderr and not job_info.stderr_file:
+                should_fetch_stderr = False
+
             # Never treat a submission script path as output content.
             if should_fetch_stdout and job_info.stdout_file and self._is_suspicious_output_path(
                 job_info.stdout_file

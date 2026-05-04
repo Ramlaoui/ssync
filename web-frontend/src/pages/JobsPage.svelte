@@ -15,7 +15,13 @@
   import { navigationActions } from "../stores/navigation";
   import { preferences } from "../stores/preferences";
   import { fetchAllWatchers } from "../stores/watchers";
-  import type { HostInfo, JobFilters, JobInfo, PartitionStatusResponse } from "../types/api";
+  import type {
+    HostInfo,
+    JobFilters,
+    JobInfo,
+    PartitionResources,
+    PartitionStatusResponse,
+  } from "../types/api";
 
   let hosts: HostInfo[] = $state([]);
   let loading = $state(false);
@@ -275,6 +281,41 @@
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     return new Date(value).toLocaleDateString();
+  }
+
+  function percent(value: number | null | undefined, total: number | null | undefined): number {
+    if (!value || !total || total <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+  }
+
+  function formatNumber(value: number | null | undefined): string {
+    return value === null || value === undefined ? "-" : value.toLocaleString();
+  }
+
+  function gpuLabel(partition: PartitionResources): string {
+    if (partition.gpus_total === null) return "Unknown";
+    if (partition.gpus_total === 0) return "No GPUs";
+    if (partition.gpus_used === null) return `Unknown used of ${partition.gpus_total}`;
+    return `${partition.gpus_used} used of ${partition.gpus_total}`;
+  }
+
+  function availabilityVariant(value: string | null): "default" | "secondary" | "warning" | "destructive" {
+    const normalized = (value || "").toLowerCase();
+    if (!normalized || normalized === "unknown") return "secondary";
+    if (normalized.includes("up") || normalized.includes("available")) return "default";
+    if (normalized.includes("down") || normalized.includes("drain")) return "destructive";
+    return "warning";
+  }
+
+  function partitionHealth(partition: PartitionResources): "available" | "busy" | "limited" | "offline" {
+    const availability = (partition.availability || "").toLowerCase();
+    const states = (partition.states || []).join(" ").toLowerCase();
+    if (availability.includes("down") || states.includes("down") || states.includes("drain")) {
+      return "offline";
+    }
+    if ((partition.cpus_idle ?? 0) > 0) return "available";
+    if ((partition.cpus_alloc ?? 0) > 0) return "busy";
+    return "limited";
   }
 
   async function loadHosts(): Promise<void> {
@@ -735,7 +776,7 @@
             {:else}
               <div class="space-y-3">
                 {#each partitionStates as hostState (hostState.hostname)}
-                  <div class="rounded-lg border border-border bg-background p-3">
+                  <div class="partition-host-card">
                     <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="text-sm font-semibold text-foreground"
@@ -760,52 +801,104 @@
                         {hostState.error}
                       </div>
                     {:else}
-                      <div class="overflow-x-auto">
-                        <table class="min-w-[720px] w-full text-sm">
+                      <div class="partition-table-wrap">
+                        <table class="partition-table">
                           <thead>
-                            <tr class="text-xs text-muted-foreground uppercase tracking-wide">
-                              <th class="text-left font-medium py-2 pr-4">Partition</th>
-                              <th class="text-left font-medium py-2 pr-4">Avail</th>
-                              <th class="text-left font-medium py-2 pr-4">CPUs a/i/t</th>
-                              <th class="text-left font-medium py-2 pr-4">GPUs u/t</th>
-                              <th class="text-left font-medium py-2 pr-4">Nodes</th>
-                              <th class="text-left font-medium py-2">State</th>
+                            <tr>
+                              <th>Partition</th>
+                              <th>Availability</th>
+                              <th>CPU Capacity</th>
+                              <th>GPU Capacity</th>
+                              <th>Nodes</th>
+                              <th>Node States</th>
                             </tr>
                           </thead>
                           <tbody>
                             {#each hostState.partitions as partition (partition.partition)}
-                              <tr class="border-t border-border/60">
-                                <td class="py-2 pr-4 font-medium text-foreground">
-                                  {partition.partition}
+                              {@const cpuUsedPercent = percent(partition.cpus_alloc, partition.cpus_total)}
+                              {@const cpuIdlePercent = percent(partition.cpus_idle, partition.cpus_total)}
+                              {@const gpuUsedPercent = percent(partition.gpus_used, partition.gpus_total)}
+                              {@const health = partitionHealth(partition)}
+                              <tr>
+                                <td data-label="Partition">
+                                  <div class="partition-name">
+                                    <span
+                                      class="h-2.5 w-2.5 rounded-full"
+                                      class:bg-emerald-500={health === "available"}
+                                      class:bg-sky-500={health === "busy"}
+                                      class:bg-amber-500={health === "limited"}
+                                      class:bg-red-500={health === "offline"}
+                                    ></span>
+                                    <span class="font-semibold text-foreground">
+                                      {partition.partition}
+                                    </span>
+                                  </div>
                                 </td>
-                                <td class="py-2 pr-4 text-muted-foreground">
-                                  {partition.availability || "-"}
+                                <td data-label="Availability">
+                                  <Badge variant={availabilityVariant(partition.availability)}>
+                                    {partition.availability || "Unknown"}
+                                  </Badge>
                                 </td>
-                                <td class="py-2 pr-4">
-                                  <span class="text-foreground font-medium">
-                                    {partition.cpus_alloc}/{partition.cpus_idle}/{partition.cpus_total}
+                                <td data-label="CPU Capacity">
+                                  <div class="resource-cell">
+                                    <div class="resource-line">
+                                      <span class="resource-primary">
+                                        {formatNumber(partition.cpus_alloc)} used
+                                      </span>
+                                      <span class="resource-secondary">
+                                        {formatNumber(partition.cpus_idle)} idle · {formatNumber(partition.cpus_total)} total
+                                      </span>
+                                    </div>
+                                    <div class="resource-meter">
+                                      <div
+                                        class="resource-meter-fill cpu"
+                                        style={`width: ${cpuUsedPercent}%`}
+                                      ></div>
+                                    </div>
+                                    <div class="resource-note">
+                                      {cpuUsedPercent}% allocated, {cpuIdlePercent}% idle
+                                    </div>
+                                  </div>
+                                </td>
+                                <td data-label="GPU Capacity">
+                                  <div class="resource-cell">
+                                    <div class="resource-primary">
+                                      {gpuLabel(partition)}
+                                    </div>
+                                    {#if partition.gpus_total !== null && partition.gpus_total > 0 && partition.gpus_used !== null}
+                                      <div class="resource-meter">
+                                        <div
+                                          class="resource-meter-fill gpu"
+                                          style={`width: ${gpuUsedPercent}%`}
+                                        ></div>
+                                      </div>
+                                      <div class="resource-note">
+                                        {gpuUsedPercent}% allocated
+                                      </div>
+                                    {:else}
+                                      <div class="resource-note">
+                                        GPU allocation not reported
+                                      </div>
+                                    {/if}
+                                  </div>
+                                </td>
+                                <td data-label="Nodes">
+                                  <span class="resource-primary">
+                                    {formatNumber(partition.nodes_total)}
                                   </span>
                                 </td>
-                                <td class="py-2 pr-4">
-                                  {#if partition.gpus_total === null}
-                                    <span class="text-muted-foreground">-</span>
-                                  {:else if partition.gpus_total === 0}
-                                    <span class="text-muted-foreground">0</span>
-                                  {:else if partition.gpus_used === null}
-                                    <span class="text-muted-foreground"
-                                      >?/{partition.gpus_total}</span
-                                    >
-                                  {:else}
-                                    <span class="text-foreground font-medium"
-                                      >{partition.gpus_used}/{partition.gpus_total}</span
-                                    >
-                                  {/if}
-                                </td>
-                                <td class="py-2 pr-4 text-muted-foreground">
-                                  {partition.nodes_total}
-                                </td>
-                                <td class="py-2 text-muted-foreground">
-                                  {(partition.states || []).join(", ") || "-"}
+                                <td data-label="Node States">
+                                  <div class="state-chip-list">
+                                    {#if partition.states && partition.states.length > 0}
+                                      {#each partition.states as state}
+                                        <span class="state-chip">
+                                          {state}
+                                        </span>
+                                      {/each}
+                                    {:else}
+                                      <span class="resource-note">-</span>
+                                    {/if}
+                                  </div>
                                 </td>
                               </tr>
                             {/each}
@@ -863,6 +956,170 @@
     }
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  .partition-host-card {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--background);
+    padding: 0.75rem;
+  }
+
+  .partition-table-wrap {
+    overflow-x: auto;
+  }
+
+  .partition-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.875rem;
+  }
+
+  .partition-table th {
+    padding: 0.5rem 1rem 0.5rem 0;
+    text-align: left;
+    color: var(--muted-foreground);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .partition-table td {
+    padding: 0.85rem 1rem 0.85rem 0;
+    vertical-align: top;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  }
+
+  .partition-table tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .partition-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    color: var(--foreground);
+  }
+
+  .resource-cell {
+    min-width: 180px;
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .resource-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .resource-primary {
+    color: var(--foreground);
+    font-weight: 650;
+  }
+
+  .resource-secondary,
+  .resource-note {
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  .resource-meter {
+    height: 0.45rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--muted);
+  }
+
+  .resource-meter-fill {
+    height: 100%;
+    border-radius: inherit;
+  }
+
+  .resource-meter-fill.cpu {
+    background: #2563eb;
+  }
+
+  .resource-meter-fill.gpu {
+    background: #7c3aed;
+  }
+
+  .state-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .state-chip {
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 650;
+  }
+
+  @media (max-width: 767px) {
+    .partition-table-wrap {
+      overflow: visible;
+    }
+
+    .partition-table,
+    .partition-table thead,
+    .partition-table tbody,
+    .partition-table tr,
+    .partition-table th,
+    .partition-table td {
+      display: block;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .partition-table thead {
+      display: none;
+    }
+
+    .partition-table tr {
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.65rem;
+      margin-bottom: 0.75rem;
+      background: color-mix(in srgb, var(--background) 96%, var(--foreground) 4%);
+    }
+
+    .partition-table tr:last-child {
+      margin-bottom: 0;
+    }
+
+    .partition-table td {
+      display: grid;
+      grid-template-columns: 7rem minmax(0, 1fr);
+      gap: 0.75rem;
+      padding: 0.45rem 0;
+      border-bottom: 0;
+    }
+
+    .partition-table td::before {
+      content: attr(data-label);
+      color: var(--muted-foreground);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .resource-line {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 0.15rem;
     }
   }
 </style>

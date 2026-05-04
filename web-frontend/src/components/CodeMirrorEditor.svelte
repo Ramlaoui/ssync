@@ -73,8 +73,15 @@
   function getThemeExtension() {
     const isDark = theme === 'dark' || theme === 'dracula';
     // Softer, more consistent colors with the page theme
-    const backgroundColor = theme === 'dracula' ? '#282a36' : (isDark ? '#1a1f2e' : (isMobile ? '#fafbfc' : '#fafbfc'));
-    const foregroundColor = theme === 'dracula' ? '#f8f8f2' : (isDark ? '#e2e8f0' : '#374151');
+    const backgroundColor = theme === 'dracula' ? '#282a36' : (isDark ? '#171717' : (isMobile ? '#fafbfc' : '#fafbfc'));
+    const foregroundColor = theme === 'dracula' ? '#f8f8f2' : (isDark ? '#d4d4d4' : '#374151');
+    const accentColor = theme === 'dracula' ? '#ff79c6' : (isDark ? '#60a5fa' : (isMobile ? '#6366f1' : '#10b981'));
+    const selectionColor = theme === 'dracula'
+      ? 'rgba(255, 121, 198, 0.24)'
+      : (isDark ? 'rgba(96, 165, 250, 0.22)' : 'rgba(16, 185, 129, 0.18)');
+    const focusedSelectionColor = theme === 'dracula'
+      ? 'rgba(255, 121, 198, 0.3)'
+      : (isDark ? 'rgba(96, 165, 250, 0.28)' : 'rgba(16, 185, 129, 0.24)');
     const mobileFont = '"SF Mono", "Monaco", "Menlo", "Consolas", "Courier New", monospace';
     const desktopFont = '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace';
 
@@ -101,7 +108,7 @@
         color: foregroundColor,
         fontSize: baseFontSize,
         fontFamily: fontFamily,
-        caretColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
+        caretColor: accentColor,
         lineHeight: lineHeight,
         letterSpacing: isMobile ? '0.01em' : 'normal',
       },
@@ -118,20 +125,26 @@
         lineHeight: lineHeight,
       },
       '.cm-cursor': {
-        borderColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
+        borderColor: accentColor,
         borderWidth: isMobile ? '2px' : '1px',
       },
       '.cm-selectionBackground': {
-        backgroundColor: theme === 'dracula' ? 'rgba(255, 121, 198, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+        backgroundColor: selectionColor,
+      },
+      '.cm-selectionLayer .cm-selectionBackground': {
+        backgroundColor: selectionColor,
+      },
+      '&.cm-focused .cm-selectionBackground': {
+        backgroundColor: focusedSelectionColor,
       },
       '.cm-activeLine': {
-        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 0, 0, 0.02)',
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.035)' : 'rgba(0, 0, 0, 0.02)',
       },
       '.cm-activeLineGutter': {
-        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 0, 0, 0.05)',
       },
       '.cm-gutters': {
-        backgroundColor: isDark ? 'rgba(0, 0, 0, 0.1)' : 'transparent',
+        backgroundColor: isDark ? '#1f1f1f' : 'transparent',
         color: isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(156, 163, 175, 0.8)',
         border: 'none',
         fontSize: baseFontSize,
@@ -529,6 +542,27 @@
 
   :global(.cm-selectionBackground) {
     background: rgba(16, 185, 129, 0.2) !important;
+  }
+
+  :global(.dark .cm-selectionBackground),
+  :global(.dark .cm-selectionLayer .cm-selectionBackground) {
+    background: rgba(96, 165, 250, 0.22) !important;
+  }
+
+  :global(.dark .cm-focused .cm-selectionBackground) {
+    background: rgba(96, 165, 250, 0.28) !important;
+  }
+
+  :global(.dark .cm-content) {
+    caret-color: #60a5fa !important;
+  }
+
+  :global(.dark .cm-focused .cm-cursor) {
+    border-color: #60a5fa !important;
+  }
+
+  :global(.dark .cm-editor ::selection) {
+    background: rgba(96, 165, 250, 0.28) !important;
   }
 
   :global(.cm-vim-panel) {
