@@ -394,9 +394,11 @@
     showSettingsMenu = false;
   }
 
-  function handleClickOutside(event: Event) {
+  function handleClickOutside(event: MouseEvent) {
     if (showSettingsMenu) {
-      const target = event.target as HTMLElement;
+      if (event.button !== 0 || !(event.target instanceof Element)) return;
+
+      const target = event.target;
       if (!target.closest('.settings-dropdown')) {
         showSettingsMenu = false;
       }

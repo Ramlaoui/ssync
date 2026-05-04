@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from ...cache import get_cache
 from ...models.job import JobState
 from ...utils.async_helpers import create_task
+from ...utils.config import config as app_config
 from ...utils.logging import setup_logger
 from ..models import (
     CompleteJobDataResponse,
@@ -327,6 +328,30 @@ async def stat_remote_file_size(conn, file_path: Optional[str]) -> int:
         return 0
 
 
+async def ensure_output_path(manager, conn, job_info, output_type: str) -> Optional[str]:
+    file_path = output_path_for(job_info, output_type)
+    if file_path:
+        return file_path
+
+    try:
+        stdout_path, stderr_path = await asyncio.to_thread(
+            manager.slurm_client.get_job_output_files,
+            conn,
+            job_info.job_id,
+            job_info.hostname,
+        )
+        if stdout_path and not job_info.stdout_file:
+            job_info.stdout_file = stdout_path
+        if stderr_path and not job_info.stderr_file:
+            job_info.stderr_file = stderr_path
+    except Exception as exc:
+        logger.debug(
+            f"Could not resolve {output_type} path for output stream {job_info.job_id}: {exc}"
+        )
+
+    return output_path_for(job_info, output_type)
+
+
 async def read_remote_file_chunk_text(
     conn,
     file_path: Optional[str],
@@ -366,8 +391,6 @@ async def build_stream_job_output_response(
     get_slurm_manager,
 ) -> StreamingResponse:
     manager = get_slurm_manager()
-    slurm_host = manager.get_host_by_name(host)
-    conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
     max_initial_bytes = max(1024, min(max_initial_bytes, MAX_OUTPUT_MAX_BYTES))
     max_live_chunk_bytes = min(chunk_size, 256 * 1024)
@@ -375,9 +398,21 @@ async def build_stream_job_output_response(
     async def generate():
         cache = get_cache()
         cached_job = cache.get_cached_job(job_id, host)
+        conn = None
+        try:
+            slurm_host = manager.get_host_by_name(host)
+            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+        except Exception as exc:
+            logger.debug(
+                f"Could not open live output stream for {job_id} on {host}: {exc}"
+            )
 
         async def resolve_job_info():
             nonlocal cached_job
+            if conn is None:
+                if cached_job and cached_job.job_info:
+                    return cached_job.job_info
+                return None
             try:
                 job_info = await asyncio.to_thread(
                     manager.slurm_client.get_job_details,
@@ -403,8 +438,8 @@ async def build_stream_job_output_response(
         }
         job_info = await resolve_job_info()
 
-        if job_info and job_info.state == JobState.RUNNING:
-            file_path = output_path_for(job_info, output_type)
+        if conn is not None and job_info and job_info.state == JobState.RUNNING:
+            file_path = await ensure_output_path(manager, conn, job_info, output_type)
             current_size = await stat_remote_file_size(conn, file_path)
             start_offset = max(0, current_size - max_initial_bytes)
             chunk_index = 0
@@ -457,7 +492,12 @@ async def build_stream_job_output_response(
                         job_info = refreshed_job_info
                     last_refresh_at = now
 
-                file_path = output_path_for(job_info, output_type)
+                file_path = await ensure_output_path(
+                    manager,
+                    conn,
+                    job_info,
+                    output_type,
+                )
                 current_size = await stat_remote_file_size(conn, file_path)
                 if current_size < position:
                     position = 0
@@ -996,37 +1036,53 @@ async def get_job_output_response(
             refresh_queued = False
 
             if is_running:
-                throttle_key = f"output:{host}:{job_id}"
-                min_interval = 10
-                now = time.time()
-                last_fetch = _OUTPUT_THROTTLE_CACHE.get(throttle_key, 0)
-                needs_stdout = should_include_output(output_type, "stdout") and not stdout_exists
-                needs_stderr = should_include_output(output_type, "stderr") and not stderr_exists
-                should_refresh = (
-                    force_refresh
-                    or now - last_fetch >= min_interval
-                    or needs_stdout
-                    or needs_stderr
-                )
-                if should_refresh:
-                    refresh_reason = (
-                        "force_refresh"
-                        if force_refresh
-                        else "running_output_refresh"
+                cache_settings = app_config.cache_settings
+                if cache_settings.refresh_running_outputs:
+                    throttle_key = f"output:{host}:{job_id}"
+                    min_interval = (
+                        cache_settings.running_output_refresh_interval_seconds
                     )
-                    refresh_queued = queue_job_output_refresh(
-                        job_info=cached_job.job_info,
-                        cache_middleware=cache_middleware,
-                        job_manager=job_manager,
-                        force_fetch=True,
-                        refresh_reason=refresh_reason,
+                    now = time.time()
+                    last_fetch = _OUTPUT_THROTTLE_CACHE.get(throttle_key, 0)
+                    needs_stdout = (
+                        should_include_output(output_type, "stdout")
+                        and not stdout_exists
                     )
-                    if refresh_queued:
-                        _OUTPUT_THROTTLE_CACHE[throttle_key] = now
+                    needs_stderr = (
+                        should_include_output(output_type, "stderr")
+                        and not stderr_exists
+                    )
+                    should_refresh = (
+                        force_refresh
+                        or now - last_fetch >= min_interval
+                        or needs_stdout
+                        or needs_stderr
+                    )
+                    if should_refresh:
+                        refresh_reason = (
+                            "force_refresh"
+                            if force_refresh
+                            else "running_output_refresh"
+                        )
+                        refresh_queued = queue_job_output_refresh(
+                            job_info=cached_job.job_info,
+                            cache_middleware=cache_middleware,
+                            job_manager=job_manager,
+                            force_fetch=True,
+                            refresh_reason=refresh_reason,
+                        )
+                        if refresh_queued:
+                            _OUTPUT_THROTTLE_CACHE[throttle_key] = now
+                    else:
+                        logger.debug(
+                            f"Job {job_id} output throttled, serving cached "
+                            f"({now - last_fetch:.1f}s since last fetch)"
+                        )
                 else:
                     logger.debug(
-                        f"Job {job_id} output throttled, serving cached "
-                        f"({now - last_fetch:.1f}s since last fetch)"
+                        "Running-output cache refresh disabled; serving cached "
+                        "output for job %s",
+                        job_id,
                     )
             elif is_completed:
                 stdout_fetched_after, stderr_fetched_after = (

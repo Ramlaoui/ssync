@@ -185,8 +185,15 @@
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: 6px;
+    background: var(--input);
+    color: var(--foreground);
     font-size: 0.875rem;
     transition: all 0.2s;
+  }
+
+  .form-input::placeholder,
+  .form-textarea::placeholder {
+    color: var(--muted-foreground);
   }
 
   .form-input:focus,

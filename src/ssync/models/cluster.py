@@ -53,6 +53,12 @@ class CacheSettings:
     zombie_cleanup_days: int = (
         7  # Days after which stale PD/UNKNOWN jobs are marked completed
     )
+    refresh_running_outputs: bool = (
+        True  # Whether output API requests refresh cached output for running jobs
+    )
+    running_output_refresh_interval_seconds: int = (
+        10  # Minimum interval between running-output cache refreshes per job
+    )
 
     def __post_init__(self):
         # Validate settings
@@ -68,6 +74,8 @@ class CacheSettings:
             self.max_size_mb = 10
         if self.zombie_cleanup_days < 0:
             self.zombie_cleanup_days = 0
+        if self.running_output_refresh_interval_seconds < 1:
+            self.running_output_refresh_interval_seconds = 1
 
 
 @dataclass

@@ -31,8 +31,10 @@ export function clickOutside(node: HTMLElement, options: ClickOutsideOptions = {
 
   const handleClick = (event: MouseEvent) => {
     if (!currentEnabled) return;
+    if (event.button !== 0) return;
+    if (!(event.target instanceof Node)) return;
 
-    const target = event.target as Node;
+    const target = event.target;
 
     // Check if click is inside the element
     if (node.contains(target)) return;

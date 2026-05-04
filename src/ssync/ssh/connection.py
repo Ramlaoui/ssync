@@ -151,6 +151,20 @@ class SSHConnection:
                         else:
                             ssh_cmd.append(hostname)
                 else:
+                    if NativeSSH.is_host_backed_off(self.host_id):
+                        return SSHCommandResult(
+                            SSHResult(
+                                success=False,
+                                stdout="",
+                                stderr=(
+                                    f"ControlMaster for {self.host_id} is in failure "
+                                    "backoff; skipping direct SSH fallback to avoid "
+                                    "spawning tunnel storms"
+                                ),
+                                return_code=255,
+                            )
+                        )
+
                     # Fallback without ControlMaster
                     ssh_cmd = NativeSSH._build_direct_ssh_command(self.host_config)
 
@@ -160,9 +174,7 @@ class SSHConnection:
             # Run with subprocess (allows true parallelism)
             try:
                 # Capture as bytes first to handle non-UTF-8 output
-                result = subprocess.run(
-                    ssh_cmd, capture_output=True, timeout=timeout or 120
-                )
+                result = NativeSSH.run_subprocess(ssh_cmd, timeout=timeout or 120)
             except subprocess.TimeoutExpired:
                 logger.debug(f"Command timed out after {timeout} seconds")
                 return SSHCommandResult(

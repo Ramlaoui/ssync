@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     fetchJobWatchers,
+    fetchWatcherEvents,
     getWatcherJobKey,
     jobWatchersErrors,
     jobWatchersLoading,
@@ -9,6 +10,8 @@
   } from "../stores/watchers";
   import type { Watcher, WatcherEvent } from "../types/watchers";
   import type { JobInfo } from "../types/api";
+  import { push } from "svelte-spa-router";
+  import Dialog from "../lib/components/ui/Dialog.svelte";
   import {
     Eye,
     ChevronDown,
@@ -23,7 +26,9 @@
     Hash,
     Radio,
     RefreshCw,
-    Zap
+    Zap,
+    ExternalLink,
+    Maximize2
   } from "lucide-svelte";
   import LoadingSpinner from "./LoadingSpinner.svelte";
 
@@ -34,6 +39,8 @@
   let { job }: Props = $props();
 
   let expandedWatchers = $state(new Set<number>());
+  let expandedEvents = $state(new Set<number>());
+  let selectedEvent = $state<WatcherEvent | null>(null);
   let jobKey = $derived(getWatcherJobKey(job.job_id, job.hostname));
   let jobWatchers = $derived(
     $watcherStore.filter(
@@ -45,6 +52,11 @@
     $watcherEvents
       .filter((event) => event.job_id === job.job_id && event.hostname === job.hostname)
       .slice(0, 6)
+  );
+  let selectedEventWatcher = $derived(
+    selectedEvent
+      ? jobWatchers.find((watcher) => watcher.id === selectedEvent?.watcher_id) || null
+      : null
   );
   let loading = $derived(Boolean($jobWatchersLoading[jobKey]) && jobWatchers.length === 0);
   let refreshing = $derived(Boolean($jobWatchersLoading[jobKey]) && jobWatchers.length > 0);
@@ -62,16 +74,52 @@
   );
 
   async function loadWatchers() {
-    await fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 0 });
+    await Promise.all([
+      fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 0 }),
+      fetchWatcherEvents(job.job_id, undefined, 100),
+    ]);
   }
 
   function toggleWatcher(watcherId: number) {
-    if (expandedWatchers.has(watcherId)) {
-      expandedWatchers.delete(watcherId);
+    const nextExpandedWatchers = new Set(expandedWatchers);
+    if (nextExpandedWatchers.has(watcherId)) {
+      nextExpandedWatchers.delete(watcherId);
     } else {
-      expandedWatchers.add(watcherId);
+      nextExpandedWatchers.add(watcherId);
     }
-    expandedWatchers = expandedWatchers;
+    expandedWatchers = nextExpandedWatchers;
+  }
+
+  function toggleEvent(eventId: number) {
+    if (expandedEvents.has(eventId)) {
+      expandedEvents.delete(eventId);
+    } else {
+      expandedEvents.add(eventId);
+    }
+    expandedEvents = new Set(expandedEvents);
+  }
+
+  function eventsForWatcher(watcherId: number): WatcherEvent[] {
+    return $watcherEvents
+      .filter(
+        (event) =>
+          event.watcher_id === watcherId &&
+          event.job_id === job.job_id &&
+          event.hostname === job.hostname
+      )
+      .slice(0, 12);
+  }
+
+  function openWatcherBoard(watcherId: number) {
+    void push(`/watchers?watcher=${watcherId}`);
+  }
+
+  function openEventDetail(event: WatcherEvent) {
+    selectedEvent = event;
+  }
+
+  function closeEventDetail() {
+    selectedEvent = null;
   }
 
   function getStateIcon(state: string | undefined) {
@@ -164,7 +212,10 @@
   }
 
   $effect(() => {
-    void fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 15_000 }).catch(() => {});
+    void Promise.all([
+      fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 15_000 }),
+      fetchWatcherEvents(job.job_id, undefined, 100),
+    ]).catch(() => {});
   });
 </script>
 
@@ -242,6 +293,7 @@
       {#each jobWatchers as watcher}
         {#if watcher}
         {@const SvelteComponent = getStateIcon(watcher.state)}
+        {@const watcherEventsForCard = eventsForWatcher(watcher.id)}
         <div class="watcher-card" class:expanded={expandedWatchers.has(watcher.id)}>
           <button
             class="watcher-header"
@@ -267,6 +319,10 @@
                     <Hash class="w-3 h-3" />
                     {watcher.trigger_count} trigger{watcher.trigger_count !== 1 ? 's' : ''}
                   </span>
+                  <span class="trigger-count">
+                    <Activity class="w-3 h-3" />
+                    {watcherEventsForCard.length} event{watcherEventsForCard.length !== 1 ? 's' : ''}
+                  </span>
                   {#if watcher.timer_mode_active}
                     <span class="timer-mode">
                       <Clock class="w-3 h-3" />
@@ -280,6 +336,13 @@
 
           {#if expandedWatchers.has(watcher.id)}
             <div class="watcher-details">
+              <div class="detail-toolbar">
+                <button class="open-board-button" onclick={() => openWatcherBoard(watcher.id)}>
+                  <ExternalLink class="w-3.5 h-3.5" />
+                  Open watcher board
+                </button>
+              </div>
+
               <!-- Pattern Section -->
               <div class="detail-section">
                 <h4>Pattern</h4>
@@ -373,6 +436,79 @@
                   {/if}
                 </div>
               </div>
+
+              <div class="detail-section events-section">
+                <h4>
+                  <Activity class="w-4 h-4" />
+                  Recent Events
+                </h4>
+
+                {#if watcherEventsForCard.length === 0}
+                  <p class="no-variables">No events recorded for this watcher yet</p>
+                {:else}
+                  <div class="watcher-event-list">
+                    {#each watcherEventsForCard as event (event.id)}
+                      {@const eventExpanded = expandedEvents.has(event.id)}
+                      <div class="watcher-event" class:failed={!event.success}>
+                        <button class="watcher-event-summary" onclick={() => toggleEvent(event.id)}>
+                          <div>
+                            <strong>{event.action_type.replace(/_/g, ' ')}</strong>
+                            <span>{formatRelativeTime(event.timestamp)} · {event.success ? 'success' : 'failed'}</span>
+                          </div>
+                          <ChevronDown class={`w-4 h-4 event-expand-icon${eventExpanded ? ' rotated' : ''}`} />
+                        </button>
+
+                        {#if eventExpanded}
+                          <div class="watcher-event-details">
+                            <div class="event-detail-actions">
+                              <button
+                                class="event-popout-button"
+                                onclick={() => openEventDetail(event)}
+                              >
+                                <Maximize2 class="w-3.5 h-3.5" />
+                                Full event detail
+                              </button>
+                            </div>
+
+                            {#if event.matched_text}
+                              <div class="event-detail-block">
+                                <span>Matched text</span>
+                                <code>{event.matched_text}</code>
+                              </div>
+                            {/if}
+
+                            {#if event.captured_vars && Object.keys(event.captured_vars).length > 0}
+                              <div class="event-detail-block">
+                                <span>Captured variables</span>
+                                <div class="variables-grid compact">
+                                  {#each Object.entries(event.captured_vars) as [name, value]}
+                                    <div class="variable-item">
+                                      <span class="variable-name">{name}:</span>
+                                      <span class="variable-value">{value}</span>
+                                    </div>
+                                  {/each}
+                                </div>
+                              </div>
+                            {/if}
+
+                            {#if event.action_result}
+                              <div class="event-detail-block">
+                                <span>Action result</span>
+                                <pre>{event.action_result}</pre>
+                              </div>
+                            {/if}
+
+                            <div class="event-detail-footer">
+                              <span>{formatTime(event.timestamp)}</span>
+                              <span>{event.hostname}</span>
+                            </div>
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
             </div>
           {/if}
         </div>
@@ -381,6 +517,73 @@
     </div>
   {/if}
 </div>
+
+{#if selectedEvent}
+  <Dialog
+    open={!!selectedEvent}
+    on:close={closeEventDetail}
+    title="Watcher Event Detail"
+    description={`${selectedEvent.action_type.replace(/_/g, ' ')} · ${formatTime(selectedEvent.timestamp)}`}
+    size="xl"
+    contentClass="watcher-event-dialog-content"
+  >
+    <div class="event-dialog">
+      <div class="event-dialog-summary">
+        <div>
+          <span class="dialog-label">Watcher</span>
+          <strong>{selectedEventWatcher?.name || selectedEvent.watcher_name || `#${selectedEvent.watcher_id}`}</strong>
+        </div>
+        <div>
+          <span class="dialog-label">Job</span>
+          <strong>#{selectedEvent.job_id} on {selectedEvent.hostname}</strong>
+        </div>
+        <div>
+          <span class="dialog-label">Action</span>
+          <strong>{selectedEvent.action_type.replace(/_/g, ' ')}</strong>
+        </div>
+        <div>
+          <span class="dialog-label">Status</span>
+          <strong class:failed={!selectedEvent.success}>
+            {selectedEvent.success ? 'success' : 'failed'}
+          </strong>
+        </div>
+      </div>
+
+      {#if selectedEvent.matched_text}
+        <section class="event-dialog-section">
+          <h3>Matched Text</h3>
+          <pre>{selectedEvent.matched_text}</pre>
+        </section>
+      {/if}
+
+      {#if selectedEvent.captured_vars && Object.keys(selectedEvent.captured_vars).length > 0}
+        <section class="event-dialog-section">
+          <h3>Captured Variables</h3>
+          <div class="event-dialog-vars">
+            {#each Object.entries(selectedEvent.captured_vars) as [name, value]}
+              <div class="event-dialog-var">
+                <span>{name}</span>
+                <code>{value}</code>
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
+      {#if selectedEvent.action_result}
+        <section class="event-dialog-section">
+          <h3>Action Result</h3>
+          <pre>{selectedEvent.action_result}</pre>
+        </section>
+      {/if}
+
+      <section class="event-dialog-section">
+        <h3>Raw Event</h3>
+        <pre>{JSON.stringify(selectedEvent, null, 2)}</pre>
+      </section>
+    </div>
+  </Dialog>
+{/if}
 
 <style>
   .watchers-tab {
@@ -683,6 +886,31 @@
     border-top: 1px solid var(--border);
   }
 
+  .detail-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 0.75rem;
+  }
+
+  .open-board-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.4rem 0.55rem;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 0.78rem;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .open-board-button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
   .detail-section {
     margin-top: 1rem;
   }
@@ -734,6 +962,10 @@
   .variables-grid {
     display: grid;
     gap: 0.5rem;
+  }
+
+  .variables-grid.compact {
+    gap: 0.35rem;
   }
 
   .variable-item {
@@ -801,6 +1033,233 @@
     color: var(--muted-foreground);
   }
 
+  .events-section {
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }
+
+  .watcher-event-list {
+    display: grid;
+    gap: 0.6rem;
+  }
+
+  .watcher-event {
+    border: 1px solid color-mix(in srgb, var(--success) 28%, var(--border));
+    border-radius: 0.5rem;
+    background: color-mix(in srgb, var(--success) 5%, var(--background));
+    overflow: hidden;
+  }
+
+  .watcher-event.failed {
+    border-color: color-mix(in srgb, var(--destructive) 32%, var(--border));
+    background: color-mix(in srgb, var(--destructive) 5%, var(--background));
+  }
+
+  .watcher-event-summary {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border: none;
+    background: transparent;
+    padding: 0.65rem 0.75rem;
+    color: var(--foreground);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .watcher-event-summary strong {
+    display: block;
+    font-size: 0.86rem;
+    text-transform: capitalize;
+  }
+
+  .watcher-event-summary span {
+    display: block;
+    margin-top: 0.15rem;
+    color: var(--muted-foreground);
+    font-size: 0.74rem;
+  }
+
+  .event-expand-icon {
+    color: var(--muted-foreground);
+    transition: transform 0.15s ease;
+  }
+
+  .event-expand-icon.rotated {
+    transform: rotate(180deg);
+  }
+
+  .watcher-event-details {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .event-detail-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .event-popout-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.35rem 0.5rem;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 0.74rem;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .event-popout-button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .event-detail-block {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .event-detail-block > span {
+    color: var(--muted-foreground);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .event-detail-block code,
+  .event-detail-block pre {
+    margin: 0;
+    padding: 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: var(--secondary);
+    color: var(--foreground);
+    font-family: monospace;
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .event-detail-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    color: var(--muted-foreground);
+    font-size: 0.74rem;
+  }
+
+  :global(.watcher-event-dialog-content) {
+    max-height: min(72vh, 760px);
+  }
+
+  .event-dialog {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .event-dialog-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .event-dialog-summary > div {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--secondary);
+    padding: 0.75rem;
+  }
+
+  .dialog-label {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: var(--muted-foreground);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .event-dialog-summary strong {
+    display: block;
+    overflow: hidden;
+    color: var(--foreground);
+    font-size: 0.86rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .event-dialog-summary strong.failed {
+    color: var(--destructive);
+  }
+
+  .event-dialog-section {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .event-dialog-section h3 {
+    margin: 0;
+    color: var(--foreground);
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+
+  .event-dialog-section pre {
+    margin: 0;
+    max-height: 260px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--secondary);
+    color: var(--foreground);
+    padding: 0.85rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .event-dialog-vars {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .event-dialog-var {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.25fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--secondary);
+    padding: 0.65rem;
+  }
+
+  .event-dialog-var span {
+    color: var(--success);
+    font-family: monospace;
+    font-weight: 700;
+  }
+
+  .event-dialog-var code {
+    min-width: 0;
+    color: var(--foreground);
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   .btn {
     padding: 0.375rem 0.75rem;
     background: var(--accent);
@@ -850,6 +1309,15 @@
 
     .variable-name {
       min-width: unset;
+    }
+
+    .event-dialog-summary {
+      grid-template-columns: 1fr;
+    }
+
+    .event-dialog-var {
+      grid-template-columns: 1fr;
+      gap: 0.3rem;
     }
   }
 </style>

@@ -252,6 +252,30 @@ class TestSSHConnection:
         mock_run.assert_called_once_with("echo 'health check'", hide=True, timeout=5)
 
     @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.run_subprocess")
+    @patch("ssync.ssh.connection.NativeSSH._build_direct_ssh_command")
+    @patch("ssync.ssh.connection.NativeSSH.is_host_backed_off")
+    @patch("ssync.ssh.connection.NativeSSH.ensure_control_master")
+    def test_run_skips_direct_fallback_during_control_master_backoff(
+        self,
+        mock_ensure_control_master,
+        mock_is_host_backed_off,
+        mock_build_direct_ssh_command,
+        mock_run_subprocess,
+    ):
+        conn = SSHConnection("jz", "jz")
+        mock_ensure_control_master.return_value = None
+        mock_is_host_backed_off.return_value = True
+
+        result = conn.run("squeue", timeout=5)
+
+        assert result.ok is False
+        assert result.return_code == 255
+        assert "skipping direct SSH fallback" in result.stderr
+        mock_build_direct_ssh_command.assert_not_called()
+        mock_run_subprocess.assert_not_called()
+
+    @pytest.mark.unit
     @patch("ssync.ssh.connection.NativeSSH.cleanup_control_master")
     @patch("subprocess.run")
     def test_run_scp_command_retries_after_timeout(

@@ -378,6 +378,59 @@ async def test_do_fetch_outputs_reuses_shared_stdout_stderr_path(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_do_fetch_outputs_resolves_missing_output_paths_before_fetch(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-missing-output-paths.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    fake_conn = types.SimpleNamespace()
+    commands = []
+
+    class _FakeSlurmClient:
+        def get_job_output_files(self, conn, job_id, resolved_hostname):
+            assert conn is fake_conn
+            assert job_id == "7003"
+            assert resolved_hostname == hostname
+            return "/tmp/resolved.out", "/tmp/resolved.err"
+
+    def run(command, hide=True, timeout=None):
+        commands.append(command)
+        if "/tmp/resolved.out" in command:
+            return types.SimpleNamespace(ok=True, stdout="resolved stdout")
+        return types.SimpleNamespace(ok=True, stdout="resolved stderr")
+
+    fake_conn.run = run
+    manager.slurm_client = _FakeSlurmClient()
+    manager._get_connection = lambda _host: fake_conn
+    _install_fake_web_app(monkeypatch, manager)
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    async def run_inline(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(job_data_manager, "_run_in_executor", run_inline)
+
+    job_info = _make_job("7003", hostname, state=JobState.COMPLETED)
+    job_info.stdout_file = None
+    job_info.stderr_file = None
+
+    stdout_content, stderr_content = await job_data_manager._do_fetch_outputs(job_info)
+
+    assert stdout_content == "resolved stdout"
+    assert stderr_content == "resolved stderr"
+    assert job_info.stdout_file == "/tmp/resolved.out"
+    assert job_info.stderr_file == "/tmp/resolved.err"
+    assert sorted(commands) == [
+        "test -f /tmp/resolved.err && cat /tmp/resolved.err",
+        "test -f /tmp/resolved.out && cat /tmp/resolved.out",
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_do_fetch_outputs_fetches_distinct_streams_concurrently(
     monkeypatch, test_cache
 ):

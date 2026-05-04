@@ -126,7 +126,9 @@
   
   // Close dropdowns on outside click
   function handleClickOutside(event: MouseEvent) {
-    const target = event.target as HTMLElement;
+    if (event.button !== 0 || !(event.target instanceof Element)) return;
+
+    const target = event.target;
     // Only close dropdowns if clicking outside ALL filter dropdowns, menus, and sortable headers
     if (!target.closest('.filter-dropdown') && 
         !target.closest('.dropdown-menu') && 

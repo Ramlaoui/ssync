@@ -19,6 +19,18 @@
     const originalOnError = window.onerror;
     
     window.onerror = (message: string | Event, source?: string, line?: number, column?: number, error?: Error) => {
+      const isOpaqueScriptError =
+        message === 'Script error.' &&
+        !source &&
+        !line &&
+        !column &&
+        !error;
+
+      if (isOpaqueScriptError) {
+        console.warn('Ignored opaque cross-origin script error');
+        return true;
+      }
+
       // Prevent error loops
       const now = Date.now();
       if (now - lastErrorTime < 100) {

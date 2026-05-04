@@ -7,7 +7,10 @@ allows unlimited parallel SSH commands through that single connection.
 import asyncio
 import hashlib
 import os
+import signal
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Union
@@ -32,6 +35,8 @@ class NativeSSH:
 
     # Class-level tracking of established control masters
     _control_masters: Dict[str, str] = {}  # host_id -> control_path
+    _host_locks: Dict[str, threading.Lock] = {}
+    _host_locks_lock = threading.Lock()
 
     @classmethod
     def get_control_path(cls, host_id: str) -> str:
@@ -58,6 +63,75 @@ class NativeSSH:
     _FAILURE_BACKOFF = 60.0  # Don't retry failed hosts for 60 seconds
 
     @classmethod
+    def _get_host_lock(cls, host_id: str) -> threading.Lock:
+        """Return a per-host lock to serialize ControlMaster creation."""
+        with cls._host_locks_lock:
+            lock = cls._host_locks.get(host_id)
+            if lock is None:
+                lock = threading.Lock()
+                cls._host_locks[host_id] = lock
+            return lock
+
+    @classmethod
+    def _is_in_failure_backoff(cls, host_id: str) -> bool:
+        """Return whether a host is currently in ControlMaster retry backoff."""
+        failed_at = cls._failed_hosts.get(host_id)
+        if failed_at is None:
+            return False
+
+        if time.time() - failed_at < cls._FAILURE_BACKOFF:
+            return True
+
+        cls._failed_hosts.pop(host_id, None)
+        return False
+
+    @classmethod
+    def is_host_backed_off(cls, host_id: str) -> bool:
+        """Public check for callers deciding whether to avoid direct fallback."""
+        return cls._is_in_failure_backoff(host_id)
+
+    @staticmethod
+    def run_subprocess(
+        cmd: list[str],
+        *,
+        timeout: Optional[float],
+        text: bool = False,
+    ) -> subprocess.CompletedProcess:
+        """Run a command and kill its whole process group on timeout.
+
+        SSH ProxyCommand chains can leave gcloud/ssh children orphaned if only the
+        direct ssh process is killed. Starting a new session lets us terminate the
+        complete local process tree for that command.
+        """
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            text=text,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                cmd, timeout, output=stdout, stderr=stderr
+            )
+
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+
+    @classmethod
     def ensure_control_master(
         cls, host_config: Union[str, Dict], host_id: str
     ) -> Optional[str]:
@@ -70,10 +144,8 @@ class NativeSSH:
         Returns:
             Control socket path if successful, None otherwise
         """
-        import time
-
         # Check if this host recently failed - if so, skip retry for backoff period
-        if host_id in cls._failed_hosts:
+        if cls._is_in_failure_backoff(host_id):
             time_since_failure = time.time() - cls._failed_hosts[host_id]
             if time_since_failure < cls._FAILURE_BACKOFF:
                 logger.debug(
@@ -81,6 +153,17 @@ class NativeSSH:
                     f"(failed {time_since_failure:.1f}s ago, backoff={cls._FAILURE_BACKOFF}s)"
                 )
                 return None
+
+        with cls._get_host_lock(host_id):
+            return cls._ensure_control_master_locked(host_config, host_id)
+
+    @classmethod
+    def _ensure_control_master_locked(
+        cls, host_config: Union[str, Dict], host_id: str
+    ) -> Optional[str]:
+        """Ensure ControlMaster is established while holding the host lock."""
+        if cls._is_in_failure_backoff(host_id):
+            return None
 
         # Get control path
         control_path = cls.get_control_path(host_id)
@@ -190,8 +273,9 @@ class NativeSSH:
             safe_cmd = [c if not password or c != password else "***" for c in ssh_cmd]
             logger.debug(f"SSH command: {' '.join(safe_cmd[:10])}...")
 
-            # Start control master with shorter timeout for faster failure
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=5)
+            # Start control master with shorter timeout for faster failure.
+            # Use process-group cleanup so ProxyCommand children are not orphaned.
+            result = cls.run_subprocess(ssh_cmd, text=True, timeout=5)
 
             # Wait a bit for socket to be created
             import time
@@ -287,6 +371,16 @@ class NativeSSH:
         control_path = cls.ensure_control_master(host_config, host_id)
 
         if not control_path:
+            if cls.is_host_backed_off(host_id):
+                return SSHResult(
+                    success=False,
+                    stdout="",
+                    stderr=(
+                        f"ControlMaster for {host_id} is in failure backoff; "
+                        "skipping direct SSH fallback to avoid spawning tunnel storms"
+                    ),
+                    return_code=255,
+                )
             # Fallback to direct SSH without ControlMaster
             logger.warning(f"Running without ControlMaster for {host_id}")
             ssh_cmd = cls._build_direct_ssh_command(host_config)
@@ -310,7 +404,10 @@ class NativeSSH:
         # Run command asynchronously
         try:
             process = await asyncio.create_subprocess_exec(
-                *ssh_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *ssh_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
 
             # Wait with timeout
@@ -320,8 +417,18 @@ class NativeSSH:
                         process.communicate(), timeout=timeout
                     )
                 except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=2)
+                    except asyncio.TimeoutError:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        await process.wait()
                     return SSHResult(
                         success=False,
                         stdout="",
