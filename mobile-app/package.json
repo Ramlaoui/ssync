@@ -1,0 +1,42 @@
+{
+  "name": "ssync-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/native": "^7.2.4",
+    "@react-navigation/native-stack": "^7.14.14",
+    "expo": "~54.0.0",
+    "expo-blur": "~15.0.8",
+    "expo-clipboard": "~8.0.8",
+    "expo-constants": "~18.0.13",
+    "expo-device": "~8.0.10",
+    "expo-file-system": "~19.0.22",
+    "expo-notifications": "~0.32.17",
+    "expo-sharing": "~14.0.8",
+    "jszip": "^3.10.1",
+    "lucide-react-native": "1.14.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-pager-view": "6.9.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@types/react": "~19.1.10",
+    "babel-preset-expo": "~54.0.10",
+    "typescript": "5.9.3"
+  }
+}
