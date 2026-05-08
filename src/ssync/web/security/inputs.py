@@ -284,6 +284,20 @@ def normalize_device_token(token: str) -> str:
     return normalized.lower()
 
 
+def normalize_push_token(token: str, token_type: str) -> str:
+    token_type = (token_type or "apns").lower()
+    if token_type == "apns":
+        return normalize_device_token(token)
+
+    if token_type == "expo":
+        normalized = InputSanitizer.sanitize_text(token or "", max_length=256)
+        if not re.match(r"^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$", normalized):
+            raise HTTPException(status_code=400, detail="Invalid Expo push token")
+        return normalized
+
+    raise HTTPException(status_code=400, detail="Invalid push token type")
+
+
 def normalize_environment(environment: Optional[str]) -> Optional[str]:
     if environment is None:
         return None

@@ -9,6 +9,7 @@ from .inputs import (
     ScriptValidator,
     normalize_device_token,
     normalize_environment,
+    normalize_push_token,
     sanitize_error_message,
     sanitize_notification_preferences,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "create_auth_dependencies",
     "normalize_device_token",
     "normalize_environment",
+    "normalize_push_token",
     "sanitize_error_message",
     "sanitize_notification_preferences",
 ]

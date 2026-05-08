@@ -5,7 +5,15 @@
   import NavigationHeader from '../components/NavigationHeader.svelte';
   import SyncSettings from '../components/SyncSettings.svelte';
   import { apiConfig, setApiKey, clearApiKey, testConnection } from '../services/api';
-  import { enableWebPush, disableWebPush, isWebPushSupported } from '../services/webpush';
+  import {
+    enableWebPush,
+    disableWebPush,
+    getNotificationPreferences,
+    getNotificationStatus,
+    isWebPushSupported,
+    updateNotificationPreferences,
+    type BackendNotificationStatus
+  } from '../services/webpush';
   import { preferences as globalPreferences, preferencesActions } from '../stores/preferences';
   import { theme } from '../stores/theme';
   import {
@@ -89,6 +97,24 @@
   // WebSocket settings from global preferences
   let websocketConfig = $derived($globalPreferences.websocket);
   let webPushSupported = $state(false);
+  let backendNotifications = $state<BackendNotificationStatus | null>(null);
+  let notificationMessage = $state<string | null>(null);
+  let notificationStates = $state<Record<string, boolean>>({
+    PD: false,
+    R: true,
+    CD: true,
+    F: true,
+    CA: true,
+    TO: true
+  });
+  const notificationStateLabels: Record<string, string> = {
+    PD: 'Pending',
+    R: 'Running',
+    CD: 'Completed',
+    F: 'Failed',
+    CA: 'Cancelled',
+    TO: 'Timed out'
+  };
 
   let isConfigured = $derived($apiConfig.apiKey !== '');
 
@@ -110,6 +136,7 @@
         savePreferences();
       }
     });
+    loadBackendNotificationSettings();
 
     // Apply compact mode if enabled
     if (preferences.compactMode) {
@@ -144,6 +171,56 @@
     localStorage.setItem('ssync_preferences', JSON.stringify(preferences));
   }
 
+  async function loadBackendNotificationSettings() {
+    try {
+      const [status, backendPrefs] = await Promise.all([
+        getNotificationStatus(),
+        getNotificationPreferences()
+      ]);
+      backendNotifications = status;
+      preferences.showNotifications = backendPrefs.enabled;
+      if (backendPrefs.allowed_states) {
+        notificationStates = {
+          ...notificationStates,
+          ...Object.fromEntries(
+            Object.keys(notificationStates).map((state) => [
+              state,
+              backendPrefs.allowed_states?.includes(state) ?? notificationStates[state]
+            ])
+          )
+        };
+      }
+      savePreferences();
+      window.dispatchEvent(new CustomEvent('notificationSettingsChanged', {
+        detail: {
+          showNotifications: preferences.showNotifications,
+          soundAlerts: preferences.soundAlerts
+        }
+      }));
+    } catch (error) {
+      backendNotifications = null;
+      notificationMessage = 'Backend notification status is unavailable.';
+    }
+  }
+
+  function enabledNotificationStates() {
+    return Object.entries(notificationStates)
+      .filter(([, enabled]) => enabled)
+      .map(([state]) => state);
+  }
+
+  async function syncBackendNotificationPreferences() {
+    try {
+      await updateNotificationPreferences({
+        enabled: preferences.showNotifications,
+        allowed_states: enabledNotificationStates()
+      });
+      notificationMessage = null;
+    } catch (error) {
+      notificationMessage = 'Failed to sync notification preferences with the backend.';
+    }
+  }
+
   async function handlePreferenceChange(key: keyof LocalPreferences, value: any) {
     preferences = { ...preferences, [key]: value } as LocalPreferences;
     savePreferences();
@@ -168,23 +245,32 @@
           savePreferences();
         }
       }
+      await syncBackendNotificationPreferences();
+    } else if (key === 'showNotifications') {
+      await syncBackendNotificationPreferences();
     } else if (key === 'webPushEnabled') {
       if (!webPushSupported) {
         preferences.webPushEnabled = false;
         savePreferences();
+        notificationMessage = 'Web Push is not supported in this browser.';
         return;
       }
 
       try {
         if (value) {
           await enableWebPush();
+          preferences.showNotifications = true;
+          await syncBackendNotificationPreferences();
+          notificationMessage = 'Web Push is registered with the backend.';
         } else {
           await disableWebPush();
+          notificationMessage = 'Web Push has been disabled for this browser.';
         }
       } catch (e) {
         console.error('Failed to update Web Push:', e);
         preferences.webPushEnabled = false;
         savePreferences();
+        notificationMessage = (e as Error).message || 'Failed to update Web Push.';
       }
     }
 
@@ -206,6 +292,11 @@
         }
       }));
     }
+  }
+
+  async function handleNotificationStateChange(state: string, enabled: boolean) {
+    notificationStates = { ...notificationStates, [state]: enabled };
+    await syncBackendNotificationPreferences();
   }
 
   async function loadCacheStats() {
@@ -760,6 +851,34 @@
             </div>
 
             <div class="section-content">
+              {#if backendNotifications}
+                <div class="preference-item">
+                  <div class="preference-info">
+                    <span class="preference-label">Backend Delivery</span>
+                    <span class="preference-description">
+                      {backendNotifications.providers.enabled
+                        ? `Available providers: ${
+                            [
+                              backendNotifications.providers.apns ? 'APNs' : null,
+                              backendNotifications.providers.expo ? 'Expo' : null,
+                              backendNotifications.providers.webpush ? 'Web Push' : null
+                            ].filter(Boolean).join(', ')
+                          }`
+                        : 'No backend push providers are configured'}
+                    </span>
+                  </div>
+                  <Badge variant={backendNotifications.providers.enabled ? 'success' : 'secondary'}>
+                    {backendNotifications.providers.enabled ? 'Enabled' : 'Unavailable'}
+                  </Badge>
+                </div>
+              {/if}
+
+              {#if notificationMessage}
+                <div class="notification-status">
+                  {notificationMessage}
+                </div>
+              {/if}
+
               <div class="preference-item">
                 <div class="preference-info">
                   <span class="preference-label">Show Notifications</span>
@@ -773,6 +892,26 @@
                   />
                   <span class="slider"></span>
                 </label>
+              </div>
+
+              <div class="preference-item notification-states-item">
+                <div class="preference-info">
+                  <span class="preference-label">Notify On States</span>
+                  <span class="preference-description">Choose which backend job transitions should send notifications</span>
+                </div>
+                <div class="state-toggles">
+                  {#each Object.entries(notificationStateLabels) as [state, label]}
+                    <label class="state-toggle">
+                      <input
+                        type="checkbox"
+                        checked={notificationStates[state]}
+                        onchange={(event) => handleNotificationStateChange(state, event.currentTarget.checked)}
+                        disabled={!preferences.showNotifications}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  {/each}
+                </div>
               </div>
 
               <div class="preference-item">
@@ -1116,6 +1255,43 @@
   .preference-description {
     font-size: 0.875rem;
     color: var(--muted-foreground);
+  }
+
+  .notification-status {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--secondary);
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+  }
+
+  .notification-states-item {
+    align-items: flex-start;
+  }
+
+  .state-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    max-width: 30rem;
+  }
+
+  .state-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.625rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--foreground);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+
+  .state-toggle input {
+    margin: 0;
   }
 
   .help-text {

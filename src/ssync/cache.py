@@ -54,6 +54,9 @@ class NotificationDevice:
     api_key_hash: str
     device_token: str
     platform: str
+    token_type: str = "apns"
+    client_type: str = "native"
+    payload_format: str = "apns"
     bundle_id: Optional[str] = None
     environment: Optional[str] = None
     device_id: Optional[str] = None
@@ -355,6 +358,9 @@ class JobDataCache:
                     api_key_hash TEXT NOT NULL,
                     device_token TEXT NOT NULL,
                     platform TEXT NOT NULL,
+                    token_type TEXT NOT NULL DEFAULT 'apns',
+                    client_type TEXT NOT NULL DEFAULT 'native',
+                    payload_format TEXT NOT NULL DEFAULT 'apns',
                     bundle_id TEXT,
                     environment TEXT,
                     device_id TEXT,
@@ -364,6 +370,17 @@ class JobDataCache:
                     UNIQUE(api_key_hash, device_token)
                 )
             """)
+            for column_name, column_type, default_value in (
+                ("token_type", "TEXT", "'apns'"),
+                ("client_type", "TEXT", "'native'"),
+                ("payload_format", "TEXT", "'apns'"),
+            ):
+                try:
+                    conn.execute(
+                        f"ALTER TABLE notification_devices ADD COLUMN {column_name} {column_type} NOT NULL DEFAULT {default_value}"
+                    )
+                except sqlite3.OperationalError:
+                    pass
 
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_notification_devices_key ON notification_devices(api_key_hash)"
@@ -407,6 +424,44 @@ class JobDataCache:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_webpush_subscriptions_enabled ON webpush_subscriptions(enabled)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_notification_states (
+                    job_key TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    hostname TEXT NOT NULL,
+                    last_seen_state TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_changed_at TEXT NOT NULL,
+                    job_name TEXT,
+                    user TEXT
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_notification_states_job ON job_notification_states(job_id, hostname)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notification_events (
+                    notification_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    hostname TEXT NOT NULL,
+                    old_state TEXT,
+                    new_state TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    job_name TEXT,
+                    user TEXT,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    sent_at TEXT,
+                    sent_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_events_status ON notification_events(status, created_at)"
             )
 
             # Array job metadata tables for efficient grouping and querying
@@ -1748,6 +1803,9 @@ class JobDataCache:
         api_key_hash: str,
         device_token: str,
         platform: str,
+        token_type: str = "apns",
+        client_type: str = "native",
+        payload_format: str = "apns",
         bundle_id: Optional[str] = None,
         environment: Optional[str] = None,
         device_id: Optional[str] = None,
@@ -1759,11 +1817,15 @@ class JobDataCache:
             conn.execute(
                 """
                 INSERT INTO notification_devices
-                (api_key_hash, device_token, platform, bundle_id, environment, device_id,
-                 enabled, created_at, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (api_key_hash, device_token, platform, token_type, client_type,
+                 payload_format, bundle_id, environment, device_id, enabled,
+                 created_at, last_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(api_key_hash, device_token) DO UPDATE SET
                     platform=excluded.platform,
+                    token_type=excluded.token_type,
+                    client_type=excluded.client_type,
+                    payload_format=excluded.payload_format,
                     bundle_id=excluded.bundle_id,
                     environment=excluded.environment,
                     device_id=excluded.device_id,
@@ -1774,6 +1836,9 @@ class JobDataCache:
                     api_key_hash,
                     device_token,
                     platform,
+                    token_type,
+                    client_type,
+                    payload_format,
                     bundle_id,
                     environment,
                     device_id,
@@ -1834,6 +1899,9 @@ class JobDataCache:
                         "api_key_hash": row["api_key_hash"],
                         "device_token": row["device_token"],
                         "platform": row["platform"],
+                        "token_type": row["token_type"],
+                        "client_type": row["client_type"],
+                        "payload_format": row["payload_format"],
                         "bundle_id": row["bundle_id"],
                         "environment": row["environment"],
                         "device_id": row["device_id"],
@@ -1844,6 +1912,181 @@ class JobDataCache:
                 )
 
         return devices
+
+    def record_notification_job_state(
+        self, *, job_info: JobInfo
+    ) -> tuple[Optional[str], str, bool]:
+        """Persist last-seen state for notification transition detection.
+
+        Returns:
+            Tuple of (old_state, new_state, is_new_job_for_notifications).
+        """
+        job_key = f"{job_info.hostname}:{job_info.job_id}"
+        now = datetime.now().isoformat()
+        state_value = (
+            job_info.state.value if hasattr(job_info.state, "value") else job_info.state
+        )
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT last_seen_state
+                FROM job_notification_states
+                WHERE job_key = ?
+                """,
+                (job_key,),
+            )
+            row = cursor.fetchone()
+            old_state = row["last_seen_state"] if row else None
+
+            if row:
+                if old_state != state_value:
+                    conn.execute(
+                        """
+                        UPDATE job_notification_states
+                        SET last_seen_state = ?, last_seen_at = ?, last_changed_at = ?,
+                            job_name = ?, user = ?
+                        WHERE job_key = ?
+                        """,
+                        (
+                            state_value,
+                            now,
+                            now,
+                            job_info.name,
+                            job_info.user,
+                            job_key,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE job_notification_states
+                        SET last_seen_at = ?, job_name = ?, user = ?
+                        WHERE job_key = ?
+                        """,
+                        (now, job_info.name, job_info.user, job_key),
+                    )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO job_notification_states
+                    (job_key, job_id, hostname, last_seen_state, last_seen_at,
+                     last_changed_at, job_name, user)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_key,
+                        job_info.job_id,
+                        job_info.hostname,
+                        state_value,
+                        now,
+                        now,
+                        job_info.name,
+                        job_info.user,
+                    ),
+                )
+
+            conn.commit()
+
+        return old_state, state_value, row is None
+
+    def claim_notification_event(
+        self,
+        *,
+        notification_id: str,
+        job_id: str,
+        hostname: str,
+        old_state: Optional[str],
+        new_state: str,
+        changed_at: str,
+        job_name: Optional[str],
+        user: Optional[str],
+        payload: Dict[str, Any],
+    ) -> bool:
+        """Claim a notification event for dispatch, returning False for duplicates."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO notification_events
+                (notification_id, job_id, hostname, old_state, new_state, changed_at,
+                 job_name, user, payload_json, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    notification_id,
+                    job_id,
+                    hostname,
+                    old_state,
+                    new_state,
+                    changed_at,
+                    job_name,
+                    user,
+                    json.dumps(payload),
+                    now,
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def mark_notification_event_sent(
+        self,
+        *,
+        notification_id: str,
+        sent_count: int,
+        last_error: Optional[str] = None,
+    ) -> None:
+        status = "sent" if sent_count > 0 else "failed"
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE notification_events
+                SET status = ?, sent_at = ?, sent_count = ?, last_error = ?
+                WHERE notification_id = ?
+                """,
+                (
+                    status,
+                    datetime.now().isoformat(),
+                    sent_count,
+                    last_error,
+                    notification_id,
+                ),
+            )
+            conn.commit()
+
+    def get_notification_event(
+        self, *, notification_id: str
+    ) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT *
+                FROM notification_events
+                WHERE notification_id = ?
+                """,
+                (notification_id,),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "notification_id": row["notification_id"],
+            "job_id": row["job_id"],
+            "hostname": row["hostname"],
+            "old_state": row["old_state"],
+            "new_state": row["new_state"],
+            "changed_at": row["changed_at"],
+            "job_name": row["job_name"],
+            "user": row["user"],
+            "payload": json.loads(row["payload_json"]),
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "sent_at": row["sent_at"],
+            "sent_count": row["sent_count"],
+            "last_error": row["last_error"],
+        }
 
     def get_notification_preferences(self, *, api_key_hash: str) -> Dict[str, Any]:
         """Return notification preferences for a user (API key)."""

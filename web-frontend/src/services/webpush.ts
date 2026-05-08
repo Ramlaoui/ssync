@@ -1,5 +1,32 @@
 import { api } from './api';
 
+export type BackendNotificationPreferences = {
+  enabled: boolean;
+  allowed_states?: string[] | null;
+  muted_job_ids?: string[];
+  muted_hosts?: string[];
+  muted_job_name_patterns?: string[];
+  allowed_users?: string[];
+};
+
+export type BackendNotificationStatus = {
+  providers: {
+    enabled: boolean;
+    apns: boolean;
+    expo: boolean;
+    webpush: boolean;
+  };
+  device_registration: {
+    platforms: string[];
+    token_types: string[];
+    payload_formats: string[];
+  };
+  event_contract: {
+    type: string;
+    fields: string[];
+  };
+};
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -25,6 +52,23 @@ export async function getWebPushSubscription(): Promise<PushSubscription | null>
   return registration.pushManager.getSubscription();
 }
 
+export async function getNotificationStatus(): Promise<BackendNotificationStatus> {
+  const response = await api.get('/api/notifications/status');
+  return response.data as BackendNotificationStatus;
+}
+
+export async function getNotificationPreferences(): Promise<BackendNotificationPreferences> {
+  const response = await api.get('/api/notifications/preferences');
+  return response.data as BackendNotificationPreferences;
+}
+
+export async function updateNotificationPreferences(
+  preferences: Partial<BackendNotificationPreferences>
+): Promise<BackendNotificationPreferences> {
+  const response = await api.patch('/api/notifications/preferences', preferences);
+  return response.data as BackendNotificationPreferences;
+}
+
 export async function enableWebPush(): Promise<void> {
   if (!(await isWebPushSupported())) {
     throw new Error('Web Push is not supported in this browser');
@@ -42,6 +86,7 @@ export async function enableWebPush(): Promise<void> {
   }
 
   const registration = await navigator.serviceWorker.register('/sw.js');
+  await navigator.serviceWorker.ready;
   const existing = await registration.pushManager.getSubscription();
   const subscription =
     existing ||
@@ -53,7 +98,8 @@ export async function enableWebPush(): Promise<void> {
   await api.post('/api/notifications/webpush/subscribe', {
     endpoint: subscription.endpoint,
     keys: subscription.toJSON().keys || {},
-    user_agent: navigator.userAgent
+    user_agent: navigator.userAgent,
+    enabled: true
   });
 }
 
