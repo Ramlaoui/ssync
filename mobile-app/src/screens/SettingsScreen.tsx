@@ -8,8 +8,6 @@ import {
   ClipboardCheck,
   Database,
   Download,
-  KeyRound,
-  ClipboardPaste,
   RefreshCw,
   Shield,
   Smartphone,
@@ -64,7 +62,7 @@ export function SettingsScreen({
   authError: string | null;
   setApiSettings: (settings: ApiSettings) => Promise<void>;
   setPreferences: (updater: UIPreferences | ((current: UIPreferences) => UIPreferences)) => Promise<void>;
-  testConnection: () => Promise<boolean>;
+  testConnection: (settings?: ApiSettings) => Promise<boolean>;
   exportSettings: () => string;
   importSettings: (json: string) => Promise<void>;
 }) {
@@ -86,19 +84,12 @@ export function SettingsScreen({
     setApiKey(apiSettings.apiKey);
   }, [apiSettings.apiKey, apiSettings.baseURL]);
 
-  async function saveApi() {
-    await setApiSettings({ baseURL: baseURL.trim(), apiKey: apiKey.trim() });
-  }
-
-  async function pasteApiKey() {
-    const text = await Clipboard.getStringAsync();
-    if (text) setApiKey(text.trim());
-  }
-
   async function runConnectionTest() {
+    const nextSettings = { baseURL: baseURL.trim(), apiKey: apiKey.trim() };
     setTesting(true);
     try {
-      const ok = await testConnection();
+      await setApiSettings(nextSettings);
+      const ok = await testConnection(nextSettings);
       if (!ok) Alert.alert("Connection failed", authError || "The API could not be reached.");
     } finally {
       setTesting(false);
@@ -234,13 +225,9 @@ export function SettingsScreen({
             <SectionHeader palette={palette} title="API Authentication" subtitle="Connect the app to your running ssync web API." />
             <ConnectionStatusBanner palette={palette} status={apiStatus} />
             <TextField palette={palette} label="API URL" value={baseURL} onChangeText={setBaseURL} placeholder="http://localhost:8000" keyboardType="url" />
-            <View style={styles.apiKeyRow}>
-              <TextField palette={palette} label="API key" value={apiKey} onChangeText={setApiKey} secureTextEntry textContentType="none" placeholder="ssync API key" style={{ flex: 1 }} />
-              <Button palette={palette} title="Paste" icon={ClipboardPaste} variant="secondary" onPress={pasteApiKey} style={styles.pasteButton} />
-            </View>
+            <TextField palette={palette} label="API key" value={apiKey} onChangeText={setApiKey} secureTextEntry textContentType="none" placeholder="ssync API key" />
             <View style={styles.actions}>
-              <Button palette={palette} title="Save" icon={KeyRound} onPress={saveApi} />
-              <Button palette={palette} title="Test" icon={RefreshCw} variant="secondary" onPress={runConnectionTest} loading={testing} />
+              <Button palette={palette} title="Save & test" icon={RefreshCw} onPress={runConnectionTest} loading={testing} />
             </View>
             <AppText palette={palette} muted size={12}>Generate a key with `ssync auth setup` on the machine running the API.</AppText>
           </Card>
@@ -596,15 +583,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8
-  },
-  apiKeyRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 8
-  },
-  pasteButton: {
-    minHeight: 46,
-    paddingHorizontal: 10
   },
   sectionRail: {
     borderWidth: StyleSheet.hairlineWidth,

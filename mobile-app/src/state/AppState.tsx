@@ -32,7 +32,7 @@ type AppStateValue = {
   addTemplate: (template: ScriptTemplate) => Promise<void>;
   deleteTemplate: (id: string) => Promise<void>;
   markTemplateUsed: (id: string) => Promise<void>;
-  testConnection: () => Promise<boolean>;
+  testConnection: (settings?: ApiSettings) => Promise<boolean>;
   setAuthState: (authenticated: boolean, error?: string | null) => void;
   exportSettings: () => string;
   importSettings: (json: string) => Promise<void>;
@@ -154,9 +154,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     await saveTemplates(next);
   }, []);
 
-  const testConnection = useCallback(async () => {
+  const testConnection = useCallback(async (settings?: ApiSettings) => {
+    const client = settings
+      ? new SsyncApiClient(() => settings.baseURL, () => settings.apiKey)
+      : api;
     try {
-      await api.testConnection();
+      await client.testConnection();
       setAuthenticated(true);
       setAuthError(null);
       return true;
