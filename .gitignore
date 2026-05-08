@@ -42,6 +42,8 @@ monitor_*.py
 .ruff_cache/
 
 node_modules/
+.expo/
+.eas/
 
 # VSCode extension build artifacts
 vscode-extension/out/

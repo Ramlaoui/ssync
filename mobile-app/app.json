@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "ssync",
+    "slug": "ssync",
+    "scheme": "ssync",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/brand/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/brand/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#050505"
+    },
+    "ios": {
+      "bundleIdentifier": "com.ssync.mobile",
+      "icon": "./assets/brand/icon.png",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.ssync.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/brand/adaptive-icon.png",
+        "backgroundColor": "#050505"
+      }
+    },
+    "plugins": [
+      "expo-notifications"
+    ],
+    "extra": {
+      "notificationEnvironment": "development",
+      "eas": {
+        "projectId": "767b6633-629d-4575-861b-3da4b90df5c3"
+      }
+    },
+    "owner": "ramlaoui"
+  }
+}
