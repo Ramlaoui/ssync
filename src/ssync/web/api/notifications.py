@@ -20,6 +20,7 @@ from ..security import (
     InputSanitizer,
     normalize_device_token,
     normalize_environment,
+    normalize_push_token,
     sanitize_notification_preferences,
 )
 
@@ -46,17 +47,37 @@ def register_notification_routes(
     ):
         """Register or update a device token for push notifications."""
         try:
-            token = normalize_device_token(payload.token)
+            token_type = payload.token_type.lower()
+            token = normalize_push_token(payload.token, token_type)
             platform = payload.platform.lower()
-            if platform not in {"ios"}:
+            if platform not in {"ios", "android", "expo"}:
                 raise HTTPException(status_code=400, detail="Unsupported platform")
 
-            environment = normalize_environment(payload.environment)
+            client_type = InputSanitizer.sanitize_text(
+                payload.client_type.lower(), max_length=32
+            ) or "native"
+            if client_type not in {"native", "expo"}:
+                raise HTTPException(status_code=400, detail="Unsupported client type")
+
+            payload_format = (
+                payload.payload_format or ("expo" if token_type == "expo" else "apns")
+            ).lower()
+            if payload_format not in {"apns", "expo"}:
+                raise HTTPException(status_code=400, detail="Unsupported payload format")
+
+            environment = (
+                normalize_environment(payload.environment)
+                if token_type == "apns"
+                else payload.environment
+            )
             cache = get_cache()
             cache.upsert_notification_device(
                 api_key_hash=_api_key_hash(api_key),
                 device_token=token,
                 platform=platform,
+                token_type=token_type,
+                client_type=client_type,
+                payload_format=payload_format,
                 bundle_id=payload.bundle_id
                 or notification_settings.apns_bundle_id
                 or None,
@@ -65,7 +86,14 @@ def register_notification_routes(
                 enabled=payload.enabled,
             )
 
-            return {"success": True, "token": token}
+            return {
+                "success": True,
+                "token": token,
+                "platform": platform,
+                "token_type": token_type,
+                "client_type": client_type,
+                "payload_format": payload_format,
+            }
         except HTTPException:
             raise
         except Exception as e:
@@ -102,11 +130,44 @@ def register_notification_routes(
         if not service.enabled:
             raise HTTPException(status_code=400, detail="Notifications not configured")
 
-        token = normalize_device_token(payload.token) if payload.token else None
+        token_type = payload.token_type.lower()
+        token = normalize_push_token(payload.token, token_type) if payload.token else None
         sent = await service.send_test_notification(
-            title=payload.title, body=payload.body, token=token
+            title=payload.title,
+            body=payload.body,
+            token=token,
+            token_type=token_type,
         )
         return {"success": True, "sent": sent}
+
+    @app.get("/api/notifications/status")
+    async def notification_status(
+        _authenticated: bool = Depends(verify_api_key_dependency),
+    ):
+        """Return backend notification provider status and supported contracts."""
+        service = get_notification_service()
+        return {
+            "providers": service.provider_status(),
+            "device_registration": {
+                "platforms": ["ios", "android", "expo"],
+                "token_types": ["apns", "expo"],
+                "payload_formats": ["apns", "expo", "webpush"],
+            },
+            "event_contract": {
+                "type": "job_notification",
+                "fields": [
+                    "notification_id",
+                    "job_id",
+                    "hostname",
+                    "state",
+                    "old_state",
+                    "changed_at",
+                    "job_name",
+                    "user",
+                    "timestamp",
+                ],
+            },
+        }
 
     @app.get("/api/notifications/preferences")
     async def get_notification_preferences(

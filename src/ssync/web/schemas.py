@@ -164,6 +164,9 @@ class PartitionStatusResponse(BaseModel):
 class NotificationDeviceRegistration(BaseModel):
     token: str
     platform: str = "ios"
+    token_type: str = "apns"
+    client_type: str = "native"
+    payload_format: Optional[str] = None
     environment: Optional[str] = None
     bundle_id: Optional[str] = None
     device_id: Optional[str] = None
@@ -174,6 +177,7 @@ class NotificationTestRequest(BaseModel):
     title: str = "Test Notification"
     body: str = "This is a test notification from ssync"
     token: Optional[str] = None
+    token_type: str = "apns"
 
 
 class NotificationPreferences(BaseModel):

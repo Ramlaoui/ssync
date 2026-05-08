@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional, Set
 
 from ...cache import get_cache
 from ...models.job import JobInfo, JobState
+from ...notifications import get_notification_service
 from ...utils.logging import setup_logger
 from ..models import JobInfoWeb
 from .state import (
@@ -136,12 +137,15 @@ async def broadcast_job_state(
     job_info, previous_state: Optional[JobState] = None
 ) -> None:
     """Broadcast a single realtime job update to websocket clients."""
+    old_state = previous_state.value if previous_state else None
+    get_notification_service().enqueue_job_info_transition(job_info, old_state)
     await job_manager.broadcast_job_update(
         job_info.job_id,
         job_info.hostname,
         {
             "type": "job_update",
-            "old_state": previous_state.value if previous_state else None,
+            "event_kind": "state_transition",
+            "old_state": old_state,
             "new_state": job_info.state.value,
             "job": JobInfoWeb.from_job_info(job_info).model_dump(mode="json"),
         },
@@ -349,6 +353,9 @@ async def monitor_all_jobs_singleton(
                         updates.append(
                             {
                                 "type": "job_update",
+                                "event_kind": "state_transition"
+                                if state_changed
+                                else "job_refresh",
                                 "job_id": job.job_id,
                                 "hostname": job.hostname,
                                 "old_state": old_state_value,
@@ -356,6 +363,11 @@ async def monitor_all_jobs_singleton(
                                 "job": job_dict,
                             }
                         )
+                        if state_changed:
+                            get_notification_service().enqueue_job_info_transition(
+                                job,
+                                old_state_value,
+                            )
 
                 completed_jobs = set(job_states.keys()) - current_job_ids
                 completed_updates = await _fetch_completed_job_updates(

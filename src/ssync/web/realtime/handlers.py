@@ -10,6 +10,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from ...cache import get_cache
 from ...models.job import JobState
+from ...notifications import get_notification_service
 from ...request_coalescer import get_request_coalescer
 from ...utils.async_helpers import create_task
 from ...utils.logging import setup_logger
@@ -75,14 +76,19 @@ async def monitor_job_updates(
 
                 previous_state = last_state
                 if job_info.state != previous_state:
+                    old_state_value = previous_state.value if previous_state else None
+                    if previous_state is not None:
+                        get_notification_service().enqueue_job_info_transition(
+                            job_info,
+                            old_state_value,
+                        )
                     await websocket.send_json(
                         {
                             "type": "state_change",
                             "job_id": actual_job_id,
                             "hostname": hostname,
-                            "old_state": previous_state.value
-                            if previous_state
-                            else None,
+                            "event_kind": "state_transition",
+                            "old_state": old_state_value,
                             "new_state": job_info.state.value,
                             "job": JobInfoWeb.from_job_info(job_info).model_dump(
                                 mode="json"
@@ -105,9 +111,8 @@ async def monitor_job_updates(
                         hostname,
                         {
                             "type": "state_change",
-                            "old_state": previous_state.value
-                            if previous_state
-                            else None,
+                            "event_kind": "state_transition",
+                            "old_state": old_state_value,
                             "new_state": job_info.state.value,
                             "job": JobInfoWeb.from_job_info(job_info).model_dump(
                                 mode="json"

@@ -7,11 +7,15 @@ self.addEventListener('push', event => {
   }
 
   const title = data.title || 'ssync';
+  const tag = data.notification_id || (data.job_id ? `job-${data.hostname || 'host'}-${data.job_id}-${data.state || 'state'}` : undefined);
   const options = {
     body: data.body || 'New notification',
     data,
-    tag: data.job_id ? `job-${data.job_id}` : undefined,
-    renotify: false
+    icon: '/favicon.ico',
+    badge: '/favicon.ico',
+    tag,
+    renotify: Boolean(tag),
+    requireInteraction: data.state === 'F' || data.state === 'TO'
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -19,12 +23,24 @@ self.addEventListener('push', event => {
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const urlToOpen = '/';
+  const data = event.notification.data || {};
+  const urlToOpen = data.job_id && data.hostname
+    ? `/#/jobs/${encodeURIComponent(data.job_id)}/${encodeURIComponent(data.hostname)}`
+    : '/';
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
       for (const client of clientList) {
-        if (client.url.endsWith(urlToOpen) && 'focus' in client) {
-          return client.focus();
+        if ('focus' in client) {
+          const clientUrl = new URL(client.url);
+          if (clientUrl.pathname + clientUrl.hash === urlToOpen || urlToOpen !== '/') {
+            return client.focus().then(focusedClient => {
+              if ('navigate' in focusedClient) {
+                return focusedClient.navigate(urlToOpen);
+              }
+              return focusedClient;
+            });
+          }
         }
       }
       if (clients.openWindow) {
