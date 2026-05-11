@@ -30,11 +30,16 @@ def _parse_time(value: Optional[str]) -> Optional[datetime]:
             return None
 
 
+def _comparison_now(value: datetime) -> datetime:
+    tzinfo = value.tzinfo if value.tzinfo and value.utcoffset() is not None else None
+    return datetime.now(tzinfo)
+
+
 def _is_recent_terminal(job, window_seconds: int) -> bool:
     end_time = _parse_time(getattr(job, "end_time", None))
     if not end_time:
         return False
-    return end_time >= datetime.now() - timedelta(seconds=window_seconds)
+    return end_time >= _comparison_now(end_time) - timedelta(seconds=window_seconds)
 
 
 def _transition_timestamp(job, state_value: str) -> Optional[str]:
@@ -56,7 +61,7 @@ def _is_recent_transition(job, state_value: str, window_seconds: int) -> bool:
     changed_at = _parse_time(_transition_timestamp(job, state_value))
     if not changed_at:
         return False
-    return changed_at >= datetime.now() - timedelta(seconds=window_seconds)
+    return changed_at >= _comparison_now(changed_at) - timedelta(seconds=window_seconds)
 
 
 async def notification_monitor_loop():

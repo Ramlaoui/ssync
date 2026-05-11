@@ -92,7 +92,9 @@ class NotificationService:
                 logger.warning(
                     f"Web Push provider unavailable; disabling Web Push notifications: {exc}"
                 )
-        if self.settings.enabled and not (self._apns_client or self._webpush_client):
+        if self.settings.enabled and not (
+            self._apns_client or self._expo_client or self._webpush_client
+        ):
             logger.warning("Notifications enabled but no providers are configured")
 
     @property

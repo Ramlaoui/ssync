@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from ssync.models.cluster import NotificationSettings
 from ssync.models.job import JobInfo, JobState
 
 
@@ -14,6 +15,12 @@ def test_notification_service_initializes_without_optional_providers():
 
     service = NotificationService()
     assert isinstance(service.enabled, bool)
+
+
+@pytest.mark.unit
+def test_notification_settings_default_to_enabled():
+    settings = NotificationSettings()
+    assert settings.enabled is True
 
 
 @pytest.mark.unit
