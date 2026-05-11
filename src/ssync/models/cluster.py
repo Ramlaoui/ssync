@@ -89,7 +89,7 @@ class APISettings:
 class NotificationSettings:
     """Notification configuration settings."""
 
-    enabled: bool = False
+    enabled: bool = True
     apns_key_id: str = ""
     apns_team_id: str = ""
     apns_bundle_id: str = ""
