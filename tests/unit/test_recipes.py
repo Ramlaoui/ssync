@@ -189,6 +189,85 @@ sbatch:
 
 
 @pytest.mark.unit
+def test_render_launch_recipe_applies_schema_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".ssync").mkdir(parents=True)
+    _write(repo / ".ssync/fragments/run/train.sh", "python train.py\n")
+    _write(repo / ".ssync/fragments/run/debug.sh", "python debug.py\n")
+    _write(
+        repo / ".ssync/envs/project-debug.yaml",
+        """
+vars:
+  DEBUG_ENV: "true"
+""",
+    )
+    _write(
+        repo / ".ssync/partitions/debug-gpu.yaml",
+        """
+host: debug
+sbatch:
+  partition: debug
+""",
+    )
+    _write(
+        repo / ".ssync/workflows/train.yaml",
+        """
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  MAX_STEPS: "100000"
+sbatch:
+  time: 120
+""",
+    )
+    _write(
+        repo / ".ssync/workflows/debug.yaml",
+        """
+run:
+  script: .ssync/fragments/run/debug.sh
+vars:
+  MAX_STEPS: "100"
+sbatch:
+  time: 10
+""",
+    )
+    recipe = repo / "experiments/demo/launch/train.yaml"
+    _write(
+        recipe,
+        """
+extends: .ssync/workflows/train.yaml
+vars:
+  MAX_STEPS: "50000"
+sbatch:
+  time: 60
+""",
+    )
+
+    rendered = render_launch_recipe(
+        recipe,
+        workflow=".ssync/workflows/debug.yaml",
+        host_partition="debug-gpu",
+        env="project-debug",
+        vars={"MAX_STEPS": "5"},
+        sbatch={"time": 5},
+        cli_overrides={
+            "workflow": ".ssync/workflows/debug.yaml",
+            "host_partition": "debug-gpu",
+            "env": "project-debug",
+            "vars": {"MAX_STEPS": "5"},
+            "sbatch": {"time": 5},
+        },
+    )
+
+    assert "python debug.py" in rendered.script_content
+    assert rendered.time == 5
+    assert rendered.vars["MAX_STEPS"] == "5"
+    assert rendered.manifest["host_partition"] == "debug-gpu"
+    assert rendered.manifest["env"] == "project-debug"
+    assert rendered.manifest["cli_overrides"]["sbatch"] == {"time": 5}
+
+
+@pytest.mark.unit
 def test_render_launch_recipe_detects_workflow_cycles(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".ssync").mkdir(parents=True)

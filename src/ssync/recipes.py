@@ -366,12 +366,38 @@ def _read_fragment(path: Path) -> str:
     return path.read_text().strip()
 
 
-def render_launch_recipe(recipe_path: str | Path) -> RenderedRecipe:
+def render_launch_recipe(
+    recipe_path: str | Path,
+    *,
+    workflow: str | None = None,
+    host_partition: str | None = None,
+    env: str | None = None,
+    vars: dict[str, Any] | None = None,
+    sbatch: dict[str, Any] | None = None,
+    cli_overrides: dict[str, Any] | None = None,
+) -> RenderedRecipe:
     """Resolve a project launch recipe into one shell script."""
     recipe_path = Path(recipe_path).expanduser().resolve()
     recipe_dir = recipe_path.parent
     repo_root = find_repo_root(recipe_path)
-    data = _resolve_recipe_data(repo_root, _load_yaml_mapping(recipe_path))
+    recipe_data = _load_yaml_mapping(recipe_path)
+    if workflow is not None:
+        recipe_data["extends"] = workflow
+        recipe_data.pop("workflow", None)
+    if host_partition is not None:
+        recipe_data["host_partition"] = host_partition
+    if env is not None:
+        recipe_data["env"] = env
+    if vars:
+        recipe_data["vars"] = _merge_section(
+            recipe_data.get("vars"), vars, append_scripts=False
+        )
+    if sbatch:
+        recipe_data["sbatch"] = _merge_section(
+            recipe_data.get("sbatch"), sbatch, append_scripts=False
+        )
+
+    data = _resolve_recipe_data(repo_root, recipe_data)
 
     source_value = data.get("source_dir")
     source_dir = (
@@ -463,10 +489,13 @@ def render_launch_recipe(recipe_path: str | Path) -> RenderedRecipe:
         "source_dir": str(source_dir),
         "host": data.get("host"),
         "host_partition": data.get("host_partition"),
-        "env": data.get("env") if isinstance(data.get("env"), str) else None,
+        "env": recipe_data.get("env")
+        if isinstance(recipe_data.get("env"), str)
+        else None,
         "fragments": [str(path) for path in fragment_paths],
         "vars": resolved_vars,
         "sbatch": sbatch_manifest,
+        "cli_overrides": cli_overrides or {},
         "script_sha256": sha256(script_content.encode("utf-8")).hexdigest(),
         "rendered_script": script_content,
     }

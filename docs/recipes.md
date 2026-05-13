@@ -133,6 +133,30 @@ profiles, fragments, resolved variables, rendered script, script hash, and
 sbatch metadata. Watcher-driven resubmits use this frozen manifest by default
 so automatic relaunches do not silently pick up unrelated local repo changes.
 
+## Overrides
+
+Recipe overrides are schema-aware. They modify the resolved recipe before
+rendering and are written into the manifest.
+
+```bash
+ssync launch-recipe experiments/demo/launch/train.yaml \
+  --workflow .ssync/workflows/debug.yaml
+
+ssync launch-recipe experiments/demo/launch/train.yaml \
+  --host-partition cluster-debug-gpu \
+  --env project-debug
+
+ssync launch-recipe experiments/demo/launch/train.yaml \
+  --var MAX_STEPS=5000 \
+  --set sbatch.time=30 \
+  --set sbatch.partition=debug
+```
+
+`--var` values are exported as shell-safe strings. `--set` currently accepts
+`sbatch.*` fields only, including `partition`, `account`, `constraint`, `gres`,
+`output`, `error`, `cpus`, `mem`, `time`, `nodes`, `ntasks_per_node`, and
+`gpus_per_node`.
+
 ## Validation
 
 `launch-recipe` validates before submit:
@@ -144,4 +168,3 @@ so automatic relaunches do not silently pick up unrelated local repo changes.
   `ntasks_per_node`, and `gpus_per_node` must be positive integers
 - exactly one `run` script must resolve
 - referenced fragments must exist
-

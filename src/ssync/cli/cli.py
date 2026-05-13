@@ -348,6 +348,24 @@ def launch_command(
 
 
 @cli.command(name="launch-recipe")
+@click.option("--workflow", help="Override the workflow profile for this launch")
+@click.option(
+    "--host-partition",
+    help="Override the repo-local host/partition profile for this launch",
+)
+@click.option("--env", "env_profile", help="Override the environment profile")
+@click.option(
+    "--var",
+    "var_overrides",
+    multiple=True,
+    help="Override a recipe variable as KEY=VALUE",
+)
+@click.option(
+    "--set",
+    "set_overrides",
+    multiple=True,
+    help="Override a scheduler field as sbatch.FIELD=VALUE",
+)
 @click.option("--host", help="Target host for job submission")
 @click.option("--job-name", help="Slurm job name")
 @click.option("--cpus", type=int, help="Number of CPUs per task")
@@ -390,6 +408,11 @@ def launch_command(
 @click.pass_context
 def launch_recipe_command(
     ctx,
+    workflow,
+    host_partition,
+    env_profile,
+    var_overrides,
+    set_overrides,
     host,
     job_name,
     cpus,
@@ -425,6 +448,11 @@ def launch_recipe_command(
 
     success = command.execute(
         recipe_path=recipe_path,
+        workflow=workflow,
+        host_partition=host_partition,
+        env_profile=env_profile,
+        var_overrides=list(var_overrides),
+        set_overrides=list(set_overrides),
         host=host,
         job_name=job_name,
         cpus=cpus,
