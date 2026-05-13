@@ -19,13 +19,19 @@
     PauseCircle,
     AlertCircle,
     Play,
+    Pencil,
+    Trash2,
     Variable,
     Hash,
     Radio,
     RefreshCw,
     Zap
   } from "lucide-svelte";
+  import { api } from "../services/api";
+  import { pauseWatcher, resumeWatcher } from "../stores/watchers";
+  import { portal } from "../lib/actions/portal";
   import LoadingSpinner from "./LoadingSpinner.svelte";
+  import WatcherDetailDialog from "./WatcherDetailDialog.svelte";
 
   interface Props {
     job: JobInfo;
@@ -34,6 +40,8 @@
   let { job }: Props = $props();
 
   let expandedWatchers = $state(new Set<number>());
+  let selectedWatcher: Watcher | null = $state(null);
+  let busyWatchers = $state(new Set<number>());
   let jobKey = $derived(getWatcherJobKey(job.job_id, job.hostname));
   let jobWatchers = $derived(
     $watcherStore.filter(
@@ -65,13 +73,46 @@
     await fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 0 });
   }
 
-  function toggleWatcher(watcherId: number) {
-    if (expandedWatchers.has(watcherId)) {
-      expandedWatchers.delete(watcherId);
-    } else {
-      expandedWatchers.add(watcherId);
+  async function withBusyWatcher(watcherId: number, action: () => Promise<void>) {
+    if (busyWatchers.has(watcherId)) return;
+    busyWatchers = new Set([...busyWatchers, watcherId]);
+    try { await action(); } finally {
+      const next = new Set(busyWatchers);
+      next.delete(watcherId);
+      busyWatchers = next;
     }
-    expandedWatchers = expandedWatchers;
+  }
+
+  function toggleWatcherState(watcher: Watcher) {
+    return withBusyWatcher(watcher.id, async () => {
+      if (watcher.state === 'active') await pauseWatcher(watcher.id);
+      else if (watcher.state === 'paused') await resumeWatcher(watcher.id);
+    });
+  }
+
+  function triggerWatcher(watcher: Watcher) {
+    return withBusyWatcher(watcher.id, async () => {
+      await api.post(`/api/watchers/${watcher.id}/trigger`, null);
+      await loadWatchers();
+    });
+  }
+
+  function deleteWatcher(watcher: Watcher) {
+    if (!confirm(`Delete watcher "${watcher.name}"?`)) return;
+    return withBusyWatcher(watcher.id, async () => {
+      await api.delete(`/api/watchers/${watcher.id}`);
+      watcherStore.update((current) => current.filter((item) => item.id !== watcher.id));
+    });
+  }
+
+  function toggleWatcher(watcherId: number) {
+    const nextExpanded = new Set(expandedWatchers);
+    if (nextExpanded.has(watcherId)) {
+      nextExpanded.delete(watcherId);
+    } else {
+      nextExpanded.add(watcherId);
+    }
+    expandedWatchers = nextExpanded;
   }
 
   function getStateIcon(state: string | undefined) {
@@ -239,15 +280,17 @@
         <h3 class="text-lg font-semibold">Configured watchers ({jobWatchers.length})</h3>
       </div>
 
-      {#each jobWatchers as watcher}
+      {#each jobWatchers as watcher (watcher.id)}
         {#if watcher}
         {@const SvelteComponent = getStateIcon(watcher.state)}
         <div class="watcher-card" class:expanded={expandedWatchers.has(watcher.id)}>
-          <button
+          <div
             class="watcher-header"
-            onclick={() => toggleWatcher(watcher.id)}
           >
-            <div class="header-left">
+            <button
+              class="header-left"
+              onclick={() => toggleWatcher(watcher.id)}
+            >
               <span class="expand-icon">
                 {#if expandedWatchers.has(watcher.id)}
                   <ChevronDown class="w-4 h-4" />
@@ -275,8 +318,51 @@
                   {/if}
                 </div>
               </div>
+            </button>
+
+            <div class="watcher-actions">
+              {#if watcher.state === 'active' || watcher.state === 'paused'}
+                <button
+                  class="icon-action"
+                  onclick={() => toggleWatcherState(watcher)}
+                  disabled={busyWatchers.has(watcher.id)}
+                  title={watcher.state === 'active' ? 'Pause watcher' : 'Resume watcher'}
+                >
+                  {#if watcher.state === 'active'}
+                    <PauseCircle class="w-4 h-4" />
+                  {:else}
+                    <Play class="w-4 h-4" />
+                  {/if}
+                </button>
+              {/if}
+              {#if watcher.state === 'active' || watcher.state === 'static'}
+                <button
+                  class="icon-action"
+                  onclick={() => triggerWatcher(watcher)}
+                  disabled={busyWatchers.has(watcher.id)}
+                  title="Trigger watcher"
+                >
+                  <Zap class="w-4 h-4" />
+                </button>
+              {/if}
+              <button
+                class="icon-action"
+                onclick={() => selectedWatcher = watcher}
+                disabled={busyWatchers.has(watcher.id)}
+                title="Edit watcher"
+              >
+                <Pencil class="w-4 h-4" />
+              </button>
+              <button
+                class="icon-action danger"
+                onclick={() => deleteWatcher(watcher)}
+                disabled={busyWatchers.has(watcher.id)}
+                title="Delete watcher"
+              >
+                <Trash2 class="w-4 h-4" />
+              </button>
             </div>
-          </button>
+          </div>
 
           {#if expandedWatchers.has(watcher.id)}
             <div class="watcher-details">
@@ -306,7 +392,7 @@
                     Captured Variables
                   </h4>
                   <div class="variables-grid">
-                    {#each Object.entries(watcher.variables) as [name, value]}
+                    {#each Object.entries(watcher.variables) as [name, value] (name)}
                       <div class="variable-item">
                         <span class="variable-name">{name}:</span>
                         <span class="variable-value">{value}</span>
@@ -381,6 +467,25 @@
     </div>
   {/if}
 </div>
+
+{#if selectedWatcher}
+  <div use:portal>
+    <WatcherDetailDialog
+      watcher={selectedWatcher}
+      jobId={selectedWatcher.job_id}
+      hostname={selectedWatcher.hostname}
+      on:close={() => selectedWatcher = null}
+      on:updated={() => {
+        selectedWatcher = null;
+        void loadWatchers();
+      }}
+      on:deleted={() => {
+        selectedWatcher = null;
+        void loadWatchers();
+      }}
+    />
+  </div>
+{/if}
 
 <style>
   .watchers-tab {
@@ -605,7 +710,8 @@
     text-align: left;
   }
 
-  .watcher-header:hover {
+  .watcher-header:hover,
+  .header-left:hover {
     background: var(--secondary);
   }
 
@@ -614,6 +720,48 @@
     align-items: center;
     gap: 0.5rem;
     flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .watcher-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .icon-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: var(--background);
+    color: var(--muted-foreground);
+    cursor: pointer;
+  }
+
+  .icon-action:hover:not(:disabled) {
+    color: var(--foreground);
+    border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  }
+
+  .icon-action.danger:hover:not(:disabled) {
+    color: var(--destructive);
+    border-color: color-mix(in srgb, var(--destructive) 42%, var(--border));
+  }
+
+  .icon-action:disabled {
+    cursor: default;
+    opacity: 0.55;
   }
 
   .expand-icon {
@@ -841,6 +989,16 @@
     .watcher-meta {
       flex-wrap: wrap;
       gap: 0.5rem;
+    }
+
+    .watcher-header {
+      align-items: flex-start;
+    }
+
+    .watcher-actions {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 4.7rem;
     }
 
     .variable-item {
