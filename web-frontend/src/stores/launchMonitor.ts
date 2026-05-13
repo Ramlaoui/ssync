@@ -33,6 +33,7 @@ export interface LaunchMonitorItem {
 }
 
 export const launchMonitorItems = writable<LaunchMonitorItem[]>(loadStoredItems());
+export const launchEditDraft = writable<LaunchJobRequest | null>(null);
 
 const streams = new Map<string, LaunchEventStream>();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -54,6 +55,14 @@ function makeClientId(): string {
     return crypto.randomUUID();
   }
   return `launch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function cloneLaunchRequest(request: LaunchJobRequest): LaunchJobRequest {
+  return {
+    ...request,
+    exclude: Array.isArray(request.exclude) ? [...request.exclude] : [],
+    include: Array.isArray(request.include) ? [...request.include] : [],
+  };
 }
 
 function loadStoredItems(): LaunchMonitorItem[] {
@@ -81,6 +90,7 @@ function loadStoredItems(): LaunchMonitorItem[] {
       })
       .map((item) => ({
         ...item,
+        request: cloneLaunchRequest(item.request),
         events: Array.isArray(item.events) ? item.events.slice(-MAX_EVENTS_PER_LAUNCH) : [],
         logs: Array.isArray(item.logs) ? item.logs.slice(-MAX_LOG_LINES_PER_LAUNCH) : [],
         dismissed: Boolean(item.dismissed),
@@ -226,7 +236,7 @@ function buildItem(request: LaunchJobRequest, attempt = 1): LaunchMonitorItem {
   return {
     clientId: makeClientId(),
     attempt,
-    request: { ...request },
+    request: cloneLaunchRequest(request),
     host: request.host,
     jobName: request.job_name,
     sourceDir: request.source_dir,
@@ -335,6 +345,20 @@ async function relaunch(clientId: string): Promise<void> {
   }
 }
 
+function prepareEdit(clientId: string): boolean {
+  const item = get(launchMonitorItems).find((candidate) => candidate.clientId === clientId);
+  if (!item) {
+    return false;
+  }
+
+  launchEditDraft.set(cloneLaunchRequest(item.request));
+  return true;
+}
+
+function clearEditDraft(): void {
+  launchEditDraft.set(null);
+}
+
 async function recoverLaunch(clientId: string): Promise<void> {
   const item = get(launchMonitorItems).find((candidate) => candidate.clientId === clientId);
   if (!item?.launchId || item.terminal) {
@@ -419,6 +443,8 @@ export const launchMonitor = {
   items: launchMonitorItems,
   startLaunch,
   relaunch,
+  prepareEdit,
+  clearEditDraft,
   recoverActiveLaunches,
   dismiss,
   clearTerminal,

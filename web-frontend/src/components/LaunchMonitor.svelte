@@ -8,6 +8,7 @@
     ChevronUp,
     ExternalLink,
     Loader2,
+    Pencil,
     RotateCcw,
     Terminal,
     X,
@@ -93,6 +94,12 @@
       return;
     }
     void push(`/jobs/${encodeURIComponent(item.jobId)}/${item.host}`);
+  }
+
+  function editItem(item: LaunchMonitorItem): void {
+    if (launchMonitor.prepareEdit(item.clientId)) {
+      void push('/launch');
+    }
   }
 </script>
 
@@ -207,6 +214,15 @@
                   </button>
                 {/if}
                 {#if item.status === 'error' || item.status === 'lost'}
+                  <button
+                    type="button"
+                    class="icon-button"
+                    onclick={() => editItem(item)}
+                    title="Edit and relaunch"
+                    aria-label="Edit and relaunch"
+                  >
+                    <Pencil size={15} />
+                  </button>
                   <button
                     type="button"
                     class="icon-button"
