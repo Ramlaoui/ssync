@@ -65,7 +65,70 @@ def test_launch_recipe_command_passes_rendered_script_to_launch(monkeypatch, tmp
     assert captured["launch_manifest"]["manifest_version"] == 1
     assert captured["launch_manifest"]["recipe_path"] == str(recipe)
     assert captured["launch_manifest"]["vars"]["CONFIG"] == "experiments/demo/train"
-    assert captured["launch_manifest"]["sbatch"]["partition"] == "gpu"
+    assert captured["launch_manifest"]["sbatch"]["partition"] == "debug"
+
+
+@pytest.mark.unit
+def test_launch_recipe_command_applies_recipe_overrides(monkeypatch, tmp_path):
+    recipe = _recipe_project(tmp_path)
+    captured = {}
+
+    def fake_launch(self, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(commands.LaunchCommand, "_launch_script_content", fake_launch)
+
+    command = commands.LaunchRecipeCommand(
+        config_path=Path("/tmp/ssync-config.yaml"),
+        slurm_hosts=[],
+        verbose=False,
+    )
+
+    success = command.execute(
+        recipe_path=recipe,
+        var_overrides=["CONFIG=experiments/demo/debug", "MAX_STEPS=5"],
+        set_overrides=["sbatch.time=5", "sbatch.partition=debug"],
+    )
+
+    assert success is True
+    assert captured["time"] == 5
+    assert captured["partition"] == "debug"
+    assert "export CONFIG=experiments/demo/debug" in captured["script_content"]
+    assert "export MAX_STEPS=5" in captured["script_content"]
+    assert captured["launch_manifest"]["cli_overrides"]["vars"] == {
+        "CONFIG": "experiments/demo/debug",
+        "MAX_STEPS": "5",
+    }
+    assert captured["launch_manifest"]["submit"]["sbatch"]["time"] == 5
+
+
+@pytest.mark.unit
+def test_launch_recipe_command_rejects_invalid_overrides(monkeypatch, tmp_path):
+    recipe = _recipe_project(tmp_path)
+    outputs = []
+
+    monkeypatch.setattr(
+        commands.click,
+        "echo",
+        lambda message="", err=False: outputs.append((message, err)),
+    )
+
+    command = commands.LaunchRecipeCommand(
+        config_path=Path("/tmp/ssync-config.yaml"),
+        slurm_hosts=[],
+        verbose=False,
+    )
+
+    success = command.execute(recipe_path=recipe, set_overrides=["partition=debug"])
+
+    assert success is False
+    assert outputs == [
+        (
+            "Invalid launch recipe override: Only sbatch.* overrides are supported: partition",
+            True,
+        )
+    ]
 
 
 @pytest.mark.unit

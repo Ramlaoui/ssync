@@ -59,6 +59,66 @@ def _format_mapping(mapping: dict[str, Any]) -> list[str]:
     return [f"  {key}: {value}" for key, value in sorted(mapping.items())]
 
 
+_SBATCH_OVERRIDE_INT_FIELDS = {
+    "cpus",
+    "mem",
+    "time",
+    "nodes",
+    "ntasks_per_node",
+    "gpus_per_node",
+}
+
+_SBATCH_OVERRIDE_FIELDS = _SBATCH_OVERRIDE_INT_FIELDS | {
+    "account",
+    "constraint",
+    "error",
+    "gres",
+    "job_name",
+    "output",
+    "partition",
+}
+
+
+def _parse_var_overrides(var_overrides: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for item in var_overrides:
+        if "=" not in item:
+            raise ValueError(f"Variable override must be KEY=VALUE: {item}")
+        key, value = item.split("=", 1)
+        if not key.isidentifier():
+            raise ValueError(f"Invalid variable override name: {key}")
+        parsed[key] = value
+    return parsed
+
+
+def _parse_sbatch_overrides(set_overrides: list[str]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for item in set_overrides:
+        if "=" not in item:
+            raise ValueError(f"Override must be sbatch.FIELD=VALUE: {item}")
+        key, value = item.split("=", 1)
+        if not key.startswith("sbatch."):
+            raise ValueError(f"Only sbatch.* overrides are supported: {key}")
+        field_name = key.removeprefix("sbatch.")
+        if field_name not in _SBATCH_OVERRIDE_FIELDS:
+            raise ValueError(f"Unsupported sbatch override field: {field_name}")
+        if field_name in _SBATCH_OVERRIDE_INT_FIELDS:
+            try:
+                converted_value = int(value)
+            except ValueError as exc:
+                raise ValueError(
+                    f"sbatch.{field_name} override must be an integer"
+                ) from exc
+            if converted_value <= 0:
+                raise ValueError(
+                    f"sbatch.{field_name} override must be a positive integer"
+                )
+            parsed[field_name] = converted_value
+        else:
+            parsed[field_name] = value
+    return parsed
+
+
 class StatusCommand(BaseCommand):
     """Handles the status command logic."""
 
@@ -547,6 +607,11 @@ class LaunchRecipeCommand(LaunchCommand):
     def execute(
         self,
         recipe_path: Path,
+        workflow: Optional[str] = None,
+        host_partition: Optional[str] = None,
+        env_profile: Optional[str] = None,
+        var_overrides: List[str] = None,
+        set_overrides: List[str] = None,
         host: Optional[str] = None,
         job_name: Optional[str] = None,
         cpus: Optional[int] = None,
@@ -571,7 +636,34 @@ class LaunchRecipeCommand(LaunchCommand):
     ) -> bool:
         """Render a launch recipe and submit it via the existing launch API."""
         try:
-            rendered = render_launch_recipe(recipe_path)
+            parsed_var_overrides = _parse_var_overrides(var_overrides or [])
+            parsed_sbatch_overrides = _parse_sbatch_overrides(set_overrides or [])
+        except ValueError as e:
+            click.echo(f"Invalid launch recipe override: {e}", err=True)
+            return False
+
+        cli_overrides = {
+            key: value
+            for key, value in {
+                "workflow": workflow,
+                "host_partition": host_partition,
+                "env": env_profile,
+                "vars": parsed_var_overrides,
+                "sbatch": parsed_sbatch_overrides,
+            }.items()
+            if value
+        }
+
+        try:
+            rendered = render_launch_recipe(
+                recipe_path,
+                workflow=workflow,
+                host_partition=host_partition,
+                env=env_profile,
+                vars=parsed_var_overrides,
+                sbatch=parsed_sbatch_overrides,
+                cli_overrides=cli_overrides,
+            )
         except RecipeError as e:
             click.echo(f"Error rendering launch recipe: {e}", err=True)
             return False
@@ -632,6 +724,16 @@ class LaunchRecipeCommand(LaunchCommand):
             )
             return True
 
+        launch_manifest = dict(rendered.manifest)
+        launch_manifest["sbatch"] = {
+            key: value for key, value in resolved_sbatch.items() if value is not None
+        }
+        launch_manifest["submit"] = {
+            "host": resolved_host,
+            "job_name": resolved_job_name,
+            "sbatch": launch_manifest["sbatch"],
+        }
+
         return self._launch_script_content(
             script_content=rendered.script_content,
             source_dir=rendered.source_dir,
@@ -654,7 +756,7 @@ class LaunchRecipeCommand(LaunchCommand):
             include=include,
             no_gitignore=no_gitignore,
             abort_on_setup_failure=abort_on_setup_failure,
-            launch_manifest=rendered.manifest,
+            launch_manifest=launch_manifest,
         )
 
 
