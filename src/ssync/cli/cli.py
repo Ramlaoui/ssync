@@ -366,6 +366,18 @@ def launch_command(
     multiple=True,
     help="Override a scheduler field as sbatch.FIELD=VALUE",
 )
+@click.option(
+    "--add-watcher",
+    "add_watchers",
+    multiple=True,
+    help="Append a repo-local watcher policy by name or path",
+)
+@click.option(
+    "--remove-watcher",
+    "remove_watchers",
+    multiple=True,
+    help="Remove a watcher policy by name, path, or path stem",
+)
 @click.option("--host", help="Target host for job submission")
 @click.option("--job-name", help="Slurm job name")
 @click.option("--cpus", type=int, help="Number of CPUs per task")
@@ -413,6 +425,8 @@ def launch_recipe_command(
     env_profile,
     var_overrides,
     set_overrides,
+    add_watchers,
+    remove_watchers,
     host,
     job_name,
     cpus,
@@ -453,6 +467,8 @@ def launch_recipe_command(
         env_profile=env_profile,
         var_overrides=list(var_overrides),
         set_overrides=list(set_overrides),
+        add_watchers=list(add_watchers),
+        remove_watchers=list(remove_watchers),
         host=host,
         job_name=job_name,
         cpus=cpus,

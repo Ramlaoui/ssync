@@ -1,0 +1,11 @@
+name: timeout_resume
+pattern: "RUN_OUTPUT_DIR=(.+)"
+captures:
+  - resume_run_dir
+trigger_on_job_end: true
+trigger_job_states:
+  - timeout
+remaining_resubmits: 2
+actions:
+  - resubmit()
+

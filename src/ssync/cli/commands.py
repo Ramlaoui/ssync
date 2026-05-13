@@ -597,6 +597,11 @@ class LaunchRecipeCommand(LaunchCommand):
             click.echo("Fragments:")
             for fragment in rendered.fragments:
                 click.echo(f"  {fragment}")
+        if rendered.manifest.get("watchers"):
+            click.echo("Watchers:")
+            for watcher in rendered.manifest["watchers"]:
+                name = watcher.get("name") or watcher.get("policy_ref")
+                click.echo(f"  {name}")
         if rendered.vars:
             click.echo("Variables:")
             for line in _format_mapping(rendered.vars):
@@ -612,6 +617,8 @@ class LaunchRecipeCommand(LaunchCommand):
         env_profile: Optional[str] = None,
         var_overrides: List[str] = None,
         set_overrides: List[str] = None,
+        add_watchers: List[str] = None,
+        remove_watchers: List[str] = None,
         host: Optional[str] = None,
         job_name: Optional[str] = None,
         cpus: Optional[int] = None,
@@ -650,6 +657,8 @@ class LaunchRecipeCommand(LaunchCommand):
                 "env": env_profile,
                 "vars": parsed_var_overrides,
                 "sbatch": parsed_sbatch_overrides,
+                "add_watchers": add_watchers or [],
+                "remove_watchers": remove_watchers or [],
             }.items()
             if value
         }
@@ -662,6 +671,8 @@ class LaunchRecipeCommand(LaunchCommand):
                 env=env_profile,
                 vars=parsed_var_overrides,
                 sbatch=parsed_sbatch_overrides,
+                add_watchers=add_watchers or [],
+                remove_watchers=remove_watchers or [],
                 cli_overrides=cli_overrides,
             )
         except RecipeError as e:

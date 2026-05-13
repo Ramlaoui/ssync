@@ -104,6 +104,38 @@ def test_launch_recipe_command_applies_recipe_overrides(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_launch_recipe_command_applies_watcher_overrides(monkeypatch, tmp_path):
+    recipe = _recipe_project(tmp_path)
+    repo = recipe.parents[3]
+    _write(repo / ".ssync/watchers/timeout_resume.yaml", 'pattern: "TIMEOUT"\n')
+    captured = {}
+
+    def fake_launch(self, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(commands.LaunchCommand, "_launch_script_content", fake_launch)
+
+    command = commands.LaunchRecipeCommand(
+        config_path=Path("/tmp/ssync-config.yaml"),
+        slurm_hosts=[],
+        verbose=False,
+    )
+
+    success = command.execute(
+        recipe_path=recipe,
+        add_watchers=["timeout_resume"],
+    )
+
+    assert success is True
+    assert "#WATCHER_BEGIN" in captured["script_content"]
+    assert captured["launch_manifest"]["watchers"][0]["name"] == "timeout_resume"
+    assert captured["launch_manifest"]["cli_overrides"]["add_watchers"] == [
+        "timeout_resume"
+    ]
+
+
+@pytest.mark.unit
 def test_launch_recipe_command_rejects_invalid_overrides(monkeypatch, tmp_path):
     recipe = _recipe_project(tmp_path)
     outputs = []
