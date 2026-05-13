@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    fetchWatcherEvents,
     fetchJobWatchers,
     getWatcherJobKey,
     jobWatchersErrors,
@@ -31,6 +32,7 @@
   import { pauseWatcher, resumeWatcher } from "../stores/watchers";
   import { portal } from "../lib/actions/portal";
   import LoadingSpinner from "./LoadingSpinner.svelte";
+  import WatcherActivityFeed from "./WatcherActivityFeed.svelte";
   import WatcherDetailDialog from "./WatcherDetailDialog.svelte";
 
   interface Props {
@@ -54,6 +56,14 @@
       .filter((event) => event.job_id === job.job_id && event.hostname === job.hostname)
       .slice(0, 6)
   );
+  let eventsByWatcher = $derived.by(() => {
+    const grouped: Record<number, WatcherEvent[]> = {};
+    for (const event of $watcherEvents) {
+      if (event.job_id !== job.job_id || event.hostname !== job.hostname) continue;
+      grouped[event.watcher_id] = [...(grouped[event.watcher_id] || []), event];
+    }
+    return grouped;
+  });
   let loading = $derived(Boolean($jobWatchersLoading[jobKey]) && jobWatchers.length === 0);
   let refreshing = $derived(Boolean($jobWatchersLoading[jobKey]) && jobWatchers.length > 0);
   let error = $derived($jobWatchersErrors[jobKey] || null);
@@ -70,7 +80,10 @@
   );
 
   async function loadWatchers() {
-    await fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 0 });
+    await Promise.all([
+      fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 0 }),
+      fetchWatcherEvents(job.job_id, undefined, 50, { silent: true }),
+    ]);
   }
 
   async function withBusyWatcher(watcherId: number, action: () => Promise<void>) {
@@ -206,6 +219,7 @@
 
   $effect(() => {
     void fetchJobWatchers(job.job_id, job.hostname, { maxAgeMs: 15_000 }).catch(() => {});
+    void fetchWatcherEvents(job.job_id, undefined, 50, { silent: true }).catch(() => {});
   });
 </script>
 
@@ -458,6 +472,13 @@
                     </div>
                   {/if}
                 </div>
+              </div>
+
+              <div class="detail-section activity-section">
+                <WatcherActivityFeed
+                  watcher={watcher}
+                  events={eventsByWatcher[watcher.id] || []}
+                />
               </div>
             </div>
           {/if}
@@ -833,6 +854,12 @@
 
   .detail-section {
     margin-top: 1rem;
+  }
+
+  .activity-section {
+    max-height: 520px;
+    overflow-y: auto;
+    padding-right: 0.25rem;
   }
 
   .detail-section h4 {
