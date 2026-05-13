@@ -381,7 +381,7 @@ class LaunchCommand(BaseCommand):
                     stream = event.get("stream", "stdout")
                     if self.verbose:
                         click.echo(f"[{source}/{stream}] {message}")
-                    elif source == "setup":
+                    elif source in {"sync", "setup"}:
                         click.echo(message, err=stream == "stderr")
                 elif event_type == "launch_result":
                     final_job_id = event.get("job_id")
