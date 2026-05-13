@@ -17,7 +17,10 @@
   } from "../lib/sbatch-parser";
   import { validateParameters } from "../lib/sbatchUtils";
   import { api } from "../services/api";
-  import { launchMonitor } from "../stores/launchMonitor";
+  import {
+    launchEditDraft,
+    launchMonitor,
+  } from "../stores/launchMonitor";
   import { resubmitStore } from "../stores/resubmit";
   import type {
     HostInfo,
@@ -169,8 +172,8 @@ echo "Starting job..."
   let showColorDropdown = $state(false);
 
   // Sync settings state
-  let excludePatterns = $state(["*.log", "*.tmp", "__pycache__/"]);
-  let includePatterns = $state([]);
+  let excludePatterns = $state<string[]>(["*.log", "*.tmp", "__pycache__/"]);
+  let includePatterns = $state<string[]>([]);
   let noGitignore = $state(false);
 
   // Helper: Convert number | undefined to string for input binding
@@ -247,6 +250,48 @@ echo "Starting job..."
     const sourceDir = parameters.sourceDir;
     parameters = { ...parsed, sourceDir };
   }
+
+  function applyLaunchEditDraft(request: LaunchJobRequest) {
+    script = request.script_content;
+    selectedHost = request.host;
+    parameters.sourceDir = request.source_dir;
+    parseSbatchFromScript(request.script_content);
+
+    parameters = {
+      ...parameters,
+      sourceDir: request.source_dir,
+      jobName: request.job_name ?? parameters.jobName ?? "",
+      partition: request.partition ?? parameters.partition ?? "",
+      account: request.account ?? parameters.account ?? "",
+      constraint: request.constraint ?? parameters.constraint ?? "",
+      cpus: request.cpus ?? parameters.cpus,
+      memory: request.mem ?? parameters.memory,
+      timeLimit: request.time ?? parameters.timeLimit,
+      nodes: request.nodes ?? parameters.nodes,
+      ntasksPerNode:
+        request.ntasks_per_node ?? request.n_tasks_per_node ?? parameters.ntasksPerNode,
+      gpusPerNode: request.gpus_per_node ?? parameters.gpusPerNode,
+      gres: request.gres ?? parameters.gres ?? "",
+      outputFile: request.output ?? parameters.outputFile ?? "",
+      errorFile: request.error ?? parameters.errorFile ?? "",
+    };
+
+    excludePatterns = [...(request.exclude || [])];
+    includePatterns = [...(request.include || [])];
+    noGitignore = Boolean(request.no_gitignore);
+    isResubmit = false;
+    originalJobId = null;
+    watcherVariables = {};
+    watchers = [];
+    launchMonitor.clearEditDraft();
+  }
+
+  run(() => {
+    const draft = $launchEditDraft;
+    if (draft) {
+      applyLaunchEditDraft(draft);
+    }
+  });
 
   // Update script with SBATCH directives
   function updateScriptWithParameters() {
