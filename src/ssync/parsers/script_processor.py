@@ -3,7 +3,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ..models.watcher import ActionType, WatcherAction, WatcherDefinition
 from ..slurm.params import SlurmParams, to_directives
@@ -156,27 +156,72 @@ class ScriptProcessor:
         }
 
         for var_name, var_value in render_vars.items():
-            cond_pattern = re.compile(
-                re.escape("${" + var_name + ":+")
-                + r"((?:[^{}]|\$\{[^}]*\})*)"
-                + re.escape("}")
-            )
-
-            def _expand_conditional(match: re.Match) -> str:
-                word = match.group(1)
+            def _expand_conditional(word: str) -> str:
                 for nested_name, nested_value in render_vars.items():
                     word = word.replace(f"${{{nested_name}}}", nested_value)
                 return word
 
-            rendered = cond_pattern.sub(_expand_conditional, rendered)
-
-            default_pattern = re.compile(
-                re.escape("${" + var_name + ":-") + r"[^}]*" + re.escape("}")
+            rendered = ScriptProcessor._replace_parameter_expansion(
+                rendered, var_name, ":+", _expand_conditional
             )
-            rendered = default_pattern.sub(var_value, rendered)
+            rendered = ScriptProcessor._replace_parameter_expansion(
+                rendered, var_name, ":-", lambda _word, value=var_value: value
+            )
             rendered = rendered.replace(f"${{{var_name}}}", var_value)
 
         return rendered
+
+    @staticmethod
+    def _replace_parameter_expansion(
+        content: str,
+        var_name: str,
+        operator: str,
+        replacement: Callable[[str], str],
+    ) -> str:
+        prefix = "${" + var_name + operator
+        start = 0
+        parts = []
+
+        while True:
+            match_start = content.find(prefix, start)
+            if match_start == -1:
+                parts.append(content[start:])
+                break
+
+            match_end = ScriptProcessor._find_parameter_expansion_end(
+                content, match_start
+            )
+            if match_end is None:
+                parts.append(content[start:])
+                break
+
+            word_start = match_start + len(prefix)
+            word = content[word_start : match_end - 1]
+            parts.append(content[start:match_start])
+            parts.append(replacement(word))
+            start = match_end
+
+        return "".join(parts)
+
+    @staticmethod
+    def _find_parameter_expansion_end(content: str, expansion_start: int) -> Optional[int]:
+        depth = 0
+        i = expansion_start
+
+        while i < len(content):
+            if content.startswith("${", i):
+                depth += 1
+                i += 2
+                continue
+            if content[i] == "}":
+                depth -= 1
+                i += 1
+                if depth == 0:
+                    return i
+                continue
+            i += 1
+
+        return None
 
     @staticmethod
     def is_slurm_script(script_path: Path) -> bool:
