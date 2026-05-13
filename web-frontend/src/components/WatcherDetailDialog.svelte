@@ -1172,22 +1172,22 @@
 
   .status-active {
     background: var(--success-bg);
-    color: #065f46;
+    color: var(--success);
   }
 
   .status-paused {
-    background: #fed7aa;
-    color: #92400e;
+    background: var(--warning-bg);
+    color: var(--warning);
   }
 
   .status-completed {
     background: var(--info-bg);
-    color: #1e40af;
+    color: var(--info);
   }
 
   .status-failed {
     background: var(--error-bg);
-    color: #991b1b;
+    color: var(--destructive);
   }
 
   .pattern-display {
@@ -1228,11 +1228,11 @@
     display: inline-block;
     padding: 0.25rem 0.75rem;
     background: var(--info-bg);
-    border: 1px solid #bfdbfe;
+    border: 1px solid color-mix(in srgb, var(--info) 35%, var(--border));
     border-radius: 6px;
     font-family: monospace;
     font-size: 0.75rem;
-    color: #1e40af;
+    color: var(--info);
   }
 
   .condition-display code {
@@ -1344,7 +1344,15 @@
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: 6px;
+    background: var(--input);
+    color: var(--foreground);
     font-size: 0.875rem;
+  }
+
+  .form-group input::placeholder,
+  .action-condition input::placeholder,
+  .config-field input::placeholder {
+    color: var(--muted-foreground);
   }
 
   .form-group input[type="checkbox"] {
@@ -1428,7 +1436,8 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.875rem;
-    background: white;
+    background: var(--input);
+    color: var(--foreground);
   }
 
   .remove-action-btn {
@@ -1461,6 +1470,8 @@
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: 6px;
+    background: var(--input);
+    color: var(--foreground);
     font-size: 0.875rem;
     font-family: monospace;
   }
@@ -1487,6 +1498,8 @@
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: 6px;
+    background: var(--input);
+    color: var(--foreground);
     font-size: 0.875rem;
   }
 
@@ -1552,19 +1565,20 @@
   .code-instructions {
     padding: 0.75rem;
     background: var(--info-bg);
-    border: 1px solid #bfdbfe;
+    border: 1px solid color-mix(in srgb, var(--info) 35%, var(--border));
     border-radius: 6px;
   }
 
   .code-instructions p {
     margin: 0;
     font-size: 0.875rem;
-    color: #1e40af;
+    color: var(--info);
   }
 
   .code-container {
     position: relative;
-    background: var(--foreground);
+    background: var(--background);
+    border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
   }
@@ -1578,7 +1592,7 @@
   .code-container code {
     font-family: "Monaco", "Courier New", monospace;
     font-size: 0.875rem;
-    color: var(--border);
+    color: var(--foreground);
     line-height: 1.5;
   }
 
@@ -1666,7 +1680,7 @@
   }
 
   .btn-secondary {
-    background: white;
+    background: var(--background);
     color: var(--foreground);
     border: 1px solid var(--border);
     margin-left: auto;
