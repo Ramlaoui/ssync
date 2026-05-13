@@ -434,6 +434,8 @@ class APIClient:
         error: Optional[str] = None,
         constraint: Optional[str] = None,
         account: Optional[str] = None,
+        qos: Optional[str] = None,
+        dependency: Optional[str] = None,
         nodes: Optional[int] = None,
         ntasks_per_node: Optional[int] = None,
         gpus_per_node: Optional[int] = None,
@@ -476,6 +478,10 @@ class APIClient:
             request_data["constraint"] = constraint
         if account:
             request_data["account"] = account
+        if qos:
+            request_data["qos"] = qos
+        if dependency:
+            request_data["dependency"] = dependency
         if nodes is not None:
             request_data["nodes"] = nodes
         if ntasks_per_node is not None:

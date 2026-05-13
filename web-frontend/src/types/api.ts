@@ -229,6 +229,8 @@ export interface LaunchJobRequest {
   error?: string;
   constraint?: string;
   account?: string;
+  qos?: string;
+  dependency?: string;
   python_env?: string;
 
   // Sync parameters

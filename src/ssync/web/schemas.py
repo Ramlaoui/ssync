@@ -322,6 +322,8 @@ class LaunchJobRequest(BaseModel):
     error: Optional[str] = None
     constraint: Optional[str] = None
     account: Optional[str] = None
+    qos: Optional[str] = None
+    dependency: Optional[str] = None
     python_env: Optional[str] = None
     exclude: List[str] = Field(default_factory=list)
     include: List[str] = Field(default_factory=list)

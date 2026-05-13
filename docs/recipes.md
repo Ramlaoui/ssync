@@ -225,8 +225,8 @@ ssync launch-recipe experiments/demo/launch/train.yaml \
 
 `--var` values are exported as shell-safe strings. `--set` currently accepts
 `sbatch.*` fields only, including `partition`, `account`, `constraint`, `gres`,
-`output`, `error`, `cpus`, `mem`, `time`, `nodes`, `ntasks_per_node`, and
-`gpus_per_node`.
+`qos`, `dependency`, `output`, `error`, `cpus`, `mem`, `time`, `nodes`,
+`ntasks_per_node`, and `gpus_per_node`.
 
 Watcher list edits accept policy names, policy paths, or path stems.
 

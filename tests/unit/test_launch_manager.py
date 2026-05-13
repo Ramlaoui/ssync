@@ -7,6 +7,20 @@ import pytest
 from ssync.launch import LaunchManager
 from ssync.models.cluster import Host, SlurmHost
 from ssync.slurm.params import SlurmParams
+from ssync.slurm.submit import SlurmSubmit
+
+
+@pytest.mark.unit
+def test_sbatch_command_includes_qos_and_dependency():
+    params = SlurmParams(qos="qos_gpu-t4", dependency="afterok:12345")
+
+    cmd, submit_line = SlurmSubmit().build_sbatch_command(params, "/tmp/job.slurm")
+
+    assert "--qos=qos_gpu-t4" in cmd
+    assert "--dependency=afterok:12345" in cmd
+    assert submit_line == (
+        "sbatch --qos=qos_gpu-t4 --dependency=afterok:12345 /tmp/job.slurm"
+    )
 
 
 @pytest.mark.unit
