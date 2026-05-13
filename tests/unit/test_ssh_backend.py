@@ -1,5 +1,6 @@
 """Unit tests for SSH backend (ConnectionManager, SSHConnection, NativeSSH)."""
 
+import io
 from unittest.mock import Mock, patch
 
 import pytest
@@ -223,6 +224,29 @@ class TestSSHConnection:
         conn = SSHConnection("myhost", "user@myhost")
         # Should not raise exception
         conn.close()
+
+    @pytest.mark.unit
+    def test_run_streaming_command_writes_stdout_and_stderr(self):
+        """Test streaming command output is written while still captured."""
+        stdout_stream = io.StringIO()
+        stderr_stream = io.StringIO()
+
+        result = SSHConnection._run_streaming_command(
+            [
+                "bash",
+                "-lc",
+                "printf 'out-1\\n'; printf 'err-1\\n' >&2",
+            ],
+            timeout=5,
+            out_stream=stdout_stream,
+            err_stream=stderr_stream,
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == b"out-1\n"
+        assert result.stderr == b"err-1\n"
+        assert stdout_stream.getvalue() == "out-1\n"
+        assert stderr_stream.getvalue() == "err-1\n"
 
     @pytest.mark.unit
     @patch("ssync.ssh.connection.NativeSSH._check_control_master")

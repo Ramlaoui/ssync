@@ -132,3 +132,102 @@ def test_launch_command_follows_async_launch(monkeypatch, tmp_path):
         ("[sync/stdout] job.sh", False),
         ("Job launched successfully with ID: 5150", False),
     ]
+
+
+@pytest.mark.unit
+def test_launch_command_prints_setup_logs_without_verbose(monkeypatch, tmp_path):
+    script_path = tmp_path / "job.sh"
+    script_path.write_text("#!/bin/bash\necho hello\n")
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+
+    outputs = []
+
+    class _FakeAPIClient:
+        def __init__(self, base_url=None, verbose=False):
+            self.verbose = verbose
+
+        def ensure_server_running(self, config_path):
+            return True, None
+
+        def launch_job(self, **kwargs):
+            return {
+                "success": True,
+                "launch_id": "launch-abc",
+                "job_id": None,
+                "message": "Launch started",
+                "hostname": "jz",
+            }
+
+        def stream_launch_events(self, launch_id):
+            assert launch_id == "launch-abc"
+            yield {
+                "type": "launch_log",
+                "launch_id": launch_id,
+                "hostname": "jz",
+                "sequence": 1,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "source": "sync",
+                "stream": "stdout",
+                "message": "hidden sync detail",
+            }
+            yield {
+                "type": "launch_log",
+                "launch_id": launch_id,
+                "hostname": "jz",
+                "sequence": 2,
+                "timestamp": "2026-01-01T00:00:01+00:00",
+                "source": "setup",
+                "stream": "stdout",
+                "message": "Resolved 12 packages",
+            }
+            yield {
+                "type": "launch_log",
+                "launch_id": launch_id,
+                "hostname": "jz",
+                "sequence": 3,
+                "timestamp": "2026-01-01T00:00:02+00:00",
+                "source": "setup",
+                "stream": "stderr",
+                "message": "Using cached wheel",
+            }
+            yield {
+                "type": "launch_result",
+                "launch_id": launch_id,
+                "hostname": "jz",
+                "sequence": 4,
+                "timestamp": "2026-01-01T00:00:03+00:00",
+                "success": True,
+                "job_id": "5150",
+                "message": "Job launched successfully (5150)",
+            }
+
+        def get_launch_status(self, launch_id):
+            raise AssertionError("status fallback should not be used")
+
+    monkeypatch.setattr(commands, "APIClient", _FakeAPIClient)
+    monkeypatch.setattr(
+        commands.click,
+        "echo",
+        lambda message="", err=False: outputs.append((message, err)),
+    )
+
+    command = commands.LaunchCommand(
+        config_path=Path("/tmp/ssync-config.yaml"),
+        slurm_hosts=[],
+        verbose=False,
+    )
+
+    success = command.execute(
+        script_path=script_path,
+        source_dir=source_dir,
+        host="jz",
+    )
+
+    assert success is True
+    assert outputs == [
+        ("Launch started", False),
+        ("Resolved 12 packages", False),
+        ("Using cached wheel", True),
+        ("Job launched successfully with ID: 5150", False),
+    ]
