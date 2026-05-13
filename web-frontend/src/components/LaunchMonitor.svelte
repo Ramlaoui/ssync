@@ -244,11 +244,33 @@
 <style>
   .launch-monitor {
     position: fixed;
-    left: 1rem;
+    left: 50%;
     bottom: 1rem;
+    transform: translateX(-50%);
     z-index: 80;
-    width: min(420px, calc(100vw - 2rem));
+    width: min(760px, calc(100vw - 2rem));
     color: var(--foreground);
+    --launch-monitor-icon-bg: var(--secondary);
+    --launch-monitor-console-bg: #f8fafc;
+    --launch-monitor-console-fg: #111827;
+    --launch-monitor-running: #1d4ed8;
+    --launch-monitor-running-bg: rgba(37, 99, 235, 0.14);
+    --launch-monitor-success: #15803d;
+    --launch-monitor-success-bg: rgba(22, 163, 74, 0.14);
+    --launch-monitor-failed: #dc2626;
+    --launch-monitor-failed-bg: rgba(220, 38, 38, 0.14);
+  }
+
+  :global(.dark) .launch-monitor {
+    --launch-monitor-icon-bg: #171717;
+    --launch-monitor-console-bg: #111827;
+    --launch-monitor-console-fg: #e5e7eb;
+    --launch-monitor-running: #60a5fa;
+    --launch-monitor-running-bg: rgba(96, 165, 250, 0.18);
+    --launch-monitor-success: #34d399;
+    --launch-monitor-success-bg: rgba(52, 211, 153, 0.16);
+    --launch-monitor-failed: #f87171;
+    --launch-monitor-failed-bg: rgba(248, 113, 113, 0.18);
   }
 
   .monitor-bar,
@@ -279,25 +301,25 @@
     align-items: center;
     justify-content: center;
     border-radius: 999px;
-    background: var(--muted);
+    background: var(--launch-monitor-icon-bg);
     color: var(--muted-foreground);
     flex-shrink: 0;
   }
 
   .bar-icon.active,
   .status-icon.running {
-    color: #2563eb;
-    background: rgba(37, 99, 235, 0.12);
+    color: var(--launch-monitor-running);
+    background: var(--launch-monitor-running-bg);
   }
 
   .status-icon.success {
-    color: #15803d;
-    background: rgba(22, 163, 74, 0.12);
+    color: var(--launch-monitor-success);
+    background: var(--launch-monitor-success-bg);
   }
 
   .status-icon.failed {
-    color: #dc2626;
-    background: rgba(220, 38, 38, 0.12);
+    color: var(--launch-monitor-failed);
+    background: var(--launch-monitor-failed-bg);
   }
 
   .bar-copy {
@@ -427,8 +449,8 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.5rem;
-    background: var(--muted);
-    color: var(--foreground);
+    background: var(--launch-monitor-console-bg);
+    color: var(--launch-monitor-console-fg);
     font-size: 0.72rem;
     line-height: 1.35;
     white-space: pre-wrap;
@@ -449,7 +471,7 @@
   }
 
   .icon-button:hover:not(:disabled) {
-    background: var(--muted);
+    background: var(--secondary);
     color: var(--foreground);
   }
 
@@ -470,7 +492,6 @@
 
   @media (max-width: 640px) {
     .launch-monitor {
-      left: 0.5rem;
       bottom: 0.5rem;
       width: calc(100vw - 1rem);
     }
