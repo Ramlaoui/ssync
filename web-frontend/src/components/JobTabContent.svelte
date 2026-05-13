@@ -106,7 +106,7 @@
       {/if}
       {#if outputData?.content_truncated}
         <div class="output-notice">
-          Showing a bounded tail for speed. Use the raw file link for the full log.
+          Showing the beginning and latest output for speed. Use the raw file link for the full log.
         </div>
       {/if}
       <OutputViewer
@@ -160,7 +160,7 @@
       {/if}
       {#if outputData?.content_truncated}
         <div class="output-notice">
-          Showing a bounded tail for speed. Use the raw file link for the full log.
+          Showing the beginning and latest output for speed. Use the raw file link for the full log.
         </div>
       {/if}
       <OutputViewer

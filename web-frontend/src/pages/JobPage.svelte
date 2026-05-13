@@ -46,6 +46,7 @@
   type OutputStreamType = 'stdout' | 'stderr';
   const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
   const MAX_OUTPUT_BUFFER_CHARS = 768 * 1024;
+  const OUTPUT_HEAD_BUFFER_CHARS = 128 * 1024;
 
   let outputData: OutputData | null = $state(null);
   let outputError: string | null = $state(null);
@@ -213,7 +214,12 @@
     if (next.length <= MAX_OUTPUT_BUFFER_CHARS) {
       return next;
     }
-    return next.slice(next.length - MAX_OUTPUT_BUFFER_CHARS);
+    const marker = '\n\n[... older live output omitted; showing beginning and latest output ...]\n\n';
+    const tailSize = MAX_OUTPUT_BUFFER_CHARS - OUTPUT_HEAD_BUFFER_CHARS - marker.length;
+    if (tailSize <= 0) {
+      return next.slice(next.length - MAX_OUTPUT_BUFFER_CHARS);
+    }
+    return `${next.slice(0, OUTPUT_HEAD_BUFFER_CHARS)}${marker}${next.slice(next.length - tailSize)}`;
   }
 
   function resetOutputState(options: { clearError?: boolean } = {}) {
