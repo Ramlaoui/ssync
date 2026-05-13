@@ -38,6 +38,8 @@ class RenderedRecipe:
     gres: str | None = None
     constraint: str | None = None
     account: str | None = None
+    qos: str | None = None
+    dependency: str | None = None
     python_env: str | None = None
     vars: dict[str, Any] = field(default_factory=dict)
     fragments: list[Path] = field(default_factory=list)
@@ -682,6 +684,8 @@ def render_launch_recipe(
             "gres": sbatch.get("gres"),
             "constraint": sbatch.get("constraint"),
             "account": sbatch.get("account"),
+            "qos": sbatch.get("qos"),
+            "dependency": sbatch.get("dependency"),
         }.items()
         if value is not None
     }
@@ -723,6 +727,8 @@ def render_launch_recipe(
         gres=sbatch.get("gres"),
         constraint=sbatch.get("constraint"),
         account=sbatch.get("account"),
+        qos=sbatch.get("qos"),
+        dependency=sbatch.get("dependency"),
         python_env=data.get("python_env"),
         vars=resolved_vars,
         fragments=fragment_paths,

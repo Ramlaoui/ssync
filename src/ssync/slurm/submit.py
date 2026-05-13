@@ -42,6 +42,10 @@ class SlurmSubmit:
             cmd.append(f"--constraint={slurm_params.constraint}")
         if slurm_params.account:
             cmd.append(f"--account={slurm_params.account}")
+        if slurm_params.qos:
+            cmd.append(f"--qos={slurm_params.qos}")
+        if slurm_params.dependency:
+            cmd.append(f"--dependency={slurm_params.dependency}")
         if slurm_params.nodes:
             cmd.append(f"--nodes={slurm_params.nodes}")
         if slurm_params.n_tasks_per_node:

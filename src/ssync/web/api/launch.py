@@ -85,6 +85,8 @@ def register_launch_routes(
                 error=request.error,
                 constraint=request.constraint,
                 account=request.account,
+                qos=request.qos,
+                dependency=request.dependency,
                 nodes=min(request.nodes, 100) if request.nodes else None,
                 n_tasks_per_node=request.n_tasks_per_node,
                 gpus_per_node=request.gpus_per_node,

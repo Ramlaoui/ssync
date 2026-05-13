@@ -266,6 +266,8 @@ def sync_command(ctx, exclude, include, no_gitignore, host, max_depth, source_di
 @click.option("--gres", help="Generic resources (e.g., 'gpu:2')")
 @click.option("--constraint", help="Node constraints (e.g., gpu, bigmem)")
 @click.option("--account", help="Slurm account for billing")
+@click.option("--qos", help="Slurm quality of service")
+@click.option("--dependency", help="Slurm dependency expression")
 @click.option("--python-env", help="Python environment setup command")
 @click.option(
     "--exclude", multiple=True, help="Additional patterns to exclude from sync"
@@ -299,6 +301,8 @@ def launch_command(
     gres,
     constraint,
     account,
+    qos,
+    dependency,
     python_env,
     exclude,
     include,
@@ -336,6 +340,8 @@ def launch_command(
         error=error,
         constraint=constraint,
         account=account,
+        qos=qos,
+        dependency=dependency,
         python_env=python_env,
         exclude=list(exclude),
         include=list(include),
@@ -393,6 +399,8 @@ def launch_command(
 @click.option("--gres", help="Generic resources (e.g., 'gpu:2')")
 @click.option("--constraint", help="Node constraints (e.g., gpu, bigmem)")
 @click.option("--account", help="Slurm account for billing")
+@click.option("--qos", help="Slurm quality of service")
+@click.option("--dependency", help="Slurm dependency expression")
 @click.option("--python-env", help="Python environment setup command")
 @click.option(
     "--exclude", multiple=True, help="Additional patterns to exclude from sync"
@@ -442,6 +450,8 @@ def launch_recipe_command(
     gres,
     constraint,
     account,
+    qos,
+    dependency,
     python_env,
     exclude,
     include,
@@ -484,6 +494,8 @@ def launch_recipe_command(
         error=error,
         constraint=constraint,
         account=account,
+        qos=qos,
+        dependency=dependency,
         python_env=python_env,
         exclude=list(exclude),
         include=list(include),

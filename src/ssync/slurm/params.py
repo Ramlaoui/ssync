@@ -29,6 +29,8 @@ class SlurmParams:
     nodes: Optional[int] = None
     constraint: Optional[str] = None
     account: Optional[str] = None
+    qos: Optional[str] = None
+    dependency: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         """Return a dict suitable for `to_directives` (maps time_min -> time)."""
@@ -42,6 +44,8 @@ class SlurmParams:
             "error": self.error,
             "constraint": self.constraint,
             "account": self.account,
+            "qos": self.qos,
+            "dependency": self.dependency,
             "nodes": self.nodes,
             "ntasks_per_node": self.n_tasks_per_node,
             "gpus_per_node": self.gpus_per_node,
@@ -65,6 +69,8 @@ ALIAS_MAP = {
     "error": "error",
     "constraint": "constraint",
     "account": "account",
+    "qos": "qos",
+    "dependency": "dependency",
     "ntasks_per_node": "ntasks_per_node",
     "n_tasks_per_node": "ntasks_per_node",
     "ntasks-per-node": "ntasks_per_node",
@@ -159,6 +165,10 @@ def to_directives(kwargs: Dict[str, Any]) -> List[str]:
         directives.append(f"#SBATCH --constraint={params['constraint']}")
     if params.get("account"):
         directives.append(f"#SBATCH --account={params['account']}")
+    if params.get("qos"):
+        directives.append(f"#SBATCH --qos={params['qos']}")
+    if params.get("dependency"):
+        directives.append(f"#SBATCH --dependency={params['dependency']}")
     if params.get("nodes"):
         directives.append(f"#SBATCH --nodes={params['nodes']}")
     if params.get("ntasks_per_node"):

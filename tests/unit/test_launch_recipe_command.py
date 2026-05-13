@@ -29,6 +29,8 @@ run:
 sbatch:
   cpus: 8
   partition: gpu
+  qos: qos_gpu-t4
+  dependency: afterok:12345
 """,
     )
     return recipe
@@ -59,6 +61,8 @@ def test_launch_recipe_command_passes_rendered_script_to_launch(monkeypatch, tmp
     assert captured["cpus"] == 8
     assert captured["mem"] == 32
     assert captured["partition"] == "debug"
+    assert captured["qos"] == "qos_gpu-t4"
+    assert captured["dependency"] == "afterok:12345"
     assert captured["source_dir"] == tmp_path / "repo"
     assert "export CONFIG=experiments/demo/train" in captured["script_content"]
     assert 'python train.py "$CONFIG"' in captured["script_content"]
@@ -66,6 +70,8 @@ def test_launch_recipe_command_passes_rendered_script_to_launch(monkeypatch, tmp
     assert captured["launch_manifest"]["recipe_path"] == str(recipe)
     assert captured["launch_manifest"]["vars"]["CONFIG"] == "experiments/demo/train"
     assert captured["launch_manifest"]["sbatch"]["partition"] == "debug"
+    assert captured["launch_manifest"]["sbatch"]["qos"] == "qos_gpu-t4"
+    assert captured["launch_manifest"]["sbatch"]["dependency"] == "afterok:12345"
 
 
 @pytest.mark.unit
@@ -88,12 +94,19 @@ def test_launch_recipe_command_applies_recipe_overrides(monkeypatch, tmp_path):
     success = command.execute(
         recipe_path=recipe,
         var_overrides=["CONFIG=experiments/demo/debug", "MAX_STEPS=5"],
-        set_overrides=["sbatch.time=5", "sbatch.partition=debug"],
+        set_overrides=[
+            "sbatch.time=5",
+            "sbatch.partition=debug",
+            "sbatch.qos=qos_gpu-dev",
+            "sbatch.dependency=afterany:999",
+        ],
     )
 
     assert success is True
     assert captured["time"] == 5
     assert captured["partition"] == "debug"
+    assert captured["qos"] == "qos_gpu-dev"
+    assert captured["dependency"] == "afterany:999"
     assert "export CONFIG=experiments/demo/debug" in captured["script_content"]
     assert "export MAX_STEPS=5" in captured["script_content"]
     assert captured["launch_manifest"]["cli_overrides"]["vars"] == {
@@ -101,6 +114,11 @@ def test_launch_recipe_command_applies_recipe_overrides(monkeypatch, tmp_path):
         "MAX_STEPS": "5",
     }
     assert captured["launch_manifest"]["submit"]["sbatch"]["time"] == 5
+    assert captured["launch_manifest"]["submit"]["sbatch"]["qos"] == "qos_gpu-dev"
+    assert (
+        captured["launch_manifest"]["submit"]["sbatch"]["dependency"]
+        == "afterany:999"
+    )
 
 
 @pytest.mark.unit

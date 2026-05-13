@@ -71,11 +71,13 @@ _SBATCH_OVERRIDE_INT_FIELDS = {
 _SBATCH_OVERRIDE_FIELDS = _SBATCH_OVERRIDE_INT_FIELDS | {
     "account",
     "constraint",
+    "dependency",
     "error",
     "gres",
     "job_name",
     "output",
     "partition",
+    "qos",
 }
 
 
@@ -412,6 +414,8 @@ class LaunchCommand(BaseCommand):
         error: Optional[str] = None,
         constraint: Optional[str] = None,
         account: Optional[str] = None,
+        qos: Optional[str] = None,
+        dependency: Optional[str] = None,
         python_env: Optional[str] = None,
         exclude: List[str] = None,
         include: List[str] = None,
@@ -450,6 +454,8 @@ class LaunchCommand(BaseCommand):
                 error=error,
                 constraint=constraint,
                 account=account,
+                qos=qos,
+                dependency=dependency,
                 nodes=nodes,
                 ntasks_per_node=ntasks_per_node,
                 gpus_per_node=gpus_per_node,
@@ -513,6 +519,8 @@ class LaunchCommand(BaseCommand):
         error: Optional[str] = None,
         constraint: Optional[str] = None,
         account: Optional[str] = None,
+        qos: Optional[str] = None,
+        dependency: Optional[str] = None,
         python_env: Optional[str] = None,
         exclude: List[str] = None,
         include: List[str] = None,
@@ -547,6 +555,8 @@ class LaunchCommand(BaseCommand):
                 error=error,
                 constraint=constraint,
                 account=account,
+                qos=qos,
+                dependency=dependency,
                 python_env=python_env,
                 exclude=exclude,
                 include=include,
@@ -636,6 +646,8 @@ class LaunchRecipeCommand(LaunchCommand):
         error: Optional[str] = None,
         constraint: Optional[str] = None,
         account: Optional[str] = None,
+        qos: Optional[str] = None,
+        dependency: Optional[str] = None,
         python_env: Optional[str] = None,
         exclude: List[str] = None,
         include: List[str] = None,
@@ -710,6 +722,10 @@ class LaunchRecipeCommand(LaunchCommand):
             constraint if constraint is not None else rendered.constraint
         )
         resolved_account = account if account is not None else rendered.account
+        resolved_qos = qos if qos is not None else rendered.qos
+        resolved_dependency = (
+            dependency if dependency is not None else rendered.dependency
+        )
         resolved_python_env = (
             python_env if python_env is not None else rendered.python_env
         )
@@ -726,6 +742,8 @@ class LaunchRecipeCommand(LaunchCommand):
             "gres": resolved_gres,
             "constraint": resolved_constraint,
             "account": resolved_account,
+            "qos": resolved_qos,
+            "dependency": resolved_dependency,
         }
 
         if dry_run:
@@ -765,6 +783,8 @@ class LaunchRecipeCommand(LaunchCommand):
             error=resolved_error,
             constraint=resolved_constraint,
             account=resolved_account,
+            qos=resolved_qos,
+            dependency=resolved_dependency,
             python_env=resolved_python_env,
             exclude=exclude,
             include=include,

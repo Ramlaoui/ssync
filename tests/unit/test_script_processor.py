@@ -575,9 +575,13 @@ class TestAddSlurmDirectives:
             content,
             constraint="gpu_v100",
             account="my_account",
+            qos="qos_gpu-t4",
+            dependency="afterok:12345",
         )
         assert "#SBATCH --constraint=gpu_v100" in result
         assert "#SBATCH --account=my_account" in result
+        assert "#SBATCH --qos=qos_gpu-t4" in result
+        assert "#SBATCH --dependency=afterok:12345" in result
 
     @pytest.mark.unit
     def test_adds_node_and_task_configuration(self):

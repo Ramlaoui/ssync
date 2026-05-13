@@ -92,6 +92,8 @@ class ActionExecutor:
             nodes=sbatch.get("nodes"),
             constraint=sbatch.get("constraint"),
             account=sbatch.get("account"),
+            qos=sbatch.get("qos"),
+            dependency=sbatch.get("dependency"),
         )
 
     def _updated_resubmit_manifest(
