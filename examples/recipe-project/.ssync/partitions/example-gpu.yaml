@@ -1,0 +1,10 @@
+host: example
+sbatch:
+  partition: gpu
+  cpus: 8
+  mem: 32
+  time: 60
+  gpus_per_node: 1
+vars:
+  VENV_ROOT: "${SCRATCHDIR}/venvs"
+

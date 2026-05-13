@@ -9,6 +9,8 @@ from .commands import (
     CancelCommand,
     CopyOutputCommand,
     LaunchCommand,
+    LaunchRecipeCommand,
+    ManifestCommand,
     PartitionsCommand,
     StatusCommand,
     SyncCommand,
@@ -339,6 +341,142 @@ def launch_command(
         no_gitignore=no_gitignore,
         no_defaults=no_defaults,
         abort_on_setup_failure=not no_abort_on_setup_failure,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="launch-recipe")
+@click.option("--host", help="Target host for job submission")
+@click.option("--job-name", help="Slurm job name")
+@click.option("--cpus", type=int, help="Number of CPUs per task")
+@click.option("--mem", type=int, help="Memory in GB")
+@click.option("--time", type=int, help="Time limit in minutes")
+@click.option("--partition", help="Slurm partition")
+@click.option("--output", help="Output file path")
+@click.option("--error", help="Error file path")
+@click.option("--nodes", type=int, help="Number of nodes")
+@click.option("--ntasks-per-node", type=int, help="Number of tasks per node")
+@click.option("--gpus-per-node", type=int, help="Number of GPUs per node")
+@click.option("--gres", help="Generic resources (e.g., 'gpu:2')")
+@click.option("--constraint", help="Node constraints (e.g., gpu, bigmem)")
+@click.option("--account", help="Slurm account for billing")
+@click.option("--python-env", help="Python environment setup command")
+@click.option(
+    "--exclude", multiple=True, help="Additional patterns to exclude from sync"
+)
+@click.option(
+    "--include", multiple=True, help="Patterns to include (overrides .gitignore)"
+)
+@click.option("--no-gitignore", is_flag=True, help="Disable .gitignore usage")
+@click.option(
+    "--no-abort-on-setup-failure",
+    is_flag=True,
+    help="Continue job submission even if login setup fails",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Render the recipe and print the script without submitting",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="With --dry-run, output the resolved manifest as JSON",
+)
+@click.argument("recipe_path", type=click.Path(exists=True, path_type=Path))
+@click.pass_context
+def launch_recipe_command(
+    ctx,
+    host,
+    job_name,
+    cpus,
+    mem,
+    time,
+    partition,
+    output,
+    error,
+    nodes,
+    ntasks_per_node,
+    gpus_per_node,
+    gres,
+    constraint,
+    account,
+    python_env,
+    exclude,
+    include,
+    no_gitignore,
+    no_abort_on_setup_failure,
+    dry_run,
+    json_output,
+    recipe_path,
+):
+    """Launch a job from a repo-local recipe YAML.
+
+    RECIPE_PATH: Path to the launch recipe YAML to render and submit.
+    """
+    command = LaunchRecipeCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        recipe_path=recipe_path,
+        host=host,
+        job_name=job_name,
+        cpus=cpus,
+        mem=mem,
+        time=time,
+        partition=partition,
+        nodes=nodes,
+        ntasks_per_node=ntasks_per_node,
+        gpus_per_node=gpus_per_node,
+        gres=gres,
+        output=output,
+        error=error,
+        constraint=constraint,
+        account=account,
+        python_env=python_env,
+        exclude=list(exclude),
+        include=list(include),
+        no_gitignore=no_gitignore,
+        abort_on_setup_failure=not no_abort_on_setup_failure,
+        dry_run=dry_run,
+        json_output=json_output,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="manifest")
+@click.argument("job_id")
+@click.option("--host", help="Target host (auto-detected if not specified)")
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Output raw manifest JSON instead of a summary",
+)
+@click.pass_context
+def manifest_command(ctx, job_id, host, json_output):
+    """Show the stored launch manifest for a recipe-submitted job.
+
+    JOB_ID: Slurm job ID whose run manifest should be shown.
+    """
+    command = ManifestCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        job_id=job_id,
+        host=host,
+        json_output=json_output,
     )
 
     if not success:

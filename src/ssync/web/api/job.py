@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 
+from ...cache import get_cache
 from ...utils.logging import setup_logger
 from ..models import (
     CompleteJobDataResponse,
@@ -332,6 +333,31 @@ def register_job_routes(
             raise
         except Exception as e:
             logger.error(f"Error in get_job_script: {e}")
+            raise HTTPException(
+                status_code=500, detail="Internal server error occurred"
+            )
+
+    @app.get("/api/jobs/{job_id}/manifest")
+    async def get_job_manifest(
+        job_id: str,
+        host: str = Query(..., description="Host where job was submitted"),
+        _authenticated: bool = Depends(verify_api_key_dependency),
+    ):
+        """Get the stored launch manifest for a recipe-submitted job."""
+        try:
+            job_id = InputSanitizer.sanitize_job_id(job_id)
+            host = InputSanitizer.sanitize_hostname(host)
+            manifest = get_cache().get_run_manifest(job_id, host)
+            if manifest is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Run manifest for job {job_id} on {host} not found",
+                )
+            return manifest
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in get_job_manifest: {e}")
             raise HTTPException(
                 status_code=500, detail="Internal server error occurred"
             )

@@ -2,13 +2,14 @@
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import click
 import requests
 
 from ..api import APIClient
 from ..manager import SlurmManager
+from ..recipes import RecipeError, render_launch_recipe
 from ..sync import SyncManager
 from .display import JobDisplay, PartitionDisplay
 
@@ -20,6 +21,42 @@ class BaseCommand:
         self.config_path = config_path
         self.slurm_hosts = slurm_hosts
         self.verbose = verbose
+
+    def _resolve_job_host(self, api_client: APIClient, job_id: str, host: str | None):
+        if host:
+            host_exists = any(h.host.hostname == host for h in self.slurm_hosts)
+            if not host_exists:
+                click.echo(f"Host '{host}' not found in configuration", err=True)
+                return None
+            return host
+
+        if self.verbose:
+            click.echo(f"No host specified, searching for job {job_id}...")
+
+        jobs = api_client.get_jobs(job_ids=[job_id])
+        if not jobs:
+            click.echo(f"Job {job_id} not found on any configured host", err=True)
+            return None
+
+        matching_hosts = sorted({job.hostname for job in jobs if job.hostname})
+        if len(matching_hosts) > 1:
+            click.echo(
+                (
+                    f"Job {job_id} was found on multiple hosts: "
+                    f"{', '.join(matching_hosts)}. Specify --host."
+                ),
+                err=True,
+            )
+            return None
+
+        resolved_host = matching_hosts[0]
+        if self.verbose:
+            click.echo(f"Found job {job_id} on host {resolved_host}")
+        return resolved_host
+
+
+def _format_mapping(mapping: dict[str, Any]) -> list[str]:
+    return [f"  {key}: {value}" for key, value in sorted(mapping.items())]
 
 
 class StatusCommand(BaseCommand):
@@ -294,10 +331,10 @@ class LaunchCommand(BaseCommand):
         final_job_id = status.get("job_id")
         return bool(status.get("success")), final_job_id, status.get("message", "")
 
-    def execute(
+    def _launch_script_content(
         self,
-        script_path: Path,
-        source_dir: Path,
+        script_content: str,
+        source_dir: Optional[Path],
         host: str,
         job_name: Optional[str] = None,
         cpus: Optional[int] = None,
@@ -316,19 +353,10 @@ class LaunchCommand(BaseCommand):
         exclude: List[str] = None,
         include: List[str] = None,
         no_gitignore: bool = False,
-        no_defaults: bool = False,
         abort_on_setup_failure: bool = True,
-    ):
-        """Execute launch command via API."""
+        launch_manifest: Optional[dict] = None,
+    ) -> bool:
         try:
-            # Read script content
-            if not script_path.exists():
-                click.echo(f"Script file not found: {script_path}", err=True)
-                return False
-
-            with open(script_path, "r") as f:
-                script_content = f.read()
-
             # Initialize API client
             api_client = APIClient(verbose=self.verbose)
 
@@ -368,6 +396,7 @@ class LaunchCommand(BaseCommand):
                 include=include,
                 no_gitignore=no_gitignore,
                 abort_on_setup_failure=abort_on_setup_failure,
+                launch_manifest=launch_manifest,
             )
 
             success = bool(launch_response.get("success"))
@@ -401,6 +430,310 @@ class LaunchCommand(BaseCommand):
 
         except Exception as e:
             click.echo(f"Error launching job: {e}", err=True)
+            return False
+
+    def execute(
+        self,
+        script_path: Path,
+        source_dir: Path,
+        host: str,
+        job_name: Optional[str] = None,
+        cpus: Optional[int] = None,
+        mem: Optional[int] = None,
+        time: Optional[int] = None,
+        partition: Optional[str] = None,
+        ntasks_per_node: Optional[int] = None,
+        nodes: Optional[int] = None,
+        gpus_per_node: Optional[int] = None,
+        gres: Optional[str] = None,
+        output: Optional[str] = None,
+        error: Optional[str] = None,
+        constraint: Optional[str] = None,
+        account: Optional[str] = None,
+        python_env: Optional[str] = None,
+        exclude: List[str] = None,
+        include: List[str] = None,
+        no_gitignore: bool = False,
+        no_defaults: bool = False,
+        abort_on_setup_failure: bool = True,
+    ):
+        """Execute launch command via API."""
+        try:
+            # Read script content
+            if not script_path.exists():
+                click.echo(f"Script file not found: {script_path}", err=True)
+                return False
+
+            with open(script_path, "r") as f:
+                script_content = f.read()
+
+            return self._launch_script_content(
+                script_content=script_content,
+                source_dir=source_dir,
+                host=host,
+                job_name=job_name,
+                cpus=cpus,
+                mem=mem,
+                time=time,
+                partition=partition,
+                ntasks_per_node=ntasks_per_node,
+                nodes=nodes,
+                gpus_per_node=gpus_per_node,
+                gres=gres,
+                output=output,
+                error=error,
+                constraint=constraint,
+                account=account,
+                python_env=python_env,
+                exclude=exclude,
+                include=include,
+                no_gitignore=no_gitignore,
+                abort_on_setup_failure=abort_on_setup_failure,
+            )
+
+        except Exception as e:
+            click.echo(f"Error launching job: {e}", err=True)
+            return False
+
+
+class LaunchRecipeCommand(LaunchCommand):
+    """Handles the launch-recipe command logic via rendered recipes."""
+
+    def _echo_dry_run(
+        self,
+        rendered,
+        *,
+        host: str,
+        job_name: Optional[str],
+        sbatch: dict[str, Any],
+        json_output: bool,
+    ) -> None:
+        manifest = dict(rendered.manifest)
+        manifest["submit"] = {
+            "host": host,
+            "job_name": job_name,
+            "sbatch": {
+                key: value for key, value in sbatch.items() if value is not None
+            },
+        }
+
+        if json_output:
+            click.echo(json.dumps(manifest, indent=2, sort_keys=True))
+            return
+
+        click.echo(f"Recipe: {rendered.recipe_path}")
+        click.echo(f"Source dir: {rendered.source_dir}")
+        click.echo(f"Host: {host}")
+        if job_name:
+            click.echo(f"Job name: {job_name}")
+        click.echo(f"Script sha256: {rendered.manifest['script_sha256']}")
+        if sbatch:
+            click.echo("Sbatch:")
+            for line in _format_mapping(
+                {key: value for key, value in sbatch.items() if value is not None}
+            ):
+                click.echo(line)
+        if rendered.fragments:
+            click.echo("Fragments:")
+            for fragment in rendered.fragments:
+                click.echo(f"  {fragment}")
+        if rendered.vars:
+            click.echo("Variables:")
+            for line in _format_mapping(rendered.vars):
+                click.echo(line)
+        click.echo("Rendered script:")
+        click.echo(rendered.script_content)
+
+    def execute(
+        self,
+        recipe_path: Path,
+        host: Optional[str] = None,
+        job_name: Optional[str] = None,
+        cpus: Optional[int] = None,
+        mem: Optional[int] = None,
+        time: Optional[int] = None,
+        partition: Optional[str] = None,
+        ntasks_per_node: Optional[int] = None,
+        nodes: Optional[int] = None,
+        gpus_per_node: Optional[int] = None,
+        gres: Optional[str] = None,
+        output: Optional[str] = None,
+        error: Optional[str] = None,
+        constraint: Optional[str] = None,
+        account: Optional[str] = None,
+        python_env: Optional[str] = None,
+        exclude: List[str] = None,
+        include: List[str] = None,
+        no_gitignore: bool = False,
+        abort_on_setup_failure: bool = True,
+        dry_run: bool = False,
+        json_output: bool = False,
+    ) -> bool:
+        """Render a launch recipe and submit it via the existing launch API."""
+        try:
+            rendered = render_launch_recipe(recipe_path)
+        except RecipeError as e:
+            click.echo(f"Error rendering launch recipe: {e}", err=True)
+            return False
+
+        resolved_host = host or rendered.host
+        if not resolved_host and not dry_run:
+            click.echo(
+                "Launch recipe does not define a host; pass --host.",
+                err=True,
+            )
+            return False
+        dry_run_host = resolved_host or "<not set>"
+
+        resolved_job_name = job_name if job_name is not None else rendered.job_name
+        resolved_cpus = cpus if cpus is not None else rendered.cpus
+        resolved_mem = mem if mem is not None else rendered.mem
+        resolved_time = time if time is not None else rendered.time
+        resolved_partition = partition if partition is not None else rendered.partition
+        resolved_ntasks = (
+            ntasks_per_node if ntasks_per_node is not None else rendered.ntasks_per_node
+        )
+        resolved_nodes = nodes if nodes is not None else rendered.nodes
+        resolved_gpus = (
+            gpus_per_node if gpus_per_node is not None else rendered.gpus_per_node
+        )
+        resolved_gres = gres if gres is not None else rendered.gres
+        resolved_output = output if output is not None else rendered.output
+        resolved_error = error if error is not None else rendered.error
+        resolved_constraint = (
+            constraint if constraint is not None else rendered.constraint
+        )
+        resolved_account = account if account is not None else rendered.account
+        resolved_python_env = (
+            python_env if python_env is not None else rendered.python_env
+        )
+        resolved_sbatch = {
+            "cpus": resolved_cpus,
+            "mem": resolved_mem,
+            "time": resolved_time,
+            "partition": resolved_partition,
+            "output": resolved_output,
+            "error": resolved_error,
+            "nodes": resolved_nodes,
+            "ntasks_per_node": resolved_ntasks,
+            "gpus_per_node": resolved_gpus,
+            "gres": resolved_gres,
+            "constraint": resolved_constraint,
+            "account": resolved_account,
+        }
+
+        if dry_run:
+            self._echo_dry_run(
+                rendered,
+                host=dry_run_host,
+                job_name=resolved_job_name,
+                sbatch=resolved_sbatch,
+                json_output=json_output,
+            )
+            return True
+
+        return self._launch_script_content(
+            script_content=rendered.script_content,
+            source_dir=rendered.source_dir,
+            host=resolved_host,
+            job_name=resolved_job_name,
+            cpus=resolved_cpus,
+            mem=resolved_mem,
+            time=resolved_time,
+            partition=resolved_partition,
+            ntasks_per_node=resolved_ntasks,
+            nodes=resolved_nodes,
+            gpus_per_node=resolved_gpus,
+            gres=resolved_gres,
+            output=resolved_output,
+            error=resolved_error,
+            constraint=resolved_constraint,
+            account=resolved_account,
+            python_env=resolved_python_env,
+            exclude=exclude,
+            include=include,
+            no_gitignore=no_gitignore,
+            abort_on_setup_failure=abort_on_setup_failure,
+            launch_manifest=rendered.manifest,
+        )
+
+
+class ManifestCommand(BaseCommand):
+    """Handles displaying stored recipe launch manifests."""
+
+    def execute(
+        self,
+        job_id: str,
+        host: Optional[str] = None,
+        json_output: bool = False,
+    ) -> bool:
+        """Fetch and display a stored run manifest."""
+        try:
+            api_client = APIClient(verbose=self.verbose)
+
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
+                return False
+
+            resolved_host = self._resolve_job_host(api_client, job_id, host)
+            if not resolved_host:
+                return False
+
+            try:
+                manifest = api_client.get_run_manifest(job_id, resolved_host)
+            except requests.exceptions.HTTPError as exc:
+                status_code = exc.response.status_code if exc.response else None
+                if status_code == 404:
+                    click.echo(
+                        f"No run manifest found for job {job_id} on {resolved_host}",
+                        err=True,
+                    )
+                    return False
+                raise
+
+            if json_output:
+                click.echo(json.dumps(manifest, indent=2, sort_keys=True))
+                return True
+
+            click.echo(f"Job: {job_id}")
+            click.echo(f"Host: {resolved_host}")
+            if manifest.get("recipe_path"):
+                click.echo(f"Recipe: {manifest['recipe_path']}")
+            if manifest.get("source_dir"):
+                click.echo(f"Source dir: {manifest['source_dir']}")
+            if manifest.get("host_partition"):
+                click.echo(f"Host partition: {manifest['host_partition']}")
+            if manifest.get("env"):
+                click.echo(f"Env: {manifest['env']}")
+            if manifest.get("script_sha256"):
+                click.echo(f"Script sha256: {manifest['script_sha256']}")
+            if manifest.get("sbatch"):
+                click.echo("Sbatch:")
+                for line in _format_mapping(manifest["sbatch"]):
+                    click.echo(line)
+            if manifest.get("fragments"):
+                click.echo("Fragments:")
+                for fragment in manifest["fragments"]:
+                    click.echo(f"  {fragment}")
+            if manifest.get("vars"):
+                click.echo("Variables:")
+                for line in _format_mapping(manifest["vars"]):
+                    click.echo(line)
+            return True
+
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
+        except Exception as e:
+            click.echo(f"Error getting run manifest: {e}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
             return False
 
 

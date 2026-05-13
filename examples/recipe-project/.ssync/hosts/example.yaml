@@ -1,0 +1,5 @@
+host: example
+vars:
+  SCRATCH_ROOT: "${SCRATCHDIR}"
+  HAS_COMPUTE_INTERNET: "false"
+

@@ -5,7 +5,7 @@ import os
 import re
 import warnings
 from pathlib import Path
-from typing import Any, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -235,6 +235,23 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    def get_run_manifest(
+        self,
+        job_id: str,
+        host: str,
+        timeout: int = 30,
+    ) -> dict[str, Any]:
+        """Get a stored launch manifest from the API."""
+        response = requests.get(
+            f"{self.base_url}/api/jobs/{job_id}/manifest",
+            params={"host": host},
+            headers=self._get_headers(),
+            timeout=timeout,
+            verify=False,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def ensure_server_running(self, config_path: Path) -> tuple[bool, Optional[str]]:
         """Ensure API server is running, start if needed.
 
@@ -426,6 +443,7 @@ class APIClient:
         include: Optional[List[str]] = None,
         no_gitignore: bool = False,
         abort_on_setup_failure: bool = True,
+        launch_manifest: Optional[Dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Launch a job via the API.
 
@@ -476,6 +494,8 @@ class APIClient:
             request_data["no_gitignore"] = no_gitignore
         if not abort_on_setup_failure:
             request_data["abort_on_setup_failure"] = False
+        if launch_manifest:
+            request_data["launch_manifest"] = launch_manifest
 
         try:
             response = requests.post(

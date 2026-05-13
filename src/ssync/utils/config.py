@@ -1,7 +1,6 @@
 import os
-import re
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 import yaml
 
@@ -15,8 +14,50 @@ from ..models.cluster import (
     SlurmHost,
 )
 
-XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME", os.environ.get("SSYNC_CONFIG", ""))
 XDG_CACHE = os.environ.get("XDG_CACHE_HOME", os.environ.get("SSYNC_CACHE", ""))
+REPO_CONFIG_NAMES = ("config.yaml", "config.yml", "ssync.yaml", "ssync.yml")
+LOCAL_OVERLAY_NAMES = (
+    ".ssync.local.yaml",
+    ".ssync.local.yml",
+    ".ssync/local.yaml",
+    ".ssync/local.yml",
+)
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).lower() in ("true", "1", "yes")
+
+
+def _resolve_env_reference(value: Any) -> Any:
+    """Resolve a whole-string ${VAR} reference without touching shell fragments.
+
+    Config files may still point secret-like local settings such as passwords at
+    environment variables. Partial strings are left untouched so remote shell
+    values like ${SCRATCHDIR}/runs survive until the cluster evaluates them.
+    """
+    if not isinstance(value, str):
+        return value
+
+    if not (value.startswith("${") and value.endswith("}")):
+        return value
+
+    env_name = value[2:-1]
+    if not env_name.isidentifier():
+        return value
+
+    return os.getenv(env_name, "")
+
+
+def _deep_merge_config(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge config maps, replacing lists and scalars with overlay values."""
+    merged = dict(base)
+    for key, overlay_value in overlay.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(overlay_value, dict):
+            merged[key] = _deep_merge_config(base_value, overlay_value)
+        else:
+            merged[key] = overlay_value
+    return merged
 
 
 class ConfigError(Exception):
@@ -26,9 +67,24 @@ class ConfigError(Exception):
 
 
 class Config:
-    def __init__(self):
-        self.config_path = self.get_default_config_path()
-        self.cache_path = self.get_default_cache_path()
+    def __init__(
+        self,
+        config_path: str | Path | None = None,
+        cache_path: str | Path | None = None,
+    ):
+        self.config_path = (
+            Path(config_path) if config_path else self.get_default_config_path()
+        )
+        self.cache_path = (
+            Path(cache_path) if cache_path else self.get_default_cache_path()
+        )
+        self.raw_config = self.load_raw_config()
+        self.overlay_paths = self.get_overlay_paths()
+        for overlay_path in self.overlay_paths:
+            self.raw_config = _deep_merge_config(
+                self.raw_config,
+                self.load_raw_config_file(overlay_path),
+            )
 
         self.config = self.load_config()
         self.cache_settings = self.load_cache_settings()
@@ -40,13 +96,27 @@ class Config:
 
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
-        home = Path.home()
+        explicit_path = os.environ.get("SSYNC_CONFIG_PATH")
+        if explicit_path:
+            return Path(explicit_path).expanduser()
 
-        if not XDG_CONFIG:
+        repo_config = self.find_repo_config_path()
+        if repo_config:
+            return repo_config
+
+        home = Path.home()
+        legacy_config = os.environ.get("SSYNC_CONFIG")
+        if legacy_config:
+            legacy_path = Path(legacy_config).expanduser()
+            if legacy_path.suffix in {".yaml", ".yml"} or legacy_path.is_file():
+                return legacy_path
+
+        xdg_config_env = os.environ.get("XDG_CONFIG_HOME")
+        if not xdg_config_env:
             # Check XDG config directory first
-            xdg_config = Path(home / ".config")
+            xdg_config = legacy_path if legacy_config else Path(home / ".config")
         else:
-            xdg_config = Path(XDG_CONFIG)
+            xdg_config = Path(xdg_config_env)
 
         xdg_config = Path(xdg_config / "ssync" / "config.yaml")
 
@@ -61,6 +131,36 @@ class Config:
         # Return XDG path as default (for creation)
         return xdg_config
 
+    def find_repo_config_path(self, start: str | Path | None = None) -> Path | None:
+        """Find a repo-local ssync config by walking upward from start."""
+        current = Path(start or os.getcwd()).resolve()
+        if current.is_file():
+            current = current.parent
+
+        for directory in (current, *current.parents):
+            ssync_dir = directory / ".ssync"
+            for name in REPO_CONFIG_NAMES:
+                candidate = ssync_dir / name
+                if candidate.exists():
+                    return candidate
+
+        return None
+
+    def get_overlay_paths(self) -> list[Path]:
+        """Return user-local overlay files adjacent to the selected repo config."""
+        config_path = Path(self.config_path).expanduser().resolve()
+        config_parent = config_path.parent
+        repo_root = config_parent.parent if config_parent.name == ".ssync" else None
+        if repo_root is None:
+            return []
+
+        overlays = []
+        for name in LOCAL_OVERLAY_NAMES:
+            candidate = repo_root / name
+            if candidate.exists() and candidate.resolve() != config_path:
+                overlays.append(candidate)
+        return overlays
+
     def get_default_cache_path(self) -> Path:
         """Get the default cache directory path."""
         xdg_cache = XDG_CACHE
@@ -71,6 +171,33 @@ class Config:
         os.makedirs(xdg_cache, exist_ok=True)
 
         return xdg_cache
+
+    def load_raw_config_file(self, config_path: str | Path) -> dict[str, Any]:
+        """Load the YAML config exactly as written.
+
+        Do not perform broad ${VAR} substitution here. Repo-local recipes and
+        cluster-side shell fragments often contain variables that must remain
+        available to the remote shell at runtime.
+        """
+        config_path = Path(config_path)
+        if not config_path.exists():
+            raise ConfigError(f"Config file not found: {config_path}")
+
+        try:
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ConfigError(f"Invalid YAML in config file: {e}")
+
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ConfigError("Config must be a YAML mapping")
+
+        return data
+
+    def load_raw_config(self) -> dict[str, Any]:
+        return self.load_raw_config_file(self.config_path)
 
     def load_config(self) -> list[SlurmHost]:
         """Load Slurm hosts configuration from YAML file.
@@ -94,20 +221,7 @@ class Config:
             work_dir: /home/myuser/work
             scratch_dir: /scratch/myuser
         """
-        config_path = Path(self.config_path)
-        if not config_path.exists():
-            raise ConfigError(f"Config file not found: {config_path}")
-
-        try:
-            with open(config_path, "r") as f:
-                content = f.read()
-                # Simple environment variable substitution: ${VAR_NAME}
-                content = re.sub(
-                    r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
-                )
-                data = yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            raise ConfigError(f"Invalid YAML in config file: {e}")
+        data = self.raw_config
 
         if not isinstance(data, dict) or "hosts" not in data:
             raise ConfigError("Config must contain 'hosts' key")
@@ -125,8 +239,8 @@ class Config:
                     hostname=hostname,
                     username=username,
                     port=host_config.get("port", 22),
-                    password=host_config.get("password"),
-                    key_file=host_config.get("key_file"),
+                    password=_resolve_env_reference(host_config.get("password")),
+                    key_file=_resolve_env_reference(host_config.get("key_file")),
                     use_ssh_config=host_config.get("use_ssh_config", True),
                 )
 
@@ -163,53 +277,29 @@ class Config:
         settings = CacheSettings()
 
         # Try to load from config file
-        config_path = Path(self.config_path)
-        if config_path.exists():
-            try:
-                with open(config_path, "r") as f:
-                    content = f.read()
-                    # Environment variable substitution
-                    content = re.sub(
-                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
-                    )
-                    data = yaml.safe_load(content)
-
-                if data and "cache" in data:
-                    cache_config = data["cache"]
-                    settings = CacheSettings(
-                        enabled=cache_config.get("enabled", settings.enabled),
-                        cache_dir=cache_config.get("cache_dir", settings.cache_dir),
-                        max_age_days=cache_config.get(
-                            "max_age_days", settings.max_age_days
-                        ),
-                        script_max_age_days=cache_config.get(
-                            "script_max_age_days", settings.script_max_age_days
-                        ),
-                        recycled_id_max_age_days=cache_config.get(
-                            "recycled_id_max_age_days",
-                            settings.recycled_id_max_age_days,
-                        ),
-                        cleanup_interval_hours=cache_config.get(
-                            "cleanup_interval_hours", settings.cleanup_interval_hours
-                        ),
-                        max_size_mb=cache_config.get(
-                            "max_size_mb", settings.max_size_mb
-                        ),
-                        auto_cleanup=cache_config.get(
-                            "auto_cleanup", settings.auto_cleanup
-                        ),
-                    )
-            except Exception:
-                # If there's any error loading cache settings, use defaults
-                pass
+        cache_config = self.raw_config.get("cache")
+        if isinstance(cache_config, dict):
+            settings = CacheSettings(
+                enabled=cache_config.get("enabled", settings.enabled),
+                cache_dir=cache_config.get("cache_dir", settings.cache_dir),
+                max_age_days=cache_config.get("max_age_days", settings.max_age_days),
+                script_max_age_days=cache_config.get(
+                    "script_max_age_days", settings.script_max_age_days
+                ),
+                recycled_id_max_age_days=cache_config.get(
+                    "recycled_id_max_age_days",
+                    settings.recycled_id_max_age_days,
+                ),
+                cleanup_interval_hours=cache_config.get(
+                    "cleanup_interval_hours", settings.cleanup_interval_hours
+                ),
+                max_size_mb=cache_config.get("max_size_mb", settings.max_size_mb),
+                auto_cleanup=cache_config.get("auto_cleanup", settings.auto_cleanup),
+            )
 
         # Environment variable overrides (for backward compatibility)
         if os.getenv("SSYNC_CACHE_ENABLED"):
-            settings.enabled = os.getenv("SSYNC_CACHE_ENABLED", "true").lower() in (
-                "true",
-                "1",
-                "yes",
-            )
+            settings.enabled = _env_flag("SSYNC_CACHE_ENABLED", "true")
         if os.getenv("SSYNC_CACHE_DIR"):
             settings.cache_dir = os.getenv("SSYNC_CACHE_DIR")
         if os.getenv("SSYNC_CACHE_MAX_AGE_DAYS"):
@@ -229,9 +319,7 @@ class Config:
         if os.getenv("SSYNC_CACHE_MAX_SIZE_MB"):
             settings.max_size_mb = int(os.getenv("SSYNC_CACHE_MAX_SIZE_MB"))
         if os.getenv("SSYNC_CACHE_AUTO_CLEANUP"):
-            settings.auto_cleanup = os.getenv(
-                "SSYNC_CACHE_AUTO_CLEANUP", "false"
-            ).lower() in ("true", "1", "yes")
+            settings.auto_cleanup = _env_flag("SSYNC_CACHE_AUTO_CLEANUP")
 
         return settings
 
@@ -240,21 +328,8 @@ class Config:
         api_key = ""
 
         # Try to load from config file
-        config_path = Path(self.config_path)
-        if config_path.exists():
-            try:
-                with open(config_path, "r") as f:
-                    content = f.read()
-                    # Environment variable substitution
-                    content = re.sub(
-                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
-                    )
-                    data = yaml.safe_load(content)
-
-                if data and "api_key" in data:
-                    api_key = data["api_key"]
-            except Exception:
-                pass
+        if "api_key" in self.raw_config:
+            api_key = _resolve_env_reference(self.raw_config["api_key"])
 
         # Environment variable override
         if os.getenv("SSYNC_API_KEY"):
@@ -268,27 +343,13 @@ class Config:
         settings = APISettings()
 
         # Try to load from config file
-        config_path = Path(self.config_path)
-        if config_path.exists():
-            try:
-                with open(config_path, "r") as f:
-                    content = f.read()
-                    # Environment variable substitution
-                    content = re.sub(
-                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
-                    )
-                    data = yaml.safe_load(content)
-
-                if data and "api" in data:
-                    api_config = data["api"]
-                    settings = APISettings(
-                        host=api_config.get("host", settings.host),
-                        port=api_config.get("port", settings.port),
-                        https=api_config.get("https", settings.https),
-                    )
-            except Exception:
-                # If there's any error loading API settings, use defaults
-                pass
+        api_config = self.raw_config.get("api")
+        if isinstance(api_config, dict):
+            settings = APISettings(
+                host=api_config.get("host", settings.host),
+                port=api_config.get("port", settings.port),
+                https=api_config.get("https", settings.https),
+            )
 
         # Environment variable overrides
         if os.getenv("SSYNC_API_HOST"):
@@ -296,11 +357,7 @@ class Config:
         if os.getenv("SSYNC_API_PORT"):
             settings.port = int(os.getenv("SSYNC_API_PORT"))
         if os.getenv("SSYNC_API_HTTPS"):
-            settings.https = os.getenv("SSYNC_API_HTTPS", "true").lower() in (
-                "true",
-                "1",
-                "yes",
-            )
+            settings.https = _env_flag("SSYNC_API_HTTPS", "true")
 
         return settings
 
@@ -308,23 +365,11 @@ class Config:
         """Load connection settings from config file or environment variables."""
         settings = {"connect_timeout": 5}
 
-        config_path = Path(self.config_path)
-        if config_path.exists():
-            try:
-                with open(config_path, "r") as f:
-                    content = f.read()
-                    content = re.sub(
-                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
-                    )
-                    data = yaml.safe_load(content)
-
-                if data and "connections" in data:
-                    conn_config = data["connections"]
-                    settings["connect_timeout"] = int(
-                        conn_config.get("connect_timeout", settings["connect_timeout"])
-                    )
-            except Exception:
-                pass
+        conn_config = self.raw_config.get("connections")
+        if isinstance(conn_config, dict):
+            settings["connect_timeout"] = int(
+                conn_config.get("connect_timeout", settings["connect_timeout"])
+            )
 
         if os.getenv("SSYNC_CONNECT_TIMEOUT"):
             settings["connect_timeout"] = int(os.getenv("SSYNC_CONNECT_TIMEOUT"))
@@ -337,63 +382,33 @@ class Config:
         settings = PathRestrictions()
 
         # Try to load from config file
-        config_path = Path(self.config_path)
-        if config_path.exists():
-            try:
-                with open(config_path, "r") as f:
-                    content = f.read()
-                    # Environment variable substitution
-                    content = re.sub(
-                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
-                    )
-                    data = yaml.safe_load(content)
-
-                if data and "path_restrictions" in data:
-                    restrictions_config = data["path_restrictions"]
-                    settings = PathRestrictions(
-                        enabled=restrictions_config.get("enabled", settings.enabled),
-                        allowed_paths=restrictions_config.get(
-                            "allowed_paths", settings.allowed_paths
-                        ),
-                        forbidden_paths=restrictions_config.get(
-                            "forbidden_paths", settings.forbidden_paths
-                        ),
-                        max_size_gb=restrictions_config.get(
-                            "max_size_gb", settings.max_size_gb
-                        ),
-                        allow_home=restrictions_config.get(
-                            "allow_home", settings.allow_home
-                        ),
-                        allow_tmp=restrictions_config.get(
-                            "allow_tmp", settings.allow_tmp
-                        ),
-                        allow_absolute=restrictions_config.get(
-                            "allow_absolute", settings.allow_absolute
-                        ),
-                    )
-            except Exception:
-                # If there's any error loading path restrictions, use defaults
-                pass
+        restrictions_config = self.raw_config.get("path_restrictions")
+        if isinstance(restrictions_config, dict):
+            settings = PathRestrictions(
+                enabled=restrictions_config.get("enabled", settings.enabled),
+                allowed_paths=restrictions_config.get(
+                    "allowed_paths", settings.allowed_paths
+                ),
+                forbidden_paths=restrictions_config.get(
+                    "forbidden_paths", settings.forbidden_paths
+                ),
+                max_size_gb=restrictions_config.get(
+                    "max_size_gb", settings.max_size_gb
+                ),
+                allow_home=restrictions_config.get("allow_home", settings.allow_home),
+                allow_tmp=restrictions_config.get("allow_tmp", settings.allow_tmp),
+                allow_absolute=restrictions_config.get(
+                    "allow_absolute", settings.allow_absolute
+                ),
+            )
 
         # Environment variable overrides
         if os.getenv("SSYNC_PATH_RESTRICTIONS_ENABLED"):
-            settings.enabled = os.getenv(
-                "SSYNC_PATH_RESTRICTIONS_ENABLED", "false"
-            ).lower() in (
-                "true",
-                "1",
-                "yes",
-            )
+            settings.enabled = _env_flag("SSYNC_PATH_RESTRICTIONS_ENABLED")
         if os.getenv("SSYNC_MAX_SYNC_SIZE_GB"):
             settings.max_size_gb = float(os.getenv("SSYNC_MAX_SYNC_SIZE_GB"))
         if os.getenv("SSYNC_ALLOW_ABSOLUTE_PATHS"):
-            settings.allow_absolute = os.getenv(
-                "SSYNC_ALLOW_ABSOLUTE_PATHS", "false"
-            ).lower() in (
-                "true",
-                "1",
-                "yes",
-            )
+            settings.allow_absolute = _env_flag("SSYNC_ALLOW_ABSOLUTE_PATHS")
 
         return settings
 
@@ -401,60 +416,50 @@ class Config:
         """Load notification settings from config file or environment variables."""
         settings = NotificationSettings()
 
-        config_path = Path(self.config_path)
-        if config_path.exists():
-            try:
-                with open(config_path, "r") as f:
-                    content = f.read()
-                    content = re.sub(
-                        r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), content
+        notifications = self.raw_config.get("notifications")
+        if isinstance(notifications, dict):
+            settings = NotificationSettings(
+                enabled=notifications.get("enabled", settings.enabled),
+                apns_key_id=_resolve_env_reference(
+                    notifications.get("apns_key_id", settings.apns_key_id)
+                ),
+                apns_team_id=_resolve_env_reference(
+                    notifications.get("apns_team_id", settings.apns_team_id)
+                ),
+                apns_bundle_id=notifications.get(
+                    "apns_bundle_id", settings.apns_bundle_id
+                ),
+                apns_private_key=_resolve_env_reference(
+                    notifications.get("apns_private_key", settings.apns_private_key)
+                ),
+                apns_use_sandbox=notifications.get(
+                    "apns_use_sandbox", settings.apns_use_sandbox
+                ),
+                apns_timeout_seconds=notifications.get(
+                    "apns_timeout_seconds", settings.apns_timeout_seconds
+                ),
+                webpush_enabled=notifications.get(
+                    "webpush_enabled", settings.webpush_enabled
+                ),
+                webpush_vapid_public_key=_resolve_env_reference(
+                    notifications.get(
+                        "webpush_vapid_public_key",
+                        settings.webpush_vapid_public_key,
                     )
-                    data = yaml.safe_load(content)
-
-                if data and "notifications" in data:
-                    notifications = data["notifications"]
-                    settings = NotificationSettings(
-                        enabled=notifications.get("enabled", settings.enabled),
-                        apns_key_id=notifications.get(
-                            "apns_key_id", settings.apns_key_id
-                        ),
-                        apns_team_id=notifications.get(
-                            "apns_team_id", settings.apns_team_id
-                        ),
-                        apns_bundle_id=notifications.get(
-                            "apns_bundle_id", settings.apns_bundle_id
-                        ),
-                        apns_private_key=notifications.get(
-                            "apns_private_key", settings.apns_private_key
-                        ),
-                        apns_use_sandbox=notifications.get(
-                            "apns_use_sandbox", settings.apns_use_sandbox
-                        ),
-                        apns_timeout_seconds=notifications.get(
-                            "apns_timeout_seconds", settings.apns_timeout_seconds
-                        ),
-                        webpush_enabled=notifications.get(
-                            "webpush_enabled", settings.webpush_enabled
-                        ),
-                        webpush_vapid_public_key=notifications.get(
-                            "webpush_vapid_public_key",
-                            settings.webpush_vapid_public_key,
-                        ),
-                        webpush_vapid_private_key=notifications.get(
-                            "webpush_vapid_private_key",
-                            settings.webpush_vapid_private_key,
-                        ),
-                        webpush_vapid_subject=notifications.get(
-                            "webpush_vapid_subject", settings.webpush_vapid_subject
-                        ),
+                ),
+                webpush_vapid_private_key=_resolve_env_reference(
+                    notifications.get(
+                        "webpush_vapid_private_key",
+                        settings.webpush_vapid_private_key,
                     )
-            except Exception:
-                pass
+                ),
+                webpush_vapid_subject=notifications.get(
+                    "webpush_vapid_subject", settings.webpush_vapid_subject
+                ),
+            )
 
         if os.getenv("SSYNC_NOTIFICATIONS_ENABLED"):
-            settings.enabled = os.getenv(
-                "SSYNC_NOTIFICATIONS_ENABLED", "false"
-            ).lower() in ("true", "1", "yes")
+            settings.enabled = _env_flag("SSYNC_NOTIFICATIONS_ENABLED")
         if os.getenv("SSYNC_APNS_KEY_ID"):
             settings.apns_key_id = os.getenv("SSYNC_APNS_KEY_ID")
         if os.getenv("SSYNC_APNS_TEAM_ID"):
@@ -464,17 +469,13 @@ class Config:
         if os.getenv("SSYNC_APNS_PRIVATE_KEY"):
             settings.apns_private_key = os.getenv("SSYNC_APNS_PRIVATE_KEY")
         if os.getenv("SSYNC_APNS_USE_SANDBOX"):
-            settings.apns_use_sandbox = os.getenv(
-                "SSYNC_APNS_USE_SANDBOX", "true"
-            ).lower() in ("true", "1", "yes")
+            settings.apns_use_sandbox = _env_flag("SSYNC_APNS_USE_SANDBOX", "true")
         if os.getenv("SSYNC_APNS_TIMEOUT_SECONDS"):
             settings.apns_timeout_seconds = float(
                 os.getenv("SSYNC_APNS_TIMEOUT_SECONDS")
             )
         if os.getenv("SSYNC_WEBPUSH_ENABLED"):
-            settings.webpush_enabled = os.getenv(
-                "SSYNC_WEBPUSH_ENABLED", "false"
-            ).lower() in ("true", "1", "yes")
+            settings.webpush_enabled = _env_flag("SSYNC_WEBPUSH_ENABLED")
         if os.getenv("SSYNC_WEBPUSH_VAPID_PUBLIC_KEY"):
             settings.webpush_vapid_public_key = os.getenv(
                 "SSYNC_WEBPUSH_VAPID_PUBLIC_KEY"

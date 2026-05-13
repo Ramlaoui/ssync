@@ -178,6 +178,7 @@ class LaunchManager:
         script_content: Optional[str] = None,
         script_variables: Optional[Dict[str, Any]] = None,
         work_dir_override: Optional[str | Path] = None,
+        launch_manifest: Optional[Dict[str, Any]] = None,
     ) -> Optional[Job]:
         """Launch a job with optional sync and submission.
 
@@ -195,6 +196,7 @@ class LaunchManager:
             script_content: Optional in-memory script content to submit
             script_variables: Optional variables to render into script_content/script_path
             work_dir_override: Optional explicit remote working directory
+            launch_manifest: Optional recipe/control-plane metadata to persist after submit
 
         Returns:
             Job object if successful, None otherwise
@@ -570,6 +572,14 @@ class LaunchManager:
                         prepared_template_script,
                         local_source_dir=local_source_dir,
                     )
+                    if launch_manifest:
+                        from .cache import get_cache
+
+                        get_cache().store_run_manifest(
+                            job.job_id,
+                            slurm_host.host.hostname,
+                            launch_manifest,
+                        )
                 except Exception as e:
                     logger.warning(
                         f"Failed to cache prepared template for job {job.job_id}: {e}"

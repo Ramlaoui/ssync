@@ -109,6 +109,7 @@ def register_launch_routes(
             no_gitignore = request.no_gitignore
             sync_enabled = source_dir is not None
             abort_on_setup_failure = request.abort_on_setup_failure
+            launch_manifest = request.launch_manifest
 
             async def _run_launch_in_background() -> None:
                 try:
@@ -125,6 +126,7 @@ def register_launch_routes(
                         sync_enabled=sync_enabled,
                         abort_on_setup_failure=abort_on_setup_failure,
                         launch_event_emitter=launch_emitter,
+                        launch_manifest=launch_manifest,
                     )
 
                     if job:

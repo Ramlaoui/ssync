@@ -73,13 +73,18 @@ async def test_launch_job_offloads_connection_acquisition(monkeypatch, temp_dir)
         "ssync.launch.ScriptProcessor.prepare_script",
         lambda clean_script_path, _temp_dir, params=None: clean_script_path,
     )
-    monkeypatch.setattr("ssync.launch.send_file", lambda *_args, **_kwargs: "/remote/work/scripts/job.sh")
+    monkeypatch.setattr(
+        "ssync.launch.send_file",
+        lambda *_args, **_kwargs: "/remote/work/scripts/job.sh",
+    )
     monkeypatch.setattr(LaunchManager, "_submit_script_in_workdir", fake_submit)
     monkeypatch.setattr(
         LaunchManager, "_capture_submission_in_background", fake_capture_submission
     )
 
-    launch_manager = LaunchManager(_FakeManager(), executor=ThreadPoolExecutor(max_workers=2))
+    launch_manager = LaunchManager(
+        _FakeManager(), executor=ThreadPoolExecutor(max_workers=2)
+    )
     try:
         job = await launch_manager.launch_job(
             script_path=script_path,
@@ -141,12 +146,18 @@ async def test_launch_job_uses_unique_temp_directory(monkeypatch, temp_dir):
     def fake_submit(*_args, **_kwargs):
         return types.SimpleNamespace(job_id="12345")
 
-    monkeypatch.setattr("ssync.launch.tempfile.mkdtemp", lambda prefix: str(unique_temp_dir))
-    monkeypatch.setattr("ssync.launch.ScriptProcessor.prepare_script", fake_prepare_script)
+    monkeypatch.setattr(
+        "ssync.launch.tempfile.mkdtemp", lambda prefix: str(unique_temp_dir)
+    )
+    monkeypatch.setattr(
+        "ssync.launch.ScriptProcessor.prepare_script", fake_prepare_script
+    )
     monkeypatch.setattr("ssync.launch.send_file", fake_send_file)
     monkeypatch.setattr(LaunchManager, "_submit_script_in_workdir", fake_submit)
 
-    launch_manager = LaunchManager(_FakeManager(), executor=ThreadPoolExecutor(max_workers=2))
+    launch_manager = LaunchManager(
+        _FakeManager(), executor=ThreadPoolExecutor(max_workers=2)
+    )
     try:
         job = await launch_manager.launch_job(
             script_path=script_path,
@@ -260,6 +271,7 @@ python train.py ${resume_run_dir:+--resume ${resume_run_dir}}
             slurm_params=SlurmParams(job_name="templated-job"),
             sync_enabled=False,
             script_variables={"resume_run_dir": "/scratch/run-42"},
+            launch_manifest={"manifest_version": 1, "recipe_path": "/repo/train.yaml"},
         )
         await asyncio.sleep(0)
     finally:
@@ -281,9 +293,10 @@ python train.py ${resume_run_dir:+--resume ${resume_run_dir}}
     assert "${resume_run_dir:+--resume ${resume_run_dir}}" not in uploaded["content"]
 
     assert "#WATCHER_BEGIN" in uploaded["template_script_content"]
-    assert "${resume_run_dir:+--resume ${resume_run_dir}}" in uploaded[
-        "template_script_content"
-    ]
+    assert (
+        "${resume_run_dir:+--resume ${resume_run_dir}}"
+        in uploaded["template_script_content"]
+    )
     assert "/scratch/run-42" not in uploaded["template_script_content"]
     assert uploaded["watcher_count"] == 1
 
@@ -291,6 +304,10 @@ python train.py ${resume_run_dir:+--resume ${resume_run_dir}}
     assert captured["host"] == hostname
     assert captured["script_content"] == cached_job.script_content
     assert captured["local_source_dir"] is None
+    assert test_cache.get_run_manifest("12345", hostname) == {
+        "manifest_version": 1,
+        "recipe_path": "/repo/train.yaml",
+    }
 
 
 @pytest.mark.unit
@@ -336,7 +353,9 @@ async def test_capture_job_submission_offloads_connection_acquisition(
     manager = JobDataManager()
     manager.cache = test_cache
     try:
-        await manager.capture_job_submission("12345", hostname, "#!/bin/bash\necho hi\n")
+        await manager.capture_job_submission(
+            "12345", hostname, "#!/bin/bash\necho hi\n"
+        )
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 
