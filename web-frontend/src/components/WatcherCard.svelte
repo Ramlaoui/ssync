@@ -33,6 +33,7 @@
   let isPausing = $state(false);
   let isTriggering = $state(false);
   let triggerMessage = $state('');
+  let stateMessage = $state('');
   let showDetailDialog = $state(false);
   let isDiscoveringTasks = $state(false);
   let discoveryMessage = $state('');
@@ -137,6 +138,17 @@
     }
     return '';
   }
+
+  function showTransientMessage(
+    setter: (value: string) => void,
+    value: string,
+    timeoutMs = 4000,
+  ) {
+    setter(value);
+    setTimeout(() => {
+      setter('');
+    }, timeoutMs);
+  }
   
   async function togglePause() {
     if (isPausing) return;
@@ -145,11 +157,20 @@
     try {
       if (watcher.state === 'active') {
         await pauseWatcher(watcher.id);
+        showTransientMessage((value) => (stateMessage = value), 'Watcher paused');
       } else if (watcher.state === 'paused') {
         await resumeWatcher(watcher.id);
+        showTransientMessage((value) => (stateMessage = value), 'Watcher resumed');
       }
     } catch (error: any) {
       console.error('Failed to toggle watcher state:', error);
+      showTransientMessage(
+        (value) => (stateMessage = value),
+        `Failed to change watcher state: ${
+          error?.response?.data?.detail || error?.message || 'Unknown error'
+        }`,
+        5000,
+      );
     } finally {
       isPausing = false;
     }
@@ -188,7 +209,7 @@
       
       // Refresh events if matches were found or timer actions executed
       if (response.data.matches || response.data.timer_mode) {
-        dispatch('refresh');
+        dispatch('refresh', { scope: 'events' });
       }
     } catch (error: any) {
       console.error('Failed to trigger watcher:', error);
@@ -223,8 +244,7 @@
   }
   
   function viewDetails() {
-    // Navigate to watchers page with Events tab selected and filtered by this watcher
-    push(`/watchers?tab=events&watcher=${watcher.id}`);
+    dispatch('inspect', { watcherId: watcher.id, scrollToActivity: true });
   }
   
   function copyWatcher() {
@@ -272,12 +292,12 @@
   
   function handleDetailUpdate(event: CustomEvent) {
     // Update the watcher with new data
-    dispatch('refresh');
+    dispatch('refresh', { scope: 'all' });
     showDetailDialog = false;
   }
   
   function handleDetailDelete(event: CustomEvent) {
-    dispatch('refresh');
+    dispatch('refresh', { scope: 'all' });
     showDetailDialog = false;
   }
 
@@ -301,7 +321,7 @@
         }
 
         // Refresh to show new watchers
-        dispatch('refresh');
+        dispatch('refresh', { scope: 'all' });
       } else {
         discoveryMessage = '○ ' + (response.data.message || 'Not an array template');
       }
@@ -330,6 +350,12 @@
       class:error={triggerMessage.includes('✗')}
     >
       {triggerMessage}
+    </div>
+  {/if}
+
+  {#if stateMessage}
+    <div class="trigger-message success">
+      {stateMessage}
     </div>
   {/if}
   
@@ -592,7 +618,7 @@
 
       <div class="details-actions">
         <button class="detail-btn" onclick={viewDetails}>
-          View All Events
+          Inspect Activity
         </button>
         {#if showJobLink}
           <button class="detail-btn" onclick={navigateToJob}>

@@ -38,6 +38,7 @@
 
   type FilterState = 'all' | 'active' | 'paused' | 'static' | 'completed';
   type SortMode = 'activity' | 'recent' | 'name';
+  type BackgroundRefreshScope = 'events' | 'all';
   type EnhancedWatcher = Watcher & { job_name?: string | null };
   type HostSummary = {
     host: string;
@@ -64,6 +65,9 @@
   let selectedHostname: string | null = $state(null);
   let pendingMultiJobSelection: any[] = [];
   let unsubscribePageStores: Array<() => void> = [];
+  let pageRefreshing = $state(false);
+  let backgroundRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingBackgroundScope: BackgroundRefreshScope = 'events';
 
   function getWatcherSearchText(
     watcher: EnhancedWatcher,
@@ -132,7 +136,6 @@
     } else {
       routeParams.set('watcher', String(watcherId));
     }
-    routeParams.delete('tab');
 
     const nextQuery = routeParams.toString();
     const nextUrl = `${url.origin}/#/watchers${nextQuery ? `?${nextQuery}` : ''}`;
@@ -155,18 +158,79 @@
     });
   }
 
-  async function refreshData() {
-    error = null;
+  function scrollToElement(id: string) {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  }
+
+  function inspectWatcher(
+    watcherId: number,
+    options: { scrollToCard?: boolean; scrollToActivity?: boolean } = {},
+  ) {
+    selectedWatcherId = watcherId;
+    updateSelectionInUrl(watcherId);
+
+    if (options.scrollToCard) {
+      scrollToElement(`watcher-card-${watcherId}`);
+    }
+    if (options.scrollToActivity) {
+      scrollToElement('watcher-activity-panel');
+    }
+  }
+
+  async function refreshData(options: { silent?: boolean } = {}) {
+    const silent = options.silent ?? false;
+    if (!silent) {
+      error = null;
+      pageRefreshing = true;
+    }
+
     try {
       await Promise.all([
-        fetchAllWatchers(),
-        fetchWatcherEvents(undefined, undefined, 300),
+        fetchAllWatchers({ silent, limit: 300 }),
+        fetchWatcherEvents(undefined, undefined, 300, { silent }),
       ]);
       refreshJobNamesInBackground();
     } catch (err) {
       console.error('Failed to refresh watcher data:', err);
-      error = 'Failed to refresh watcher data. Please try again.';
+      error = silent
+        ? 'Watcher activity could not be refreshed in the background.'
+        : 'Failed to refresh watcher data. Please try again.';
+    } finally {
+      if (!silent) {
+        pageRefreshing = false;
+      }
     }
+  }
+
+  function scheduleBackgroundRefresh(scope: BackgroundRefreshScope = 'events') {
+    if (scope === 'all') {
+      pendingBackgroundScope = 'all';
+    }
+    if (backgroundRefreshTimer) {
+      return;
+    }
+
+    backgroundRefreshTimer = setTimeout(async () => {
+      const nextScope = pendingBackgroundScope;
+      pendingBackgroundScope = 'events';
+      backgroundRefreshTimer = null;
+
+      try {
+        if (nextScope === 'all') {
+          await refreshData({ silent: true });
+        } else {
+          await fetchWatcherEvents(undefined, undefined, 300, { silent: true });
+        }
+      } catch (err) {
+        console.error('Failed to refresh watcher activity in background:', err);
+      }
+    }, 250);
   }
 
   async function openAttachDialog() {
@@ -325,9 +389,18 @@
     await refreshData();
   }
 
-  function selectWatcher(watcherId: number) {
-    selectedWatcherId = watcherId;
-    updateSelectionInUrl(watcherId);
+  function handleWatcherInspect(
+    event: CustomEvent<{ watcherId: number; scrollToActivity?: boolean }>,
+  ) {
+    inspectWatcher(event.detail.watcherId, {
+      scrollToActivity: event.detail.scrollToActivity,
+    });
+  }
+
+  function handleWatcherRefresh(
+    event?: CustomEvent<{ scope?: BackgroundRefreshScope }>,
+  ) {
+    scheduleBackgroundRefresh(event?.detail?.scope || 'events');
   }
 
   let eventSummaryByWatcher = $derived.by(() => {
@@ -560,6 +633,10 @@
   onDestroy(() => {
     unsubscribePageStores.forEach((unsubscribe) => unsubscribe());
     unsubscribePageStores = [];
+    if (backgroundRefreshTimer) {
+      clearTimeout(backgroundRefreshTimer);
+      backgroundRefreshTimer = null;
+    }
     disconnectWatcherWebSocket();
   });
 </script>
@@ -567,8 +644,8 @@
 <div class="watchers-page">
   <NavigationHeader
     showRefresh={true}
-    refreshing={$watchersLoading || $eventsLoading}
-    on:refresh={refreshData}
+    refreshing={pageRefreshing}
+    on:refresh={() => refreshData()}
   >
     {#snippet left()}
       <div class="page-copy">
@@ -576,7 +653,7 @@
           <Eye class="w-4 h-4" />
           <span>Watchers</span>
         </div>
-        <p>Monitor watcher state and related events in the same workspace.</p>
+        <p>Monitor watcher state and related events in one unified workspace.</p>
       </div>
     {/snippet}
 
@@ -650,7 +727,7 @@
   {/if}
 
   <main class="workspace">
-    <aside class="list-panel">
+    <section class="primary-column">
       <div class="summary-grid">
         <article class="summary-card">
           <span class="summary-label">Active</span>
@@ -677,7 +754,7 @@
       <div class="list-header">
         <div>
           <h2>{filteredWatchers.length} watcher{filteredWatchers.length === 1 ? '' : 's'}</h2>
-          <p>Searchable list ordered by recent activity.</p>
+          <p>Run watcher actions in place without leaving the board.</p>
         </div>
       </div>
 
@@ -692,70 +769,70 @@
           {/if}
         </div>
       {:else}
-        <div class="watcher-list">
+        <div class="watcher-grid">
           {#each filteredWatchers as watcher (watcher.id)}
             {@const latestEvent = eventSummaryByWatcher[watcher.id]?.latest}
-            <button
+            <article
+              id={"watcher-card-" + watcher.id}
               class:selected={selectedWatcher?.id === watcher.id}
-              class="watcher-list-item"
-              onclick={() => selectWatcher(watcher.id)}
+              class="watcher-shell"
             >
-              <div class="item-row">
-                <div class="item-title-group">
-                  <div class="item-state" data-state={watcher.state}></div>
-                  <div>
-                    <div class="item-title">{watcher.name}</div>
-                    <div class="item-subtitle">
+              <div class="watcher-shell-header">
+                <div class="watcher-shell-copy">
+                  <div class="watcher-shell-title">
+                    <span class="item-state" data-state={watcher.state}></span>
+                    <strong>{watcher.name}</strong>
+                  </div>
+                  <div class="watcher-shell-subtitle">
+                    <span>
                       Job #{watcher.job_id}
                       {#if watcher.job_name}
-                        <span>• {watcher.job_name}</span>
+                        • {watcher.job_name}
                       {/if}
-                    </div>
+                    </span>
+                    <span>{watcher.hostname}</span>
                   </div>
                 </div>
-
-                <span class="item-count">
-                  {eventSummaryByWatcher[watcher.id]?.count || 0}
-                </span>
+                <button
+                  class="inspect-chip"
+                  onclick={() => inspectWatcher(watcher.id, { scrollToActivity: true })}
+                >
+                  {eventSummaryByWatcher[watcher.id]?.count || 0} event{eventSummaryByWatcher[watcher.id]?.count === 1 ? '' : 's'}
+                </button>
               </div>
 
-              <div class="item-body">
-                <span>{watcher.hostname}</span>
-                <span>
-                  {watcher.trigger_on_job_end
-                    ? `job end: ${(watcher.trigger_job_states || []).join(', ')}`
-                    : watcher.pattern || 'manual trigger'}
-                </span>
-              </div>
-
-              <div class="item-footer">
+              <div class="watcher-shell-meta">
                 <span>{watcher.actions?.length || 0} action{watcher.actions?.length === 1 ? '' : 's'}</span>
                 <span>{watcher.interval_seconds}s interval</span>
                 <span>{formatRelativeTime(latestEvent?.timestamp || watcher.last_check)}</span>
               </div>
-            </button>
+
+              <WatcherCard
+                watcher={watcher}
+                showJobLink={true}
+                lastEvent={latestEvent}
+                class={selectedWatcher?.id === watcher.id ? 'watcher-card-selected' : ''}
+                on:copy={handleWatcherCopy}
+                on:inspect={handleWatcherInspect}
+                on:refresh={handleWatcherRefresh}
+              />
+            </article>
           {/each}
         </div>
       {/if}
-    </aside>
 
-    <section class="detail-panel">
-      {#if !$watchersLoading && !selectedWatcher}
-        <div class="detail-empty">
-          <Zap class="w-8 h-8" />
-          <h2>No watcher selected</h2>
-          <p>Pick a watcher from the list to inspect its actions and related events.</p>
-        </div>
-      {:else if selectedWatcher}
-        <div class="detail-header">
-          <div>
-            <h2>{selectedWatcher.name}</h2>
-            <p>
-              Job #{selectedWatcher.job_id} on {selectedWatcher.hostname}
-              {#if selectedWatcher.job_name}
-                • {selectedWatcher.job_name}
-              {/if}
-            </p>
+      {#if selectedWatcher}
+        <div id="watcher-activity-panel" class="activity-card selected-activity-card">
+          <div class="detail-header">
+            <div>
+              <div class="page-title-row">
+                <Zap class="w-4 h-4" />
+                <span>Watcher Activity</span>
+              </div>
+              <p>
+                {selectedWatcher.name} • Job #{selectedWatcher.job_id} on {selectedWatcher.hostname}
+              </p>
+            </div>
           </div>
 
           <div class="detail-pills">
@@ -766,63 +843,33 @@
             <span class="detail-pill">
               created {formatRelativeTime(selectedWatcher.created_at)}
             </span>
-          </div>
-        </div>
-
-        <div class="detail-grid">
-          <div class="detail-card">
-            <WatcherCard
-              watcher={selectedWatcher}
-              showJobLink={true}
-              lastEvent={eventSummaryByWatcher[selectedWatcher.id]?.latest}
-              on:copy={handleWatcherCopy}
-              on:refresh={refreshData}
-            />
+            <span class="detail-pill">
+              {selectedWatcher.trigger_on_job_end
+                ? 'Terminal-state trigger'
+                : selectedWatcher.timer_mode_enabled
+                  ? 'Pattern + timer'
+                  : 'Pattern monitor'}
+            </span>
           </div>
 
-          <div class="insights-card">
-            <div class="insight-block">
-              <span class="insight-label">Last activity</span>
-              <strong>
-                {formatRelativeTime(
-                  eventSummaryByWatcher[selectedWatcher.id]?.latest?.timestamp ||
-                    selectedWatcher.last_check,
-                )}
-              </strong>
+          {#if sameJobWatchers.length > 0}
+            <div class="peer-list">
+              {#each sameJobWatchers as peer (peer.id)}
+                <button
+                  class="peer-chip"
+                  onclick={() =>
+                    inspectWatcher(peer.id, {
+                      scrollToCard: true,
+                      scrollToActivity: true,
+                    })}
+                >
+                  <Server class="w-3.5 h-3.5" />
+                  {peer.name}
+                </button>
+              {/each}
             </div>
-            <div class="insight-block">
-              <span class="insight-label">Host</span>
-              <strong>{selectedWatcher.hostname}</strong>
-            </div>
-            <div class="insight-block">
-              <span class="insight-label">Mode</span>
-              <strong>
-                {selectedWatcher.trigger_on_job_end
-                  ? 'Terminal-state trigger'
-                  : selectedWatcher.timer_mode_enabled
-                    ? 'Pattern + timer'
-                    : 'Pattern monitor'}
-              </strong>
-            </div>
-            <div class="insight-block">
-              <span class="insight-label">Same job</span>
-              <strong>{sameJobWatchers.length} peer watcher(s)</strong>
-            </div>
+          {/if}
 
-            {#if sameJobWatchers.length > 0}
-              <div class="peer-list">
-                {#each sameJobWatchers as peer (peer.id)}
-                  <button class="peer-chip" onclick={() => selectWatcher(peer.id)}>
-                    <Server class="w-3.5 h-3.5" />
-                    {peer.name}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        </div>
-
-        <div class="activity-card">
           <WatcherActivityFeed
             watcher={selectedWatcher}
             events={selectedWatcherEvents}
@@ -830,8 +877,9 @@
           />
         </div>
       {/if}
+    </section>
 
-      <div class="activity-column" aria-label="Watcher activity overview">
+    <aside class="activity-column" aria-label="Watcher activity overview">
       {#if $watchers.length > 0 || latestEvents.length > 0}
         <div class="board-panel host-panel">
           <div class="board-heading">
@@ -889,7 +937,11 @@
                 <button
                   class:failed={!event.success}
                   class="event-stream-item"
-                  onclick={() => selectWatcher(event.watcher_id)}
+                  onclick={() =>
+                    inspectWatcher(event.watcher_id, {
+                      scrollToCard: true,
+                      scrollToActivity: true,
+                    })}
                 >
                   <span class="event-dot"></span>
                   <div>
@@ -930,8 +982,7 @@
           </div>
         </div>
       {/if}
-      </div>
-    </section>
+    </aside>
   </main>
 </div>
 
@@ -974,10 +1025,12 @@
 
 <style>
   .watchers-page {
+    height: 100%;
     min-height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--background);
+    overflow: hidden;
   }
 
   .page-copy {
@@ -994,7 +1047,8 @@
     color: var(--foreground);
   }
 
-  .page-copy p {
+  .page-copy p,
+  .detail-header p {
     margin: 0;
     color: var(--muted-foreground);
     font-size: 0.84rem;
@@ -1164,25 +1218,219 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
     gap: 1rem;
     align-items: start;
     padding: 1.25rem 1.5rem 1.5rem;
+    overflow: auto;
   }
 
-  .board-panel {
-    min-width: 0;
-    padding: 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 1rem;
-    background: var(--card);
-  }
-
+  .primary-column,
   .activity-column {
-    min-width: 0;
+    min-height: 0;
+  }
+
+  .primary-column {
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.8rem;
+  }
+
+  .summary-card,
+  .board-panel,
+  .activity-card,
+  .watcher-shell {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 1.1rem;
+    background: var(--card);
+  }
+
+  .summary-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.9rem;
+  }
+
+  .summary-label {
+    color: var(--muted-foreground);
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .summary-card strong {
+    font-size: 1.15rem;
+    color: var(--foreground);
+  }
+
+  .summary-card small {
+    color: var(--muted-foreground);
+    font-size: 0.76rem;
+  }
+
+  .list-header h2 {
+    margin: 0;
+    color: var(--foreground);
+    font-size: 1.1rem;
+  }
+
+  .list-header p {
+    margin: 0.3rem 0 0;
+    color: var(--muted-foreground);
+    font-size: 0.84rem;
+  }
+
+  .panel-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 220px;
+    border: 1px dashed var(--border);
+    border-radius: 1.2rem;
+    background: var(--card);
+    color: var(--muted-foreground);
+    text-align: center;
+    padding: 1.2rem;
+  }
+
+  .watcher-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
+  }
+
+  .watcher-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 1rem;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  }
+
+  .watcher-shell:hover,
+  .watcher-shell.selected {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    box-shadow: 0 12px 28px color-mix(in srgb, var(--foreground) 8%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .watcher-shell-header,
+  .watcher-shell-title,
+  .watcher-shell-subtitle,
+  .watcher-shell-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  .watcher-shell-header,
+  .watcher-shell-meta {
+    justify-content: space-between;
+  }
+
+  .watcher-shell-copy {
+    min-width: 0;
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .watcher-shell-title strong {
+    color: var(--foreground);
+    font-size: 0.95rem;
+    line-height: 1.3;
+  }
+
+  .watcher-shell-subtitle,
+  .watcher-shell-meta {
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+    flex-wrap: wrap;
+  }
+
+  .item-state {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 999px;
+    flex-shrink: 0;
+    background: var(--muted-foreground);
+  }
+
+  .item-state[data-state='active'] {
+    background: var(--success);
+  }
+
+  .item-state[data-state='paused'] {
+    background: var(--warning);
+  }
+
+  .item-state[data-state='static'],
+  .item-state[data-state='completed'] {
+    background: var(--accent);
+  }
+
+  .inspect-chip,
+  .detail-pill,
+  .peer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: max-content;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--secondary) 92%, transparent);
+    color: var(--foreground);
+    font-size: 0.76rem;
+    font-weight: 600;
+  }
+
+  .activity-card {
+    padding: 1rem;
+  }
+
+  .selected-activity-card {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .detail-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+
+  .peer-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+
+  .activity-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    position: sticky;
+    top: 0;
+  }
+
+  .board-panel {
+    padding: 0.9rem;
   }
 
   .board-heading {
@@ -1262,21 +1510,16 @@
 
   .host-lane-meta {
     justify-content: space-between;
-    gap: 0.7rem;
-  }
-
-  .host-lane-meta span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    flex-wrap: wrap;
   }
 
   .host-lane-meter,
   .state-bar-track {
-    height: 0.4rem;
+    width: 100%;
+    height: 0.55rem;
     border-radius: 999px;
+    background: color-mix(in srgb, var(--secondary) 88%, transparent);
     overflow: hidden;
-    background: color-mix(in srgb, var(--secondary) 90%, transparent);
   }
 
   .host-lane-fill,
@@ -1284,72 +1527,65 @@
     display: block;
     height: 100%;
     border-radius: inherit;
-    background: var(--success);
-    transition: width 0.22s ease;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 65%, white),
+      var(--accent)
+    );
   }
 
   .event-stream-item {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 0.65rem;
-    padding: 0.62rem 0.7rem;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.6rem;
+    align-items: start;
+    padding: 0.75rem;
   }
 
-  .event-stream-item:hover,
-  .host-lane:hover,
-  .state-bar-row:hover {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  .event-stream-item strong {
+    color: var(--foreground);
+    font-size: 0.8rem;
+  }
+
+  .event-stream-item p,
+  .event-stream-item time {
+    margin: 0.2rem 0 0;
+    color: var(--muted-foreground);
+    font-size: 0.74rem;
+    line-height: 1.4;
+  }
+
+  .event-stream-item.failed {
+    border-color: color-mix(in srgb, var(--destructive) 30%, var(--border));
   }
 
   .event-dot {
     width: 0.55rem;
     height: 0.55rem;
+    margin-top: 0.35rem;
     border-radius: 999px;
     background: var(--success);
-    box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--success) 16%, transparent);
   }
 
   .event-stream-item.failed .event-dot {
     background: var(--destructive);
-    box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--destructive) 16%, transparent);
-  }
-
-  .event-stream-item strong,
-  .event-stream-item p,
-  .event-stream-item time {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .event-stream-item strong {
-    display: block;
-    color: var(--foreground);
-    font-size: 0.82rem;
-  }
-
-  .event-stream-item p,
-  .event-stream-item time {
-    margin: 0;
-    color: var(--muted-foreground);
-    font-size: 0.74rem;
   }
 
   .state-bar-row {
     display: grid;
-    grid-template-columns: 74px minmax(0, 1fr) 2rem;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.55rem 0.65rem;
-    color: var(--muted-foreground);
-    font-size: 0.78rem;
-    font-weight: 600;
+    gap: 0.75rem;
+    padding: 0.72rem 0.8rem;
   }
 
+  .state-bar-row span,
   .state-bar-row strong {
-    color: var(--foreground);
-    text-align: right;
+    font-size: 0.78rem;
+  }
+
+  .state-bar-row[data-state='active'] .state-bar-fill {
+    background: var(--success);
   }
 
   .state-bar-row[data-state='paused'] .state-bar-fill {
@@ -1361,291 +1597,23 @@
     background: var(--accent);
   }
 
-  .list-panel,
-  .detail-panel,
-  .activity-column {
-    min-height: 0;
-  }
-
-  .list-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1rem;
-    border: 1px solid var(--border);
-    border-radius: 1.2rem;
-    background: var(--card);
-    overflow: hidden;
-  }
-
-  .summary-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
-  .summary-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    padding: 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 1rem;
-    background: color-mix(in srgb, var(--background) 92%, transparent);
-  }
-
-  .summary-label {
-    color: var(--muted-foreground);
-    font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .summary-card strong {
-    font-size: 1.15rem;
-    color: var(--foreground);
-  }
-
-  .summary-card small {
-    color: var(--muted-foreground);
-    font-size: 0.76rem;
-  }
-
-  .list-header h2,
-  .detail-empty h2,
-  .detail-header h2 {
-    margin: 0;
-    color: var(--foreground);
-    font-size: 1.1rem;
-  }
-
-  .list-header p,
-  .detail-empty p,
-  .detail-header p {
-    margin: 0.3rem 0 0;
-    color: var(--muted-foreground);
-    font-size: 0.84rem;
-  }
-
-  .watcher-list {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    padding-right: 0.2rem;
-  }
-
-  .watcher-list-item {
-    display: flex;
-    flex-direction: column;
-    gap: 0.7rem;
-    padding: 0.95rem;
-    border: 1px solid var(--border);
-    border-radius: 1rem;
-    background: var(--background);
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
-  }
-
-  .watcher-list-item:hover,
-  .watcher-list-item.selected {
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-    box-shadow: 0 12px 28px color-mix(in srgb, var(--foreground) 8%, transparent);
-    transform: translateY(-1px);
-  }
-
-  .item-row,
-  .item-title-group,
-  .item-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.8rem;
-  }
-
-  .item-title-group {
-    justify-content: flex-start;
-    min-width: 0;
-  }
-
-  .item-state {
-    width: 0.7rem;
-    height: 0.7rem;
-    border-radius: 999px;
-    flex-shrink: 0;
-    background: var(--muted-foreground);
-  }
-
-  .item-state[data-state='active'] {
-    background: var(--success);
-  }
-
-  .item-state[data-state='paused'] {
-    background: var(--warning);
-  }
-
-  .item-state[data-state='static'],
-  .item-state[data-state='completed'] {
-    background: var(--accent);
-  }
-
-  .item-title {
-    font-weight: 600;
-    color: var(--foreground);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .item-subtitle,
-  .item-body,
-  .item-footer {
-    color: var(--muted-foreground);
-    font-size: 0.78rem;
-  }
-
-  .item-body {
-    display: grid;
-    gap: 0.35rem;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-
-  .item-body span,
-  .item-footer span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .item-count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 1.9rem;
-    padding: 0.2rem 0.45rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--secondary) 88%, transparent);
-    color: var(--foreground);
-    font-size: 0.76rem;
-    font-weight: 700;
-  }
-
-  .detail-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    overflow: auto;
-  }
-
-  .detail-empty,
-  .panel-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 220px;
-    border: 1px dashed var(--border);
-    border-radius: 1.2rem;
-    background: var(--card);
-    color: var(--muted-foreground);
-    text-align: center;
-    padding: 1.2rem;
-  }
-
-  .detail-empty {
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .detail-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .detail-pills {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0.55rem;
-  }
-
-  .detail-pill,
-  .peer-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.6rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--secondary) 88%, transparent);
-    color: var(--foreground);
-    font-size: 0.78rem;
-    font-weight: 600;
-    border: none;
-  }
-
-  .detail-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 1rem;
-    align-items: start;
-  }
-
-  .detail-card,
-  .insights-card,
-  .activity-card {
-    padding: 1rem;
-    border: 1px solid var(--border);
-    border-radius: 1.2rem;
-    background: var(--card);
-  }
-
-  .insights-card {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.9rem;
-  }
-
-  .insight-block {
-    display: flex;
-    flex-direction: column;
-    gap: 0.22rem;
-  }
-
-  .insight-label {
-    color: var(--muted-foreground);
-    font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .insight-block strong {
-    color: var(--foreground);
-    font-size: 0.94rem;
-    line-height: 1.4;
-  }
-
-  .peer-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-    grid-column: 1 / -1;
-  }
-
-  .peer-chip {
-    cursor: pointer;
+  :global(.watcher-card-selected) {
+    border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
   }
 
   @media (max-width: 1400px) {
-    .activity-column {
-      display: flex;
+    .workspace {
+      grid-template-columns: 1fr;
     }
 
-    .insights-card {
+    .activity-column {
+      position: static;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .summary-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
@@ -1670,33 +1638,11 @@
       padding: 1rem;
     }
 
-    .list-panel {
-      order: 1;
-    }
-
-    .detail-panel {
-      order: 2;
-      overflow: visible;
-    }
-
-    .activity-column {
-      order: 3;
-      display: flex;
+    .watcher-grid {
+      grid-template-columns: 1fr;
     }
 
     .summary-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .detail-header {
-      flex-direction: column;
-    }
-
-    .detail-pills {
-      justify-content: flex-start;
-    }
-
-    .insights-card {
       grid-template-columns: 1fr 1fr;
     }
   }

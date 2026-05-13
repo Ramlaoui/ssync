@@ -221,11 +221,15 @@ export async function prefetchJobWatchers(jobId: string, host?: string): Promise
 }
 
 // Fetch all watchers using the global endpoint
-export async function fetchAllWatchers(): Promise<void> {
-  watchersLoading.set(true);
+export async function fetchAllWatchers(
+  options: { silent?: boolean; limit?: number } = {}
+): Promise<void> {
+  if (!options.silent) {
+    watchersLoading.set(true);
+  }
   try {
     const response = await api.get<WatchersResponse>('/api/watchers', {
-      params: { limit: 300 }
+      params: { limit: options.limit ?? 300 }
     });
 
     const validatedWatchers = validateWatchers(response.data.watchers || [], 'fetchAllWatchers');
@@ -239,7 +243,9 @@ export async function fetchAllWatchers(): Promise<void> {
     console.error('Failed to fetch all watchers:', error);
     throw error;
   } finally {
-    watchersLoading.set(false);
+    if (!options.silent) {
+      watchersLoading.set(false);
+    }
   }
 }
 
@@ -247,9 +253,12 @@ export async function fetchAllWatchers(): Promise<void> {
 export async function fetchWatcherEvents(
   jobId?: string,
   watcherId?: number,
-  limit: number = 300
+  limit: number = 300,
+  options: { silent?: boolean } = {}
 ): Promise<void> {
-  eventsLoading.set(true);
+  if (!options.silent) {
+    eventsLoading.set(true);
+  }
   try {
     const params: any = { limit };
     if (jobId) params.job_id = jobId;
@@ -265,7 +274,9 @@ export async function fetchWatcherEvents(
     console.error('Failed to fetch watcher events:', error);
     throw error;
   } finally {
-    eventsLoading.set(false);
+    if (!options.silent) {
+      eventsLoading.set(false);
+    }
   }
 }
 
