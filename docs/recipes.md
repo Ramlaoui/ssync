@@ -153,12 +153,16 @@ Submitted recipe jobs store a manifest in the local ssync cache:
 ```bash
 ssync manifest 12345 --host cluster
 ssync manifest 12345 --host cluster --json
+ssync rerender 12345 --host cluster
+ssync rerender 12345 --host cluster --from-current-repo
 ```
 
 The manifest records the recipe path, repo root, source directory, selected
 profiles, fragments, resolved variables, rendered script, script hash, and
 sbatch metadata. Watcher-driven resubmits use this frozen manifest by default
 so automatic relaunches do not silently pick up unrelated local repo changes.
+`ssync rerender` follows the same rule: it shows the frozen script unless
+`--from-current-repo` is passed explicitly.
 
 ## Overrides
 
