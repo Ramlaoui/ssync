@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from .utils.config import get_user_config_dir
+
 
 class RecipeError(Exception):
     """Launch recipe loading or rendering error."""
@@ -109,6 +111,37 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return data
 
 
+def _recipe_config_roots(repo_root: Path) -> list[Path]:
+    return [repo_root / ".ssync", get_user_config_dir()]
+
+
+def _is_bare_recipe_ref(value: str | Path) -> bool:
+    raw_value = str(value)
+    path = Path(value).expanduser()
+    return not (
+        path.is_absolute()
+        or path.exists()
+        or path.suffix in {".yaml", ".yml"}
+        or "/" in raw_value
+    )
+
+
+def _resolve_named_recipe_path(value: str | Path) -> Path:
+    raw_value = str(value)
+    path = Path(value).expanduser()
+    if not _is_bare_recipe_ref(value):
+        return path.resolve()
+
+    repo_root = find_repo_root(Path.cwd())
+    for root in _recipe_config_roots(repo_root):
+        for suffix in (".yaml", ".yml"):
+            candidate = root / "recipes" / f"{raw_value}{suffix}"
+            if candidate.exists():
+                return candidate.resolve()
+
+    return path.resolve()
+
+
 def _profile_path(repo_root: Path, kind: str, value: Any) -> Path:
     if not isinstance(value, str) or not value:
         raise RecipeError(f"{kind} profile reference must be a non-empty string")
@@ -117,12 +150,15 @@ def _profile_path(repo_root: Path, kind: str, value: Any) -> Path:
     if path.is_absolute() or path.suffix in {".yaml", ".yml"} or "/" in value:
         return (repo_root / path).resolve() if not path.is_absolute() else path
 
-    for suffix in (".yaml", ".yml"):
-        candidate = repo_root / ".ssync" / kind / f"{value}{suffix}"
-        if candidate.exists():
-            return candidate
+    first_candidate: Path | None = None
+    for root in _recipe_config_roots(repo_root):
+        for suffix in (".yaml", ".yml"):
+            candidate = root / kind / f"{value}{suffix}"
+            first_candidate = first_candidate or candidate
+            if candidate.exists():
+                return candidate
 
-    return repo_root / ".ssync" / kind / f"{value}.yaml"
+    return first_candidate or repo_root / ".ssync" / kind / f"{value}.yaml"
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -519,9 +555,10 @@ def render_launch_recipe(
     cli_overrides: dict[str, Any] | None = None,
 ) -> RenderedRecipe:
     """Resolve a project launch recipe into one shell script."""
-    recipe_path = Path(recipe_path).expanduser().resolve()
+    bare_recipe_ref = _is_bare_recipe_ref(recipe_path)
+    recipe_path = _resolve_named_recipe_path(recipe_path)
     recipe_dir = recipe_path.parent
-    repo_root = find_repo_root(recipe_path)
+    repo_root = find_repo_root(Path.cwd() if bare_recipe_ref else recipe_path)
     recipe_data = _load_yaml_mapping(recipe_path)
     if workflow is not None:
         recipe_data["extends"] = workflow

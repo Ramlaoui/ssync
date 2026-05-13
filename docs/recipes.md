@@ -6,8 +6,9 @@ launch API, and stores the resolved manifest for later inspection or watcher
 resubmits.
 
 Use regular `ssync launch SCRIPT SOURCE_DIR --host HOST` for handwritten shell
-scripts. Use `ssync launch-recipe RECIPE.yaml` when the project has a `.ssync/`
-control-plane folder.
+scripts. Use `ssync launch-recipe RECIPE.yaml`, or a bare recipe name such as
+`ssync launch-recipe train`, when the project has a `.ssync/` control-plane
+folder.
 
 ## Layout
 
@@ -19,6 +20,7 @@ repo/
     envs/project.yaml
     watchers/timeout_resume.yaml
     workflows/train.yaml
+    recipes/train.yaml
     fragments/
       env/activate.sh
       env/offline.sh
@@ -29,6 +31,21 @@ repo/
 
 YAML composes reusable pieces. Executable project logic stays in `.sh`
 fragments so Bash remains shellcheckable and easy to patch.
+
+Named profiles are resolved from the project first, then from the user ssync
+config directory:
+
+```text
+repo/.ssync/
+~/.config/ssync/
+```
+
+For example, `env: project` checks `repo/.ssync/envs/project.yaml` before
+falling back to `~/.config/ssync/envs/project.yaml`. The same lookup applies to
+`hosts`, `partitions`, `watchers`, and `workflows`. Bare recipe names are also
+resolved through `recipes/`, so `ssync launch-recipe train` checks
+`repo/.ssync/recipes/train.yaml` before `~/.config/ssync/recipes/train.yaml`.
+Explicit paths keep their existing path behavior.
 
 ## Recipe
 

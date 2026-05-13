@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from ssync.models.cluster import Host
-from ssync.utils.config import Config, ConfigError
+from ssync.utils.config import Config, ConfigError, get_user_config_dir
 
 
 def _write_config(path: Path, body: str) -> None:
@@ -29,6 +29,17 @@ hosts:
 
     assert cfg.config_path == config_path
     assert cfg.config[0].host.hostname == "cluster.example.com"
+
+
+@pytest.mark.unit
+def test_user_config_dir_uses_canonical_xdg_path(monkeypatch, tmp_path):
+    xdg_home = tmp_path / "xdg"
+
+    monkeypatch.delenv("SSYNC_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("SSYNC_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_home))
+
+    assert get_user_config_dir() == xdg_home / "ssync"
 
 
 @pytest.mark.unit
