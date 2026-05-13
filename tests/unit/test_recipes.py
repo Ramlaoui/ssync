@@ -106,6 +106,190 @@ run:
 
 
 @pytest.mark.unit
+def test_render_launch_recipe_falls_back_to_user_config_profiles(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    user_config = tmp_path / "xdg" / "ssync"
+    (repo / ".ssync").mkdir(parents=True)
+    _write(
+        repo / ".ssync/fragments/env/activate.sh", 'source "$VENV_PATH/bin/activate"\n'
+    )
+    _write(repo / ".ssync/fragments/run/train.sh", "python train.py\n")
+    _write(
+        user_config / "hosts/cluster.yaml",
+        """
+host: cluster
+vars:
+  SCRATCH_ROOT: /scratch/user
+""",
+    )
+    _write(
+        user_config / "partitions/cluster-gpu.yaml",
+        """
+host: cluster
+sbatch:
+  partition: gpu
+  cpus: 8
+vars:
+  VENV_ROOT: /scratch/user/venvs
+""",
+    )
+    _write(
+        user_config / "envs/project.yaml",
+        """
+vars:
+  VENV_PATH: /scratch/user/venvs/project
+scripts:
+  - .ssync/fragments/env/activate.sh
+""",
+    )
+    _write(
+        user_config / "watchers/timeout_resume.yaml",
+        """
+pattern: "RUN_OUTPUT_DIR=(.+)"
+captures:
+  - resume_run_dir
+actions:
+  - resubmit()
+""",
+    )
+    _write(
+        user_config / "workflows/train.yaml",
+        """
+host_partition: cluster-gpu
+env: project
+watchers:
+  - timeout_resume
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  PROFILE_SOURCE: xdg
+""",
+    )
+    recipe = repo / "experiments/demo/launch/train.yaml"
+    _write(recipe, "extends: train\n")
+
+    monkeypatch.delenv("SSYNC_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("SSYNC_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    rendered = render_launch_recipe(recipe)
+
+    assert rendered.host == "cluster"
+    assert rendered.partition == "gpu"
+    assert rendered.cpus == 8
+    assert rendered.vars["SCRATCH_ROOT"] == "/scratch/user"
+    assert rendered.vars["VENV_ROOT"] == "/scratch/user/venvs"
+    assert rendered.vars["VENV_PATH"] == "/scratch/user/venvs/project"
+    assert rendered.vars["PROFILE_SOURCE"] == "xdg"
+    assert rendered.manifest["watchers"][0]["policy_ref"] == "timeout_resume"
+
+
+@pytest.mark.unit
+def test_render_launch_recipe_prefers_project_profile_over_user_config(
+    monkeypatch, tmp_path
+):
+    repo = tmp_path / "repo"
+    user_config = tmp_path / "xdg" / "ssync"
+    (repo / ".ssync").mkdir(parents=True)
+    _write(repo / ".ssync/fragments/run/train.sh", "python train.py\n")
+    _write(
+        user_config / "workflows/train.yaml",
+        """
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  PROFILE_SOURCE: xdg
+""",
+    )
+    _write(
+        repo / ".ssync/workflows/train.yaml",
+        """
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  PROFILE_SOURCE: project
+""",
+    )
+    recipe = repo / "experiments/demo/launch/train.yaml"
+    _write(recipe, "extends: train\n")
+
+    monkeypatch.delenv("SSYNC_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("SSYNC_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    rendered = render_launch_recipe(recipe)
+
+    assert rendered.vars["PROFILE_SOURCE"] == "project"
+
+
+@pytest.mark.unit
+def test_render_launch_recipe_resolves_named_project_recipe_before_user_config(
+    monkeypatch, tmp_path
+):
+    repo = tmp_path / "repo"
+    user_config = tmp_path / "xdg" / "ssync"
+    (repo / ".ssync").mkdir(parents=True)
+    _write(repo / ".ssync/fragments/run/train.sh", "python train.py\n")
+    _write(
+        user_config / "recipes/train.yaml",
+        """
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  RECIPE_SOURCE: xdg
+""",
+    )
+    _write(
+        repo / ".ssync/recipes/train.yaml",
+        """
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  RECIPE_SOURCE: project
+""",
+    )
+
+    monkeypatch.delenv("SSYNC_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("SSYNC_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(repo)
+
+    rendered = render_launch_recipe("train")
+
+    assert rendered.recipe_path == repo / ".ssync/recipes/train.yaml"
+    assert rendered.vars["RECIPE_SOURCE"] == "project"
+
+
+@pytest.mark.unit
+def test_render_launch_recipe_falls_back_to_named_user_config_recipe(
+    monkeypatch, tmp_path
+):
+    repo = tmp_path / "repo"
+    user_config = tmp_path / "xdg" / "ssync"
+    (repo / ".ssync").mkdir(parents=True)
+    _write(repo / ".ssync/fragments/run/train.sh", "python train.py\n")
+    _write(
+        user_config / "recipes/train.yaml",
+        """
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  RECIPE_SOURCE: xdg
+""",
+    )
+
+    monkeypatch.delenv("SSYNC_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("SSYNC_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(repo)
+
+    rendered = render_launch_recipe("train")
+
+    assert rendered.recipe_path == user_config / "recipes/train.yaml"
+    assert rendered.vars["RECIPE_SOURCE"] == "xdg"
+
+
+@pytest.mark.unit
 def test_render_launch_recipe_composes_workflow_profiles_and_recipe_overrides(
     tmp_path,
 ):

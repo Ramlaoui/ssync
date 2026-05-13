@@ -24,6 +24,42 @@ LOCAL_OVERLAY_NAMES = (
 )
 
 
+def get_user_config_dir() -> Path:
+    """Return the user-level ssync config directory."""
+    explicit_path = os.environ.get("SSYNC_CONFIG_PATH")
+    if explicit_path:
+        return Path(explicit_path).expanduser().parent
+
+    legacy_config = os.environ.get("SSYNC_CONFIG")
+    if legacy_config:
+        legacy_path = Path(legacy_config).expanduser()
+        if legacy_path.suffix in {".yaml", ".yml"} or legacy_path.is_file():
+            return legacy_path.parent
+        if not os.environ.get("XDG_CONFIG_HOME"):
+            return legacy_path / "ssync"
+
+    xdg_config_env = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_env:
+        return Path(xdg_config_env).expanduser() / "ssync"
+
+    return Path.home() / ".config" / "ssync"
+
+
+def get_user_config_path() -> Path:
+    """Return the canonical user-level ssync config file path."""
+    explicit_path = os.environ.get("SSYNC_CONFIG_PATH")
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+
+    legacy_config = os.environ.get("SSYNC_CONFIG")
+    if legacy_config:
+        legacy_path = Path(legacy_config).expanduser()
+        if legacy_path.suffix in {".yaml", ".yml"} or legacy_path.is_file():
+            return legacy_path
+
+    return get_user_config_dir() / "config.yaml"
+
+
 def _env_flag(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).lower() in ("true", "1", "yes")
 
@@ -104,27 +140,13 @@ class Config:
         if repo_config:
             return repo_config
 
-        home = Path.home()
-        legacy_config = os.environ.get("SSYNC_CONFIG")
-        if legacy_config:
-            legacy_path = Path(legacy_config).expanduser()
-            if legacy_path.suffix in {".yaml", ".yml"} or legacy_path.is_file():
-                return legacy_path
-
-        xdg_config_env = os.environ.get("XDG_CONFIG_HOME")
-        if not xdg_config_env:
-            # Check XDG config directory first
-            xdg_config = legacy_path if legacy_config else Path(home / ".config")
-        else:
-            xdg_config = Path(xdg_config_env)
-
-        xdg_config = Path(xdg_config / "ssync" / "config.yaml")
+        xdg_config = get_user_config_path()
 
         if xdg_config.exists():
             return xdg_config
 
         # Fall back to home directory
-        home_config = Path(home / ".ssync.yaml")
+        home_config = Path.home() / ".ssync.yaml"
         if home_config.exists():
             return home_config
 
