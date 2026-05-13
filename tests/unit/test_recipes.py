@@ -18,7 +18,7 @@ def test_render_launch_recipe_composes_fragments(tmp_path):
     _write(
         repo / ".ssync/fragments/env/activate.sh", 'source "$VENV_PATH/bin/activate"\n'
     )
-    _write(repo / ".ssync/fragments/prepare/offline.sh", "export HF_HUB_OFFLINE=1\n")
+    _write(repo / ".ssync/fragments/login/prefetch.sh", "python prefetch.py\n")
     _write(
         repo / ".ssync/fragments/run/train.sh",
         'echo "RUN_OUTPUT_DIR=${RUN_DIR}"\nsrun python train.py "$CONFIG"\n',
@@ -38,9 +38,9 @@ env:
     - .ssync/fragments/env/activate.sh
 prepare:
   scripts:
-    - script: .ssync/fragments/prepare/offline.sh
+    - script: .ssync/fragments/login/prefetch.sh
       vars:
-        DATA_OFFLINE_MODE: "true"
+        PREFETCH_DATASET: "true"
 run:
   script: .ssync/fragments/run/train.sh
   vars:
@@ -66,13 +66,22 @@ sbatch:
     assert rendered.time == 60
     assert rendered.gpus_per_node == 1
     assert "export CONFIG=experiments/demo/train" in rendered.script_content
-    assert "export DATA_OFFLINE_MODE=true" in rendered.script_content
+    assert "#LOGIN_SETUP_BEGIN" in rendered.script_content
+    assert "#LOGIN_SETUP_END" in rendered.script_content
+    assert "export PREFETCH_DATASET=true" in rendered.script_content
+    assert rendered.script_content.index("export CONFIG=experiments/demo/train") < (
+        rendered.script_content.index("python prefetch.py")
+    )
+    assert "python prefetch.py" in rendered.script_content
     assert 'source "$VENV_PATH/bin/activate"' in rendered.script_content
+    assert rendered.script_content.index(
+        "python prefetch.py"
+    ) < rendered.script_content.index('source "$VENV_PATH/bin/activate"')
     assert 'echo "RUN_OUTPUT_DIR=${RUN_DIR}"' in rendered.script_content
     assert rendered.vars["VENV_PATH"] == "/scratch/venvs/demo"
     assert rendered.fragments == [
+        repo / ".ssync/fragments/login/prefetch.sh",
         repo / ".ssync/fragments/env/activate.sh",
-        repo / ".ssync/fragments/prepare/offline.sh",
         repo / ".ssync/fragments/run/train.sh",
     ]
 
@@ -105,8 +114,8 @@ def test_render_launch_recipe_composes_workflow_profiles_and_recipe_overrides(
     _write(
         repo / ".ssync/fragments/env/activate.sh", 'source "$VENV_PATH/bin/activate"\n'
     )
-    _write(repo / ".ssync/fragments/prepare/offline.sh", "export OFFLINE=1\n")
-    _write(repo / ".ssync/fragments/prepare/prefetch.sh", "python prefetch.py\n")
+    _write(repo / ".ssync/fragments/env/offline.sh", "export OFFLINE=1\n")
+    _write(repo / ".ssync/fragments/login/prefetch.sh", "python prefetch.py\n")
     _write(repo / ".ssync/fragments/run/train.sh", "python train.py\n")
     _write(
         repo / ".ssync/hosts/entalpic.yaml",
@@ -137,6 +146,7 @@ vars:
   VENV_PATH: /scratch/venvs/project
 scripts:
   - .ssync/fragments/env/activate.sh
+  - .ssync/fragments/env/offline.sh
 """,
     )
     _write(
@@ -146,7 +156,7 @@ host_partition: entalpic-gpu
 env: project-default
 prepare:
   scripts:
-    - .ssync/fragments/prepare/offline.sh
+    - .ssync/fragments/login/prefetch.sh
 run:
   script: .ssync/fragments/run/train.sh
 vars:
@@ -165,7 +175,7 @@ vars:
   MAX_STEPS: "5000"
 prepare:
   scripts:
-    - .ssync/fragments/prepare/prefetch.sh
+    - .ssync/fragments/login/prefetch.sh
 sbatch:
   time: 30
 """,
@@ -184,8 +194,8 @@ sbatch:
     assert rendered.vars["VENV_PATH"] == "/scratch/venvs/project"
     assert rendered.vars["MAX_STEPS"] == "5000"
     assert rendered.script_content.index(
-        "export OFFLINE=1"
-    ) < rendered.script_content.index("python prefetch.py")
+        "python prefetch.py"
+    ) < rendered.script_content.index("export OFFLINE=1")
     assert 'source "$VENV_PATH/bin/activate"' in rendered.script_content
 
 

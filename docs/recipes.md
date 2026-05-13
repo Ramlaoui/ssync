@@ -21,7 +21,8 @@ repo/
     workflows/train.yaml
     fragments/
       env/activate.sh
-      prepare/offline.sh
+      env/offline.sh
+      login/prefetch_dataset.sh
       run/train.sh
   experiments/demo/launch/train.yaml
 ```
@@ -49,7 +50,7 @@ host_partition: cluster-gpu
 env: project
 prepare:
   scripts:
-    - .ssync/fragments/prepare/offline.sh
+    - .ssync/fragments/login/prefetch_dataset.sh
 run:
   script: .ssync/fragments/run/train.sh
 vars:
@@ -110,17 +111,35 @@ it does not eagerly expand remote runtime variables.
 
 ## Environment and Fragments
 
+`prepare` is pre-submit preparation. Its fragments are rendered inside
+`#LOGIN_SETUP_BEGIN/#LOGIN_SETUP_END`, so existing ssync launch handling runs
+them on the login node before `sbatch`. Use this for dataset prefetching,
+remote path creation, and checks that cannot run on compute nodes.
+
+`env` is optional. It is a reusable compute-side setup profile for commands
+that must run inside the Slurm job before `run`, such as activating a virtual
+environment, exporting offline/cache variables, or loading modules. Small
+projects can skip `env` and put those commands directly in the run fragment.
+
 ```yaml
 # .ssync/envs/project.yaml
 vars:
   VENV_PATH: "${VENV_ROOT}/project"
 scripts:
   - .ssync/fragments/env/activate.sh
+  - .ssync/fragments/env/offline.sh
 ```
 
 ```bash
 # .ssync/fragments/env/activate.sh
 source "${VENV_PATH}/bin/activate"
+```
+
+```bash
+# .ssync/fragments/login/prefetch_dataset.sh
+if [ "${PREFETCH_DATASET:-false}" = "true" ]; then
+  uv run --no-sync python tools/prefetch_dataset.py "$CONFIG"
+fi
 ```
 
 ```bash

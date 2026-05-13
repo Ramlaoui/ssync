@@ -4,6 +4,6 @@ source_dir: .
 vars:
   CONFIG: experiments/demo/train
   EXPERIMENT_NAME: demo-train
+  PREFETCH_DATASET: "true"
 sbatch:
   time: 30
-
