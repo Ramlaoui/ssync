@@ -23,8 +23,10 @@ class _FakeCacheMiddleware:
 
 
 class _FakeRemoteResult:
-    def __init__(self, stdout):
+    def __init__(self, stdout, ok=True):
         self.stdout = stdout
+        self.stderr = ""
+        self.ok = ok
 
 
 class _FakeConnection:
@@ -56,6 +58,53 @@ async def test_live_stream_remote_chunk_decodes_base64_transport():
     assert "base64 -w0" in command
     assert "tail -c +13" in command
     assert kwargs["timeout"] == 30
+
+
+@pytest.mark.unit
+def test_limit_output_bytes_preserves_beginning_and_latest_output():
+    content = "header\n" + ("middle\n" * 4000) + "final metrics\n"
+
+    limited, truncated = job_services.limit_output_bytes(content, 16 * 1024)
+
+    assert truncated is True
+    assert limited.startswith("header\n")
+    assert "bytes omitted; showing beginning and latest output" in limited
+    assert limited.endswith("final metrics\n")
+    assert len(limited.encode("utf-8")) <= 16 * 1024
+
+
+@pytest.mark.unit
+def test_file_metadata_large_output_reads_head_and_tail():
+    class FakeConnection:
+        def __init__(self):
+            self.commands = []
+
+        def run(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            if command.startswith("test -f"):
+                return _FakeRemoteResult("exists\n")
+            if command.startswith("stat -c"):
+                return _FakeRemoteResult("20000 1710000000\n")
+            return _FakeRemoteResult("header\n[... bytes omitted ...]\nlatest\n")
+
+    conn = FakeConnection()
+
+    content, metadata, truncated = job_services.get_file_metadata_and_content(
+        conn,
+        "/tmp/slurm output.log",
+        "stdout",
+        "123",
+        "cluster",
+        max_bytes=16 * 1024,
+    )
+
+    read_command = conn.commands[-1][0]
+    assert "head -c" in read_command
+    assert "tail -c" in read_command
+    assert "'/tmp/slurm output.log'" in read_command
+    assert metadata.size_bytes == 20000
+    assert content.endswith("latest\n")
+    assert truncated is True
 
 
 @pytest.mark.unit

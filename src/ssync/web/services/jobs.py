@@ -5,6 +5,7 @@ import base64
 import gzip
 import io
 import json
+import shlex
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -104,6 +105,33 @@ def limit_output_lines(content: Optional[str], lines: Optional[int]) -> Optional
     return "".join(chunks[-lines:])
 
 
+def build_output_omission_marker(omitted_bytes: int) -> str:
+    return (
+        "\n\n"
+        f"[... {max(0, omitted_bytes):,} bytes omitted; showing beginning and latest output ...]"
+        "\n\n"
+    )
+
+
+def compute_bounded_output_window(
+    *,
+    total_bytes: int,
+    max_bytes: int,
+    min_head_bytes: int = 1,
+    max_head_bytes: Optional[int] = None,
+) -> tuple[int, int, str]:
+    marker = build_output_omission_marker(total_bytes - max_bytes)
+
+    for _ in range(2):
+        available = max(1, max_bytes - len(marker.encode("utf-8")))
+        head_cap = max_head_bytes if max_head_bytes is not None else available
+        head_bytes = max(min_head_bytes, min(head_cap, available // 4))
+        tail_bytes = max(1, available - head_bytes)
+        marker = build_output_omission_marker(total_bytes - head_bytes - tail_bytes)
+
+    return head_bytes, tail_bytes, marker
+
+
 def limit_output_bytes(
     content: Optional[str], max_bytes: Optional[int]
 ) -> tuple[Optional[str], bool]:
@@ -116,8 +144,24 @@ def limit_output_bytes(
     if len(encoded) <= max_bytes:
         return content, False
 
-    tail = encoded[-max_bytes:]
-    return tail.decode("utf-8", errors="ignore"), True
+    # Very small limits are mostly used by tests and API callers expecting a
+    # strict tail. For normal UI limits, keep the file start visible and pair it
+    # with the latest output so headers and setup logs are not lost.
+    if max_bytes < 8192:
+        tail = encoded[-max_bytes:]
+        return tail.decode("utf-8", errors="ignore"), True
+
+    head_bytes, tail_bytes, marker = compute_bounded_output_window(
+        total_bytes=len(encoded),
+        max_bytes=max_bytes,
+    )
+    if len(marker.encode("utf-8")) >= max_bytes:
+        tail = encoded[-max_bytes:]
+        return tail.decode("utf-8", errors="ignore"), True
+
+    head = encoded[:head_bytes].decode("utf-8", errors="ignore")
+    tail = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
+    return f"{head}{marker}{tail}", True
 
 
 def limit_output_content(
@@ -315,9 +359,10 @@ def output_path_for(job_info, output_type: str) -> Optional[str]:
 async def stat_remote_file_size(conn, file_path: Optional[str]) -> int:
     if not file_path:
         return 0
+    quoted_path = shlex.quote(file_path)
     result = await asyncio.to_thread(
         conn.run,
-        f"stat -c %s '{file_path}' 2>/dev/null || echo 0",
+        f"stat -c %s {quoted_path} 2>/dev/null || echo 0",
         hide=True,
         warn=True,
     )
@@ -335,10 +380,11 @@ async def read_remote_file_chunk_text(
 ) -> Optional[str]:
     if not file_path or max_bytes <= 0:
         return None
+    quoted_path = shlex.quote(file_path)
     result = await asyncio.to_thread(
         conn.run,
         (
-            f"tail -c +{start_offset + 1} '{file_path}' 2>/dev/null | "
+            f"tail -c +{start_offset + 1} {quoted_path} 2>/dev/null | "
             f"head -c {max_bytes} | base64 -w0"
         ),
         hide=True,
@@ -376,8 +422,18 @@ async def build_stream_job_output_response(
         cache = get_cache()
         cached_job = cache.get_cached_job(job_id, host)
 
-        async def resolve_job_info():
+        def cached_job_info_with_path():
+            if cached_job and cached_job.job_info:
+                if output_path_for(cached_job.job_info, output_type):
+                    return cached_job.job_info
+            return None
+
+        async def resolve_job_info(*, prefer_cache: bool = False):
             nonlocal cached_job
+            if prefer_cache:
+                cached_info = cached_job_info_with_path()
+                if cached_info:
+                    return cached_info
             try:
                 job_info = await asyncio.to_thread(
                     manager.slurm_client.get_job_details,
@@ -401,7 +457,7 @@ async def build_stream_job_output_response(
             "job_id": job_id,
             "host": host,
         }
-        job_info = await resolve_job_info()
+        job_info = await resolve_job_info(prefer_cache=True)
 
         if job_info and job_info.state == JobState.RUNNING:
             file_path = output_path_for(job_info, output_type)
@@ -427,13 +483,42 @@ async def build_stream_job_output_response(
                     {"type": "truncation_notice", "original_size": current_size}
                 )
 
-            initial_payload = await read_remote_file_chunk_text(
-                conn,
-                file_path,
-                start_offset,
-                max_initial_bytes,
-            )
-            if initial_payload:
+            initial_payloads: list[str] = []
+            if start_offset > 0:
+                head_bytes, tail_bytes, marker = compute_bounded_output_window(
+                    total_bytes=current_size,
+                    max_bytes=max_initial_bytes,
+                    min_head_bytes=1024,
+                    max_head_bytes=64 * 1024,
+                )
+                head_payload = await read_remote_file_chunk_text(
+                    conn,
+                    file_path,
+                    0,
+                    head_bytes,
+                )
+                if head_payload:
+                    initial_payloads.append(head_payload)
+                    initial_payloads.append(marker)
+                tail_payload = await read_remote_file_chunk_text(
+                    conn,
+                    file_path,
+                    current_size - tail_bytes,
+                    tail_bytes,
+                )
+                if tail_payload:
+                    initial_payloads.append(tail_payload)
+            else:
+                initial_payload = await read_remote_file_chunk_text(
+                    conn,
+                    file_path,
+                    start_offset,
+                    max_initial_bytes,
+                )
+                if initial_payload:
+                    initial_payloads.append(initial_payload)
+
+            for initial_payload in initial_payloads:
                 for index in range(0, len(initial_payload), chunk_size):
                     yield format_sse_event(
                         {
@@ -885,14 +970,15 @@ def get_file_metadata_and_content(
 
     try:
         metadata = FileMetadata(path=file_path)
+        quoted_path = shlex.quote(file_path)
         file_check = conn.run(
-            f"test -f {file_path} && echo 'exists' || echo 'not found'", hide=True
+            f"test -f {quoted_path} && echo 'exists' || echo 'not found'", hide=True
         )
         if "exists" not in file_check.stdout:
             return None, metadata, False
 
         metadata.exists = True
-        stat_result = conn.run(f"stat -c '%s %Y' {file_path}", hide=True)
+        stat_result = conn.run(f"stat -c '%s %Y' {quoted_path}", hide=True)
         if stat_result.ok:
             size, mtime = stat_result.stdout.strip().split()
             metadata.size_bytes = int(size)
@@ -904,11 +990,24 @@ def get_file_metadata_and_content(
         truncated = False
         if not metadata_only:
             if lines:
-                cmd = f"tail -n {lines} {file_path}"
+                cmd = f"tail -n {lines} {quoted_path}"
             elif max_bytes:
-                cmd = f"tail -c {max_bytes} {file_path}"
+                if max_bytes >= 8192 and metadata.size_bytes and metadata.size_bytes > max_bytes:
+                    head_bytes, tail_bytes, marker = compute_bounded_output_window(
+                        total_bytes=metadata.size_bytes,
+                        max_bytes=max_bytes,
+                        min_head_bytes=1024,
+                        max_head_bytes=64 * 1024,
+                    )
+                    cmd = (
+                        f"(head -c {head_bytes} {quoted_path}; "
+                        f"printf %s {shlex.quote(marker)}; "
+                        f"tail -c {tail_bytes} {quoted_path})"
+                    )
+                else:
+                    cmd = f"tail -c {max_bytes} {quoted_path}"
             else:
-                cmd = f"cat {file_path}"
+                cmd = f"cat {quoted_path}"
             result = conn.run(cmd, hide=True)
             content = result.stdout
             if max_bytes and metadata.size_bytes is not None:
