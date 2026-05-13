@@ -376,10 +376,13 @@ class LaunchCommand(BaseCommand):
                             click.echo(f"Launch stage: {stage}")
                     last_stage = stage
                     last_message = message or last_message
-                elif event_type == "launch_log" and self.verbose and message:
+                elif event_type == "launch_log" and message:
                     source = event.get("source", "launch")
                     stream = event.get("stream", "stdout")
-                    click.echo(f"[{source}/{stream}] {message}")
+                    if self.verbose:
+                        click.echo(f"[{source}/{stream}] {message}")
+                    elif source == "setup":
+                        click.echo(message, err=stream == "stderr")
                 elif event_type == "launch_result":
                     final_job_id = event.get("job_id")
                     return bool(event.get("success")), final_job_id, message

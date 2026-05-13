@@ -82,6 +82,92 @@ class SSHConnection:
             self.host = host_id.split("@")[-1].split(":")[0]
             self.user = None
 
+    @staticmethod
+    def _decode_output_chunk(chunk: bytes, stream_name: str) -> str:
+        try:
+            return chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.debug(
+                "UTF-8 decode error in %s, using replacement characters",
+                stream_name,
+            )
+            return chunk.decode("utf-8", errors="replace")
+
+    @classmethod
+    def _run_streaming_command(
+        cls,
+        ssh_cmd: list[str],
+        *,
+        timeout: Optional[float],
+        out_stream: Any = None,
+        err_stream: Any = None,
+    ):
+        import subprocess
+        import threading
+
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        effective_timeout = timeout or 120
+
+        process = subprocess.Popen(
+            ssh_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        def pump(pipe, chunks: list[bytes], stream, stream_name: str):
+            if pipe is None:
+                return
+            try:
+                for chunk in iter(pipe.readline, b""):
+                    chunks.append(chunk)
+                    if stream is not None:
+                        stream.write(cls._decode_output_chunk(chunk, stream_name))
+            finally:
+                if stream is not None:
+                    if hasattr(stream, "finish"):
+                        stream.finish()
+                    elif hasattr(stream, "flush"):
+                        stream.flush()
+                pipe.close()
+
+        stdout_thread = threading.Thread(
+            target=pump,
+            args=(process.stdout, stdout_chunks, out_stream, "stdout"),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=pump,
+            args=(process.stderr, stderr_chunks, err_stream, "stderr"),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+
+        try:
+            return_code = process.wait(timeout=effective_timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = 124
+            stderr_chunks.append(
+                f"Command timed out after {effective_timeout} seconds".encode()
+            )
+
+        stdout_thread.join()
+        stderr_thread.join()
+
+        stdout = cls._decode_output_chunk(b"".join(stdout_chunks), "stdout")
+        stderr = cls._decode_output_chunk(b"".join(stderr_chunks), "stderr")
+        if return_code == 124 and not stderr:
+            stderr = f"Command timed out after {effective_timeout} seconds"
+
+        return subprocess.CompletedProcess(
+            ssh_cmd,
+            return_code,
+            stdout=stdout.encode("utf-8", errors="replace"),
+            stderr=stderr.encode("utf-8", errors="replace"),
+        )
+
     def run(
         self,
         command: str,
@@ -97,7 +183,8 @@ class SSHConnection:
             hide: Whether to hide output (ignored)
             warn: Whether to treat failures as warnings
             timeout: Command timeout in seconds
-            **kwargs: Other arguments (ignored)
+            **kwargs: Other arguments. ``out_stream`` and ``err_stream`` are honored
+                for live command output.
 
         Returns:
             Fabric-compatible result
@@ -154,25 +241,36 @@ class SSHConnection:
                     # Fallback without ControlMaster
                     ssh_cmd = NativeSSH._build_direct_ssh_command(self.host_config)
 
+            out_stream = kwargs.get("out_stream")
+            err_stream = kwargs.get("err_stream")
+
             # Add command
             ssh_cmd.append(command)
 
-            # Run with subprocess (allows true parallelism)
-            try:
-                # Capture as bytes first to handle non-UTF-8 output
-                result = subprocess.run(
-                    ssh_cmd, capture_output=True, timeout=timeout or 120
+            if out_stream is not None or err_stream is not None:
+                result = self._run_streaming_command(
+                    ssh_cmd,
+                    timeout=timeout,
+                    out_stream=out_stream,
+                    err_stream=err_stream,
                 )
-            except subprocess.TimeoutExpired:
-                logger.debug(f"Command timed out after {timeout} seconds")
-                return SSHCommandResult(
-                    SSHResult(
-                        success=False,
-                        stdout="",
-                        stderr=f"Command timed out after {timeout} seconds",
-                        return_code=124,
+            else:
+                # Run with subprocess (allows true parallelism)
+                try:
+                    # Capture as bytes first to handle non-UTF-8 output
+                    result = subprocess.run(
+                        ssh_cmd, capture_output=True, timeout=timeout or 120
                     )
-                )
+                except subprocess.TimeoutExpired:
+                    logger.debug(f"Command timed out after {timeout} seconds")
+                    return SSHCommandResult(
+                        SSHResult(
+                            success=False,
+                            stdout="",
+                            stderr=f"Command timed out after {timeout} seconds",
+                            return_code=124,
+                        )
+                    )
 
             # Try to decode the output, handling encoding errors gracefully
             try:
@@ -436,9 +534,7 @@ class SSHConnection:
                     timeout=self.SCP_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired as exc:
-                last_error = (
-                    f"SCP {direction} timed out after {self.SCP_TIMEOUT_SECONDS} seconds"
-                )
+                last_error = f"SCP {direction} timed out after {self.SCP_TIMEOUT_SECONDS} seconds"
                 logger.warning(
                     f"{last_error} for {self.host_id} (attempt {attempt + 1}/2)"
                 )

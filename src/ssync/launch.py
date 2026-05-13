@@ -20,6 +20,41 @@ from .utils.slurm_arrays import looks_like_array_submission
 logger = setup_logger(__name__, "INFO")
 
 
+class _LaunchEventStream:
+    """Line-buffered stream that forwards login setup output to launch events."""
+
+    def __init__(self, emitter: LaunchEventEmitter, *, source: str, stream: str):
+        self.emitter = emitter
+        self.source = source
+        self.stream = stream
+        self._buffer = ""
+
+    def write(self, data: str) -> int:
+        if not data:
+            return 0
+
+        self._buffer += str(data)
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            line = line.rstrip("\r")
+            if line:
+                self.emitter.log(self.source, line, stream=self.stream)
+        return len(data)
+
+    def flush(self) -> None:
+        return None
+
+    def finish(self) -> None:
+        if self._buffer:
+            line = self._buffer.rstrip("\r\n")
+            self._buffer = ""
+            if line:
+                self.emitter.log(self.source, line, stream=self.stream)
+
+    def close(self) -> None:
+        self.finish()
+
+
 class LaunchManager:
     """Manages the complete job launch workflow: sync + submit."""
 
@@ -383,14 +418,39 @@ class LaunchManager:
                     f"Setup commands: {login_setup_commands[:500]}..."
                 )  # Log first 500 chars
                 setup_result = None
+                streamed_setup_output = launch_event_emitter is not None
                 try:
 
                     def run_setup():
                         with conn.cd(remote_work_dir):
+                            out_stream = (
+                                _LaunchEventStream(
+                                    launch_event_emitter,
+                                    source="setup",
+                                    stream="stdout",
+                                )
+                                if launch_event_emitter
+                                else None
+                            )
+                            err_stream = (
+                                _LaunchEventStream(
+                                    launch_event_emitter,
+                                    source="setup",
+                                    stream="stderr",
+                                )
+                                if launch_event_emitter
+                                else None
+                            )
                             # Use pty=False to ensure we capture all output
-                            # Don't hide output to see what's happening
+                            # Stream output through launch events while retaining
+                            # the final captured result for error reporting.
                             result = conn.run(
-                                login_setup_commands, warn=True, hide=False, pty=False
+                                login_setup_commands,
+                                warn=True,
+                                hide=False,
+                                pty=False,
+                                out_stream=out_stream,
+                                err_stream=err_stream,
                             )
                             # Log the result immediately for debugging
                             logger.debug(
@@ -405,13 +465,13 @@ class LaunchManager:
                     if setup_result.ok:
                         logger.info("Login node setup completed successfully")
                         if launch_event_emitter:
-                            if setup_result.stdout:
+                            if setup_result.stdout and not streamed_setup_output:
                                 launch_event_emitter.log(
                                     "setup",
                                     setup_result.stdout.strip(),
                                     stream="stdout",
                                 )
-                            if setup_result.stderr:
+                            if setup_result.stderr and not streamed_setup_output:
                                 launch_event_emitter.log(
                                     "setup",
                                     setup_result.stderr.strip(),
@@ -439,6 +499,7 @@ class LaunchManager:
                                 if (
                                     stdout_output
                                     and stdout_output != "No stdout captured"
+                                    and not streamed_setup_output
                                 ):
                                     launch_event_emitter.log(
                                         "setup", stdout_output, stream="stdout"
@@ -446,6 +507,7 @@ class LaunchManager:
                                 if (
                                     stderr_output
                                     and stderr_output != "No stderr captured"
+                                    and not streamed_setup_output
                                 ):
                                     launch_event_emitter.log(
                                         "setup",
@@ -469,6 +531,7 @@ class LaunchManager:
                                 if (
                                     stdout_output
                                     and stdout_output != "No stdout captured"
+                                    and not streamed_setup_output
                                 ):
                                     launch_event_emitter.log(
                                         "setup", stdout_output, stream="stdout"
@@ -476,6 +539,7 @@ class LaunchManager:
                                 if (
                                     stderr_output
                                     and stderr_output != "No stderr captured"
+                                    and not streamed_setup_output
                                 ):
                                     launch_event_emitter.log(
                                         "setup",

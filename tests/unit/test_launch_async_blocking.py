@@ -312,6 +312,117 @@ python train.py ${resume_run_dir:+--resume ${resume_run_dir}}
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_launch_job_streams_login_setup_output(monkeypatch):
+    hostname = "cluster-launch.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    events = []
+    executor = ThreadPoolExecutor(max_workers=2)
+
+    class _FakeEmitter:
+        def stage(self, stage, *, message="", job_id=None):
+            events.append(("stage", stage, message, job_id))
+
+        def log(self, source, message, *, stream="stdout", level="info", job_id=None):
+            events.append(("log", source, stream, message, level, job_id))
+
+    class _FakeConn:
+        def run(self, command, **kwargs):
+            out_stream = kwargs.get("out_stream")
+            err_stream = kwargs.get("err_stream")
+            if "uv sync" in command:
+                assert out_stream is not None
+                assert err_stream is not None
+                out_stream.write("Resolved 12 packages\n")
+                err_stream.write("Using cached wheel\n")
+                out_stream.close()
+                err_stream.close()
+                return types.SimpleNamespace(
+                    return_code=0,
+                    stdout="Resolved 12 packages\n",
+                    stderr="Using cached wheel\n",
+                    ok=True,
+                )
+            return types.SimpleNamespace(return_code=0, stdout="", stderr="", ok=True)
+
+        def cd(self, _path):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeManager:
+        def get_host_by_name(self, host: str):
+            assert host == hostname
+            return slurm_host
+
+        def _get_connection(self, host):
+            assert host.hostname == hostname
+            return _FakeConn()
+
+    def fake_submit(*_args, **_kwargs):
+        return types.SimpleNamespace(job_id="12345")
+
+    monkeypatch.setattr(
+        "ssync.launch.send_file",
+        lambda *_args, **_kwargs: "/remote/work/scripts/job.sh",
+    )
+    monkeypatch.setattr(LaunchManager, "_submit_script_in_workdir", fake_submit)
+
+    script_content = """#!/bin/bash
+#LOGIN_SETUP_BEGIN
+uv sync
+#LOGIN_SETUP_END
+python train.py
+"""
+
+    launch_manager = LaunchManager(_FakeManager(), executor=executor)
+    try:
+        job = await launch_manager.launch_job(
+            script_path=None,
+            script_content=script_content,
+            source_dir=None,
+            host=hostname,
+            slurm_params=SlurmParams(),
+            sync_enabled=False,
+            launch_event_emitter=_FakeEmitter(),
+        )
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    assert job.job_id == "12345"
+    assert (
+        "log",
+        "setup",
+        "stdout",
+        "Resolved 12 packages",
+        "info",
+        None,
+    ) in events
+    assert (
+        "log",
+        "setup",
+        "stderr",
+        "Using cached wheel",
+        "info",
+        None,
+    ) in events
+    assert (
+        events.count(("log", "setup", "stdout", "Resolved 12 packages", "info", None))
+        == 1
+    )
+    assert (
+        "stage",
+        "setup_finished",
+        "Login-node setup completed successfully.",
+        None,
+    ) in events
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_capture_job_submission_offloads_connection_acquisition(
     monkeypatch, test_cache
 ):
