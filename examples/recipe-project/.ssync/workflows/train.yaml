@@ -2,7 +2,7 @@ host_partition: example-gpu
 env: project
 prepare:
   scripts:
-    - .ssync/fragments/prepare/offline.sh
+    - .ssync/fragments/login/prefetch_dataset.sh
 run:
   script: .ssync/fragments/run/train.sh
 vars:

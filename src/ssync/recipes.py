@@ -474,6 +474,38 @@ def _read_fragment(path: Path) -> str:
     return path.read_text().strip()
 
 
+def _render_fragment_entries(
+    *,
+    repo_root: Path,
+    recipe_dir: Path,
+    entries: list[dict[str, Any]],
+    field_name: str,
+    section_vars: dict[str, Any],
+    fragment_paths: list[Path],
+    resolved_vars: dict[str, Any],
+) -> list[str]:
+    sections = []
+    for entry in entries:
+        fragment_vars = _merge_vars(entry.get("vars"))
+        fragment_path = _resolve_path(
+            repo_root, recipe_dir, entry["script"], f"{field_name}.script"
+        )
+        fragment_paths.append(fragment_path)
+        sections.append(
+            f"# ssync {field_name}: {_display_path(fragment_path, repo_root)}"
+        )
+        section_exports = _render_var_exports(section_vars)
+        if section_exports:
+            sections.append(section_exports)
+            resolved_vars.update(section_vars)
+        fragment_exports = _render_var_exports(fragment_vars)
+        if fragment_exports:
+            sections.append(fragment_exports)
+            resolved_vars.update(fragment_vars)
+        sections.append(_read_fragment(fragment_path))
+    return sections
+
+
 def render_launch_recipe(
     recipe_path: str | Path,
     *,
@@ -535,31 +567,45 @@ def render_launch_recipe(
         sections.append(var_exports)
 
     fragment_paths: list[Path] = []
-    for field_name in ("env", "prepare"):
-        section = data.get(field_name)
-        section_vars = (
-            _merge_vars(section.get("vars"))
-            if isinstance(section, dict) and "vars" in section
-            else {}
+    prepare_section = data.get("prepare")
+    prepare_vars = (
+        _merge_vars(prepare_section.get("vars"))
+        if isinstance(prepare_section, dict) and "vars" in prepare_section
+        else {}
+    )
+    prepare_sections = _render_fragment_entries(
+        repo_root=repo_root,
+        recipe_dir=recipe_dir,
+        entries=_script_entries(prepare_section, "prepare"),
+        field_name="prepare",
+        section_vars=prepare_vars,
+        fragment_paths=fragment_paths,
+        resolved_vars=resolved_vars,
+    )
+    if prepare_sections:
+        sections.append("#LOGIN_SETUP_BEGIN")
+        if var_exports:
+            sections.append(var_exports)
+        sections.extend(prepare_sections)
+        sections.append("#LOGIN_SETUP_END")
+
+    env_section = data.get("env")
+    env_vars = (
+        _merge_vars(env_section.get("vars"))
+        if isinstance(env_section, dict) and "vars" in env_section
+        else {}
+    )
+    sections.extend(
+        _render_fragment_entries(
+            repo_root=repo_root,
+            recipe_dir=recipe_dir,
+            entries=_script_entries(env_section, "env"),
+            field_name="env",
+            section_vars=env_vars,
+            fragment_paths=fragment_paths,
+            resolved_vars=resolved_vars,
         )
-        for entry in _script_entries(data.get(field_name), field_name):
-            fragment_vars = _merge_vars(entry.get("vars"))
-            fragment_path = _resolve_path(
-                repo_root, recipe_dir, entry["script"], f"{field_name}.script"
-            )
-            fragment_paths.append(fragment_path)
-            sections.append(
-                f"# ssync {field_name}: {_display_path(fragment_path, repo_root)}"
-            )
-            section_exports = _render_var_exports(section_vars)
-            if section_exports:
-                sections.append(section_exports)
-                resolved_vars.update(section_vars)
-            fragment_exports = _render_var_exports(fragment_vars)
-            if fragment_exports:
-                sections.append(fragment_exports)
-                resolved_vars.update(fragment_vars)
-            sections.append(_read_fragment(fragment_path))
+    )
 
     run_entries = _script_entries(data.get("run"), "run")
     if len(run_entries) != 1:
