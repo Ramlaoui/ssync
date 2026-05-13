@@ -5,6 +5,7 @@
   import { onMount } from "svelte";
   import Router, { push, link, location } from "svelte-spa-router";
   import ErrorBoundary from "./components/ErrorBoundary.svelte";
+  import LaunchMonitor from "./components/LaunchMonitor.svelte";
   import PerformanceMonitor from "./components/PerformanceMonitor.svelte";
   import JobsPage from "./pages/JobsPage.svelte";
   import JobPage from "./pages/JobPage.svelte";
@@ -368,10 +369,12 @@
       </div>
     </main>
   </div>
+
+  <LaunchMonitor />
   
   <!-- Performance Monitor (only in development/debug mode) -->
   {#if import.meta.env.DEV || window.location.search.includes('debug')}
-    <PerformanceMonitor position="bottom-left" />
+    <PerformanceMonitor position="bottom-right" />
   {/if}
 </ErrorBoundary>
 

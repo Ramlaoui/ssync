@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount } from "svelte";
-  import { push } from "svelte-spa-router";
+  import { createEventDispatcher, onMount } from "svelte";
   import { createBubbler, run } from "svelte/legacy";
   import { fade, fly, slide } from "svelte/transition";
   import Button from "../lib/components/ui/Button.svelte";
@@ -16,19 +15,16 @@
     parseSbatchDirectives,
     type JobParameters,
   } from "../lib/sbatch-parser";
-  import { LaunchEventStream, fetchLaunchStatus } from "../lib/launchStreaming";
   import { validateParameters } from "../lib/sbatchUtils";
   import { api } from "../services/api";
+  import { launchMonitor } from "../stores/launchMonitor";
   import { resubmitStore } from "../stores/resubmit";
   import type {
     HostInfo,
-    LaunchEvent,
     LaunchJobRequest,
-    LaunchJobResponse,
   } from "../types/api";
   import CodeMirrorEditor from "./CodeMirrorEditor.svelte";
   import FileBrowser from "./FileBrowser.svelte";
-  import LaunchStatusToast from "./LaunchStatusToast.svelte";
   import NavigationHeader from "./NavigationHeader.svelte";
   import SaveTemplateDialog from "./SaveTemplateDialog.svelte";
   import ScriptHistory from "./ScriptHistory.svelte";
@@ -91,139 +87,10 @@
 # Your commands here
 echo "Starting job..."
 `);
-  let launching = $state(false);
+  let launchRequestPending = $state(false);
   let hosts: HostInfo[] = $state([]);
   let selectedHost = $state("");
   let loading = $state(false);
-
-  // Launch status toast state
-  let showLaunchToast = $state(false);
-  let launchToastStatus: "launching" | "success" | "error" =
-    $state("launching");
-  let launchToastMessage = $state("");
-  let launchToastLogLines: string[] = $state([]);
-  let pendingJobNavigation: { jobId: string; host: string } | null =
-    $state(null);
-  let activeLaunchId: string | null = $state(null);
-  const launchEventStream = new LaunchEventStream();
-  let seenLaunchSequences = new Set<number>();
-
-  function formatLaunchLogLine(event: LaunchEvent): string {
-    const source = event.source || "launch";
-    const stream = event.stream || "stdout";
-    const message = event.message || "";
-    return `[${source}/${stream}] ${message}`;
-  }
-
-  function cleanupLaunchTracking() {
-    launchEventStream.close();
-    seenLaunchSequences = new Set<number>();
-    activeLaunchId = null;
-  }
-
-  function handleLaunchSuccess(
-    jobId: string | undefined,
-    host: string,
-    message?: string,
-  ) {
-    launchToastStatus = "success";
-    launchToastMessage = message || "Job launched successfully";
-    launching = false;
-
-    if (jobId) {
-      pendingJobNavigation = { jobId, host };
-    }
-
-    cleanupLaunchTracking();
-
-    setTimeout(() => {
-      if (showLaunchToast && launchToastStatus === "success") {
-        showLaunchToast = false;
-      }
-    }, 5000);
-  }
-
-  function handleLaunchFailure(message?: string) {
-    launchToastStatus = "error";
-    launchToastMessage = message || "Launch failed";
-    launching = false;
-    cleanupLaunchTracking();
-  }
-
-  function consumeLaunchEvent(event: LaunchEvent) {
-    if (!activeLaunchId || event.launch_id !== activeLaunchId) {
-      return;
-    }
-
-    if (seenLaunchSequences.has(event.sequence)) {
-      return;
-    }
-    seenLaunchSequences.add(event.sequence);
-
-    if (event.type === "launch_log" && event.message) {
-      launchToastLogLines = [
-        ...launchToastLogLines,
-        formatLaunchLogLine(event),
-      ].slice(-8);
-    }
-
-    if (event.message) {
-      launchToastMessage = event.message;
-    }
-
-    if (event.type === "launch_result") {
-      if (event.success) {
-        handleLaunchSuccess(
-          event.job_id,
-          event.hostname || selectedHost,
-          event.message,
-        );
-      } else {
-        handleLaunchFailure(event.message);
-      }
-      return;
-    }
-
-    launchToastStatus = "launching";
-  }
-
-  async function recoverLaunchProgress(launchId: string) {
-    try {
-      const status = await fetchLaunchStatus(launchId);
-
-      for (const event of status.events) {
-        consumeLaunchEvent(event);
-      }
-
-      if (status.terminal) {
-        if (status.success) {
-          handleLaunchSuccess(
-            status.job_id,
-            status.hostname || selectedHost,
-            status.message,
-          );
-        } else {
-          handleLaunchFailure(status.message);
-        }
-        return;
-      }
-
-      if (status.message) {
-        launchToastMessage = status.message;
-      }
-
-      launchEventStream.start(launchId, consumeLaunchEvent, () => {
-        void recoverLaunchProgress(launchId);
-      });
-    } catch (error) {
-      console.error("Failed to recover launch progress:", error);
-      handleLaunchFailure("Lost launch progress connection");
-    }
-  }
-
-  onDestroy(() => {
-    launchEventStream.close();
-  });
 
   // Script Templates
   interface ScriptTemplate {
@@ -751,27 +618,16 @@ echo "Starting job..."
   }
 
   async function handleLaunch() {
-    if (!canLaunch) return;
-
-    cleanupLaunchTracking();
-
-    // Show launching toast immediately
-    showLaunchToast = true;
-    launchToastStatus = "launching";
-    launchToastMessage = "Syncing files and submitting job...";
-    launchToastLogLines = [];
-    launching = true;
+    if (!canLaunch || launchRequestPending) return;
 
     // Keep the original script for the actual launch
     const originalScript = script;
 
-    // Launch in background - don't block UI
-    launchJobInBackground(originalScript);
+    void launchJobInBackground(originalScript);
   }
 
   async function launchJobInBackground(originalScript: string) {
-    let launchError = "";
-
+    launchRequestPending = true;
     try {
       // Save script to localStorage for history
       saveScriptToLocalHistory();
@@ -813,74 +669,11 @@ echo "Starting job..."
       if (parameters.outputFile) launchData.output = parameters.outputFile;
       if (parameters.errorFile) launchData.error = parameters.errorFile;
 
-      // Call the launch API - returns immediately with a launch_id
-      const response = await api.post<LaunchJobResponse>(
-        "/api/jobs/launch",
-        launchData,
-      );
-
-      if (response.data?.success && response.data.launch_id) {
-        activeLaunchId = response.data.launch_id;
-        seenLaunchSequences = new Set<number>();
-        launchToastMessage = response.data.message || "Syncing files and submitting job...";
-        launchEventStream.start(activeLaunchId, consumeLaunchEvent, () => {
-          if (activeLaunchId) {
-            void recoverLaunchProgress(activeLaunchId);
-          }
-        });
-      } else if (response.data?.success && response.data.job_id) {
-        // Backward compat: server returned a job_id directly (no sync needed)
-        const jobId = response.data.job_id;
-        const host = response.data.hostname || selectedHost;
-        handleLaunchSuccess(jobId, host, `Job ${jobId} launched successfully`);
-      } else {
-        throw new Error("Invalid response from server");
-      }
+      await launchMonitor.startLaunch(launchData);
     } catch (error: any) {
       console.error("Launch failed:", error);
-
-      // Better error extraction
-      if (error.response?.data) {
-        // Handle validation errors from 422 response
-        const errorData = error.response.data;
-        if (typeof errorData.detail === "string") {
-          launchError = errorData.detail;
-        } else if (Array.isArray(errorData.detail)) {
-          // Pydantic validation errors come as array
-          launchError = errorData.detail
-            .map((e: any) => `${e.loc?.join(".")}: ${e.msg}`)
-            .join(", ");
-        } else if (typeof errorData.detail === "object") {
-          launchError = JSON.stringify(errorData.detail);
-        } else if (errorData.message) {
-          launchError = errorData.message;
-        } else {
-          launchError = JSON.stringify(errorData);
-        }
-      } else if (error.message) {
-        launchError = error.message;
-      } else {
-        launchError = "Failed to launch job. Please try again.";
-      }
-
-      // Update toast with error
-      handleLaunchFailure(launchError);
-    }
-  }
-
-  function handleDismissToast() {
-    showLaunchToast = false;
-    pendingJobNavigation = null;
-    launchToastLogLines = [];
-    cleanupLaunchTracking();
-  }
-
-  function handleNavigateToJob() {
-    if (pendingJobNavigation) {
-      const encodedJobId = encodeURIComponent(pendingJobNavigation.jobId);
-      push(`/jobs/${encodedJobId}/${pendingJobNavigation.host}`);
-      showLaunchToast = false;
-      pendingJobNavigation = null;
+    } finally {
+      launchRequestPending = false;
     }
   }
 
@@ -1204,19 +997,6 @@ echo "Starting job..."
         : "",
   );
 </script>
-
-<!-- Launch Status Toast -->
-{#if showLaunchToast}
-  <LaunchStatusToast
-    status={launchToastStatus}
-    message={launchToastMessage}
-    logLines={launchToastLogLines}
-    onDismiss={handleDismissToast}
-    onNavigate={launchToastStatus === "success"
-      ? handleNavigateToJob
-      : undefined}
-  />
-{/if}
 
 <div class="modern-launcher">
   <!-- Mobile Header -->
@@ -1992,12 +1772,12 @@ echo "Starting job..."
           <!-- Launch Button -->
           <Button
             on:click={handleLaunch}
-            disabled={!canLaunch || launching}
+            disabled={!canLaunch || launchRequestPending}
             class="launch-header-button"
             size="default"
             title={!canLaunch ? launchDisabledReason : ""}
           >
-            {#if launching}
+            {#if launchRequestPending}
               <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
               Launching...
             {:else}
@@ -3135,11 +2915,11 @@ echo "Starting job..."
               showMobileConfig = false;
               mobileConfigView = "main";
             }}
-            disabled={!canLaunch || launching}
+            disabled={!canLaunch || launchRequestPending}
             class="w-full"
             size="lg"
           >
-            {#if launching}
+            {#if launchRequestPending}
               <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
               Launching...
             {:else}
@@ -3178,9 +2958,9 @@ echo "Starting job..."
     <button
       class="mobile-launch-fab"
       onclick={handleLaunch}
-      disabled={!canLaunch || launching}
+      disabled={!canLaunch || launchRequestPending}
     >
-      {#if launching}
+      {#if launchRequestPending}
         <RefreshCw class="w-5 h-5 animate-spin" />
       {:else}
         <Play class="w-5 h-5" />
