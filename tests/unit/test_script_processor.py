@@ -105,6 +105,28 @@ class TestRenderScriptVariables:
         )
         assert rendered == "python main.py --resume /scratch/ckpt.pt"
 
+    @pytest.mark.unit
+    def test_renders_nested_default_expression_without_trailing_brace(self):
+        script = (
+            'RUN_DIR="${resume_run_dir:-${RUN_ROOT}/${RUN_NAME}}"\n'
+            'python train.py hydra.run.dir=${resume_run_dir:-${RUN_ROOT}/${RUN_NAME}}\n'
+        )
+        rendered = ScriptProcessor.render_script_variables(
+            script,
+            {"resume_run_dir": "/scratch/run-42"},
+        )
+        assert rendered == (
+            'RUN_DIR="/scratch/run-42"\n'
+            "python train.py hydra.run.dir=/scratch/run-42\n"
+        )
+
+    @pytest.mark.unit
+    def test_leaves_missing_nested_default_expression_for_shell(self):
+        script = 'RUN_DIR="${resume_run_dir:-${RUN_ROOT}/${RUN_NAME}}"'
+        assert ScriptProcessor.render_script_variables(script, {"RUN_ROOT": "/runs"}) == (
+            'RUN_DIR="${resume_run_dir:-/runs/${RUN_NAME}}"'
+        )
+
 
 class TestExtractWatchers:
     """Tests for extract_watchers method."""
