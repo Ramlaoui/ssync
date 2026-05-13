@@ -103,9 +103,7 @@ class JobInfoWeb(BaseModel):
         for field_name, field_info in cls.model_fields.items():
             if field_name == "state":
                 continue
-            default_value = (
-                None if field_info.is_required() else field_info.default
-            )
+            default_value = None if field_info.is_required() else field_info.default
             payload[field_name] = getattr(job_info, field_name, default_value)
         payload["state"] = JobStateWeb(job_info.state.value)
         return cls(**payload)
@@ -330,6 +328,7 @@ class LaunchJobRequest(BaseModel):
     no_gitignore: bool = False
     force_sync: bool = False
     abort_on_setup_failure: bool = True
+    launch_manifest: Optional[Dict[str, object]] = None
 
 
 class LaunchJobResponse(BaseModel):

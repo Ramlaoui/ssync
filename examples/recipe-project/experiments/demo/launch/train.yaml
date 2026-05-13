@@ -1,0 +1,9 @@
+extends: .ssync/workflows/train.yaml
+job_name: demo-train
+source_dir: .
+vars:
+  CONFIG: experiments/demo/train
+  EXPERIMENT_NAME: demo-train
+sbatch:
+  time: 30
+

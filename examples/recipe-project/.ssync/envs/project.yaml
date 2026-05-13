@@ -1,0 +1,5 @@
+vars:
+  VENV_PATH: "${VENV_ROOT}/project"
+scripts:
+  - .ssync/fragments/env/activate.sh
+

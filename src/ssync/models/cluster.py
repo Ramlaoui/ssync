@@ -161,9 +161,11 @@ class Host:
 
     def __post_init__(self):
         if self.key_file:
-            self.key_file = Path(self.key_file).expanduser().resolve()
-        if self.ProxyJump:
-            self.ProxyJump = Host(**self.ProxyJump)
+            object.__setattr__(
+                self, "key_file", Path(self.key_file).expanduser().resolve()
+            )
+        if self.ProxyJump and not isinstance(self.ProxyJump, Host):
+            object.__setattr__(self, "ProxyJump", Host(**self.ProxyJump))
 
 
 @dataclass(frozen=True)

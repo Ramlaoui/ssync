@@ -72,11 +72,21 @@ ssync sync ./project-dir --host cluster1 --exclude "*.log"
 ### Job Submission
 ```bash
 # Submit a job script
-ssync submit job.sh --host cluster1
-
-# Combined sync and submit operation
 ssync launch job.sh ./project-dir --host cluster1
+
+# Render and launch a repo-local recipe
+ssync launch-recipe experiments/demo/launch/train.yaml
+
+# Inspect what a recipe will submit
+ssync launch-recipe experiments/demo/launch/train.yaml --dry-run
+
+# Inspect the manifest stored for a submitted recipe job
+ssync manifest 12345 --host cluster1
 ```
+
+Repo-local launch recipes let a project compose host/partition profiles,
+environment setup, preparation fragments, and a project-owned run fragment from
+`.ssync/`. See [docs/recipes.md](docs/recipes.md).
 
 ### Output Retrieval
 ```bash

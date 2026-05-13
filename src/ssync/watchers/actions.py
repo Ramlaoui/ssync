@@ -4,8 +4,8 @@ import asyncio
 import json
 import os
 import re
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Tuple
 
 from ..launch import LaunchManager
@@ -64,10 +64,51 @@ class ActionExecutor:
         if not missing:
             return None
 
-        return (
-            "Missing required watcher capture(s) for resubmit: "
-            + ", ".join(missing)
+        return "Missing required watcher capture(s) for resubmit: " + ", ".join(missing)
+
+    def _slurm_params_from_manifest(
+        self, manifest: Dict[str, Any] | None
+    ) -> SlurmParams:
+        """Build SlurmParams from a stored launch manifest when available."""
+        if not manifest:
+            return SlurmParams()
+
+        sbatch = manifest.get("sbatch")
+        if not isinstance(sbatch, dict):
+            return SlurmParams()
+
+        return SlurmParams(
+            job_name=sbatch.get("job_name"),
+            time_min=sbatch.get("time"),
+            cpus_per_task=sbatch.get("cpus") or sbatch.get("cpus_per_task"),
+            mem_gb=sbatch.get("mem") or sbatch.get("mem_gb"),
+            partition=sbatch.get("partition"),
+            output=sbatch.get("output"),
+            error=sbatch.get("error"),
+            n_tasks_per_node=sbatch.get("ntasks_per_node")
+            or sbatch.get("n_tasks_per_node"),
+            gpus_per_node=sbatch.get("gpus_per_node"),
+            gres=sbatch.get("gres"),
+            nodes=sbatch.get("nodes"),
+            constraint=sbatch.get("constraint"),
+            account=sbatch.get("account"),
         )
+
+    def _updated_resubmit_manifest(
+        self,
+        manifest: Dict[str, Any] | None,
+        script_content: str,
+    ) -> Dict[str, Any] | None:
+        """Carry manifest forward while preserving watcher counter updates."""
+        if not manifest:
+            return None
+
+        from hashlib import sha256
+
+        updated = dict(manifest)
+        updated["rendered_script"] = script_content
+        updated["script_sha256"] = sha256(script_content.encode("utf-8")).hexdigest()
+        return updated
 
     async def execute(
         self,
@@ -262,10 +303,21 @@ class ActionExecutor:
             # Get original script
             cache = get_cache()
             cached_job = cache.get_cached_job(job_id, hostname)
-            if not cached_job or not cached_job.script_content:
+            raw_manifest = cache.get_run_manifest(job_id, hostname)
+            manifest = raw_manifest if isinstance(raw_manifest, dict) else None
+            manifest_script = (
+                manifest.get("rendered_script") if isinstance(manifest, dict) else None
+            )
+            if not cached_job and not manifest_script:
                 return False, "Original script not found in cache"
 
-            script_content = cached_job.script_content
+            script_content = (
+                cached_job.script_content
+                if cached_job and cached_job.script_content
+                else manifest_script
+            )
+            if not script_content:
+                return False, "Original script not found in cache"
             remaining_resubmits = params.get("remaining_resubmits")
             if remaining_resubmits is not None:
                 try:
@@ -280,7 +332,10 @@ class ActionExecutor:
                     return False, "No resubmits remaining for this watcher"
 
                 if watcher is None:
-                    return False, "Cannot decrement resubmit counter without watcher context"
+                    return (
+                        False,
+                        "Cannot decrement resubmit counter without watcher context",
+                    )
 
                 script_content = ScriptProcessor.decrement_watcher_resubmit_counter(
                     script_content,
@@ -318,25 +373,35 @@ class ActionExecutor:
                 await self._cancel_job(job_id, hostname, {"reason": "Resubmitting"})
 
             slurm_host = manager.get_host_by_name(hostname)
-            source_dir = (
-                Path(cached_job.local_source_dir)
-                if cached_job.local_source_dir
-                else None
+            manifest_source_dir = (
+                manifest.get("source_dir") if isinstance(manifest, dict) else None
             )
-            work_dir = cached_job.job_info.work_dir
+            if manifest_source_dir:
+                source_dir = Path(manifest_source_dir)
+            elif cached_job and cached_job.local_source_dir:
+                source_dir = Path(cached_job.local_source_dir)
+            else:
+                source_dir = None
+
+            work_dir = cached_job.job_info.work_dir if cached_job else None
             if not work_dir and source_dir is not None:
                 work_dir = str(Path(slurm_host.work_dir) / source_dir.name)
 
             launch_manager = LaunchManager(manager)
+            launch_manifest = self._updated_resubmit_manifest(
+                manifest,
+                script_content,
+            )
             new_job = await launch_manager.launch_job(
                 script_path=None,
                 script_content=script_content,
                 script_variables=all_vars,
                 source_dir=source_dir,
                 host=hostname,
-                slurm_params=SlurmParams(),
+                slurm_params=self._slurm_params_from_manifest(manifest),
                 sync_enabled=False,
                 work_dir_override=work_dir,
+                launch_manifest=launch_manifest,
             )
             if not new_job:
                 return False, "Launch manager did not return a resubmitted job"

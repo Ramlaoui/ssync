@@ -1,0 +1,10 @@
+host_partition: example-gpu
+env: project
+prepare:
+  scripts:
+    - .ssync/fragments/prepare/offline.sh
+run:
+  script: .ssync/fragments/run/train.sh
+vars:
+  MAX_STEPS: "100000"
+

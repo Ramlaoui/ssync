@@ -158,6 +158,17 @@ class JobDataCache:
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS run_manifests (
+                    job_id TEXT NOT NULL,
+                    hostname TEXT NOT NULL,
+                    manifest_version INTEGER NOT NULL DEFAULT 1,
+                    manifest_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (job_id, hostname)
+                )
+            """)
+
             # Add columns if they don't exist (for migration)
             try:
                 conn.execute(
@@ -1438,6 +1449,51 @@ class JobDataCache:
                 self._store_cached_data(cached_data)
 
             conn.commit()
+
+    def store_run_manifest(
+        self,
+        job_id: str,
+        hostname: str,
+        manifest: Dict[str, Any],
+    ) -> None:
+        """Store an immutable launch manifest for a submitted job."""
+        manifest_version = int(manifest.get("manifest_version", 1))
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO run_manifests
+                (job_id, hostname, manifest_version, manifest_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    hostname,
+                    manifest_version,
+                    json.dumps(manifest, sort_keys=True),
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+
+    def get_run_manifest(
+        self,
+        job_id: str,
+        hostname: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve a stored launch manifest."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT manifest_json FROM run_manifests
+                WHERE job_id = ? AND hostname = ?
+                """,
+                (job_id, hostname),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return None
+        return json.loads(row["manifest_json"])
 
     def mark_job_completed(self, job_id: str, hostname: str):
         """Mark a job as no longer active (completed/failed/cancelled)."""

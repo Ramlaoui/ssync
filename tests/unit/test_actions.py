@@ -7,8 +7,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from ssync import cache as cache_module
-from ssync.models.watcher import ActionType, WatcherAction, WatcherDefinition, WatcherInstance
 from ssync.models.job import JobInfo, JobState
+from ssync.models.watcher import (
+    ActionType,
+    WatcherAction,
+    WatcherDefinition,
+    WatcherInstance,
+)
 from ssync.watchers.actions import ActionExecutor
 from ssync.web import app as app_module
 
@@ -22,31 +27,23 @@ class TestSubstituteVariables:
     def test_positional_capture_in_params(self):
         params = {"command": "cd $1; wandb sync"}
         variables = {"1": "/scratch/run-42", "_matched_text": "full match"}
-        result = self.executor._substitute_variables(
-            params, variables, "100", "host"
-        )
+        result = self.executor._substitute_variables(params, variables, "100", "host")
         assert result["command"] == "cd /scratch/run-42; wandb sync"
 
     def test_named_capture_in_params(self):
         params = {"command": "echo $output_dir"}
         variables = {"output_dir": "/data/out", "_matched_text": "match"}
-        result = self.executor._substitute_variables(
-            params, variables, "100", "host"
-        )
+        result = self.executor._substitute_variables(params, variables, "100", "host")
         assert result["command"] == "echo /data/out"
 
     def test_builtin_vars_job_id_hostname(self):
         params = {"command": "echo $JOB_ID on $HOSTNAME"}
-        result = self.executor._substitute_variables(
-            params, {}, "12345", "entalpic"
-        )
+        result = self.executor._substitute_variables(params, {}, "12345", "entalpic")
         assert result["command"] == "echo 12345 on entalpic"
 
     def test_braced_syntax(self):
         params = {"command": "echo ${JOB_ID}"}
-        result = self.executor._substitute_variables(
-            params, {}, "12345", "entalpic"
-        )
+        result = self.executor._substitute_variables(params, {}, "12345", "entalpic")
         assert result["command"] == "echo 12345"
 
 
@@ -212,10 +209,8 @@ class TestResubmitLaunchDelegation:
         assert message == "Resubmitted as job 67890"
         assert fake_launch_job.kwargs["script_path"] is None
         assert "# remaining_resubmits: 1" in fake_launch_job.kwargs["script_content"]
-        assert (
-            fake_launch_job.kwargs["script_variables"]["resume_run_dir"].endswith(
-                "run-42"
-            )
+        assert fake_launch_job.kwargs["script_variables"]["resume_run_dir"].endswith(
+            "run-42"
         )
         assert fake_launch_job.kwargs["source_dir"] == Path(
             "/home/aliramlaoui/work/triforces"
@@ -223,8 +218,7 @@ class TestResubmitLaunchDelegation:
         assert fake_launch_job.kwargs["host"] == "adastra"
         assert fake_launch_job.kwargs["sync_enabled"] is False
         assert (
-            fake_launch_job.kwargs["work_dir_override"]
-            == cached_job.job_info.work_dir
+            fake_launch_job.kwargs["work_dir_override"] == cached_job.job_info.work_dir
         )
 
     @pytest.mark.asyncio
@@ -276,6 +270,123 @@ class TestResubmitLaunchDelegation:
             fake_launch_job.kwargs["work_dir_override"]
             == "/lus/work/CT10/cad16353/aramlaoui/triforces"
         )
+
+    @pytest.mark.asyncio
+    async def test_resubmit_uses_manifest_source_and_sbatch_when_available(
+        self, monkeypatch
+    ):
+        executor = ActionExecutor()
+
+        cached_job = SimpleNamespace(
+            script_content="#!/bin/bash\npython main.py\n",
+            local_source_dir="/stale/local/source",
+            job_info=JobInfo(
+                job_id="12345",
+                name="train",
+                state=JobState.TIMEOUT,
+                hostname="adastra",
+                work_dir=None,
+            ),
+        )
+        manifest = {
+            "manifest_version": 1,
+            "source_dir": "/home/aliramlaoui/work/project",
+            "rendered_script": "#!/bin/bash\npython manifest.py\n",
+            "sbatch": {
+                "job_name": "manifest-job",
+                "partition": "gpu",
+                "cpus": 12,
+                "mem": 48,
+                "time": 30,
+                "gpus_per_node": 1,
+            },
+        }
+
+        mock_cache = MagicMock()
+        mock_cache.get_cached_job.return_value = cached_job
+        mock_cache.get_run_manifest.return_value = manifest
+        monkeypatch.setattr(cache_module, "get_cache", lambda: mock_cache)
+
+        mock_manager = MagicMock()
+        mock_manager.get_host_by_name.return_value = SimpleNamespace(
+            work_dir=Path("/remote/work")
+        )
+        monkeypatch.setattr(app_module, "get_slurm_manager", lambda: mock_manager)
+
+        async def fake_launch_job(_self, **kwargs):
+            fake_launch_job.kwargs = kwargs
+            return SimpleNamespace(job_id="67890")
+
+        monkeypatch.setattr(
+            "ssync.watchers.actions.LaunchManager.launch_job",
+            fake_launch_job,
+        )
+
+        success, _ = await executor._resubmit_job(
+            "12345",
+            "adastra",
+            {},
+            {"job_end_state": "timeout"},
+        )
+
+        assert success is True
+        assert fake_launch_job.kwargs["script_content"] == cached_job.script_content
+        assert fake_launch_job.kwargs["source_dir"] == Path(
+            "/home/aliramlaoui/work/project"
+        )
+        assert fake_launch_job.kwargs["work_dir_override"] == "/remote/work/project"
+        assert fake_launch_job.kwargs["slurm_params"].job_name == "manifest-job"
+        assert fake_launch_job.kwargs["slurm_params"].partition == "gpu"
+        assert fake_launch_job.kwargs["slurm_params"].cpus_per_task == 12
+        assert fake_launch_job.kwargs["slurm_params"].mem_gb == 48
+        assert fake_launch_job.kwargs["slurm_params"].time_min == 30
+        assert fake_launch_job.kwargs["launch_manifest"]["rendered_script"] == (
+            cached_job.script_content
+        )
+
+    @pytest.mark.asyncio
+    async def test_resubmit_can_fall_back_to_manifest_script_when_cache_lacks_script(
+        self, monkeypatch
+    ):
+        executor = ActionExecutor()
+
+        manifest = {
+            "manifest_version": 1,
+            "source_dir": "/home/aliramlaoui/work/project",
+            "rendered_script": "#!/bin/bash\npython manifest.py\n",
+            "sbatch": {"partition": "gpu"},
+        }
+
+        mock_cache = MagicMock()
+        mock_cache.get_cached_job.return_value = None
+        mock_cache.get_run_manifest.return_value = manifest
+        monkeypatch.setattr(cache_module, "get_cache", lambda: mock_cache)
+
+        mock_manager = MagicMock()
+        mock_manager.get_host_by_name.return_value = SimpleNamespace(
+            work_dir=Path("/remote/work")
+        )
+        monkeypatch.setattr(app_module, "get_slurm_manager", lambda: mock_manager)
+
+        async def fake_launch_job(_self, **kwargs):
+            fake_launch_job.kwargs = kwargs
+            return SimpleNamespace(job_id="67890")
+
+        monkeypatch.setattr(
+            "ssync.watchers.actions.LaunchManager.launch_job",
+            fake_launch_job,
+        )
+
+        success, _ = await executor._resubmit_job(
+            "12345",
+            "adastra",
+            {},
+            {"job_end_state": "timeout"},
+        )
+
+        assert success is True
+        assert fake_launch_job.kwargs["script_content"] == manifest["rendered_script"]
+        assert fake_launch_job.kwargs["slurm_params"].partition == "gpu"
 
     @pytest.mark.asyncio
     async def test_resubmit_stops_when_no_resubmits_remain(self, monkeypatch):
@@ -377,4 +488,7 @@ class TestResubmitLaunchDelegation:
         )
 
         assert success is False
-        assert message == "Missing required watcher capture(s) for resubmit: resume_run_dir"
+        assert (
+            message
+            == "Missing required watcher capture(s) for resubmit: resume_run_dir"
+        )

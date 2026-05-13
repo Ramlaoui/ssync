@@ -1,0 +1,497 @@
+"""Repo-local launch recipe loading and rendering."""
+
+from dataclasses import dataclass, field
+from hashlib import sha256
+from pathlib import Path
+from shlex import quote
+from typing import Any
+
+import yaml
+
+
+class RecipeError(Exception):
+    """Launch recipe loading or rendering error."""
+
+
+@dataclass(frozen=True)
+class RenderedRecipe:
+    """Resolved recipe ready for launch."""
+
+    recipe_path: Path
+    repo_root: Path
+    script_content: str
+    source_dir: Path
+    host: str | None = None
+    job_name: str | None = None
+    cpus: int | None = None
+    mem: int | None = None
+    time: int | None = None
+    partition: str | None = None
+    output: str | None = None
+    error: str | None = None
+    nodes: int | None = None
+    ntasks_per_node: int | None = None
+    gpus_per_node: int | None = None
+    gres: str | None = None
+    constraint: str | None = None
+    account: str | None = None
+    python_env: str | None = None
+    vars: dict[str, Any] = field(default_factory=dict)
+    fragments: list[Path] = field(default_factory=list)
+    manifest: dict[str, Any] = field(default_factory=dict)
+
+
+_ALLOWED_TOP_LEVEL_KEYS = {
+    "account",
+    "constraint",
+    "env",
+    "error",
+    "extends",
+    "gpus_per_node",
+    "gres",
+    "host",
+    "host_partition",
+    "job_name",
+    "mem",
+    "nodes",
+    "ntasks_per_node",
+    "output",
+    "partition",
+    "prepare",
+    "python_env",
+    "run",
+    "sbatch",
+    "source_dir",
+    "time",
+    "vars",
+    "workflow",
+}
+
+_SBATCH_INT_FIELDS = {
+    "cpus",
+    "mem",
+    "time",
+    "nodes",
+    "ntasks_per_node",
+    "gpus_per_node",
+}
+
+
+def find_repo_root(start: str | Path) -> Path:
+    """Find the nearest repository root for a recipe or working directory."""
+    current = Path(start).resolve()
+    if current.is_file():
+        current = current.parent
+
+    for directory in (current, *current.parents):
+        if (directory / ".ssync").is_dir() or (directory / ".git").exists():
+            return directory
+
+    return current
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise RecipeError(f"Recipe not found: {path}")
+
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise RecipeError(f"Invalid YAML in recipe {path}: {exc}") from exc
+
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise RecipeError("Launch recipe must be a YAML mapping")
+
+    return data
+
+
+def _profile_path(repo_root: Path, kind: str, value: Any) -> Path:
+    if not isinstance(value, str) or not value:
+        raise RecipeError(f"{kind} profile reference must be a non-empty string")
+
+    path = Path(value).expanduser()
+    if path.is_absolute() or path.suffix in {".yaml", ".yml"} or "/" in value:
+        return (repo_root / path).resolve() if not path.is_absolute() else path
+
+    for suffix in (".yaml", ".yml"):
+        candidate = repo_root / ".ssync" / kind / f"{value}{suffix}"
+        if candidate.exists():
+            return candidate
+
+    return repo_root / ".ssync" / kind / f"{value}.yaml"
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _merge_section(base: Any, overlay: Any, *, append_scripts: bool) -> Any:
+    if base is None:
+        return overlay
+    if overlay is None:
+        return base
+
+    if isinstance(base, dict) and isinstance(overlay, dict):
+        merged = dict(base)
+        for key, overlay_value in overlay.items():
+            if append_scripts and key == "scripts":
+                merged[key] = _as_list(merged.get(key)) + _as_list(overlay_value)
+            else:
+                merged[key] = _merge_section(
+                    merged.get(key),
+                    overlay_value,
+                    append_scripts=append_scripts,
+                )
+        return merged
+
+    if append_scripts and isinstance(base, list) and isinstance(overlay, list):
+        return base + overlay
+
+    return overlay
+
+
+def _merge_recipe_data(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, overlay_value in overlay.items():
+        if key in {"extends", "workflow"}:
+            continue
+        if key in {"env", "prepare"}:
+            merged[key] = _merge_section(
+                merged.get(key), overlay_value, append_scripts=True
+            )
+        elif key in {"vars", "sbatch"}:
+            merged[key] = _merge_section(
+                merged.get(key), overlay_value, append_scripts=False
+            )
+        else:
+            merged[key] = overlay_value
+    return merged
+
+
+def _load_profile(repo_root: Path, kind: str, value: Any) -> dict[str, Any]:
+    profile_path = _profile_path(repo_root, kind, value)
+    return _load_yaml_mapping(profile_path)
+
+
+def _resolve_workflow_data(
+    repo_root: Path, data: dict[str, Any], seen: set[Path] | None = None
+) -> dict[str, Any]:
+    profile_ref = data.get("extends") or data.get("workflow")
+    if not profile_ref:
+        return {}
+
+    profile_path = _profile_path(repo_root, "workflows", profile_ref)
+    seen = seen or set()
+    if profile_path in seen:
+        raise RecipeError(f"Workflow profile cycle detected at {profile_path}")
+    seen.add(profile_path)
+
+    profile_data = _load_yaml_mapping(profile_path)
+    base_data = _resolve_workflow_data(repo_root, profile_data, seen)
+    return _merge_recipe_data(base_data, profile_data)
+
+
+def _load_host_partition_profile_data(
+    repo_root: Path, host_partition: Any
+) -> dict[str, Any]:
+    if not host_partition:
+        return {}
+
+    partition_data = _load_profile(repo_root, "partitions", host_partition)
+    host_ref = partition_data.get("host")
+    host_data: dict[str, Any] = {}
+    if isinstance(host_ref, str):
+        host_path = _profile_path(repo_root, "hosts", host_ref)
+        if host_path.exists():
+            host_data = _load_yaml_mapping(host_path)
+
+    return _merge_recipe_data(host_data, partition_data)
+
+
+def _load_env_profile_data(repo_root: Path, env: Any) -> dict[str, Any]:
+    if not isinstance(env, str):
+        return {}
+    return {"env": _load_profile(repo_root, "envs", env)}
+
+
+def _resolve_recipe_data(repo_root: Path, data: dict[str, Any]) -> dict[str, Any]:
+    workflow_data = _resolve_workflow_data(repo_root, data)
+    selector_data = _merge_recipe_data(workflow_data, data)
+    host_partition_data = _load_host_partition_profile_data(
+        repo_root, selector_data.get("host_partition")
+    )
+    env_data = _load_env_profile_data(repo_root, selector_data.get("env"))
+
+    recipe_overlay = {
+        key: value
+        for key, value in data.items()
+        if key not in {"extends", "workflow"}
+        and not (key == "env" and isinstance(value, str))
+    }
+
+    resolved = _merge_recipe_data(workflow_data, host_partition_data)
+    resolved = _merge_recipe_data(resolved, env_data)
+    return _merge_recipe_data(resolved, recipe_overlay)
+
+
+def _resolve_path(
+    repo_root: Path, recipe_dir: Path, value: Any, field_name: str
+) -> Path:
+    if not isinstance(value, str) or not value:
+        raise RecipeError(f"Recipe field '{field_name}' must be a non-empty path")
+
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+
+    recipe_relative = (recipe_dir / path).resolve()
+    if recipe_relative.exists():
+        return recipe_relative
+
+    return (repo_root / path).resolve()
+
+
+def _resolve_repo_path(repo_root: Path, value: Any, field_name: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise RecipeError(f"Recipe field '{field_name}' must be a non-empty path")
+
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (repo_root / path).resolve()
+
+
+def _display_path(path: Path, repo_root: Path) -> str:
+    try:
+        return str(path.relative_to(repo_root))
+    except ValueError:
+        return str(path)
+
+
+def _script_entries(value: Any, field_name: str) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+
+    if isinstance(value, dict):
+        scripts = value.get("scripts")
+        if scripts is None and "script" in value:
+            scripts = [value]
+    else:
+        scripts = value
+
+    if scripts is None:
+        return []
+    if isinstance(scripts, (str, dict)):
+        scripts = [scripts]
+    if not isinstance(scripts, list):
+        raise RecipeError(f"Recipe field '{field_name}' must be a script or list")
+
+    entries = []
+    for item in scripts:
+        if isinstance(item, str):
+            entries.append({"script": item})
+        elif isinstance(item, dict) and isinstance(item.get("script"), str):
+            entries.append(item)
+        else:
+            raise RecipeError(
+                f"Recipe field '{field_name}' contains an invalid script entry"
+            )
+    return entries
+
+
+def _merge_vars(*maps: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value in maps:
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise RecipeError("Recipe vars must be a mapping")
+        merged.update(value)
+    return merged
+
+
+def _validate_recipe_data(data: dict[str, Any], source_dir: Path) -> None:
+    unknown_keys = sorted(set(data) - _ALLOWED_TOP_LEVEL_KEYS)
+    if unknown_keys:
+        joined = ", ".join(unknown_keys)
+        raise RecipeError(f"Unknown launch recipe field(s): {joined}")
+
+    if not source_dir.exists():
+        raise RecipeError(f"Recipe source_dir does not exist: {source_dir}")
+    if not source_dir.is_dir():
+        raise RecipeError(f"Recipe source_dir is not a directory: {source_dir}")
+
+    env = data.get("env")
+    if env is not None and not isinstance(env, (str, dict)):
+        raise RecipeError("Recipe field 'env' must be a profile name or mapping")
+
+    sbatch = data.get("sbatch", {})
+    if sbatch is None:
+        return
+    if not isinstance(sbatch, dict):
+        raise RecipeError("Recipe field 'sbatch' must be a mapping")
+    for field_name in _SBATCH_INT_FIELDS:
+        value = sbatch.get(field_name)
+        if value is None:
+            continue
+        if not isinstance(value, int) or value <= 0:
+            raise RecipeError(
+                f"Recipe sbatch field '{field_name}' must be a positive integer"
+            )
+
+
+def _render_var_exports(values: dict[str, Any]) -> str:
+    if not values:
+        return ""
+
+    lines = ["# ssync recipe variables"]
+    for key, value in values.items():
+        if not isinstance(key, str) or not key.isidentifier():
+            raise RecipeError(f"Invalid recipe variable name: {key}")
+        lines.append(f"export {key}={quote(str(value))}")
+    return "\n".join(lines)
+
+
+def _read_fragment(path: Path) -> str:
+    if not path.exists():
+        raise RecipeError(f"Recipe fragment not found: {path}")
+    if not path.is_file():
+        raise RecipeError(f"Recipe fragment is not a file: {path}")
+    return path.read_text().strip()
+
+
+def render_launch_recipe(recipe_path: str | Path) -> RenderedRecipe:
+    """Resolve a project launch recipe into one shell script."""
+    recipe_path = Path(recipe_path).expanduser().resolve()
+    recipe_dir = recipe_path.parent
+    repo_root = find_repo_root(recipe_path)
+    data = _resolve_recipe_data(repo_root, _load_yaml_mapping(recipe_path))
+
+    source_value = data.get("source_dir")
+    source_dir = (
+        repo_root
+        if source_value is None
+        else _resolve_repo_path(repo_root, source_value, "source_dir")
+    )
+    _validate_recipe_data(data, source_dir)
+
+    vars_from_recipe = _merge_vars(data.get("vars"))
+    resolved_vars = dict(vars_from_recipe)
+    sections = ["#!/bin/bash", "set -euo pipefail"]
+    var_exports = _render_var_exports(vars_from_recipe)
+    if var_exports:
+        sections.append(var_exports)
+
+    fragment_paths: list[Path] = []
+    for field_name in ("env", "prepare"):
+        section = data.get(field_name)
+        section_vars = (
+            _merge_vars(section.get("vars"))
+            if isinstance(section, dict) and "vars" in section
+            else {}
+        )
+        for entry in _script_entries(data.get(field_name), field_name):
+            fragment_vars = _merge_vars(entry.get("vars"))
+            fragment_path = _resolve_path(
+                repo_root, recipe_dir, entry["script"], f"{field_name}.script"
+            )
+            fragment_paths.append(fragment_path)
+            sections.append(
+                f"# ssync {field_name}: {_display_path(fragment_path, repo_root)}"
+            )
+            section_exports = _render_var_exports(section_vars)
+            if section_exports:
+                sections.append(section_exports)
+                resolved_vars.update(section_vars)
+            fragment_exports = _render_var_exports(fragment_vars)
+            if fragment_exports:
+                sections.append(fragment_exports)
+                resolved_vars.update(fragment_vars)
+            sections.append(_read_fragment(fragment_path))
+
+    run_entries = _script_entries(data.get("run"), "run")
+    if len(run_entries) != 1:
+        raise RecipeError("Launch recipe must define exactly one run script")
+
+    run_entry = run_entries[0]
+    run_vars = _merge_vars(run_entry.get("vars"))
+    run_path = _resolve_path(repo_root, recipe_dir, run_entry["script"], "run.script")
+    fragment_paths.append(run_path)
+    sections.append(f"# ssync run: {_display_path(run_path, repo_root)}")
+    run_exports = _render_var_exports(run_vars)
+    if run_exports:
+        sections.append(run_exports)
+        resolved_vars.update(run_vars)
+    sections.append(_read_fragment(run_path))
+
+    sbatch = data.get("sbatch", {})
+    if sbatch is None:
+        sbatch = {}
+    if not isinstance(sbatch, dict):
+        raise RecipeError("Recipe field 'sbatch' must be a mapping")
+
+    script_content = "\n\n".join(sections).rstrip() + "\n"
+    sbatch_manifest = {
+        key: value
+        for key, value in {
+            "job_name": data.get("job_name") or sbatch.get("job_name"),
+            "cpus": sbatch.get("cpus"),
+            "mem": sbatch.get("mem"),
+            "time": sbatch.get("time"),
+            "partition": sbatch.get("partition"),
+            "output": sbatch.get("output"),
+            "error": sbatch.get("error"),
+            "nodes": sbatch.get("nodes"),
+            "ntasks_per_node": sbatch.get("ntasks_per_node"),
+            "gpus_per_node": sbatch.get("gpus_per_node"),
+            "gres": sbatch.get("gres"),
+            "constraint": sbatch.get("constraint"),
+            "account": sbatch.get("account"),
+        }.items()
+        if value is not None
+    }
+    manifest = {
+        "manifest_version": 1,
+        "recipe_path": str(recipe_path),
+        "repo_root": str(repo_root),
+        "source_dir": str(source_dir),
+        "host": data.get("host"),
+        "host_partition": data.get("host_partition"),
+        "env": data.get("env") if isinstance(data.get("env"), str) else None,
+        "fragments": [str(path) for path in fragment_paths],
+        "vars": resolved_vars,
+        "sbatch": sbatch_manifest,
+        "script_sha256": sha256(script_content.encode("utf-8")).hexdigest(),
+        "rendered_script": script_content,
+    }
+
+    return RenderedRecipe(
+        recipe_path=recipe_path,
+        repo_root=repo_root,
+        script_content=script_content,
+        source_dir=source_dir,
+        host=data.get("host"),
+        job_name=data.get("job_name") or sbatch.get("job_name"),
+        cpus=sbatch.get("cpus"),
+        mem=sbatch.get("mem"),
+        time=sbatch.get("time"),
+        partition=sbatch.get("partition"),
+        output=sbatch.get("output"),
+        error=sbatch.get("error"),
+        nodes=sbatch.get("nodes"),
+        ntasks_per_node=sbatch.get("ntasks_per_node"),
+        gpus_per_node=sbatch.get("gpus_per_node"),
+        gres=sbatch.get("gres"),
+        constraint=sbatch.get("constraint"),
+        account=sbatch.get("account"),
+        python_env=data.get("python_env"),
+        vars=resolved_vars,
+        fragments=fragment_paths,
+        manifest=manifest,
+    )
