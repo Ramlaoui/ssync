@@ -17,6 +17,7 @@ repo/
     hosts/cluster.yaml
     partitions/cluster-gpu.yaml
     envs/project.yaml
+    watchers/timeout_resume.yaml
     workflows/train.yaml
     fragments/
       env/activate.sh
@@ -53,7 +54,33 @@ run:
   script: .ssync/fragments/run/train.sh
 vars:
   MAX_STEPS: "100000"
+watchers:
+  - timeout_resume
 ```
+
+## Watcher Policies
+
+Reusable watcher policies live in `.ssync/watchers/` and are rendered into
+ordinary `#WATCHER_BEGIN` blocks before submit, so they reuse the existing
+watcher extraction and daemon path.
+
+```yaml
+# .ssync/watchers/timeout_resume.yaml
+name: timeout_resume
+pattern: "RUN_OUTPUT_DIR=(.+)"
+captures:
+  - resume_run_dir
+trigger_on_job_end: true
+trigger_job_states:
+  - timeout
+remaining_resubmits: 2
+actions:
+  - resubmit()
+```
+
+The policy above standardizes the resume contract: the run fragment prints
+`RUN_OUTPUT_DIR=...`, the watcher captures it as `resume_run_dir`, and a
+watcher-driven resubmit injects that capture into the frozen manifest relaunch.
 
 ## Host and Partition Profiles
 
@@ -150,12 +177,18 @@ ssync launch-recipe experiments/demo/launch/train.yaml \
   --var MAX_STEPS=5000 \
   --set sbatch.time=30 \
   --set sbatch.partition=debug
+
+ssync launch-recipe experiments/demo/launch/train.yaml \
+  --add-watcher timeout_resume \
+  --remove-watcher tracker_sync
 ```
 
 `--var` values are exported as shell-safe strings. `--set` currently accepts
 `sbatch.*` fields only, including `partition`, `account`, `constraint`, `gres`,
 `output`, `error`, `cpus`, `mem`, `time`, `nodes`, `ntasks_per_node`, and
 `gpus_per_node`.
+
+Watcher list edits accept policy names, policy paths, or path stems.
 
 ## Validation
 

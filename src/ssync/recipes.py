@@ -1,5 +1,6 @@
 """Repo-local launch recipe loading and rendering."""
 
+import json
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -64,6 +65,7 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "source_dir",
     "time",
     "vars",
+    "watchers",
     "workflow",
 }
 
@@ -161,7 +163,7 @@ def _merge_recipe_data(base: dict[str, Any], overlay: dict[str, Any]) -> dict[st
     for key, overlay_value in overlay.items():
         if key in {"extends", "workflow"}:
             continue
-        if key in {"env", "prepare"}:
+        if key in {"env", "prepare", "watchers"}:
             merged[key] = _merge_section(
                 merged.get(key), overlay_value, append_scripts=True
             )
@@ -218,6 +220,13 @@ def _load_env_profile_data(repo_root: Path, env: Any) -> dict[str, Any]:
     if not isinstance(env, str):
         return {}
     return {"env": _load_profile(repo_root, "envs", env)}
+
+
+def _load_watcher_policy(repo_root: Path, value: str) -> dict[str, Any]:
+    policy = _load_profile(repo_root, "watchers", value)
+    policy.setdefault("name", Path(value).stem)
+    policy["policy_ref"] = value
+    return policy
 
 
 def _resolve_recipe_data(repo_root: Path, data: dict[str, Any]) -> dict[str, Any]:
@@ -305,6 +314,105 @@ def _script_entries(value: Any, field_name: str) -> list[dict[str, Any]]:
     return entries
 
 
+def _watcher_entries(
+    repo_root: Path,
+    value: Any,
+    *,
+    add_watchers: list[str] | None = None,
+    remove_watchers: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    raw_entries = _as_list(value) + list(add_watchers or [])
+    remove_names = set(remove_watchers or [])
+    entries = []
+
+    for item in raw_entries:
+        if isinstance(item, str):
+            policy = _load_watcher_policy(repo_root, item)
+        elif isinstance(item, dict):
+            policy = dict(item)
+        else:
+            raise RecipeError("Recipe field 'watchers' must contain names or mappings")
+
+        policy_name = policy.get("name")
+        policy_ref = policy.get("policy_ref")
+        ref_stem = Path(str(policy_ref)).stem if policy_ref else None
+        if (
+            policy_name in remove_names
+            or policy_ref in remove_names
+            or ref_stem in remove_names
+        ):
+            continue
+        entries.append(policy)
+
+    return entries
+
+
+def _action_to_string(action: Any) -> str:
+    if isinstance(action, str):
+        return action
+    if isinstance(action, dict) and len(action) == 1:
+        action_name, params = next(iter(action.items()))
+        if params in (None, {}):
+            return f"{action_name}()"
+        if isinstance(params, dict):
+            param_parts = [
+                f"{key}={json.dumps(str(value))}"
+                for key, value in sorted(params.items())
+            ]
+            return f"{action_name}({', '.join(param_parts)})"
+        return f"{action_name}({json.dumps(str(params))})"
+    raise RecipeError("Watcher actions must be strings or single-key mappings")
+
+
+def _render_watcher_blocks(watchers: list[dict[str, Any]]) -> str:
+    if not watchers:
+        return ""
+
+    blocks = []
+    for watcher in watchers:
+        pattern = watcher.get("pattern")
+        trigger_on_job_end = watcher.get("trigger_on_job_end")
+        if not pattern and not trigger_on_job_end:
+            name = watcher.get("name") or watcher.get("policy_ref") or "<unnamed>"
+            raise RecipeError(
+                f"Watcher policy '{name}' must define pattern or trigger_on_job_end"
+            )
+
+        lines = ["#WATCHER_BEGIN"]
+        for key in (
+            "name",
+            "pattern",
+            "interval",
+            "captures",
+            "condition",
+            "timer_mode_enabled",
+            "timer_interval_seconds",
+            "trigger_on_job_end",
+            "trigger_job_states",
+            "remaining_resubmits",
+        ):
+            if key not in watcher:
+                continue
+            value = watcher[key]
+            if isinstance(value, (list, dict)):
+                rendered_value = json.dumps(value)
+            elif isinstance(value, bool):
+                rendered_value = "true" if value else "false"
+            else:
+                rendered_value = str(value)
+            lines.append(f"# {key}: {rendered_value}")
+
+        actions = _as_list(watcher.get("actions"))
+        if actions:
+            lines.append("# actions:")
+            for action in actions:
+                lines.append(f"#   - {_action_to_string(action)}")
+        lines.append("#WATCHER_END")
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
 def _merge_vars(*maps: Any) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for value in maps:
@@ -374,6 +482,8 @@ def render_launch_recipe(
     env: str | None = None,
     vars: dict[str, Any] | None = None,
     sbatch: dict[str, Any] | None = None,
+    add_watchers: list[str] | None = None,
+    remove_watchers: list[str] | None = None,
     cli_overrides: dict[str, Any] | None = None,
 ) -> RenderedRecipe:
     """Resolve a project launch recipe into one shell script."""
@@ -410,6 +520,16 @@ def render_launch_recipe(
     vars_from_recipe = _merge_vars(data.get("vars"))
     resolved_vars = dict(vars_from_recipe)
     sections = ["#!/bin/bash", "set -euo pipefail"]
+    resolved_watchers = _watcher_entries(
+        repo_root,
+        data.get("watchers"),
+        add_watchers=add_watchers,
+        remove_watchers=remove_watchers,
+    )
+    watcher_blocks = _render_watcher_blocks(resolved_watchers)
+    if watcher_blocks:
+        sections.append(watcher_blocks)
+
     var_exports = _render_var_exports(vars_from_recipe)
     if var_exports:
         sections.append(var_exports)
@@ -493,6 +613,7 @@ def render_launch_recipe(
         if isinstance(recipe_data.get("env"), str)
         else None,
         "fragments": [str(path) for path in fragment_paths],
+        "watchers": resolved_watchers,
         "vars": resolved_vars,
         "sbatch": sbatch_manifest,
         "cli_overrides": cli_overrides or {},

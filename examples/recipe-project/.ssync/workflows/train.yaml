@@ -7,4 +7,5 @@ run:
   script: .ssync/fragments/run/train.sh
 vars:
   MAX_STEPS: "100000"
-
+watchers:
+  - timeout_resume
