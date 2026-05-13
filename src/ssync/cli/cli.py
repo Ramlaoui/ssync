@@ -12,6 +12,7 @@ from .commands import (
     LaunchRecipeCommand,
     ManifestCommand,
     PartitionsCommand,
+    RerenderCommand,
     StatusCommand,
     SyncCommand,
 )
@@ -521,6 +522,44 @@ def manifest_command(ctx, job_id, host, json_output):
         job_id=job_id,
         host=host,
         json_output=json_output,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="rerender")
+@click.argument("job_id")
+@click.option("--host", help="Target host (auto-detected if not specified)")
+@click.option(
+    "--from-current-repo",
+    is_flag=True,
+    help="Re-resolve the recorded recipe from current local files",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Output the rerendered manifest JSON instead of the script summary",
+)
+@click.pass_context
+def rerender_command(ctx, job_id, host, from_current_repo, json_output):
+    """Show the rendered script for a recipe-submitted job.
+
+    By default this uses the frozen script stored in the run manifest. Use
+    --from-current-repo to explicitly opt into live recipe resolution.
+    """
+    command = RerenderCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        job_id=job_id,
+        host=host,
+        json_output=json_output,
+        from_current_repo=from_current_repo,
     )
 
     if not success:

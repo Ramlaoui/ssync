@@ -850,6 +850,102 @@ class ManifestCommand(BaseCommand):
             return False
 
 
+class RerenderCommand(BaseCommand):
+    """Handles displaying frozen or live rerenders for recipe jobs."""
+
+    def execute(
+        self,
+        job_id: str,
+        host: Optional[str] = None,
+        json_output: bool = False,
+        from_current_repo: bool = False,
+    ) -> bool:
+        """Show the script represented by a stored manifest."""
+        try:
+            api_client = APIClient(verbose=self.verbose)
+
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
+                return False
+
+            resolved_host = self._resolve_job_host(api_client, job_id, host)
+            if not resolved_host:
+                return False
+
+            try:
+                manifest = api_client.get_run_manifest(job_id, resolved_host)
+            except requests.exceptions.HTTPError as exc:
+                status_code = exc.response.status_code if exc.response else None
+                if status_code == 404:
+                    click.echo(
+                        f"No run manifest found for job {job_id} on {resolved_host}",
+                        err=True,
+                    )
+                    return False
+                raise
+
+            if from_current_repo:
+                recipe_path = manifest.get("recipe_path")
+                if not recipe_path:
+                    click.echo(
+                        f"Run manifest for job {job_id} does not record a recipe path",
+                        err=True,
+                    )
+                    return False
+                overrides = manifest.get("cli_overrides") or {}
+                try:
+                    rendered = render_launch_recipe(
+                        recipe_path,
+                        workflow=overrides.get("workflow"),
+                        host_partition=overrides.get("host_partition"),
+                        env=overrides.get("env"),
+                        vars=overrides.get("vars"),
+                        sbatch=overrides.get("sbatch"),
+                        add_watchers=overrides.get("add_watchers"),
+                        remove_watchers=overrides.get("remove_watchers"),
+                        cli_overrides=overrides,
+                    )
+                except RecipeError as e:
+                    click.echo(f"Error rerendering from current repo: {e}", err=True)
+                    return False
+                manifest = rendered.manifest
+
+            if json_output:
+                click.echo(json.dumps(manifest, indent=2, sort_keys=True))
+                return True
+
+            mode = "current repo" if from_current_repo else "frozen manifest"
+            click.echo(f"Job: {job_id}")
+            click.echo(f"Host: {resolved_host}")
+            click.echo(f"Rerender mode: {mode}")
+            if manifest.get("recipe_path"):
+                click.echo(f"Recipe: {manifest['recipe_path']}")
+            if manifest.get("script_sha256"):
+                click.echo(f"Script sha256: {manifest['script_sha256']}")
+            script = manifest.get("rendered_script")
+            if not script:
+                click.echo("Run manifest does not contain a rendered script", err=True)
+                return False
+            click.echo("Rendered script:")
+            click.echo(script)
+            return True
+
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
+        except Exception as e:
+            click.echo(f"Error rerendering run manifest: {e}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return False
+
+
 class CopyOutputCommand(BaseCommand):
     """Handles copying job output files via the API."""
 

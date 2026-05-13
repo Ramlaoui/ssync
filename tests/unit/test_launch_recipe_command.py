@@ -346,3 +346,81 @@ def test_manifest_command_reports_missing_manifest(monkeypatch):
 
     assert success is False
     assert outputs == [("No run manifest found for job 123 on entalpic", True)]
+
+
+@pytest.mark.unit
+def test_rerender_command_prints_frozen_manifest_script(monkeypatch):
+    class FakeAPIClient:
+        def __init__(self, verbose=False):
+            self.verbose = verbose
+
+        def ensure_server_running(self, config_path):
+            return True, None
+
+        def get_run_manifest(self, job_id, host):
+            return {
+                "manifest_version": 1,
+                "recipe_path": "/repo/launch.yaml",
+                "script_sha256": "abc",
+                "rendered_script": "#!/bin/bash\necho frozen\n",
+            }
+
+    outputs = []
+    monkeypatch.setattr(commands, "APIClient", FakeAPIClient)
+    monkeypatch.setattr(
+        commands.click,
+        "echo",
+        lambda message="", err=False: outputs.append((message, err)),
+    )
+
+    command = commands.RerenderCommand(
+        config_path=Path("/tmp/ssync-config.yaml"),
+        slurm_hosts=[SimpleNamespace(host=SimpleNamespace(hostname="entalpic"))],
+        verbose=False,
+    )
+
+    success = command.execute("123", host="entalpic")
+
+    assert success is True
+    assert ("Rerender mode: frozen manifest", False) in outputs
+    assert any("echo frozen" in message for message, _ in outputs)
+
+
+@pytest.mark.unit
+def test_rerender_command_can_render_from_current_repo(monkeypatch, tmp_path):
+    recipe = _recipe_project(tmp_path)
+
+    class FakeAPIClient:
+        def __init__(self, verbose=False):
+            self.verbose = verbose
+
+        def ensure_server_running(self, config_path):
+            return True, None
+
+        def get_run_manifest(self, job_id, host):
+            return {
+                "manifest_version": 1,
+                "recipe_path": str(recipe),
+                "cli_overrides": {"vars": {"CONFIG": "current"}},
+                "rendered_script": "#!/bin/bash\necho old\n",
+            }
+
+    outputs = []
+    monkeypatch.setattr(commands, "APIClient", FakeAPIClient)
+    monkeypatch.setattr(
+        commands.click,
+        "echo",
+        lambda message="", err=False: outputs.append((message, err)),
+    )
+
+    command = commands.RerenderCommand(
+        config_path=Path("/tmp/ssync-config.yaml"),
+        slurm_hosts=[SimpleNamespace(host=SimpleNamespace(hostname="entalpic"))],
+        verbose=False,
+    )
+
+    success = command.execute("123", host="entalpic", from_current_repo=True)
+
+    assert success is True
+    assert ("Rerender mode: current repo", False) in outputs
+    assert any("export CONFIG=current" in message for message, _ in outputs)
