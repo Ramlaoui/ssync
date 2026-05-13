@@ -135,7 +135,7 @@ def test_launch_command_follows_async_launch(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
-def test_launch_command_prints_setup_logs_without_verbose(monkeypatch, tmp_path):
+def test_launch_command_prints_launch_logs_without_verbose(monkeypatch, tmp_path):
     script_path = tmp_path / "job.sh"
     script_path.write_text("#!/bin/bash\necho hello\n")
     source_dir = tmp_path / "src"
@@ -169,7 +169,7 @@ def test_launch_command_prints_setup_logs_without_verbose(monkeypatch, tmp_path)
                 "timestamp": "2026-01-01T00:00:00+00:00",
                 "source": "sync",
                 "stream": "stdout",
-                "message": "hidden sync detail",
+                "message": "sending incremental file list",
             }
             yield {
                 "type": "launch_log",
@@ -227,6 +227,7 @@ def test_launch_command_prints_setup_logs_without_verbose(monkeypatch, tmp_path)
     assert success is True
     assert outputs == [
         ("Launch started", False),
+        ("sending incremental file list", False),
         ("Resolved 12 packages", False),
         ("Using cached wheel", True),
         ("Job launched successfully with ID: 5150", False),
