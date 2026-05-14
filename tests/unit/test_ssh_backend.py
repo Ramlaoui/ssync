@@ -201,6 +201,13 @@ class TestSSHConnection:
         assert conn.host_config == "myhost"
         assert conn.host_id == "user@myhost"
         assert conn.host == "myhost"
+        assert conn.command_timeout == 120
+
+    @pytest.mark.unit
+    def test_init_with_custom_command_timeout(self):
+        """Test initialization with custom remote command timeout."""
+        conn = SSHConnection("myhost", "user@myhost", command_timeout=300)
+        assert conn.command_timeout == 300
 
     @pytest.mark.unit
     def test_init_with_dict_config(self):
@@ -247,6 +254,53 @@ class TestSSHConnection:
         assert result.stderr == b"err-1\n"
         assert stdout_stream.getvalue() == "out-1\n"
         assert stderr_stream.getvalue() == "err-1\n"
+
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.ensure_control_master", return_value=None)
+    @patch(
+        "ssync.ssh.connection.NativeSSH._build_direct_ssh_command",
+        return_value=["ssh", "myhost"],
+    )
+    @patch("subprocess.run")
+    def test_run_uses_configured_default_command_timeout(
+        self, mock_run, _mock_build_direct, _mock_control_master
+    ):
+        """Commands without explicit timeout use the connection default."""
+        mock_run.return_value = Mock(returncode=0, stdout=b"", stderr=b"")
+        conn = SSHConnection("myhost", "user@myhost", command_timeout=300)
+
+        result = conn.run("echo ok")
+
+        assert result.ok is True
+        mock_run.assert_called_once_with(
+            ["ssh", "myhost", "echo ok"],
+            capture_output=True,
+            timeout=300,
+        )
+
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.ensure_control_master", return_value=None)
+    @patch(
+        "ssync.ssh.connection.NativeSSH._build_direct_ssh_command",
+        return_value=["ssh", "myhost"],
+    )
+    @patch("subprocess.run")
+    def test_run_timeout_reports_effective_timeout(
+        self, mock_run, _mock_build_direct, _mock_control_master
+    ):
+        """Timeout errors report the configured timeout instead of None."""
+        import subprocess
+
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["ssh", "myhost", "sleep 10"],
+            timeout=300,
+        )
+        conn = SSHConnection("myhost", "user@myhost", command_timeout=300)
+
+        result = conn.run("sleep 10")
+
+        assert result.return_code == 124
+        assert result.stderr == "Command timed out after 300 seconds"
 
     @pytest.mark.unit
     @patch("ssync.ssh.connection.NativeSSH._check_control_master")
@@ -321,14 +375,20 @@ class TestConnectionManager:
         """Test ConnectionManager initialization."""
         manager = ConnectionManager()
         assert manager.connection_timeout == 30
+        assert manager.command_timeout == 120
         assert manager.health_check_ttl_seconds == 30.0
         assert len(manager._connections) == 0
 
     @pytest.mark.unit
     def test_init_with_custom_timeout(self):
         """Test ConnectionManager with custom timeout."""
-        manager = ConnectionManager(connection_timeout=60, health_check_ttl_seconds=5)
+        manager = ConnectionManager(
+            connection_timeout=60,
+            command_timeout=300,
+            health_check_ttl_seconds=5,
+        )
         assert manager.connection_timeout == 60
+        assert manager.command_timeout == 300
         assert manager.health_check_ttl_seconds == 5
 
     @pytest.mark.unit

@@ -33,9 +33,22 @@ def build_slurm_manager_getter(config_module, slurm_manager_cls):
                 slurm_manager.close_connections()
 
             slurm_hosts = config_module.load_config()
-            connection_timeout = int(os.environ.get("SSYNC_CONNECTION_TIMEOUT", "30"))
+            connection_timeout = int(
+                os.environ.get(
+                    "SSYNC_CONNECTION_TIMEOUT",
+                    config_module.connection_settings.get("connect_timeout", 30),
+                )
+            )
+            command_timeout = int(
+                os.environ.get(
+                    "SSYNC_COMMAND_TIMEOUT",
+                    config_module.connection_settings.get("command_timeout", 120),
+                )
+            )
             slurm_manager = slurm_manager_cls(
-                slurm_hosts, connection_timeout=connection_timeout
+                slurm_hosts,
+                connection_timeout=connection_timeout,
+                command_timeout=command_timeout,
             )
             config_last_modified = current_mtime
 

@@ -55,15 +55,23 @@ class SSHConnection:
 
     SCP_TIMEOUT_SECONDS = 120
 
-    def __init__(self, host_config: Any, host_id: str):
+    def __init__(
+        self,
+        host_config: Any,
+        host_id: str,
+        *,
+        command_timeout: float = 120,
+    ):
         """Initialize with host configuration.
 
         Args:
             host_config: SSH config (string alias or dict)
             host_id: Unique identifier for this host
+            command_timeout: Default timeout in seconds for remote commands
         """
         self.host_config = host_config
         self.host_id = host_id
+        self.command_timeout = command_timeout
 
         # Extract hostname for compatibility
         if isinstance(host_config, str):
@@ -107,7 +115,7 @@ class SSHConnection:
 
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
-        effective_timeout = timeout or 120
+        effective_timeout = timeout if timeout is not None else 120
 
         process = subprocess.Popen(
             ssh_cmd,
@@ -243,6 +251,7 @@ class SSHConnection:
 
             out_stream = kwargs.get("out_stream")
             err_stream = kwargs.get("err_stream")
+            effective_timeout = timeout if timeout is not None else self.command_timeout
 
             # Add command
             ssh_cmd.append(command)
@@ -250,7 +259,7 @@ class SSHConnection:
             if out_stream is not None or err_stream is not None:
                 result = self._run_streaming_command(
                     ssh_cmd,
-                    timeout=timeout,
+                    timeout=effective_timeout,
                     out_stream=out_stream,
                     err_stream=err_stream,
                 )
@@ -259,15 +268,17 @@ class SSHConnection:
                 try:
                     # Capture as bytes first to handle non-UTF-8 output
                     result = subprocess.run(
-                        ssh_cmd, capture_output=True, timeout=timeout or 120
+                        ssh_cmd, capture_output=True, timeout=effective_timeout
                     )
                 except subprocess.TimeoutExpired:
-                    logger.debug(f"Command timed out after {timeout} seconds")
+                    logger.debug(
+                        f"Command timed out after {effective_timeout} seconds"
+                    )
                     return SSHCommandResult(
                         SSHResult(
                             success=False,
                             stdout="",
-                            stderr=f"Command timed out after {timeout} seconds",
+                            stderr=f"Command timed out after {effective_timeout} seconds",
                             return_code=124,
                         )
                     )
