@@ -385,16 +385,21 @@ class Config:
 
     def load_connection_settings(self) -> Dict[str, int]:
         """Load connection settings from config file or environment variables."""
-        settings = {"connect_timeout": 5}
+        settings = {"connect_timeout": 5, "command_timeout": 120}
 
         conn_config = self.raw_config.get("connections")
         if isinstance(conn_config, dict):
             settings["connect_timeout"] = int(
                 conn_config.get("connect_timeout", settings["connect_timeout"])
             )
+            settings["command_timeout"] = int(
+                conn_config.get("command_timeout", settings["command_timeout"])
+            )
 
         if os.getenv("SSYNC_CONNECT_TIMEOUT"):
             settings["connect_timeout"] = int(os.getenv("SSYNC_CONNECT_TIMEOUT"))
+        if os.getenv("SSYNC_COMMAND_TIMEOUT"):
+            settings["command_timeout"] = int(os.getenv("SSYNC_COMMAND_TIMEOUT"))
 
         return settings
 

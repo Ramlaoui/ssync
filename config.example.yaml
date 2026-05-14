@@ -75,6 +75,8 @@ cache:
 connections:
   # Timeout (seconds) for initial SSH connection per host
   connect_timeout: 5
+  # Default timeout (seconds) for remote SSH commands
+  command_timeout: 120
 
 # API configuration (optional)
 api_key: ${SSYNC_API_KEY}  # Or set directly: "your-secret-key-here"

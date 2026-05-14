@@ -43,10 +43,16 @@ class SlurmManager:
         slurm_hosts: List[SlurmHost],
         use_ssh_config: bool = True,
         connection_timeout: int = 30,
+        command_timeout: int | None = None,
     ):
+        if command_timeout is None:
+            command_timeout = int(config.connection_settings.get("command_timeout", 120))
+
         self.slurm_hosts = slurm_hosts
         self.connection_manager = ConnectionManager(
-            use_ssh_config, connection_timeout=connection_timeout
+            use_ssh_config,
+            connection_timeout=connection_timeout,
+            command_timeout=command_timeout,
         )
         self.slurm_client = SlurmClient()
 

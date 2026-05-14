@@ -199,6 +199,53 @@ api_key: ${LOCAL_SSYNC_API_KEY}
 
 
 @pytest.mark.unit
+def test_connection_settings_load_command_timeout(monkeypatch, tmp_path):
+    config_path = tmp_path / "ssync.yaml"
+    _write_config(
+        config_path,
+        """
+hosts:
+  - hostname: cluster.example.com
+    work_dir: /work/user
+    scratch_dir: /scratch/user
+connections:
+  connect_timeout: 7
+  command_timeout: 300
+""",
+    )
+
+    monkeypatch.delenv("SSYNC_CONNECT_TIMEOUT", raising=False)
+    monkeypatch.delenv("SSYNC_COMMAND_TIMEOUT", raising=False)
+
+    cfg = Config(config_path=config_path)
+
+    assert cfg.connection_settings["connect_timeout"] == 7
+    assert cfg.connection_settings["command_timeout"] == 300
+
+
+@pytest.mark.unit
+def test_connection_settings_command_timeout_env_override(monkeypatch, tmp_path):
+    config_path = tmp_path / "ssync.yaml"
+    _write_config(
+        config_path,
+        """
+hosts:
+  - hostname: cluster.example.com
+    work_dir: /work/user
+    scratch_dir: /scratch/user
+connections:
+  command_timeout: 300
+""",
+    )
+
+    monkeypatch.setenv("SSYNC_COMMAND_TIMEOUT", "900")
+
+    cfg = Config(config_path=config_path)
+
+    assert cfg.connection_settings["command_timeout"] == 900
+
+
+@pytest.mark.unit
 def test_config_rejects_non_mapping_yaml(tmp_path):
     config_path = tmp_path / "ssync.yaml"
     _write_config(config_path, "- not\n- a\n- mapping\n")

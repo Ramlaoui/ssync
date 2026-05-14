@@ -18,6 +18,7 @@ class ConnectionManager:
         self,
         use_ssh_config: bool = True,
         connection_timeout: int = 30,
+        command_timeout: int = 120,
         health_check_ttl_seconds: float = 30.0,
     ):
         """Initialize connection manager.
@@ -25,9 +26,11 @@ class ConnectionManager:
         Args:
             use_ssh_config: Whether to use SSH config (always True now)
             connection_timeout: Connection timeout in seconds
+            command_timeout: Default timeout in seconds for remote commands
             health_check_ttl_seconds: Minimum interval between blocking health checks
         """
         self.connection_timeout = connection_timeout
+        self.command_timeout = command_timeout
         self.health_check_ttl_seconds = health_check_ttl_seconds
         self._connections: Dict[str, SSHConnection] = {}
         self._last_health_check: Dict[str, float] = {}
@@ -60,7 +63,9 @@ class ConnectionManager:
             connection = self._connections.get(host_string)
             if connection is None:
                 host_config = self._host_to_config(host)
-                connection = SSHConnection(host_config, host_string)
+                connection = SSHConnection(
+                    host_config, host_string, command_timeout=self.command_timeout
+                )
                 self._connections[host_string] = connection
                 self._last_health_check[host_string] = time.monotonic()
                 logger.debug(f"Created SSH connection for {host_string}")
@@ -91,7 +96,9 @@ class ConnectionManager:
                 return current
 
             host_config = self._host_to_config(host)
-            refreshed_connection = SSHConnection(host_config, host_string)
+            refreshed_connection = SSHConnection(
+                host_config, host_string, command_timeout=self.command_timeout
+            )
             self._connections[host_string] = refreshed_connection
             self._last_health_check[host_string] = time.monotonic()
             logger.info(f"Recreated SSH connection for {host_string}")
