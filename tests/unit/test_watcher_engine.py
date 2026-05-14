@@ -10,9 +10,10 @@ from ssync.models.watcher import (
     WatcherInstance,
     WatcherState,
 )
-from ssync.web import app as app_module
+from ssync.watchers import actions as actions_module
 from ssync.watchers import engine as engine_module
 from ssync.watchers.engine import JobEndHandlingResult, OutputReadResult
+from ssync.web import app as app_module
 
 
 @pytest.mark.unit
@@ -268,6 +269,55 @@ async def test_job_end_resubmit_retries_until_success(monkeypatch, test_cache):
     assert persisted_variables["__ssync_job_end_action_success_0"] == "1"
     assert persisted_variables["__ssync_job_end_action_success_1"] == "1"
     assert persisted_variables["__ssync_job_end_completed"] == "1"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_execute_action_disables_watcher_after_max_failures(
+    monkeypatch, test_cache
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_id = engine._store_watcher(
+        "10009",
+        "cluster",
+        WatcherDefinition(
+            name="limited",
+            pattern="ERROR",
+            actions=[WatcherAction(type=ActionType.RESUBMIT, params={})],
+            max_failures=2,
+        ),
+    )
+    watcher = engine._get_watcher(watcher_id)
+
+    class FailingExecutor:
+        async def execute(self, **_kwargs):
+            return False, "setup failed"
+
+    monkeypatch.setattr(actions_module, "ActionExecutor", FailingExecutor)
+
+    first_success, first_result = await engine._execute_action(
+        watcher,
+        watcher.definition.actions[0],
+        "ERROR",
+        {},
+    )
+    watcher = engine._get_watcher(watcher_id)
+    second_success, second_result = await engine._execute_action(
+        watcher,
+        watcher.definition.actions[0],
+        "ERROR",
+        {},
+    )
+    updated = engine._get_watcher(watcher_id)
+
+    assert first_success is False
+    assert first_result == "setup failed"
+    assert second_success is False
+    assert "watcher disabled after 2 failed action attempt(s)" in second_result
+    assert updated.failure_count == 2
+    assert updated.state == WatcherState.DISABLED
 
 
 @pytest.mark.unit

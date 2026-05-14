@@ -412,7 +412,7 @@ class ActionExecutor:
             return True, f"Resubmitted as job {new_job.job_id}"
 
         except Exception as e:
-            logger.error(f"Failed to resubmit job {job_id}: {e}")
+            logger.exception(f"Failed to resubmit job {job_id}: {e}")
             return False, str(e)
 
     async def _notify_email(

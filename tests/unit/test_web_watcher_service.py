@@ -26,6 +26,7 @@ def test_create_watcher_allows_job_end_trigger_without_pattern(monkeypatch, test
             "hostname": "cluster",
             "name": "job-end-resubmit",
             "trigger_on_job_end": True,
+            "max_failures": 3,
             "actions": [{"type": "resubmit", "params": {"reason": "failed"}}],
         },
         get_slurm_manager=DummySlurmManager,
@@ -34,6 +35,8 @@ def test_create_watcher_allows_job_end_trigger_without_pattern(monkeypatch, test
     assert watcher["pattern"] == ""
     assert watcher["trigger_on_job_end"] is True
     assert watcher["trigger_job_states"] == ["completed", "failed", "timeout"]
+    assert watcher["max_failures"] == 3
+    assert watcher["failure_count"] == 0
 
 
 @pytest.mark.unit
@@ -94,6 +97,7 @@ async def test_attach_watchers_builds_job_end_trigger_definitions(monkeypatch):
             {
                 "name": "job-end-resubmit",
                 "trigger_on_job_end": True,
+                "max_failures": 4,
                 "actions": [{"type": "resubmit"}],
             }
         ],
@@ -107,4 +111,5 @@ async def test_attach_watchers_builds_job_end_trigger_definitions(monkeypatch):
     assert watcher_def.pattern == ""
     assert watcher_def.trigger_on_job_end is True
     assert watcher_def.trigger_job_states == ["completed", "failed", "timeout"]
+    assert watcher_def.max_failures == 4
     assert watcher_def.actions[0].type.value == "resubmit"

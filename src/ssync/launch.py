@@ -20,6 +20,10 @@ from .utils.slurm_arrays import looks_like_array_submission
 logger = setup_logger(__name__, "INFO")
 
 
+class LoginSetupError(RuntimeError):
+    """Raised when login-node setup fails before job submission."""
+
+
 class _LaunchEventStream:
     """Line-buffered stream that forwards login setup output to launch events."""
 
@@ -520,9 +524,7 @@ class LaunchManager:
                                 f"Setup stdout:\n{stdout_output}\n"
                                 f"Setup stderr:\n{stderr_output}"
                             )
-                            logger.error(error_msg)
-                            logger.error("Aborting job submission due to setup failure")
-                            raise RuntimeError(error_msg)
+                            raise LoginSetupError(error_msg)
                         else:
                             logger.warning("Login node setup completed with warnings")
                             logger.warning(f"Setup stdout: {stdout_output}")
@@ -553,11 +555,10 @@ class LaunchManager:
                                 )
 
                 except Exception as e:
-                    # Try to extract more details from the exception
-                    error_details = str(e)
-
-                    # If we have a setup_result, include its output
-                    if setup_result:
+                    if isinstance(e, LoginSetupError):
+                        error_msg = str(e)
+                    elif setup_result:
+                        error_details = str(e)
                         stderr_output = (
                             setup_result.stderr.strip()
                             if setup_result.stderr
@@ -575,15 +576,16 @@ class LaunchManager:
                         )
                     else:
                         # No setup_result means the exception happened before the command ran
+                        error_details = str(e)
                         error_msg = (
                             f"Login node setup failed with exception: {error_details}"
                         )
 
-                    logger.error(error_msg)
                     if abort_on_setup_failure:
                         logger.error("Aborting job submission due to setup failure")
-                        raise RuntimeError(error_msg)
+                        raise
                     else:
+                        logger.exception(error_msg)
                         logger.warning(
                             "Continuing despite setup failure (abort_on_setup_failure=False)"
                         )
@@ -688,7 +690,7 @@ class LaunchManager:
                 raise RuntimeError(error_msg)
 
         except Exception as e:
-            logger.error(f"Error during job launch: {e}")
+            logger.exception(f"Error during job launch: {e}")
             raise
         finally:
             try:

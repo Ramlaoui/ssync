@@ -155,6 +155,9 @@ class SSHConnection:
         try:
             return_code = process.wait(timeout=effective_timeout)
         except subprocess.TimeoutExpired:
+            logger.exception(
+                "Command timed out after %s seconds", effective_timeout
+            )
             process.kill()
             return_code = 124
             stderr_chunks.append(
@@ -271,8 +274,8 @@ class SSHConnection:
                         ssh_cmd, capture_output=True, timeout=effective_timeout
                     )
                 except subprocess.TimeoutExpired:
-                    logger.debug(
-                        f"Command timed out after {effective_timeout} seconds"
+                    logger.exception(
+                        "Command timed out after %s seconds", effective_timeout
                     )
                     return SSHCommandResult(
                         SSHResult(

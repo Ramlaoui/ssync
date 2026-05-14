@@ -438,6 +438,7 @@ class WatcherEngine:
                         condition=template.definition.condition,
                         actions=template.definition.actions,
                         max_triggers=template.definition.max_triggers,
+                        max_failures=template.definition.max_failures,
                         output_type=template.definition.output_type,
                         timer_mode_enabled=template.definition.timer_mode_enabled,
                         timer_interval_seconds=template.definition.timer_interval_seconds,
@@ -765,6 +766,8 @@ class WatcherEngine:
                                     actions_executed += 1
                                     action_count_in_window += 1
                                 logger.debug(f"Timer action result: {result}")
+                                if watcher.state == WatcherState.DISABLED:
+                                    break
                             except Exception as e:
                                 logger.error(f"Failed to execute timer action: {e}")
 
@@ -1115,6 +1118,8 @@ class WatcherEngine:
                     success_key = self._job_end_action_success_key(action_index)
                     self._update_watcher_variables(watcher.id, {success_key: "1"})
                     fresh_variables[success_key] = "1"
+                elif watcher.state == WatcherState.DISABLED:
+                    retry_pending = False
                 elif self._should_retry_failed_job_end_action(action, result):
                     retry_pending = True
             except Exception as e:
@@ -1181,6 +1186,17 @@ class WatcherEngine:
                 watcher=watcher,
             )
 
+            failure_count = self._record_action_result(watcher, success)
+            if (
+                not success
+                and watcher.definition.max_failures is not None
+                and failure_count >= watcher.definition.max_failures
+            ):
+                result = (
+                    f"{result}; watcher disabled after {failure_count} failed "
+                    f"action attempt(s)"
+                )
+
             # Log event
             event_payload = self._log_watcher_event(
                 watcher_id=watcher.id,
@@ -1206,8 +1222,18 @@ class WatcherEngine:
             return success, result
 
         except Exception as e:
-            logger.error(f"Failed to execute action for watcher {watcher.id}: {e}")
-            return False, f"Error: {e}"
+            failure_count = self._record_action_result(watcher, False)
+            logger.exception(f"Failed to execute action for watcher {watcher.id}: {e}")
+            result = f"Error: {e}"
+            if (
+                watcher.definition.max_failures is not None
+                and failure_count >= watcher.definition.max_failures
+            ):
+                result = (
+                    f"{result}; watcher disabled after {failure_count} failed "
+                    f"action attempt(s)"
+                )
+            return False, result
 
     async def execute_timer_actions(self, watcher_id: int) -> tuple[bool, str]:
         """
@@ -1539,8 +1565,9 @@ class WatcherEngine:
                      captures_json, condition, actions_json, created_at, state,
                      timer_mode_enabled, timer_interval_seconds,
                      trigger_on_job_end, trigger_job_states_json,
-                     is_array_template, array_spec, parent_watcher_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     is_array_template, array_spec, parent_watcher_id,
+                     max_failures)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -1569,6 +1596,7 @@ class WatcherEngine:
                         1 if definition.is_array_template else 0,
                         definition.array_spec,
                         parent_watcher_id,
+                        definition.max_failures,
                     ),
                 )
                 conn.commit()
@@ -1636,6 +1664,9 @@ class WatcherEngine:
                         remaining_resubmits=int(remaining_resubmits)
                         if remaining_resubmits is not None
                         else None,
+                        max_failures=row["max_failures"]
+                        if "max_failures" in row.keys()
+                        else None,
                         is_array_template=bool(
                             row["is_array_template"]
                             if "is_array_template" in row.keys()
@@ -1654,6 +1685,9 @@ class WatcherEngine:
                         state=WatcherState(row["state"]),
                         last_position=row["last_position"],
                         trigger_count=row["trigger_count"],
+                        failure_count=row["failure_count"]
+                        if "failure_count" in row.keys()
+                        else 0,
                         timer_mode_active=bool(
                             row["timer_mode_active"]
                             if "timer_mode_active" in row.keys()
@@ -1778,6 +1812,60 @@ class WatcherEngine:
 
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} state: {e}")
+
+    def _record_action_result(
+        self, watcher: WatcherInstance, success: bool
+    ) -> int:
+        """Persist action failure count and disable watcher at its threshold."""
+        if watcher.id is None:
+            return watcher.failure_count
+
+        try:
+            with self.cache._get_connection() as conn:
+                if success:
+                    if watcher.failure_count == 0:
+                        return 0
+                    conn.execute(
+                        "UPDATE job_watchers SET failure_count = 0 WHERE id = ?",
+                        (watcher.id,),
+                    )
+                    conn.commit()
+                    watcher.failure_count = 0
+                    self._schedule_watcher_refresh(watcher.id)
+                    return 0
+
+                row = conn.execute(
+                    "SELECT failure_count FROM job_watchers WHERE id = ?",
+                    (watcher.id,),
+                ).fetchone()
+                current_failure_count = row["failure_count"] if row else 0
+                failure_count = current_failure_count + 1
+                conn.execute(
+                    "UPDATE job_watchers SET failure_count = ? WHERE id = ?",
+                    (failure_count, watcher.id),
+                )
+                if (
+                    watcher.definition.max_failures is not None
+                    and failure_count >= watcher.definition.max_failures
+                ):
+                    conn.execute(
+                        "UPDATE job_watchers SET state = ? WHERE id = ?",
+                        (WatcherState.DISABLED.value, watcher.id),
+                    )
+                    logger.warning(
+                        "Watcher %s disabled after %s failed action attempt(s)",
+                        watcher.id,
+                        failure_count,
+                    )
+                    watcher.state = WatcherState.DISABLED
+                conn.commit()
+                watcher.failure_count = failure_count
+                self._schedule_watcher_refresh(watcher.id)
+                return failure_count
+
+        except Exception as e:
+            logger.error(f"Failed to record watcher {watcher.id} action result: {e}")
+            return watcher.failure_count
 
     def _update_watcher_position(self, watcher_id: int, position: int):
         """Update watcher last read position."""

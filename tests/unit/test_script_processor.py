@@ -266,6 +266,20 @@ echo "test"
         assert watchers[0].actions[0].type == ActionType.RESUBMIT
         assert "#WATCHER_BEGIN" not in clean_script
 
+    @pytest.mark.unit
+    def test_extract_watcher_with_max_failures(self):
+        script = """#!/bin/bash
+#WATCHER_BEGIN
+# name: Limited Retry
+# pattern: ERROR
+# max_failures: 3
+# action: resubmit
+#WATCHER_END
+"""
+        watchers, _ = ScriptProcessor.extract_watchers(script)
+        assert len(watchers) == 1
+        assert watchers[0].max_failures == 3
+
 
 class TestParseActionString:
     """Tests for _parse_action_string method."""
@@ -382,6 +396,14 @@ class TestParseInlineWatcher:
         assert watcher.actions[0].type == ActionType.RESUBMIT
 
     @pytest.mark.unit
+    def test_parse_inline_watcher_with_max_failures(self):
+        watcher = ScriptProcessor._parse_inline_watcher(
+            'pattern="ERROR" action=resubmit max_failures=3'
+        )
+        assert watcher is not None
+        assert watcher.max_failures == 3
+
+    @pytest.mark.unit
     def test_parse_inline_watcher_adds_default_action(self):
         line = 'pattern="Error"'  # No action specified
         watcher = ScriptProcessor._parse_inline_watcher(line)
@@ -469,6 +491,17 @@ actions:
         assert watcher.trigger_on_job_end is True
         assert watcher.trigger_job_states == ["completed", "failed", "timeout"]
         assert watcher.actions[0].type == ActionType.RESUBMIT
+
+    @pytest.mark.unit
+    def test_parse_watcher_with_max_failures(self):
+        block = """name: Limited Retry
+pattern: ERROR
+max_failures: 3
+action: resubmit
+"""
+        watcher = ScriptProcessor._parse_watcher_block(block)
+        assert watcher is not None
+        assert watcher.max_failures == 3
 
     @pytest.mark.unit
     def test_parse_watcher_with_remaining_resubmits(self):

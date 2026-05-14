@@ -248,6 +248,8 @@ class JobDataCache:
                     last_check TEXT,
                     last_position INTEGER DEFAULT 0,
                     trigger_count INTEGER DEFAULT 0,
+                    failure_count INTEGER DEFAULT 0,
+                    max_failures INTEGER,
                     state TEXT DEFAULT 'active',
                     timer_mode_enabled INTEGER DEFAULT 0,
                     timer_interval_seconds INTEGER DEFAULT 30,
@@ -288,6 +290,16 @@ class JobDataCache:
                 conn.execute(
                     "ALTER TABLE job_watchers ADD COLUMN trigger_job_states_json TEXT"
                 )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE job_watchers ADD COLUMN failure_count INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE job_watchers ADD COLUMN max_failures INTEGER")
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
