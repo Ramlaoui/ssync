@@ -1,5 +1,6 @@
 """Tests for the ActionExecutor — focused on interpolation and relaunch flow."""
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -129,6 +130,57 @@ class TestScriptBodyInterpolation:
 
 class TestResubmitLaunchDelegation:
     """Test that resubmit delegates into LaunchManager with cached job context."""
+
+    @pytest.mark.asyncio
+    async def test_resubmit_failure_logs_traceback(self, monkeypatch, caplog):
+        executor = ActionExecutor()
+        cached_job = SimpleNamespace(
+            script_content="#!/bin/bash\npython main.py\n",
+            local_source_dir="/home/aliramlaoui/work/triforces",
+            job_info=JobInfo(
+                job_id="12345",
+                name="train",
+                state=JobState.TIMEOUT,
+                hostname="adastra",
+                work_dir="/remote/work/triforces",
+            ),
+        )
+
+        mock_cache = MagicMock()
+        mock_cache.get_cached_job.return_value = cached_job
+        monkeypatch.setattr(cache_module, "get_cache", lambda: mock_cache)
+
+        mock_manager = MagicMock()
+        mock_manager.get_host_by_name.return_value = SimpleNamespace(
+            work_dir=Path("/remote/work")
+        )
+        monkeypatch.setattr(app_module, "get_slurm_manager", lambda: mock_manager)
+
+        async def fake_launch_job(_self, **_kwargs):
+            raise RuntimeError("setup failed")
+
+        monkeypatch.setattr(
+            "ssync.watchers.actions.LaunchManager.launch_job",
+            fake_launch_job,
+        )
+
+        caplog.set_level(logging.ERROR, logger="ssync.watchers.actions")
+
+        success, message = await executor._resubmit_job(
+            "12345",
+            "adastra",
+            {},
+            {"job_end_state": "timeout"},
+            None,
+        )
+
+        assert success is False
+        assert message == "setup failed"
+        assert any(
+            record.exc_info
+            and "Failed to resubmit job 12345: setup failed" in record.getMessage()
+            for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_resubmit_uses_launch_manager_with_cached_job_context(

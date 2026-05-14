@@ -1,6 +1,7 @@
 """Regression tests for launch-path blocking SSH connection acquisition."""
 
 import asyncio
+import logging
 import sys
 import threading
 import types
@@ -419,6 +420,86 @@ python train.py
         "Login-node setup completed successfully.",
         None,
     ) in events
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_launch_job_setup_failure_logs_traceback_without_duplicate_output(
+    monkeypatch, caplog
+):
+    hostname = "cluster-launch.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    executor = ThreadPoolExecutor(max_workers=2)
+
+    class _FakeConn:
+        def run(self, command, **_kwargs):
+            if "uv sync" in command:
+                return types.SimpleNamespace(
+                    return_code=124,
+                    stdout="",
+                    stderr="Command timed out after 10 seconds",
+                    ok=False,
+                )
+            return types.SimpleNamespace(return_code=0, stdout="", stderr="", ok=True)
+
+        def cd(self, _path):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeManager:
+        def get_host_by_name(self, host: str):
+            assert host == hostname
+            return slurm_host
+
+        def _get_connection(self, host):
+            assert host.hostname == hostname
+            return _FakeConn()
+
+    def fail_submit(*_args, **_kwargs):
+        raise AssertionError("submission should not run after setup failure")
+
+    monkeypatch.setattr(
+        "ssync.launch.send_file",
+        lambda *_args, **_kwargs: "/remote/work/scripts/job.sh",
+    )
+    monkeypatch.setattr(LaunchManager, "_submit_script_in_workdir", fail_submit)
+
+    script_content = """#!/bin/bash
+#LOGIN_SETUP_BEGIN
+uv sync
+#LOGIN_SETUP_END
+python train.py
+"""
+
+    launch_manager = LaunchManager(_FakeManager(), executor=executor)
+    caplog.set_level(logging.ERROR, logger="ssync.launch")
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await launch_manager.launch_job(
+                script_path=None,
+                script_content=script_content,
+                source_dir=None,
+                host=hostname,
+                slurm_params=SlurmParams(),
+                sync_enabled=False,
+            )
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    message = str(exc_info.value)
+    assert message.count("Setup stdout:") == 1
+    assert message.count("Setup stderr:") == 1
+    assert "Command timed out after 10 seconds" in message
+    assert any(
+        record.exc_info and "Error during job launch" in record.getMessage()
+        for record in caplog.records
+    )
+    assert sum(1 for record in caplog.records if record.exc_info) == 1
 
 
 @pytest.mark.unit

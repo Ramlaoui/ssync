@@ -558,6 +558,11 @@ class ScriptProcessor:
                         watcher.remaining_resubmits = int(value)
                     except ValueError:
                         pass
+                elif key == "max_failures":
+                    try:
+                        watcher.max_failures = int(value)
+                    except ValueError:
+                        pass
                 elif key == "action":
                     # Simple single action
                     action_type, params = ScriptProcessor._parse_action_string(value)
@@ -649,6 +654,11 @@ class ScriptProcessor:
             elif key == "remaining_resubmits" or key == "resubmit_count":
                 try:
                     watcher.remaining_resubmits = int(value)
+                except ValueError:
+                    pass
+            elif key == "max_failures":
+                try:
+                    watcher.max_failures = int(value)
                 except ValueError:
                     pass
 

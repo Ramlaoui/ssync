@@ -109,6 +109,8 @@ def format_watcher_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
         "interval_seconds": row_dict["interval_seconds"],
         "state": row_dict["state"],
         "trigger_count": row_dict["trigger_count"],
+        "failure_count": row_dict.get("failure_count", 0),
+        "max_failures": row_dict.get("max_failures"),
         "last_check": row_dict.get("last_check"),
         "last_position": row_dict.get("last_position"),
         "created_at": row_dict.get("created_at"),
@@ -341,6 +343,7 @@ def build_watcher_update_fields(
         "interval_seconds",
         "condition",
         "timer_interval_seconds",
+        "max_failures",
     )
     for field in direct_fields:
         if field in watcher_update:
@@ -381,6 +384,7 @@ def get_job_watchers_payload(
             SELECT id, job_id, hostname, name, pattern, interval_seconds,
                    captures_json, condition, actions_json, state,
                    trigger_count, last_check, last_position, created_at,
+                   failure_count, max_failures,
                    timer_mode_enabled, timer_interval_seconds, timer_mode_active,
                    trigger_on_job_end, trigger_job_states_json,
                    is_array_template, array_spec, parent_watcher_id,
@@ -794,6 +798,7 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
         captures_json = serialize_watcher_captures(watcher_config)
         condition = watcher_config.get("condition")
         timer_mode_enabled = watcher_config.get("timer_mode_enabled", False)
+        max_failures = watcher_config.get("max_failures")
         trigger_on_job_end = watcher_config.get("trigger_on_job_end", False)
         remaining_resubmits = watcher_config.get("remaining_resubmits")
         trigger_job_states = normalize_trigger_job_states(
@@ -833,9 +838,10 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
                 job_id, hostname, name, pattern, interval_seconds,
                 captures_json, condition, actions_json, state,
                 last_check, last_position, trigger_count, created_at,
+                failure_count, max_failures,
                 timer_mode_enabled, timer_interval_seconds, timer_mode_active,
                 trigger_on_job_end, trigger_job_states_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -851,6 +857,8 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
                 0,
                 0,
                 datetime.now().isoformat(),
+                0,
+                max_failures,
                 1 if timer_mode_enabled else 0,
                 timer_interval_seconds,
                 0,
@@ -926,6 +934,7 @@ def build_watcher_definitions(*, watchers: List[Dict[str, Any]], job_id: str):
                 condition=watcher_definition.get("condition"),
                 actions=actions,
                 max_triggers=watcher_definition.get("max_triggers", 10),
+                max_failures=watcher_definition.get("max_failures"),
                 output_type=watcher_definition.get("output_type", "stdout"),
                 remaining_resubmits=remaining_resubmits,
                 timer_mode_enabled=watcher_definition.get("timer_mode_enabled", False),
