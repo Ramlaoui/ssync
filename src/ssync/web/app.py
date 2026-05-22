@@ -72,18 +72,26 @@ THREAD_POOL_SIZE = int(os.getenv("SSYNC_THREAD_POOL_SIZE", str(os.cpu_count() + 
 BACKGROUND_THREAD_POOL_SIZE = int(
     os.getenv("SSYNC_BACKGROUND_THREAD_POOL_SIZE", str(THREAD_POOL_SIZE))
 )
+DEFAULT_LAUNCH_THREAD_POOL_SIZE = max(2, min(4, THREAD_POOL_SIZE))
+LAUNCH_THREAD_POOL_SIZE = int(
+    os.getenv("SSYNC_LAUNCH_THREAD_POOL_SIZE", str(DEFAULT_LAUNCH_THREAD_POOL_SIZE))
+)
 interactive_executor = ThreadPoolExecutor(
     max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-interactive"
 )
 background_executor = ThreadPoolExecutor(
     max_workers=BACKGROUND_THREAD_POOL_SIZE, thread_name_prefix="ssh-background"
 )
+launch_executor = ThreadPoolExecutor(
+    max_workers=LAUNCH_THREAD_POOL_SIZE, thread_name_prefix="ssh-launch"
+)
 # Backwards-compatible alias for code paths that still expect a single executor.
 executor = interactive_executor
 logger.info(
-    "Initialized thread pools: interactive=%s background=%s",
+    "Initialized thread pools: interactive=%s background=%s launch=%s",
     THREAD_POOL_SIZE,
     BACKGROUND_THREAD_POOL_SIZE,
+    LAUNCH_THREAD_POOL_SIZE,
 )
 launch_event_manager = LaunchEventManager()
 api_key_manager = APIKeyManager()
@@ -111,7 +119,7 @@ register_lifecycle_events(
     get_slurm_manager=get_slurm_manager,
     cache_middleware=_cache_middleware,
     api_key_manager=api_key_manager,
-    executor=interactive_executor,
+    executors=[interactive_executor, background_executor, launch_executor],
     shutdown_event=_shutdown_event,
     periodic_connection_health_check=periodic_connection_health_check,
 )
@@ -183,7 +191,7 @@ register_launch_routes(
     cache_job_state_transition=cache_job_state_transition,
     broadcast_job_state=_broadcast_job_state,
     launch_event_manager=launch_event_manager,
-    executor=executor,
+    executor=launch_executor,
 )
 
 register_status_routes(

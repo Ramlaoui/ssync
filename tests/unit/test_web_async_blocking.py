@@ -14,8 +14,8 @@ from fastapi import WebSocketDisconnect
 from ssync.models.cluster import Host, SlurmHost
 from ssync.models.job import JobInfo, JobState
 from ssync.request_coalescer import JobRequestCoalescer
-from ssync.web.models import JobInfoWeb
 from ssync.web import app as web_app
+from ssync.web.models import JobInfoWeb
 from ssync.web.realtime import handlers as realtime_handlers
 from ssync.web.realtime import monitor as realtime_monitor
 from ssync.web.realtime.state import all_jobs_state
@@ -52,6 +52,14 @@ def _get_route_endpoint(path: str, method: str):
     raise AssertionError(f"Route {method} {path} not found")
 
 
+def _get_closure_value(func, name: str):
+    closure = func.__closure__ or ()
+    return {
+        freevar: cell.cell_contents
+        for freevar, cell in zip(func.__code__.co_freevars, closure)
+    }[name]
+
+
 class _FakeAllJobsWebSocket:
     def __init__(self):
         self.accepted = False
@@ -65,6 +73,15 @@ class _FakeAllJobsWebSocket:
 
     async def receive_text(self):
         raise WebSocketDisconnect()
+
+
+@pytest.mark.unit
+def test_launch_route_uses_dedicated_executor():
+    launch_job = _get_route_endpoint("/api/jobs/launch", "POST")
+
+    assert _get_closure_value(launch_job, "executor") is web_app.launch_executor
+    assert web_app.launch_executor is not web_app.executor
+    assert web_app.launch_executor is not web_app.background_executor
 
 
 @pytest.mark.unit

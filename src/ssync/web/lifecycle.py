@@ -99,7 +99,7 @@ def register_lifecycle_events(
     get_slurm_manager,
     cache_middleware,
     api_key_manager,
-    executor,
+    executors,
     shutdown_event,
     periodic_connection_health_check,
 ) -> None:
@@ -181,8 +181,14 @@ def register_lifecycle_events(
         except Exception:
             pass
 
-        executor.shutdown(wait=True, cancel_futures=True)
-        logger.info("Thread pool shutdown complete")
+        seen_executor_ids = set()
+        for executor in executors:
+            executor_id = id(executor)
+            if executor_id in seen_executor_ids:
+                continue
+            seen_executor_ids.add(executor_id)
+            executor.shutdown(wait=True, cancel_futures=True)
+        logger.info("Thread pools shutdown complete")
 
         try:
             get_slurm_manager().close_connections()
