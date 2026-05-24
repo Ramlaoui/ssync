@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -145,6 +146,96 @@ api:
 
     assert cfg.api_settings.port == 9000
     assert cfg.overlay_paths == [repo / ".ssync.local.yaml"]
+
+
+@pytest.mark.unit
+def test_load_config_rereads_config_file_and_derived_settings(tmp_path):
+    config_path = tmp_path / "ssync.yaml"
+    _write_config(
+        config_path,
+        """
+hosts:
+  - hostname: old-cluster
+    work_dir: /work/old
+    scratch_dir: /scratch/old
+connections:
+  command_timeout: 120
+""",
+    )
+    cfg = Config(config_path=config_path)
+
+    _write_config(
+        config_path,
+        """
+hosts:
+  - hostname: new-cluster
+    work_dir: /work/new
+    scratch_dir: /scratch/new
+connections:
+  command_timeout: 300
+""",
+    )
+
+    hosts = cfg.load_config()
+
+    assert [host.host.hostname for host in hosts] == ["new-cluster"]
+    assert [host.host.hostname for host in cfg.config] == ["new-cluster"]
+    assert cfg.connection_settings["command_timeout"] == 300
+
+
+@pytest.mark.unit
+def test_web_manager_getter_reloads_changed_config_file(tmp_path):
+    from ssync.web.lifecycle import build_slurm_manager_getter
+
+    class RecordingManager:
+        def __init__(self, slurm_hosts, connection_timeout=0, command_timeout=0):
+            self.slurm_hosts = slurm_hosts
+            self.connection_timeout = connection_timeout
+            self.command_timeout = command_timeout
+            self.closed = False
+
+        def close_connections(self):
+            self.closed = True
+
+    config_path = tmp_path / "ssync.yaml"
+    _write_config(
+        config_path,
+        """
+hosts:
+  - hostname: old-cluster
+    work_dir: /work/old
+    scratch_dir: /scratch/old
+connections:
+  command_timeout: 120
+""",
+    )
+    cfg = Config(config_path=config_path)
+    get_manager = build_slurm_manager_getter(cfg, RecordingManager)
+
+    first_manager = get_manager()
+    first_mtime = config_path.stat().st_mtime
+
+    _write_config(
+        config_path,
+        """
+hosts:
+  - hostname: new-cluster
+    work_dir: /work/new
+    scratch_dir: /scratch/new
+connections:
+  command_timeout: 300
+""",
+    )
+    os.utime(config_path, (first_mtime + 1, first_mtime + 1))
+
+    second_manager = get_manager()
+
+    assert first_manager.closed is True
+    assert second_manager is not first_manager
+    assert [host.host.hostname for host in second_manager.slurm_hosts] == [
+        "new-cluster"
+    ]
+    assert second_manager.command_timeout == 300
 
 
 @pytest.mark.unit
