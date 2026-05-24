@@ -17,6 +17,7 @@ from ..launch_events import LaunchEventManager
 from ..manager import SlurmManager
 from ..utils.logging import setup_logger
 from .api import (
+    register_catalog_routes,
     register_cluster_routes,
     register_job_routes,
     register_launch_routes,
@@ -158,6 +159,12 @@ register_cluster_routes(
     verify_api_key_dependency=verify_api_key,
     get_slurm_manager=get_slurm_manager,
     executor=executor,
+)
+
+register_catalog_routes(
+    app,
+    verify_api_key_dependency=verify_api_key,
+    get_slurm_manager=get_slurm_manager,
 )
 
 register_system_routes(

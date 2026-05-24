@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -157,6 +157,78 @@ class PartitionStatusResponse(BaseModel):
     cache_age_seconds: Optional[int] = None
     updated_at: Optional[str] = None
     error: Optional[str] = None
+
+
+class LaunchCatalogWarningWeb(BaseModel):
+    """Non-fatal launch catalog discovery warning."""
+
+    kind: str
+    message: str
+    path: Optional[str] = None
+
+
+class LaunchCatalogRootWeb(BaseModel):
+    """Config root included in launch catalog discovery."""
+
+    source: str
+    path: str
+    exists: bool
+
+
+class LaunchCatalogHostWeb(BaseModel):
+    """Safe configured host summary for launch catalog consumers."""
+
+    id: str
+    label: str
+    hostname: str
+    source: str = "config"
+    work_dir: str = "[CONFIGURED]"
+    scratch_dir: str = "[CONFIGURED]"
+    slurm_defaults: Dict[str, Any] = Field(default_factory=dict)
+    requires_password: bool = False
+    has_key_file: bool = False
+    uses_ssh_config: bool = True
+
+
+class LaunchCatalogProfileWeb(BaseModel):
+    """Safe recipe/profile summary for launch catalog consumers."""
+
+    id: str
+    label: str
+    kind: str
+    source: str
+    path: str
+    active: bool = True
+    shadowed_by: Optional[str] = None
+    host: Optional[str] = None
+    host_partition: Optional[str] = None
+    env: Optional[str] = None
+    workflow: Optional[str] = None
+    source_dir: Optional[str] = None
+    sbatch: Dict[str, Any] = Field(default_factory=dict)
+    variable_names: List[str] = Field(default_factory=list)
+    scripts: List[str] = Field(default_factory=list)
+    references: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LaunchCatalogResponse(BaseModel):
+    """Static launch recipes and profiles available to clients."""
+
+    repo_root: str
+    include_user_config: bool
+    cached: bool = False
+    cache_age_seconds: float = 0.0
+    cache_ttl_seconds: float = 0.0
+    roots: List[LaunchCatalogRootWeb] = Field(default_factory=list)
+    hosts: List[LaunchCatalogHostWeb] = Field(default_factory=list)
+    recipes: List[LaunchCatalogProfileWeb] = Field(default_factory=list)
+    workflows: List[LaunchCatalogProfileWeb] = Field(default_factory=list)
+    partitions: List[LaunchCatalogProfileWeb] = Field(default_factory=list)
+    envs: List[LaunchCatalogProfileWeb] = Field(default_factory=list)
+    watchers: List[LaunchCatalogProfileWeb] = Field(default_factory=list)
+    host_profiles: List[LaunchCatalogProfileWeb] = Field(default_factory=list)
+    warnings: List[LaunchCatalogWarningWeb] = Field(default_factory=list)
 
 
 class NotificationDeviceRegistration(BaseModel):
