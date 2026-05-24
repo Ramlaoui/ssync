@@ -46,7 +46,14 @@ def cli(ctx, no_ssh_config, verbose):
 @cli.command(name="status")
 @click.option("--host", help="Check specific host only")
 @click.option("--user", help="Check jobs for specific user")
-@click.option("--simple", is_flag=True, help="Show simple tabular output")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json", "verbose"], case_sensitive=False),
+    default="table",
+    show_default=True,
+    help="Output format",
+)
 @click.option(
     "--since",
     default="14d",
@@ -67,7 +74,7 @@ def status_command(
     ctx,
     host,
     user,
-    simple,
+    output_format,
     since,
     limit,
     job_id,
@@ -86,7 +93,7 @@ def status_command(
     success = command.execute(
         host=host,
         user=user,
-        simple=simple,
+        output_format=output_format,
         since=since,
         limit=limit,
         job_id=job_id,

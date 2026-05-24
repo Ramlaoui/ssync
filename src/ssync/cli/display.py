@@ -1,7 +1,8 @@
 """Job display utilities for CLI."""
 
+import json
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import click
 
@@ -83,25 +84,70 @@ class JobDisplay:
         return jobs_by_host
 
     @staticmethod
-    def display_jobs_simple(jobs: List[JobInfo]):
-        """Display jobs in a simple tabular format."""
-        if not jobs:
+    def _display_value(value: Optional[str]) -> str:
+        if value is None or value == "" or value == "N/A":
+            return "-"
+        return str(value)
+
+    @staticmethod
+    def _truncate(value: str, width: int) -> str:
+        if len(value) <= width:
+            return value
+        return value[: max(width - 3, 0)] + "..."
+
+    @staticmethod
+    def _job_status_record(job: JobInfo) -> dict[str, Optional[str]]:
+        return {
+            "job_id": job.job_id,
+            "state": job.state.value,
+            "name": job.name,
+            "host": job.hostname,
+            "partition": job.partition,
+            "runtime": job.runtime,
+            "reason": job.reason,
+            "submitted_at": job.submit_time,
+            "user": job.user,
+            "stdout_file": job.stdout_file,
+            "stderr_file": job.stderr_file,
+            "work_dir": job.work_dir,
+        }
+
+    @staticmethod
+    def display_jobs_json(jobs: List[JobInfo]):
+        """Display jobs as a stable flattened JSON list."""
+        display_jobs = JobDisplay.filter_array_jobs(jobs)
+        records = [JobDisplay._job_status_record(job) for job in display_jobs]
+        click.echo(json.dumps(records, indent=2))
+
+    @staticmethod
+    def display_jobs_table(jobs: List[JobInfo]):
+        """Display jobs in the default compact tabular format."""
+        display_jobs = JobDisplay.filter_array_jobs(jobs)
+        if not display_jobs:
+            click.echo("No jobs found")
             return
 
-        click.echo(
-            f"{'JobID':<12} {'Name':<20} {'State':<12} {'Runtime':<12} {'Reason':<20}"
-        )
-        click.echo("-" * 76)
+        columns = [
+            ("JOB_ID", 14, lambda job: job.job_id),
+            ("STATE", 7, lambda job: job.state.value),
+            ("HOST", 12, lambda job: job.hostname),
+            ("PARTITION", 16, lambda job: job.partition),
+            ("NAME", 24, lambda job: job.name),
+            ("RUNTIME", 12, lambda job: job.runtime),
+            ("REASON", 32, lambda job: job.reason),
+        ]
 
-        for job in jobs:
-            runtime = job.runtime or "N/A"
-            reason = job.reason or "N/A"
-            if len(reason) > 18:
-                reason = reason[:15] + "..."
+        header = " ".join(f"{name:<{width}}" for name, width, _ in columns).rstrip()
+        click.echo(header)
+        click.echo("-" * len(header))
 
-            click.echo(
-                f"{job.job_id:<12} {job.name:<20} {job.state.value:<12} {runtime:<12} {reason:<20}"
-            )
+        for job in display_jobs:
+            cells = []
+            for _name, width, value_getter in columns:
+                value = JobDisplay._display_value(value_getter(job))
+                value = JobDisplay._truncate(value, width)
+                cells.append(f"{value:<{width}}")
+            click.echo(" ".join(cells).rstrip())
 
     @staticmethod
     def display_jobs_detailed(jobs: List[JobInfo]):
@@ -158,9 +204,7 @@ class JobDisplay:
                 click.echo(f"  Reason: {job.reason}")
 
     @staticmethod
-    def display_jobs_by_host(
-        jobs_by_host: Dict[str, List[JobInfo]], simple: bool = False
-    ):
+    def display_jobs_by_host(jobs_by_host: Dict[str, List[JobInfo]]):
         """Display jobs grouped by hostname."""
         for hostname, host_jobs in jobs_by_host.items():
             click.echo(f"\n=== {hostname} ===")
@@ -169,10 +213,7 @@ class JobDisplay:
                 click.echo("No jobs found")
                 continue
 
-            if simple:
-                JobDisplay.display_jobs_simple(host_jobs)
-            else:
-                JobDisplay.display_jobs_detailed(host_jobs)
+            JobDisplay.display_jobs_detailed(host_jobs)
 
 
 class PartitionDisplay:
