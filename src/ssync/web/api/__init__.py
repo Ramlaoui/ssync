@@ -1,5 +1,6 @@
 """Route registration helpers grouped by HTTP API concern."""
 
+from .catalog import register_catalog_routes
 from .cluster import register_cluster_routes
 from .job import register_job_routes
 from .launch import register_launch_routes
@@ -10,6 +11,7 @@ from .system import register_system_routes
 from .watchers import register_watcher_routes
 
 __all__ = [
+    "register_catalog_routes",
     "register_cluster_routes",
     "register_job_routes",
     "register_launch_routes",

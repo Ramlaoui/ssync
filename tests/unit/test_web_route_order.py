@@ -50,4 +50,5 @@ def test_spa_fallback_is_registered_after_api_routes(monkeypatch):
 
     assert _route_index(app, "/health") < spa_index
     assert _route_index(app, "/api/hosts") < spa_index
+    assert _route_index(app, "/api/launch-catalog") < spa_index
     assert _route_index(app, "/api/jobs/{job_id}") < spa_index
