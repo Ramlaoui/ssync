@@ -217,6 +217,9 @@ class LaunchCatalogResponse(BaseModel):
 
     repo_root: str
     include_user_config: bool
+    cached: bool = False
+    cache_age_seconds: float = 0.0
+    cache_ttl_seconds: float = 0.0
     roots: List[LaunchCatalogRootWeb] = Field(default_factory=list)
     hosts: List[LaunchCatalogHostWeb] = Field(default_factory=list)
     recipes: List[LaunchCatalogProfileWeb] = Field(default_factory=list)

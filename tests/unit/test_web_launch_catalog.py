@@ -18,12 +18,13 @@ class _FakeManager:
         self.slurm_hosts = slurm_hosts
 
 
-def _client(manager: _FakeManager) -> TestClient:
+def _client(manager: _FakeManager, *, cache_ttl_seconds: float = 5.0) -> TestClient:
     app = FastAPI()
     register_catalog_routes(
         app,
         verify_api_key_dependency=lambda: True,
         get_slurm_manager=lambda: manager,
+        cache_ttl_seconds=cache_ttl_seconds,
     )
     return TestClient(app)
 
@@ -67,6 +68,41 @@ sbatch:
     assert payload["recipes"][0]["id"] == "train"
     assert payload["recipes"][0]["sbatch"]["time"] == "24:00:00"
     assert "secret" not in str(payload)
+
+
+@pytest.mark.unit
+def test_launch_catalog_route_caches_and_force_refreshes(tmp_path):
+    repo = tmp_path / "repo"
+    recipe = repo / ".ssync/recipes/train.yaml"
+    _write(recipe, "job_name: first\n")
+    client = _client(_FakeManager([]), cache_ttl_seconds=60.0)
+
+    first = client.get(
+        "/api/launch-catalog",
+        params={"repo_root": str(repo), "include_user_config": "false"},
+    )
+    _write(recipe, "job_name: second\n")
+    cached = client.get(
+        "/api/launch-catalog",
+        params={"repo_root": str(repo), "include_user_config": "false"},
+    )
+    refreshed = client.get(
+        "/api/launch-catalog",
+        params={
+            "repo_root": str(repo),
+            "include_user_config": "false",
+            "force_refresh": "true",
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()["cached"] is False
+    assert cached.status_code == 200
+    assert cached.json()["cached"] is True
+    assert cached.json()["recipes"][0]["label"] == "first"
+    assert refreshed.status_code == 200
+    assert refreshed.json()["cached"] is False
+    assert refreshed.json()["recipes"][0]["label"] == "second"
 
 
 @pytest.mark.unit
