@@ -1,4 +1,5 @@
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -114,21 +115,16 @@ class Config:
         self.cache_path = (
             Path(cache_path) if cache_path else self.get_default_cache_path()
         )
-        self.raw_config = self.load_raw_config()
-        self.overlay_paths = self.get_overlay_paths()
-        for overlay_path in self.overlay_paths:
-            self.raw_config = _deep_merge_config(
-                self.raw_config,
-                self.load_raw_config_file(overlay_path),
-            )
-
-        self.config = self.load_config()
-        self.cache_settings = self.load_cache_settings()
-        self.api_key = self.load_api_key()
-        self.api_settings = self.load_api_settings()
-        self.path_restrictions = self.load_path_restrictions()
-        self.connection_settings = self.load_connection_settings()
-        self.notification_settings = self.load_notification_settings()
+        self.raw_config: dict[str, Any] = {}
+        self.overlay_paths: list[Path] = []
+        self.config: list[SlurmHost] = []
+        self.cache_settings = CacheSettings()
+        self.api_key = ""
+        self.api_settings = APISettings()
+        self.path_restrictions = PathRestrictions()
+        self.connection_settings: Dict[str, int] = {}
+        self.notification_settings = NotificationSettings()
+        self.reload()
 
     def get_default_config_path(self) -> Path:
         """Get the default configuration file path."""
@@ -221,7 +217,34 @@ class Config:
     def load_raw_config(self) -> dict[str, Any]:
         return self.load_raw_config_file(self.config_path)
 
+    def load_effective_raw_config(self) -> dict[str, Any]:
+        """Load base config plus any local overlays from disk."""
+        raw_config = self.load_raw_config()
+        self.overlay_paths = self.get_overlay_paths()
+        for overlay_path in self.overlay_paths:
+            raw_config = _deep_merge_config(
+                raw_config,
+                self.load_raw_config_file(overlay_path),
+            )
+        return raw_config
+
+    def reload(self) -> None:
+        """Reload config files from disk and refresh derived settings."""
+        self.raw_config = self.load_effective_raw_config()
+        self.config = self._parse_hosts_config()
+        self.cache_settings = self.load_cache_settings()
+        self.api_key = self.load_api_key()
+        self.api_settings = self.load_api_settings()
+        self.path_restrictions = self.load_path_restrictions()
+        self.connection_settings = self.load_connection_settings()
+        self.notification_settings = self.load_notification_settings()
+
     def load_config(self) -> list[SlurmHost]:
+        """Reload config files from disk and return configured Slurm hosts."""
+        self.reload()
+        return self.config
+
+    def _parse_hosts_config(self) -> list[SlurmHost]:
         """Load Slurm hosts configuration from YAML file.
 
         Expected format (with SSH config support):
@@ -517,4 +540,25 @@ class Config:
         return settings
 
 
-config = Config()
+class LazyConfig:
+    """Lazily create the process-wide config object on first use."""
+
+    def __init__(self):
+        self._instance: Config | None = None
+        self._lock = threading.RLock()
+
+    def get(self) -> Config:
+        with self._lock:
+            if self._instance is None:
+                self._instance = Config()
+            return self._instance
+
+    def reset(self) -> None:
+        with self._lock:
+            self._instance = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.get(), name)
+
+
+config = LazyConfig()
