@@ -128,7 +128,7 @@ class StatusCommand(BaseCommand):
         self,
         host: Optional[str] = None,
         user: Optional[str] = None,
-        simple: bool = False,
+        output_format: str = "table",
         since: Optional[str] = None,
         limit: Optional[int] = None,
         job_id: Optional[str] = None,
@@ -138,6 +138,14 @@ class StatusCommand(BaseCommand):
         cat_output: Optional[str] = None,
     ):
         """Execute status command."""
+        output_format = output_format.lower()
+        if output_format not in {"table", "json", "verbose"}:
+            click.echo(
+                "Invalid status format. Choose one of: table, json, verbose",
+                err=True,
+            )
+            return False
+
         # Validate conflicting flags
         if active_only and completed_only:
             click.echo(
@@ -183,22 +191,30 @@ class StatusCommand(BaseCommand):
                 completed_only=completed_only,
             )
 
-            # Group jobs by hostname for display
-            jobs_by_host = JobDisplay.group_jobs_by_host(jobs)
-
-            # Ensure all configured hosts are shown (or just the requested one)
-            hosts_to_show = (
-                [host] if host else [h.host.hostname for h in self.slurm_hosts]
-            )
-            for hostname in hosts_to_show:
-                if hostname not in jobs_by_host:
-                    jobs_by_host[hostname] = []
-
             # Display results
             if cat_output and job_ids:
-                click.echo("Note: --cat-output not supported with API mode yet")
+                click.echo(
+                    "Note: --cat-output not supported with API mode yet",
+                    err=True,
+                )
 
-            JobDisplay.display_jobs_by_host(jobs_by_host, simple)
+            if output_format == "json":
+                JobDisplay.display_jobs_json(jobs)
+            elif output_format == "verbose":
+                # Group jobs by hostname for verbose display
+                jobs_by_host = JobDisplay.group_jobs_by_host(jobs)
+
+                # Ensure all configured hosts are shown (or just the requested one)
+                hosts_to_show = (
+                    [host] if host else [h.host.hostname for h in self.slurm_hosts]
+                )
+                for hostname in hosts_to_show:
+                    if hostname not in jobs_by_host:
+                        jobs_by_host[hostname] = []
+
+                JobDisplay.display_jobs_by_host(jobs_by_host)
+            else:
+                JobDisplay.display_jobs_table(jobs)
             return True
 
         except requests.exceptions.ConnectionError:
