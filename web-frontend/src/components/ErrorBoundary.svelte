@@ -13,12 +13,32 @@
   let errorInfo = $state('');
   let errorCount = 0;
   let lastErrorTime = 0;
+
+  function isOpaqueScriptError(
+    message: string | Event,
+    source?: string,
+    line?: number,
+    column?: number,
+    error?: Error | null,
+  ): boolean {
+    return (
+      message === 'Script error.' &&
+      !source &&
+      !line &&
+      !column &&
+      !error
+    );
+  }
   
   // Set up error handler
   onMount(() => {
     const originalOnError = window.onerror;
     
-    window.onerror = (message: string | Event, source?: string, line?: number, column?: number, error?: Error) => {
+    window.onerror = (message: string | Event, source?: string, line?: number, column?: number, error?: Error | null) => {
+      if (isOpaqueScriptError(message, source, line, column, error)) {
+        return true;
+      }
+
       // Prevent error loops
       const now = Date.now();
       if (now - lastErrorTime < 100) {
@@ -46,7 +66,7 @@
       console.error('ErrorBoundary caught:', { message, source, line, column, error });
       
       if (originalOnError) {
-        return originalOnError(message, source, line, column, error);
+        return originalOnError(message, source, line, column, error ?? undefined);
       }
       
       return true; // Prevent default error handling
