@@ -8,6 +8,7 @@
   import ArrayJobCard from "../components/ArrayJobCard.svelte";
   import JobTable from "../components/JobTable.svelte";
   import NavigationHeader from "../components/NavigationHeader.svelte";
+  import { getArrayGroupTasks } from "../lib/arrayJobs";
   import Badge from "../lib/components/ui/Badge.svelte";
   import CollapsibleSection from "../lib/components/ui/CollapsibleSection.svelte";
   import { jobStateManager } from "../lib/JobStateManager";
@@ -98,7 +99,9 @@
         if ($arrayJobGroups.length > 0) {
           const arrayJobIds = new Set(
             $arrayJobGroups.flatMap((group) =>
-              group.tasks.map((task) => `${task.hostname}:${task.job_id}`),
+              getArrayGroupTasks(group).map(
+                (task) => `${task.hostname}:${task.job_id}`,
+              ),
             ),
           );
           jobs = jobs.filter(
@@ -177,7 +180,7 @@
       if (filters.state) {
         // Filter groups that have tasks in the specified state
         groups = groups.filter((g) =>
-          g.tasks.some((t) => t.state === filters.state),
+          getArrayGroupTasks(g).some((t) => t.state === filters.state),
         );
       }
       if (filters.activeOnly) {
