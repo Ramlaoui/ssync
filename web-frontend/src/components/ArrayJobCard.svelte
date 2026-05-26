@@ -2,6 +2,7 @@
   import { ChevronDown, ChevronRight, Zap, Clock, CheckCircle, AlertCircle, XCircle, Square } from 'lucide-svelte';
   import { push } from 'svelte-spa-router';
   import type { ArrayJobGroup } from '../types/api';
+  import { getArrayGroupTasks } from '../lib/arrayJobs';
   import { jobUtils } from '../lib/jobUtils';
   import { api } from '../services/api';
 
@@ -49,6 +50,7 @@
   }
 
   let groupState = $derived(getGroupState());
+  let tasks = $derived(getArrayGroupTasks(group));
 
   // Context menu state
   let showContextMenu = $state(false);
@@ -57,6 +59,7 @@
 
   function handleContextMenu(event: MouseEvent) {
     event.preventDefault();
+    event.stopPropagation();
     contextMenuX = event.clientX;
     contextMenuY = event.clientY;
     showContextMenu = true;
@@ -176,7 +179,7 @@
 
 {#if expanded}
   <div class="task-list">
-    {#each group.tasks.filter(task => task && task.job_id) as task (task.job_id)}
+    {#each tasks as task (task.job_id)}
       <button
         class="task-item"
         onclick={(e) => {
