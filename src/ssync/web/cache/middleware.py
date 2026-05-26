@@ -2,6 +2,7 @@
 Cache middleware compatibility layer for Slurm API endpoints.
 """
 
+import asyncio
 import os
 from typing import Any, Dict, List, Optional
 
@@ -109,11 +110,11 @@ class CacheMiddleware:
         await self._verifier.verify_and_update_cache(current_job_ids)
 
     async def get_cache_stats(self) -> Dict[str, Any]:
-        stats = self.cache.get_cache_stats()
+        stats = await asyncio.to_thread(self.cache.get_cache_stats)
         return self._verifier.extend_stats(stats)
 
     async def cleanup_cache(self, max_age_days: Optional[int] = None) -> int:
-        return self.cache.cleanup_old_entries(max_age_days)
+        return await asyncio.to_thread(self.cache.cleanup_old_entries, max_age_days)
 
 
 _middleware_instance: Optional[CacheMiddleware] = None

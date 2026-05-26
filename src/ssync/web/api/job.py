@@ -347,7 +347,9 @@ def register_job_routes(
         try:
             job_id = InputSanitizer.sanitize_job_id(job_id)
             host = InputSanitizer.sanitize_hostname(host)
-            manifest = get_cache().get_run_manifest(job_id, host)
+            manifest = await asyncio.to_thread(
+                lambda: get_cache().get_run_manifest(job_id, host)
+            )
             if manifest is None:
                 raise HTTPException(
                     status_code=404,

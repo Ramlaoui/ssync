@@ -90,6 +90,14 @@ class JobDataManager:
             cached_job.stderr_compressed, cached_job.stderr_compression
         )
 
+    async def _get_cached_output_content_in_executor(
+        self, job_id: str, hostname: str, output_type: str
+    ) -> Optional[str]:
+        """Read and decompress cached output without blocking the event loop."""
+        return await self._run_in_executor(
+            self._get_cached_output_content, job_id, hostname, output_type
+        )
+
     async def _read_remote_output_file(
         self, conn, file_path: str
     ) -> tuple[bool, Optional[str]]:
@@ -203,20 +211,83 @@ class JobDataManager:
 
     async def _run_in_executor(self, func, *args, **kwargs):
         """Run a blocking function in the thread pool if available."""
+        loop = asyncio.get_running_loop()
         try:
             # Prefer the background pool so bulk refresh work cannot starve
             # interactive launch/status requests.
             from .web.app import background_executor, executor
 
-            loop = asyncio.get_event_loop()
             pool = background_executor or executor
             return await loop.run_in_executor(pool, lambda: func(*args, **kwargs))
         except ImportError:
-            # If not running in web context, run directly (blocking)
-            logger.debug(
-                "No thread pool available, running SSH operations synchronously"
-            )
-            return func(*args, **kwargs)
+            # Outside the web app, still avoid blocking the caller's event loop.
+            logger.debug("No web thread pool available, using default executor")
+            return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+    async def _cache_jobs_in_executor(self, jobs: List[JobInfo]) -> None:
+        """Persist fetched jobs without blocking the event loop."""
+        if not jobs:
+            return
+        await self._run_in_executor(self.cache.cache_jobs, list(jobs))
+
+    async def _cache_job_in_executor(
+        self,
+        job_info: JobInfo,
+        *,
+        script_content: Optional[str] = None,
+        local_source_dir: Optional[str] = None,
+    ) -> None:
+        """Persist one job without blocking the event loop."""
+        await self._run_in_executor(
+            self.cache.cache_job,
+            job_info,
+            script_content=script_content,
+            local_source_dir=local_source_dir,
+        )
+
+    async def _get_cached_job_in_executor(
+        self, job_id: str, hostname: Optional[str] = None
+    ):
+        """Read one cached job without blocking the event loop."""
+        return await self._run_in_executor(self.cache.get_cached_job, job_id, hostname)
+
+    async def _get_cached_jobs_for_host_in_executor(
+        self,
+        host_name: str,
+        job_ids: Optional[List[str]],
+        limit: Optional[int],
+    ) -> List[JobInfo]:
+        """Return cached host jobs without blocking the event loop."""
+        return await self._run_in_executor(
+            self._get_cached_jobs_for_host, host_name, job_ids, limit
+        )
+
+    async def _update_job_script_in_executor(
+        self, job_id: str, hostname: str, script_content: str
+    ) -> None:
+        """Persist a job script without blocking the event loop."""
+        await self._run_in_executor(
+            self.cache.update_job_script, job_id, hostname, script_content
+        )
+
+    async def _update_job_outputs_in_executor(
+        self,
+        job_id: str,
+        hostname: str,
+        *,
+        stdout_content: Optional[str] = None,
+        stderr_content: Optional[str] = None,
+        mark_fetched_after_completion: bool = False,
+    ) -> None:
+        """Persist fetched output content without blocking the event loop."""
+        await self._run_in_executor(
+            self.cache.update_job_outputs,
+            job_id,
+            hostname,
+            stdout_content=stdout_content,
+            stderr_content=stderr_content,
+            mark_fetched_after_completion=mark_fetched_after_completion,
+        )
 
     async def fetch_all_jobs(
         self,
@@ -315,16 +386,20 @@ class JobDataManager:
             if not available_hosts:
                 section_start = time.perf_counter()
                 if hostname:
-                    cached_jobs = self._get_cached_jobs_for_host(
+                    cached_jobs = await self._get_cached_jobs_for_host_in_executor(
                         hostname, job_ids, limit
                     )
                 elif job_ids:
-                    cached_job_data = self.cache.get_cached_jobs_by_ids(job_ids)
+                    cached_job_data = await self._run_in_executor(
+                        self.cache.get_cached_jobs_by_ids, job_ids
+                    )
                     cached_jobs = [
                         cjd.job_info for cjd in cached_job_data.values() if cjd.job_info
                     ]
                 elif limit:
-                    cached_job_data = self.cache.get_cached_jobs(limit=limit)
+                    cached_job_data = await self._run_in_executor(
+                        self.cache.get_cached_jobs, limit=limit
+                    )
                     cached_jobs = [
                         cjd.job_info for cjd in cached_job_data if cjd.job_info
                     ]
@@ -442,7 +517,7 @@ class JobDataManager:
                         logger.error(
                             f"Error fetching from {host_name}: {exc}. Falling back to cache."
                         )
-                        result = self._get_cached_jobs_for_host(
+                        result = await self._get_cached_jobs_for_host_in_executor(
                             host_name, job_ids, limit
                         )
                     all_jobs.extend(result)
@@ -460,7 +535,9 @@ class JobDataManager:
                     await self._mark_host_fetch_failure(host_name, "request timeout")
                     timed_out_hosts.add(host_name)
                     all_jobs.extend(
-                        self._get_cached_jobs_for_host(host_name, job_ids, limit)
+                        await self._get_cached_jobs_for_host_in_executor(
+                            host_name, job_ids, limit
+                        )
                     )
                 if timed_out_hosts:
                     await self._release_hosts(timed_out_hosts)
@@ -670,7 +747,9 @@ class JobDataManager:
         logger.info(f"Host {host_name} is already being fetched, using cache fallback")
         await self._wait_for_host_idle(host_name, self._busy_host_wait_seconds)
 
-        cached_jobs = self._get_cached_jobs_for_host(host_name, job_ids, limit)
+        cached_jobs = await self._get_cached_jobs_for_host_in_executor(
+            host_name, job_ids, limit
+        )
         if cached_jobs:
             logger.info(
                 f"Returning {len(cached_jobs)} cached jobs for busy host {host_name}"
@@ -692,7 +771,9 @@ class JobDataManager:
             f"Host {host_name} is in failure backoff ({remaining_seconds:.1f}s remaining), "
             "using cache fallback"
         )
-        cached_jobs = self._get_cached_jobs_for_host(host_name, job_ids, limit)
+        cached_jobs = await self._get_cached_jobs_for_host_in_executor(
+            host_name, job_ids, limit
+        )
         if cached_jobs:
             logger.info(
                 f"Returning {len(cached_jobs)} cached jobs for backed-off host {host_name}"
@@ -846,11 +927,8 @@ class JobDataManager:
                 # LIGHTWEIGHT CACHING - only cache job info, don't fetch expensive data
                 for job in active_jobs:
                     job.hostname = hostname
-                    # Only cache basic job info (preserving existing script/outputs)
-                    self.cache.cache_job(
-                        job,
-                        script_content=None,  # Preserve existing
-                    )
+                # Only cache basic job info (preserving existing script/outputs)
+                await self._cache_jobs_in_executor(active_jobs)
 
                 jobs.extend(active_jobs)
                 mark_host_timing("fetch_active", section_start)
@@ -871,8 +949,10 @@ class JobDataManager:
                 # Use cache even on force_refresh for completed jobs (they don't change)
                 # Only skip cache if we're looking for specific job_ids
                 if not job_ids:
-                    cached_completed_ids = self.cache.get_cached_completed_job_ids(
-                        hostname, effective_since
+                    cached_completed_ids = await self._run_in_executor(
+                        self.cache.get_cached_completed_job_ids,
+                        hostname,
+                        effective_since,
                     )
                     if cached_completed_ids:
                         logger.info(
@@ -898,20 +978,16 @@ class JobDataManager:
 
                 # CACHE COMPLETED JOBS AND FETCH OUTPUTS
                 section_start = time.perf_counter()
-                cached_completed_map = self.cache.get_cached_jobs_by_ids(
-                    [job.job_id for job in completed_jobs], hostname
+                cached_completed_map = await self._run_in_executor(
+                    self.cache.get_cached_jobs_by_ids,
+                    [job.job_id for job in completed_jobs],
+                    hostname,
                 )
                 for job in completed_jobs:
                     job.hostname = hostname
 
                     # Check if we already have this job cached
                     cached_job = cached_completed_map.get(job.job_id)
-
-                    # Cache job info (preserving existing data)
-                    self.cache.cache_job(
-                        job,
-                        script_content=None,  # Preserve existing
-                    )
 
                     # If this is a new completed job without cached outputs, fetch them
                     if not cached_job or (
@@ -924,6 +1000,8 @@ class JobDataManager:
                                 create_task(self._fetch_outputs_from_cached_paths(job))
                             except Exception:
                                 pass
+                # Cache job info (preserving existing data) off the event loop.
+                await self._cache_jobs_in_executor(completed_jobs)
                 jobs.extend(completed_jobs)
                 mark_host_timing("cache_completed", section_start)
 
@@ -943,8 +1021,10 @@ class JobDataManager:
                     f"Looking for {len(missing_job_ids)} missing job_ids in cache: {missing_job_ids}"
                 )
 
-                cached_missing_map = self.cache.get_cached_jobs_by_ids(
-                    list(missing_job_ids), hostname
+                cached_missing_map = await self._run_in_executor(
+                    self.cache.get_cached_jobs_by_ids,
+                    list(missing_job_ids),
+                    hostname,
                 )
                 for missing_id, cached_job in cached_missing_map.items():
                     if self._can_use_cached_job_for_missing_lookup(cached_job):
@@ -960,8 +1040,10 @@ class JobDataManager:
             # Regular case: merge with cached completed jobs for bulk queries
             elif not active_only and not job_ids:
                 section_start = time.perf_counter()
-                cached_jobs = self.cache.get_cached_completed_jobs(
-                    hostname, since=since_dt
+                cached_jobs = await self._run_in_executor(
+                    self.cache.get_cached_completed_jobs,
+                    hostname,
+                    since_dt,
                 )
 
                 # CRITICAL: Filter cached jobs by current user
@@ -987,8 +1069,11 @@ class JobDataManager:
             if not completed_only:
                 section_start = time.perf_counter()
                 recent_cached_active_jobs = (
-                    self._get_recent_cached_active_jobs_for_host(
-                        hostname, effective_user, limit
+                    await self._run_in_executor(
+                        self._get_recent_cached_active_jobs_for_host,
+                        hostname,
+                        effective_user,
+                        limit,
                     )
                 )
                 jobs = self._merge_with_cached_jobs(jobs, recent_cached_active_jobs)
@@ -1073,14 +1158,16 @@ class JobDataManager:
                     f"No manager available for comprehensive capture of job {job_id}"
                 )
                 # Still cache the script at minimum
-                self.cache.update_job_script(job_id, hostname, script_content)
+                await self._update_job_script_in_executor(
+                    job_id, hostname, script_content
+                )
                 return
 
             slurm_host = manager.get_host_by_name(hostname)
             conn = await self._run_in_executor(manager._get_connection, slurm_host.host)
 
             # 1. Cache the script immediately
-            self.cache.update_job_script(job_id, hostname, script_content)
+            await self._update_job_script_in_executor(job_id, hostname, script_content)
 
             # 2. Capture COMPLETE job metadata while scontrol still works
             # This is CRITICAL - get ALL info including output file paths NOW
@@ -1091,7 +1178,7 @@ class JobDataManager:
 
                 if complete_job_info:
                     # Cache complete job info with all metadata
-                    self.cache.cache_job(
+                    await self._cache_job_in_executor(
                         complete_job_info,
                         script_content=script_content,
                         local_source_dir=local_source_dir,
@@ -1108,7 +1195,7 @@ class JobDataManager:
                         hostname=hostname,
                         submit_time=datetime.now().isoformat(),
                     )
-                    self.cache.cache_job(
+                    await self._cache_job_in_executor(
                         minimal_job_info,
                         script_content=script_content,
                         local_source_dir=local_source_dir,
@@ -1127,7 +1214,7 @@ class JobDataManager:
                     hostname=hostname,
                     submit_time=datetime.now().isoformat(),
                 )
-                self.cache.cache_job(
+                await self._cache_job_in_executor(
                     minimal_job_info,
                     script_content=script_content,
                     local_source_dir=local_source_dir,
@@ -1156,7 +1243,9 @@ class JobDataManager:
             logger.error(f"Failed to capture submission data for job {job_id}: {e}")
             # At minimum, try to save the script
             try:
-                self.cache.update_job_script(job_id, hostname, script_content)
+                await self._update_job_script_in_executor(
+                    job_id, hostname, script_content
+                )
             except Exception as script_error:
                 logger.error(
                     f"Even script caching failed for job {job_id}: {script_error}"
@@ -1172,7 +1261,7 @@ class JobDataManager:
         """
         try:
             # Always preserve existing data, only update status fields
-            self.cache.cache_job(
+            await self._cache_job_in_executor(
                 job_info,
                 script_content=None,  # Preserve existing
             )
@@ -1184,7 +1273,7 @@ class JobDataManager:
                 JobState.CANCELLED,
                 JobState.TIMEOUT,
             ]:
-                cached_job = self.cache.get_cached_job(
+                cached_job = await self._get_cached_job_in_executor(
                     job_info.job_id, job_info.hostname
                 )
                 if (
@@ -1276,8 +1365,10 @@ class JobDataManager:
 
             # Check if we've already fetched outputs after completion
             stdout_fetched_after, stderr_fetched_after = (
-                self.cache.check_outputs_fetched_after_completion(
-                    job_info.job_id, job_info.hostname
+                await self._run_in_executor(
+                    self.cache.check_outputs_fetched_after_completion,
+                    job_info.job_id,
+                    job_info.hostname,
                 )
             )
 
@@ -1300,7 +1391,7 @@ class JobDataManager:
 
             # If nothing to fetch, return existing cached content
             if not should_fetch_stdout and not should_fetch_stderr:
-                cached_job = self.cache.get_cached_job(
+                cached_job = await self._get_cached_job_in_executor(
                     job_info.job_id, job_info.hostname
                 )
                 if cached_job:
@@ -1327,7 +1418,7 @@ class JobDataManager:
                 if force_fetch:
                     raise RuntimeError(error_msg)
                 # Return cached content if available
-                cached_job = self.cache.get_cached_job(
+                cached_job = await self._get_cached_job_in_executor(
                     job_info.job_id, job_info.hostname
                 )
                 if cached_job:
@@ -1365,7 +1456,7 @@ class JobDataManager:
                     if refreshed_stderr:
                         job_info.stderr_file = refreshed_stderr
                     # Persist corrected paths for future calls.
-                    self.cache.cache_job(job_info, script_content=None)
+                    await self._cache_job_in_executor(job_info, script_content=None)
                 except Exception as e:
                     logger.debug(
                         f"Could not refresh output paths for job {job_info.job_id}: {e}"
@@ -1421,7 +1512,7 @@ class JobDataManager:
                         f"Using cached {output_type} for job {job_info.job_id} after fetch error"
                     )
 
-                return self._get_cached_output_content(
+                return await self._get_cached_output_content_in_executor(
                     job_info.job_id, job_info.hostname, output_type
                 )
 
@@ -1449,7 +1540,7 @@ class JobDataManager:
                         )
                         task_names.append("stdout")
                     else:
-                        stdout_content = self._get_cached_output_content(
+                        stdout_content = await self._get_cached_output_content_in_executor(
                             job_info.job_id, job_info.hostname, "stdout"
                         )
 
@@ -1461,7 +1552,7 @@ class JobDataManager:
                         )
                         task_names.append("stderr")
                     else:
-                        stderr_content = self._get_cached_output_content(
+                        stderr_content = await self._get_cached_output_content_in_executor(
                             job_info.job_id, job_info.hostname, "stderr"
                         )
 
@@ -1473,16 +1564,16 @@ class JobDataManager:
                             else:
                                 stderr_content = content
             else:
-                stdout_content = self._get_cached_output_content(
+                stdout_content = await self._get_cached_output_content_in_executor(
                     job_info.job_id, job_info.hostname, "stdout"
                 )
-                stderr_content = self._get_cached_output_content(
+                stderr_content = await self._get_cached_output_content_in_executor(
                     job_info.job_id, job_info.hostname, "stderr"
                 )
 
             # Update cache with fetched outputs
             if should_fetch_stdout or should_fetch_stderr:
-                self.cache.update_job_outputs(
+                await self._update_job_outputs_in_executor(
                     job_info.job_id,
                     job_info.hostname,
                     stdout_content=stdout_content if should_fetch_stdout else None,
@@ -1498,7 +1589,9 @@ class JobDataManager:
         except Exception as e:
             logger.error(f"Error fetching outputs for job {job_info.job_id}: {e}")
             # Return cached content on error
-            cached_job = self.cache.get_cached_job(job_info.job_id, job_info.hostname)
+            cached_job = await self._get_cached_job_in_executor(
+                job_info.job_id, job_info.hostname
+            )
             if cached_job:
                 stdout = self._decompress_output(
                     cached_job.stdout_compressed, cached_job.stdout_compression
@@ -1524,7 +1617,7 @@ class JobDataManager:
             Complete job data if found, None otherwise
         """
         try:
-            cached_job = self.cache.get_cached_job(job_id, hostname)
+            cached_job = await self._get_cached_job_in_executor(job_id, hostname)
             if not cached_job:
                 return None
 
@@ -1574,7 +1667,7 @@ class JobDataManager:
         """
         try:
             # Check cache first
-            cached_job = self.cache.get_cached_job(job_id, hostname)
+            cached_job = await self._get_cached_job_in_executor(job_id, hostname)
             if cached_job and cached_job.script_content:
                 return cached_job.script_content
 
@@ -1606,7 +1699,7 @@ class JobDataManager:
 
                     if script_content:
                         # Cache it for future use
-                        self.cache.update_job_script(
+                        await self._update_job_script_in_executor(
                             job_id, slurm_host.host.hostname, script_content
                         )
                         return script_content
@@ -1693,7 +1786,9 @@ class JobDataManager:
             return requested_since
 
         # No explicit since requested - use incremental fetching from last fetch time
-        fetch_state = self.cache.get_host_fetch_state(hostname)
+        fetch_state = await self._run_in_executor(
+            self.cache.get_host_fetch_state, hostname
+        )
         if fetch_state:
             last_fetch_utc_str = fetch_state["last_fetch_time_utc"]
             if "+" in last_fetch_utc_str or "Z" in last_fetch_utc_str:
@@ -1727,7 +1822,8 @@ class JobDataManager:
 
             utc_time = datetime.now(timezone.utc)
 
-            self.cache.update_host_fetch_state(
+            await self._run_in_executor(
+                self.cache.update_host_fetch_state,
                 hostname=hostname,
                 fetch_time=cluster_time,
                 fetch_time_utc=utc_time,
@@ -1800,7 +1896,7 @@ class JobDataManager:
 
     async def cleanup_old_data(self, max_age_days: Optional[int] = None) -> int:
         """Clean up old job data according to retention policies."""
-        return self.cache.cleanup_old_entries(max_age_days)
+        return await self._run_in_executor(self.cache.cleanup_old_entries, max_age_days)
 
 
 # Global instance

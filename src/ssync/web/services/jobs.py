@@ -829,7 +829,8 @@ async def refresh_job_output_in_background(
             force_fetch=force_fetch,
         )
         is_running = job_info.state == JobState.RUNNING
-        cache_middleware.cache.update_job_outputs(
+        await asyncio.to_thread(
+            cache_middleware.cache.update_job_outputs,
             job_id=job_info.job_id,
             hostname=job_info.hostname,
             stdout_content=stdout_content,
@@ -1039,12 +1040,15 @@ async def get_job_output_response(
             max_bytes = max(1, min(max_bytes, MAX_OUTPUT_MAX_BYTES))
 
         cached_job = (
-            cache_middleware.cache.get_cached_job(job_id, host) if host else None
+            await asyncio.to_thread(cache_middleware.cache.get_cached_job, job_id, host)
+            if host
+            else None
         )
         if not cached_job and not host:
             manager = get_slurm_manager()
             for slurm_host in manager.slurm_hosts:
-                cached_job = cache_middleware.cache.get_cached_job(
+                cached_job = await asyncio.to_thread(
+                    cache_middleware.cache.get_cached_job,
                     job_id,
                     slurm_host.host.hostname,
                 )
@@ -1129,7 +1133,8 @@ async def get_job_output_response(
                     )
             elif is_completed:
                 stdout_fetched_after, stderr_fetched_after = (
-                    cache_middleware.cache.check_outputs_fetched_after_completion(
+                    await asyncio.to_thread(
+                        cache_middleware.cache.check_outputs_fetched_after_completion,
                         job_id,
                         host,
                     )
@@ -1367,7 +1372,8 @@ async def get_job_script_payload(
 
             script_found_in_slurm = True
             local_source_dir = None
-            cached_job = cache_middleware.cache.get_cached_job(
+            cached_job = await asyncio.to_thread(
+                cache_middleware.cache.get_cached_job,
                 job_id,
                 slurm_host.host.hostname,
             )

@@ -113,7 +113,8 @@ class CacheScheduler:
 
             # Size-based cleanup first (if configured)
             if self.cache_settings.max_size_mb > 0:
-                size_cleaned = self.cache_middleware.cache.cleanup_by_size(
+                size_cleaned = await asyncio.to_thread(
+                    self.cache_middleware.cache.cleanup_by_size,
                     self.cache_settings.max_size_mb
                 )
                 if size_cleaned > 0:
@@ -131,9 +132,13 @@ class CacheScheduler:
             # Zombie cleanup - mark stale PD/UNKNOWN jobs as completed
             zombie_days = self.cache_settings.zombie_cleanup_days
             if zombie_days > 0:
-                zombies = self.cache_middleware.cache.find_zombie_jobs(zombie_days)
+                zombies = await asyncio.to_thread(
+                    self.cache_middleware.cache.find_zombie_jobs, zombie_days
+                )
                 for job_id, hostname, state in zombies:
-                    self.cache_middleware.cache.mark_job_completed(job_id, hostname)
+                    await asyncio.to_thread(
+                        self.cache_middleware.cache.mark_job_completed, job_id, hostname
+                    )
                 if zombies:
                     logger.info(
                         f"Zombie cleanup: marked {len(zombies)} stale jobs as completed"
@@ -156,13 +161,15 @@ class CacheScheduler:
 
             # Age-based cleanup
             if max_age_days is not None and max_age_days >= 0:
-                cleaned_count = self.cache_middleware.cache.cleanup_old_entries(
+                cleaned_count = await asyncio.to_thread(
+                    self.cache_middleware.cache.cleanup_old_entries,
                     max_age_days=max_age_days, preserve_scripts=preserve_scripts
                 )
 
             # Size-based cleanup
             if self.cache_settings.max_size_mb > 0:
-                size_cleaned = self.cache_middleware.cache.cleanup_by_size(
+                size_cleaned = await asyncio.to_thread(
+                    self.cache_middleware.cache.cleanup_by_size,
                     self.cache_settings.max_size_mb
                 )
                 cleaned_count += size_cleaned

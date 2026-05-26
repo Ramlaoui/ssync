@@ -77,7 +77,7 @@ def register_cluster_routes(
             fetch_states = {}
             for slurm_host in hosts_to_check:
                 hostname = slurm_host.host.hostname
-                state = cache.get_host_fetch_state(hostname)
+                state = await asyncio.to_thread(cache.get_host_fetch_state, hostname)
                 if not state:
                     fetch_states[hostname] = {
                         "status": "never_fetched",

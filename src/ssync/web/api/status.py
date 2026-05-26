@@ -14,9 +14,9 @@ from ..security import InputSanitizer
 from ..status_helpers import (
     build_job_status_response,
     build_status_cache_filters,
-    get_cached_host_status_response,
     filter_jobs_by_search,
     get_cached_date_range_status_response,
+    get_cached_host_status_response,
 )
 
 logger = setup_logger(__name__)
@@ -27,6 +27,50 @@ async def _json_status_response(results: List[JobStatusResponse]) -> Response:
     """Serialize large status payloads off the event loop."""
     payload = await asyncio.to_thread(_STATUS_RESPONSE_ADAPTER.dump_json, results)
     return Response(content=payload, media_type="application/json")
+
+
+def _build_status_response_for_jobs(
+    *,
+    hostname: str,
+    jobs,
+    search: Optional[str],
+    group_array_jobs: bool,
+    limit: Optional[int],
+) -> JobStatusResponse:
+    web_jobs = filter_jobs_by_search(
+        [JobInfoWeb.from_job_info(job) for job in jobs], search
+    )
+    return build_job_status_response(
+        hostname=hostname,
+        web_jobs=web_jobs,
+        query_time=datetime.now(),
+        group_array_jobs=group_array_jobs,
+        limit=limit,
+    )
+
+
+def _build_status_results_from_jobs(
+    *,
+    all_jobs,
+    slurm_hosts,
+    search: Optional[str],
+    group_array_jobs: bool,
+    limit: Optional[int],
+) -> List[JobStatusResponse]:
+    jobs_by_host = {}
+    for job in all_jobs:
+        jobs_by_host.setdefault(job.hostname, []).append(job)
+
+    return [
+        _build_status_response_for_jobs(
+            hostname=slurm_host.host.hostname,
+            jobs=jobs_by_host.get(slurm_host.host.hostname, []),
+            search=search,
+            group_array_jobs=group_array_jobs,
+            limit=limit,
+        )
+        for slurm_host in slurm_hosts
+    ]
 
 
 def register_status_routes(
@@ -45,7 +89,7 @@ def register_status_routes(
         """Get cache statistics including date range cache information."""
         try:
             stats = await cache_middleware.get_cache_stats()
-            cache_middleware.cache.cleanup_expired_ranges()
+            await asyncio.to_thread(cache_middleware.cache.cleanup_expired_ranges)
 
             from ...request_coalescer import get_request_coalescer
 
@@ -68,7 +112,7 @@ def register_status_routes(
     async def clear_cache(_authenticated: bool = Depends(verify_api_key_dependency)):
         """Clear all cache entries."""
         try:
-            get_cache().clear_all()
+            await asyncio.to_thread(lambda: get_cache().clear_all())
             return {"status": "success", "message": "Cache cleared successfully"}
         except Exception as e:
             logger.error(f"Error clearing cache: {e}")
@@ -199,29 +243,14 @@ def register_status_routes(
                         profile=profile,
                     )
 
-                    jobs_by_host = {}
-                    for job in all_jobs:
-                        jobs_by_host.setdefault(job.hostname, []).append(job)
-
-                    for hostname in jobs_by_host:
-                        web_jobs = [
-                            JobInfoWeb.from_job_info(job)
-                            for job in jobs_by_host[hostname]
-                        ]
-                        jobs_by_host[hostname] = filter_jobs_by_search(web_jobs, search)
-
-                    results = []
-                    for slurm_host in slurm_hosts:
-                        hostname = slurm_host.host.hostname
-                        results.append(
-                            build_job_status_response(
-                                hostname=hostname,
-                                web_jobs=jobs_by_host.get(hostname, []),
-                                query_time=datetime.now(),
-                                group_array_jobs=group_array_jobs,
-                                limit=limit,
-                            )
-                        )
+                    results = await asyncio.to_thread(
+                        _build_status_results_from_jobs,
+                        all_jobs=all_jobs,
+                        slurm_hosts=slurm_hosts,
+                        search=search,
+                        group_array_jobs=group_array_jobs,
+                        limit=limit,
+                    )
 
                     logger.info(
                         f"Concurrent fetch completed: {sum(len(result.jobs) for result in results)} total jobs from {len(slurm_hosts)} hosts"
@@ -299,13 +328,11 @@ def register_status_routes(
                         skip_user_detection,
                         force_refresh,
                     )
-                    web_jobs = filter_jobs_by_search(
-                        [JobInfoWeb.from_job_info(job) for job in jobs], search
-                    )
-                    return build_job_status_response(
+                    return await asyncio.to_thread(
+                        _build_status_response_for_jobs,
                         hostname=hostname,
-                        web_jobs=web_jobs,
-                        query_time=datetime.now(),
+                        jobs=jobs,
+                        search=search,
                         group_array_jobs=group_array_jobs,
                         limit=limit,
                     )

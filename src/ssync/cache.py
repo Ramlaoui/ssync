@@ -625,30 +625,20 @@ class JobDataCache:
 
         return JobInfo(**normalized)
 
-    def cache_job(
+    def _build_cached_job_data(
         self,
         job_info: JobInfo,
+        *,
+        existing_cached: Optional[CachedJobData] = None,
         script_content: Optional[str] = None,
         local_source_dir: Optional[str] = None,
-    ):
-        """
-        Cache job information and associated data.
-
-        IMPORTANT: This method preserves existing script content if not provided.
-        This ensures scripts cached at job launch time are not lost when job status is updated.
-
-        Args:
-            job_info: JobInfo object to cache
-            script_content: Optional script content (if None, preserves existing)
-            local_source_dir: Optional local source directory that was synced
-        """
-        now = datetime.now()
-        # Check if job is in active state (Pending or Running)
+        now: Optional[datetime] = None,
+    ) -> CachedJobData:
+        """Build a cache row while preserving durable fields from an old row."""
+        now = now or datetime.now()
         from .models.job import JobState as JS
 
         is_active = job_info.state in [JS.PENDING, JS.RUNNING]
-
-        existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
 
         if existing_cached:
             if script_content is None and existing_cached.script_content:
@@ -703,55 +693,154 @@ class JobDataCache:
             last_updated=now,
             is_active=is_active,
         )
+        return cached_data
+
+    def cache_job(
+        self,
+        job_info: JobInfo,
+        script_content: Optional[str] = None,
+        local_source_dir: Optional[str] = None,
+    ):
+        """
+        Cache job information and associated data.
+
+        IMPORTANT: This method preserves existing script content if not provided.
+        This ensures scripts cached at job launch time are not lost when job status is updated.
+
+        Args:
+            job_info: JobInfo object to cache
+            script_content: Optional script content (if None, preserves existing)
+            local_source_dir: Optional local source directory that was synced
+        """
+        existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
+        cached_data = self._build_cached_job_data(
+            job_info,
+            existing_cached=existing_cached,
+            script_content=script_content,
+            local_source_dir=local_source_dir,
+        )
 
         self._store_cached_data(cached_data)
+
+    def cache_jobs(self, job_infos: List[JobInfo]) -> None:
+        """Cache many jobs in a single connection and transaction."""
+        if not job_infos:
+            return
+
+        now = datetime.now()
+        keys = [
+            (job_info.job_id, job_info.hostname)
+            for job_info in job_infos
+            if job_info.job_id and job_info.hostname
+        ]
+        existing_by_key = self._get_cached_jobs_for_keys(keys)
+
+        with self._get_connection() as conn:
+            for job_info in job_infos:
+                if not job_info.job_id or not job_info.hostname:
+                    continue
+                cached_data = self._build_cached_job_data(
+                    job_info,
+                    existing_cached=existing_by_key.get(
+                        (job_info.job_id, job_info.hostname)
+                    ),
+                    now=now,
+                )
+                self._store_cached_data_in_connection(conn, cached_data)
+            conn.commit()
+
+    def _get_cached_jobs_for_keys(
+        self,
+        keys: List[Tuple[str, str]],
+        max_age_days: Optional[int] = None,
+    ) -> Dict[Tuple[str, str], CachedJobData]:
+        """Batch lookup existing cache rows by exact (job_id, hostname) pairs."""
+        if not keys:
+            return {}
+
+        if max_age_days is None:
+            max_age_days = self.cache_settings.recycled_id_max_age_days
+        cache_cutoff = self._get_cache_cutoff_iso(max_age_days)
+        submit_time_cutoff = self._get_submit_time_cutoff(max_age_days)
+
+        results: Dict[Tuple[str, str], CachedJobData] = {}
+        unique_keys = list(dict.fromkeys(keys))
+        chunk_size = 250
+        with self._get_connection() as conn:
+            for i in range(0, len(unique_keys), chunk_size):
+                chunk = unique_keys[i : i + chunk_size]
+                conditions = " OR ".join(
+                    ["(job_id = ? AND hostname = ?)"] * len(chunk)
+                )
+                params: List[Any] = [
+                    value for job_id, hostname in chunk for value in (job_id, hostname)
+                ]
+                query = f"SELECT * FROM cached_jobs WHERE ({conditions})"
+                if cache_cutoff:
+                    query += " AND cached_at >= ?"
+                    params.append(cache_cutoff)
+
+                cursor = conn.execute(query, params)
+                for row in cursor.fetchall():
+                    cached_data = self._row_to_cached_data(row)
+                    if cached_data.job_info and cached_data.job_info.submit_time:
+                        if self._is_submit_time_older_than_cutoff(
+                            cached_data.job_info.submit_time, submit_time_cutoff
+                        ):
+                            continue
+                    results[(cached_data.job_id, cached_data.hostname)] = cached_data
+
+        return results
 
     def _store_cached_data(self, cached_data: CachedJobData):
         """Store cached data in database and maintain array metadata."""
         with self._get_connection() as conn:
-            job_info_dict = asdict(cached_data.job_info)
-
-            # Convert enums to strings for JSON serialization
-            job_info_dict = self._prepare_dict_for_json(job_info_dict)
-
-            # Extract array_job_id from job_info
-            array_job_id = cached_data.job_info.array_job_id
-
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO cached_jobs
-                (job_id, hostname, job_info_json, script_content, local_source_dir,
-                 stdout_compressed, stdout_size, stdout_compression,
-                 stderr_compressed, stderr_size, stderr_compression,
-                 cached_at, last_updated, is_active, array_job_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    cached_data.job_id,
-                    cached_data.hostname,
-                    json.dumps(job_info_dict),
-                    cached_data.script_content,
-                    cached_data.local_source_dir,
-                    cached_data.stdout_compressed,
-                    cached_data.stdout_size,
-                    cached_data.stdout_compression,
-                    cached_data.stderr_compressed,
-                    cached_data.stderr_size,
-                    cached_data.stderr_compression,
-                    cached_data.cached_at.isoformat(),
-                    cached_data.last_updated.isoformat(),
-                    cached_data.is_active,
-                    array_job_id,
-                ),
-            )
-
-            # Maintain array metadata if this is an array job
-            if array_job_id:
-                self._update_array_metadata(
-                    conn, cached_data.job_info, cached_data.script_content
-                )
-
+            self._store_cached_data_in_connection(conn, cached_data)
             conn.commit()
+
+    def _store_cached_data_in_connection(self, conn, cached_data: CachedJobData):
+        """Store cached data using an existing database connection."""
+        job_info_dict = asdict(cached_data.job_info)
+
+        # Convert enums to strings for JSON serialization
+        job_info_dict = self._prepare_dict_for_json(job_info_dict)
+
+        # Extract array_job_id from job_info
+        array_job_id = cached_data.job_info.array_job_id
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO cached_jobs
+            (job_id, hostname, job_info_json, script_content, local_source_dir,
+             stdout_compressed, stdout_size, stdout_compression,
+             stderr_compressed, stderr_size, stderr_compression,
+             cached_at, last_updated, is_active, array_job_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                cached_data.job_id,
+                cached_data.hostname,
+                json.dumps(job_info_dict),
+                cached_data.script_content,
+                cached_data.local_source_dir,
+                cached_data.stdout_compressed,
+                cached_data.stdout_size,
+                cached_data.stdout_compression,
+                cached_data.stderr_compressed,
+                cached_data.stderr_size,
+                cached_data.stderr_compression,
+                cached_data.cached_at.isoformat(),
+                cached_data.last_updated.isoformat(),
+                cached_data.is_active,
+                array_job_id,
+            ),
+        )
+
+        # Maintain array metadata if this is an array job
+        if array_job_id:
+            self._update_array_metadata(
+                conn, cached_data.job_info, cached_data.script_content
+            )
 
     def _update_array_metadata(
         self, conn, job_info: JobInfo, script_content: Optional[str] = None

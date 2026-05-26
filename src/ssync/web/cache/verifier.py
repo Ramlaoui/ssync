@@ -54,7 +54,9 @@ class CacheVerificationService:
     ):
         try:
             logger.info("Starting background cache verification")
-            to_mark_completed = self.cache.verify_cached_jobs(current_job_ids)
+            to_mark_completed = await asyncio.to_thread(
+                self.cache.verify_cached_jobs, current_job_ids
+            )
             if not to_mark_completed:
                 logger.debug("No jobs to mark as completed")
                 return
@@ -67,7 +69,7 @@ class CacheVerificationService:
             )
 
             for job_id, hostname in successfully_updated:
-                self.cache.mark_job_completed(job_id, hostname)
+                await asyncio.to_thread(self.cache.mark_job_completed, job_id, hostname)
 
             if successfully_updated:
                 logger.info(
@@ -189,9 +191,10 @@ class CacheVerificationService:
                 logger.info(
                     f"Updating job {job_id} with final state: {final_state.state.value}"
                 )
-                cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(
-                    job_id
+                cached_map = await asyncio.to_thread(
+                    self.cache.get_cached_jobs_by_ids, [job_id], hostname
                 )
+                cached_job = cached_map.get(job_id)
                 script_content = cached_job.script_content if cached_job else None
 
                 if not script_content:
@@ -210,15 +213,19 @@ class CacheVerificationService:
                     except Exception as e:
                         logger.debug(f"Could not fetch script for job {job_id}: {e}")
 
-                self.cache.cache_job(final_state, script_content=script_content)
+                await asyncio.to_thread(
+                    self.cache.cache_job, final_state, script_content=script_content
+                )
                 return True
 
-            return self._handle_missing_final_state(job_id, hostname)
+            return await self._handle_missing_final_state(job_id, hostname)
         except Exception as e:
             logger.warning(f"Error processing completing job {job_id}: {e}")
             return None
 
-    def _handle_missing_final_state(self, job_id: str, hostname: str) -> Optional[bool]:
+    async def _handle_missing_final_state(
+        self, job_id: str, hostname: str
+    ) -> Optional[bool]:
         import time
 
         job_key = (job_id, hostname)
@@ -240,14 +247,16 @@ class CacheVerificationService:
                 f"Giving up on job {job_id} after {attempts} failed sacct attempts "
                 f"({time_elapsed:.0f}s elapsed). Marking as completed with UNKNOWN state."
             )
-            cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(
-                job_id
+            cached_map = await asyncio.to_thread(
+                self.cache.get_cached_jobs_by_ids, [job_id], hostname
             )
+            cached_job = cached_map.get(job_id)
             if cached_job and cached_job.job_info:
                 from ...models.job import JobState
 
                 cached_job.job_info.state = JobState.UNKNOWN
-                self.cache.cache_job(
+                await asyncio.to_thread(
+                    self.cache.cache_job,
                     cached_job.job_info,
                     script_content=cached_job.script_content,
                 )
