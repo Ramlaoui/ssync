@@ -58,6 +58,64 @@ def _make_job(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_fetch_host_jobs_caches_active_jobs_off_event_loop(monkeypatch, test_cache):
+    hostname = "cluster-cache-offloop.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    job = _make_job("3000", hostname)
+    manager = _FakeManager([slurm_host])
+    manager._get_connection = lambda _host: object()
+    manager.slurm_client = types.SimpleNamespace(
+        check_slurm_availability=lambda *_args, **_kwargs: True,
+        get_active_jobs=lambda *_args, **_kwargs: [job],
+    )
+    _install_fake_web_app(monkeypatch, manager)
+
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    call_thread = {}
+    original_cache_jobs = test_cache.cache_jobs
+
+    def blocking_cache_jobs(job_infos):
+        call_thread["ident"] = threading.get_ident()
+        call_thread["jobs"] = [cached_job.job_id for cached_job in job_infos]
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=1)
+        return original_cache_jobs(job_infos)
+
+    monkeypatch.setattr(test_cache, "cache_jobs", blocking_cache_jobs)
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+
+    task = asyncio.create_task(
+        job_data_manager._fetch_host_jobs(
+            manager,
+            slurm_host,
+            user="testuser",
+            since=None,
+            job_ids=None,
+            state_filter=None,
+            active_only=True,
+            completed_only=False,
+            skip_user_detection=False,
+            force_refresh=False,
+            limit=None,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    assert call_thread["ident"] != threading.get_ident()
+    assert call_thread["jobs"] == ["3000"]
+
+    release.set()
+    result = await asyncio.wait_for(task, timeout=1.0)
+
+    assert [fetched.job_id for fetched in result] == ["3000"]
+    assert test_cache.get_cached_job("3000", hostname) is not None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_get_job_data_ignores_unknown_cached_job_fields(test_cache):
     hostname = "cluster-forward-fields.example.com"
     job = _make_job("41257_[0-5]", hostname)
@@ -113,6 +171,49 @@ async def test_fetch_all_jobs_returns_cached_for_busy_host(monkeypatch, test_cac
     jobs = await job_data_manager.fetch_all_jobs(hostname=hostname)
 
     assert [job.job_id for job in jobs] == ["1001"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_all_jobs_busy_host_cache_read_runs_off_event_loop(
+    monkeypatch, test_cache
+):
+    hostname = "cluster-busy-offloop.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    manager = _FakeManager([slurm_host])
+    _install_fake_web_app(monkeypatch, manager)
+
+    job_data_manager = JobDataManager()
+    job_data_manager.cache = test_cache
+    job_data_manager._busy_host_wait_seconds = 0.0
+
+    cached_job = _make_job("1002", hostname)
+    test_cache.cache_job(cached_job)
+
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    call_thread = {}
+    original_get_cached_jobs = test_cache.get_cached_jobs
+
+    def blocking_get_cached_jobs(*args, **kwargs):
+        call_thread["ident"] = threading.get_ident()
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=1)
+        return original_get_cached_jobs(*args, **kwargs)
+
+    monkeypatch.setattr(test_cache, "get_cached_jobs", blocking_get_cached_jobs)
+
+    job_data_manager._fetching_hosts.add(hostname)
+    task = asyncio.create_task(job_data_manager.fetch_all_jobs(hostname=hostname))
+
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    assert call_thread["ident"] != threading.get_ident()
+
+    release.set()
+    jobs = await asyncio.wait_for(task, timeout=1.0)
+
+    assert [job.job_id for job in jobs] == ["1002"]
 
 
 @pytest.mark.unit

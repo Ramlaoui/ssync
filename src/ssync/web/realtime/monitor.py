@@ -257,12 +257,14 @@ async def monitor_all_jobs_singleton(
                 if last_full_update == 0:
                     logger.debug("Performing initial cache-only websocket update")
                     since_dt = datetime.now() - timedelta(days=1)
-                    cached_job_data = cache.get_cached_jobs(
+                    cached_job_data = await asyncio.to_thread(
+                        cache.get_cached_jobs,
                         hostname=None,
                         limit=active_fetch_limit,
                         since=since_dt,
                     )
-                    all_jobs = filter_ws_initial_cached_jobs(
+                    all_jobs = await asyncio.to_thread(
+                        filter_ws_initial_cached_jobs,
                         job_data_manager,
                         cached_job_data,
                     )

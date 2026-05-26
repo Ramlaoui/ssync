@@ -1,5 +1,7 @@
 """Cache-backed response helpers for the web API."""
 
+import asyncio
+import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -18,14 +20,36 @@ class CacheResponseService:
         self.cache = cache
         self._recent_active_cache_ttl_seconds = recent_active_cache_ttl_seconds
 
-    async def cache_job_status_response(
+    async def _run_cache_call(self, func, *args, **kwargs):
+        """Run cache work away from the event loop."""
+        web_app = sys.modules.get("ssync.web.app")
+        pool = getattr(web_app, "background_executor", None) or getattr(
+            web_app, "executor", None
+        )
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(pool, lambda: func(*args, **kwargs))
+
+    def _cache_job_infos_sync(self, job_infos: List[JobInfo]) -> None:
+        if not job_infos:
+            return
+        cache_jobs = getattr(self.cache, "cache_jobs", None)
+        if callable(cache_jobs):
+            cache_jobs(job_infos)
+            return
+        for job_info in job_infos:
+            self.cache.cache_job(job_info)
+
+    def _prepare_job_status_cache_work(
         self,
         responses: List[JobStatusResponse],
-        hostname: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
-        since: Optional[str] = None,
-    ) -> List[JobStatusResponse]:
+        hostname: Optional[str],
+        filters: Optional[Dict[str, Any]],
+        since: Optional[str],
+    ) -> tuple[List[JobStatusResponse], List[JobInfo], List[Dict[str, Any]]]:
         enhanced_responses = []
+        jobs_to_cache: List[JobInfo] = []
+        range_cache_entries: List[Dict[str, Any]] = []
 
         for response in responses:
             if response.cached:
@@ -39,7 +63,7 @@ class CacheResponseService:
             for job_web in response.jobs:
                 job_info = job_web.to_job_info()
                 job_ids_for_range.append(job_info.job_id)
-                self.cache.cache_job(job_info)
+                jobs_to_cache.append(job_info)
                 current_jobs.append(job_web)
 
             if hostname and filters and since and response_hostname == hostname:
@@ -49,12 +73,14 @@ class CacheResponseService:
                         for job_web in current_jobs
                     )
                     ttl_seconds = 86400 if all_completed else 60
-                    self.cache.cache_date_range_query(
-                        hostname=hostname,
-                        filters=filters,
-                        since=since,
-                        job_ids=job_ids_for_range,
-                        ttl_seconds=ttl_seconds,
+                    range_cache_entries.append(
+                        {
+                            "hostname": hostname,
+                            "filters": filters,
+                            "since": since,
+                            "job_ids": job_ids_for_range,
+                            "ttl_seconds": ttl_seconds,
+                        }
                     )
                     logger.info(
                         f"Cached date range for {hostname}: {len(job_ids_for_range)} jobs, "
@@ -77,16 +103,47 @@ class CacheResponseService:
                 )
             )
 
+        return enhanced_responses, jobs_to_cache, range_cache_entries
+
+    async def cache_job_status_response(
+        self,
+        responses: List[JobStatusResponse],
+        hostname: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
+    ) -> List[JobStatusResponse]:
+        enhanced_responses, jobs_to_cache, range_cache_entries = (
+            await self._run_cache_call(
+                self._prepare_job_status_cache_work,
+                responses,
+                hostname,
+                filters,
+                since,
+            )
+        )
+
+        if jobs_to_cache:
+            await self._run_cache_call(self._cache_job_infos_sync, jobs_to_cache)
+
+        for range_cache_entry in range_cache_entries:
+            await self._run_cache_call(
+                self.cache.cache_date_range_query, **range_cache_entry
+            )
+
         return enhanced_responses
 
     async def check_date_range_cache(
         self, hostname: str, filters: Dict[str, Any], since: str
     ) -> Optional[List[JobInfoWeb]]:
-        cached_job_ids = self.cache.check_date_range_cache(hostname, filters, since)
+        cached_job_ids = await self._run_cache_call(
+            self.cache.check_date_range_cache, hostname, filters, since
+        )
         if cached_job_ids is None:
             return None
 
-        cached_map = self.cache.get_cached_jobs_by_ids(cached_job_ids, hostname)
+        cached_map = await self._run_cache_call(
+            self.cache.get_cached_jobs_by_ids, cached_job_ids, hostname
+        )
         cached_jobs = [
             JobInfoWeb.from_job_info(cached.job_info)
             for cached in cached_map.values()
@@ -108,7 +165,10 @@ class CacheResponseService:
         *,
         allow_stale_active: bool = False,
     ) -> Optional[JobInfoWeb]:
-        cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+        cached_map = await self._run_cache_call(
+            self.cache.get_cached_jobs_by_ids, [job_id], hostname
+        )
+        cached_job = cached_map.get(job_id)
         if cached_job and self._can_return_cached_job(
             cached_job, allow_stale_active=allow_stale_active
         ):
@@ -134,7 +194,8 @@ class CacheResponseService:
     async def cache_job_output(
         self, job_id: str, hostname: str, response: JobOutputResponse
     ):
-        self.cache.update_job_outputs(
+        await self._run_cache_call(
+            self.cache.update_job_outputs,
             job_id=job_id,
             hostname=hostname,
             stdout_content=response.stdout,
@@ -145,7 +206,10 @@ class CacheResponseService:
     async def get_cached_job_output(
         self, job_id: str, hostname: Optional[str] = None
     ) -> Optional[JobOutputResponse]:
-        cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+        cached_map = await self._run_cache_call(
+            self.cache.get_cached_jobs_by_ids, [job_id], hostname
+        )
+        cached_job = cached_map.get(job_id)
         if not cached_job or not (
             cached_job.stdout_compressed or cached_job.stderr_compressed
         ):
@@ -195,12 +259,18 @@ class CacheResponseService:
         script_content: str,
         local_source_dir: Optional[str] = None,
     ):
-        self.cache.update_job_script(job_id, hostname, script_content)
+        await self._run_cache_call(
+            self.cache.update_job_script, job_id, hostname, script_content
+        )
 
         if local_source_dir:
-            cached = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+            cached_map = await self._run_cache_call(
+                self.cache.get_cached_jobs_by_ids, [job_id], hostname
+            )
+            cached = cached_map.get(job_id)
             if cached:
-                self.cache.cache_job(
+                await self._run_cache_call(
+                    self.cache.cache_job,
                     cached.job_info,
                     script_content=script_content,
                     local_source_dir=local_source_dir,
@@ -211,7 +281,10 @@ class CacheResponseService:
     async def get_cached_job_script(
         self, job_id: str, hostname: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        cached_job = self.cache.get_cached_jobs_by_ids([job_id], hostname).get(job_id)
+        cached_map = await self._run_cache_call(
+            self.cache.get_cached_jobs_by_ids, [job_id], hostname
+        )
+        cached_job = cached_map.get(job_id)
         if cached_job and cached_job.script_content:
             return {
                 "job_id": job_id,

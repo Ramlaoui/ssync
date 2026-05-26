@@ -1,5 +1,6 @@
 """Shared status endpoint helpers for web job views."""
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -204,31 +205,24 @@ def _get_cached_username_for_host(manager, hostname: str) -> Optional[str]:
         return None
 
 
-async def get_cached_host_status_response(
+def _prepare_cached_host_status_response(
     *,
     cache_middleware,
-    manager,
     hostname: str,
-    user: Optional[str],
+    effective_user: str,
     active_only: bool,
     completed_only: bool,
     state: Optional[str],
     search: Optional[str],
     group_array_jobs: bool,
     limit: Optional[int],
-    refresh_callback,
-) -> Optional[JobStatusResponse]:
-    """Return a cached single-host status response when user filtering is safe."""
-    effective_user = user or _get_cached_username_for_host(manager, hostname)
-    if not effective_user:
-        return None
-
+) -> tuple[Optional[JobStatusResponse], bool]:
     cached_jobs = cache_middleware.cache.get_cached_jobs(
         hostname=hostname,
         active_only=active_only,
     )
     if not cached_jobs:
-        return None
+        return None, False
 
     web_jobs = [
         JobInfoWeb.from_job_info(cached.job_info)
@@ -236,7 +230,7 @@ async def get_cached_host_status_response(
         if cached.job_info and cached.job_info.user == effective_user
     ]
     if not web_jobs:
-        return None
+        return None, False
 
     if completed_only:
         web_jobs = [
@@ -257,6 +251,7 @@ async def get_cached_host_status_response(
 
     web_jobs = filter_jobs_by_search(web_jobs, search)
 
+    should_refresh = False
     fetch_state = cache_middleware.cache.get_host_fetch_state(hostname)
     if fetch_state:
         try:
@@ -271,7 +266,7 @@ async def get_cached_host_status_response(
                 hostname,
                 cache_age,
             )
-            create_task(refresh_callback())
+            should_refresh = True
 
     response = build_job_status_response(
         hostname=hostname,
@@ -287,6 +282,42 @@ async def get_cached_host_status_response(
         hostname,
         group_array_jobs,
     )
+    return response, should_refresh
+
+
+async def get_cached_host_status_response(
+    *,
+    cache_middleware,
+    manager,
+    hostname: str,
+    user: Optional[str],
+    active_only: bool,
+    completed_only: bool,
+    state: Optional[str],
+    search: Optional[str],
+    group_array_jobs: bool,
+    limit: Optional[int],
+    refresh_callback,
+) -> Optional[JobStatusResponse]:
+    """Return a cached single-host status response when user filtering is safe."""
+    effective_user = user or _get_cached_username_for_host(manager, hostname)
+    if not effective_user:
+        return None
+
+    response, should_refresh = await asyncio.to_thread(
+        _prepare_cached_host_status_response,
+        cache_middleware=cache_middleware,
+        hostname=hostname,
+        effective_user=effective_user,
+        active_only=active_only,
+        completed_only=completed_only,
+        state=state,
+        search=search,
+        group_array_jobs=group_array_jobs,
+        limit=limit,
+    )
+    if should_refresh:
+        create_task(refresh_callback())
     return response
 
 
@@ -313,6 +344,39 @@ async def get_cached_date_range_status_response(
     if cached_jobs is None:
         return None
 
+    response, should_refresh = await asyncio.to_thread(
+        _prepare_cached_date_range_status_response,
+        cache_middleware=cache_middleware,
+        hostname=hostname,
+        since=since,
+        cache_filters=cache_filters,
+        cached_jobs=cached_jobs,
+        active_only=active_only,
+        completed_only=completed_only,
+        state=state,
+        search=search,
+        group_array_jobs=group_array_jobs,
+        limit=limit,
+    )
+    if should_refresh:
+        create_task(refresh_callback())
+    return response
+
+
+def _prepare_cached_date_range_status_response(
+    *,
+    cache_middleware,
+    hostname: str,
+    since: str,
+    cache_filters: Dict[str, Any],
+    cached_jobs: List[JobInfoWeb],
+    active_only: bool,
+    completed_only: bool,
+    state: Optional[str],
+    search: Optional[str],
+    group_array_jobs: bool,
+    limit: Optional[int],
+) -> tuple[JobStatusResponse, bool]:
     cached_state_map = cache_middleware.cache.get_cached_jobs_by_ids(
         [job.job_id for job in cached_jobs],
         hostname,
@@ -329,6 +393,7 @@ async def get_cached_date_range_status_response(
         cache_filters,
         since,
     )
+    should_refresh = False
     if cache_entry:
         cache_age = (
             datetime.now() - cache_entry.get("cached_at", datetime.now())
@@ -337,7 +402,7 @@ async def get_cached_date_range_status_response(
             logger.info(
                 f"Cache for {hostname} is {cache_age:.0f}s old - triggering background refresh"
             )
-            create_task(refresh_callback())
+            should_refresh = True
 
     if state:
         normalized_jobs = [job for job in normalized_jobs if job.state == state]
@@ -354,7 +419,7 @@ async def get_cached_date_range_status_response(
     logger.info(
         f"Served {len(web_jobs)} jobs from date range cache for {hostname} (grouping={group_array_jobs})"
     )
-    return response
+    return response, should_refresh
 
 
 def apply_grouped_limit(
