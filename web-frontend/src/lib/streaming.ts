@@ -1,6 +1,3 @@
-import { apiConfig } from '../services/api';
-import { get } from 'svelte/store';
-
 export interface OutputStreamMetadata {
   type: 'metadata';
   output_type: 'stdout' | 'stderr';
@@ -42,13 +39,8 @@ export class OutputStreamSession {
   start(url: string): void {
     this.close();
 
-    const config = get(apiConfig);
     const streamUrl = new URL(url, window.location.origin);
-    if (config.apiKey) {
-      streamUrl.searchParams.set('api_key', config.apiKey);
-    }
-
-    this.eventSource = new EventSource(streamUrl.toString());
+    this.eventSource = new EventSource(streamUrl.toString(), { withCredentials: true });
     this.eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as

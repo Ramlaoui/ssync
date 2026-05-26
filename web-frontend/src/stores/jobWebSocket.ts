@@ -1,6 +1,5 @@
-import { writable, get } from 'svelte/store';
+import { writable } from 'svelte/store';
 import type { JobInfo } from '../types/api';
-import { apiConfig } from '../services/api';
 
 interface JobWebSocketState {
   connected: boolean;
@@ -198,12 +197,9 @@ export function connectJobWebSocket(jobId: string, hostname?: string) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const encodedWsJobId = encodeURIComponent(wsJobId);
 
-  // Add API key to WebSocket URL if configured
-  const config = get(apiConfig);
-  const apiKeyParam = config.apiKey ? `?api_key=${encodeURIComponent(config.apiKey)}` : '';
-  const wsUrl = `${protocol}//${window.location.host}/ws/jobs/${encodedWsJobId}${apiKeyParam}`;
+  const wsUrl = `${protocol}//${window.location.host}/ws/jobs/${encodedWsJobId}`;
 
-  console.log('[JobWebSocket] Connecting to:', wsUrl.replace(/api_key=[^&]+/, 'api_key=***'));
+  console.log('[JobWebSocket] Connecting to:', wsUrl);
   jobWebSocket = new WebSocket(wsUrl);
   
   jobWebSocket.onopen = () => {
@@ -368,12 +364,9 @@ export function connectAllJobsWebSocket() {
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-  // Add API key to WebSocket URL if configured
-  const config = get(apiConfig);
-  const apiKeyParam = config.apiKey ? `?api_key=${encodeURIComponent(config.apiKey)}` : '';
-  const wsUrl = `${protocol}//${window.location.host}/ws/jobs${apiKeyParam}`;
+  const wsUrl = `${protocol}//${window.location.host}/ws/jobs`;
 
-  console.log('[AllJobsWebSocket] Connecting to:', wsUrl.replace(/api_key=[^&]+/, 'api_key=***'));
+  console.log('[AllJobsWebSocket] Connecting to:', wsUrl);
   allJobsWebSocket = new WebSocket(wsUrl);
   
   allJobsWebSocket.onopen = () => {

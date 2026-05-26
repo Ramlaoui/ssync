@@ -254,6 +254,17 @@ class InputSanitizer:
         return username
 
     @staticmethod
+    def sanitize_filename(filename: str, max_length: int = 255) -> str:
+        if not filename:
+            return "file"
+
+        name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        name = re.sub(r"[\x00-\x1F\x7F]", "", name)
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+        name = name.lstrip(".") or "file"
+        return name[:max_length]
+
+    @staticmethod
     def sanitize_text(text: str, max_length: int = 1000) -> str:
         if not text:
             return text

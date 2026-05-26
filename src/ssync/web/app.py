@@ -48,8 +48,10 @@ from .realtime import (
 )
 from .security import (
     APIKeyManager,
+    SessionManager,
     configure_security_middleware,
     create_auth_dependencies,
+    register_auth_routes,
 )
 
 logger = setup_logger(__name__, "INFO")
@@ -96,6 +98,10 @@ logger.info(
 )
 launch_event_manager = LaunchEventManager()
 api_key_manager = APIKeyManager()
+session_manager = SessionManager(
+    ttl_seconds=int(os.getenv("SSYNC_SESSION_TTL_SECONDS", str(12 * 60 * 60))),
+    cookie_name=os.getenv("SSYNC_SESSION_COOKIE_NAME", "ssync_session"),
+)
 _shutdown_event = threading.Event()
 _cache_middleware = get_cache_middleware()
 get_slurm_manager = build_slurm_manager_getter(config, SlurmManager)
@@ -110,9 +116,17 @@ verify_api_key, get_api_key, verify_api_key_flexible, verify_websocket_api_key =
         api_key_header=api_key_header,
         require_api_key=REQUIRE_API_KEY,
         logger=logger,
+        session_manager=session_manager,
     )
 )
 configure_security_middleware(app, logger)
+register_auth_routes(
+    app,
+    api_key_manager=api_key_manager,
+    session_manager=session_manager,
+    api_key_header=api_key_header,
+    require_api_key=REQUIRE_API_KEY,
+)
 register_lifecycle_events(
     app,
     thread_pool_size=THREAD_POOL_SIZE,

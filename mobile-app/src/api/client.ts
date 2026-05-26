@@ -30,6 +30,16 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+type NativeWebSocketInit = {
+  headers?: Record<string, string>;
+};
+
+type NativeWebSocketConstructor = new (
+  url: string,
+  protocols?: string | string[],
+  options?: NativeWebSocketInit
+) => WebSocket;
+
 function normalizeBaseURL(baseURL: string): string {
   return baseURL.trim().replace(/\/+$/, "");
 }
@@ -60,9 +70,17 @@ export class SsyncApiClient {
   }
 
   buildWebSocketURL(path: string): string {
+    return `${this.wsBaseURL}${path}`;
+  }
+
+  openWebSocket(path: string): WebSocket {
     const apiKey = this.getApiKey();
-    const query = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "";
-    return `${this.wsBaseURL}${path}${query}`;
+    const WebSocketWithOptions = WebSocket as unknown as NativeWebSocketConstructor;
+    return new WebSocketWithOptions(
+      this.buildWebSocketURL(path),
+      undefined,
+      apiKey ? { headers: { "X-API-Key": apiKey } } : undefined
+    );
   }
 
   async request<T>(method: Method, path: string, options: RequestOptions = {}): Promise<T> {
@@ -79,6 +97,7 @@ export class SsyncApiClient {
     try {
       const response = await fetch(`${baseURL}${path}${asQuery(options.params)}`, {
         method,
+        credentials: "include",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -140,6 +159,9 @@ export class SsyncApiClient {
   }
 
   async testConnection(): Promise<boolean> {
+    if (this.getApiKey()) {
+      await this.post<{ authenticated: boolean }>("/api/auth/session");
+    }
     await this.getHosts();
     return true;
   }

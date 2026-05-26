@@ -292,7 +292,7 @@ export function useJobs({
   const connectWebSocket = useCallback(() => {
     if (!authenticated || !api.wsBaseURL || wsRef.current?.readyState === WebSocket.OPEN) return;
     closeWebSocket();
-    const ws = new WebSocket(api.buildWebSocketURL("/ws/jobs"));
+    const ws = api.openWebSocket("/ws/jobs");
     wsRef.current = ws;
     ws.onopen = () => {
       setWsConnected(true);
