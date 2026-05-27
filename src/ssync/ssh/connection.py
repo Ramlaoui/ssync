@@ -90,6 +90,62 @@ class SSHConnection:
             self.host = host_id.split("@")[-1].split(":")[0]
             self.user = None
 
+    def _get_password(self) -> Optional[str]:
+        if not isinstance(self.host_config, dict):
+            return None
+        connect_kwargs = self.host_config.get("connect_kwargs", {})
+        return connect_kwargs.get("password")
+
+    def _host_argument(self) -> str:
+        if isinstance(self.host_config, str):
+            return self.host_config
+
+        hostname = self.host_config.get("hostname", self.host_config.get("host"))
+        if "user" in self.host_config:
+            return f"{self.host_config['user']}@{hostname}"
+        return hostname
+
+    def _build_ssh_command(self) -> list[str]:
+        control_path = NativeSSH.ensure_control_master(self.host_config, self.host_id)
+        if control_path:
+            return [
+                "ssh",
+                "-S",
+                control_path,
+                "-o",
+                "ControlMaster=no",
+                self._host_argument(),
+            ]
+
+        password = self._get_password()
+        if password:
+            return ["sshpass", "-p", password, "ssh", self._host_argument()]
+
+        return NativeSSH._build_direct_ssh_command(self.host_config)
+
+    def _build_scp_command(
+        self, *, upload: bool, local_path: str, remote: str
+    ) -> list[str]:
+        host_for_scp = self._host_argument()
+        remote_target = f"{host_for_scp}:{remote}"
+        control_path = NativeSSH.ensure_control_master(self.host_config, self.host_id)
+
+        if control_path:
+            base_cmd = [
+                "scp",
+                "-o",
+                f"ControlPath={control_path}",
+                "-o",
+                "ControlMaster=no",
+            ]
+        else:
+            password = self._get_password()
+            base_cmd = ["sshpass", "-p", password, "scp"] if password else ["scp"]
+
+        if upload:
+            return base_cmd + [local_path, remote_target]
+        return base_cmd + [remote_target, local_path]
+
     @staticmethod
     def _decode_output_chunk(chunk: bytes, stream_name: str) -> str:
         try:
@@ -155,9 +211,7 @@ class SSHConnection:
         try:
             return_code = process.wait(timeout=effective_timeout)
         except subprocess.TimeoutExpired:
-            logger.exception(
-                "Command timed out after %s seconds", effective_timeout
-            )
+            logger.exception("Command timed out after %s seconds", effective_timeout)
             process.kill()
             return_code = 124
             stderr_chunks.append(
@@ -208,55 +262,12 @@ class SSHConnection:
             # Use subprocess directly for true parallelism
             import subprocess
 
-            # Check if this host needs password auth
-            password = None
-            if isinstance(self.host_config, dict):
-                connect_kwargs = self.host_config.get("connect_kwargs", {})
-                password = connect_kwargs.get("password")
-
-            # For password auth, skip ControlMaster and use direct connection
-            if password:
-                # Direct connection with sshpass
-                ssh_cmd = ["sshpass", "-p", password, "ssh"]
-
-                # Add hostname
-                if isinstance(self.host_config, str):
-                    ssh_cmd.append(self.host_config)
-                else:
-                    hostname = self.host_config.get(
-                        "hostname", self.host_config.get("host")
-                    )
-                    ssh_cmd.append(hostname)
-            else:
-                # Use ControlMaster for key-based auth
-                control_path = NativeSSH.ensure_control_master(
-                    self.host_config, self.host_id
-                )
-
-                if control_path:
-                    # Use the control socket
-                    ssh_cmd = ["ssh", "-o", f"ControlPath={control_path}"]
-
-                    # Add hostname
-                    if isinstance(self.host_config, str):
-                        ssh_cmd.append(self.host_config)
-                    else:
-                        hostname = self.host_config.get(
-                            "hostname", self.host_config.get("host")
-                        )
-                        if "user" in self.host_config and "." in hostname:
-                            ssh_cmd.append(f"{self.host_config['user']}@{hostname}")
-                        else:
-                            ssh_cmd.append(hostname)
-                else:
-                    # Fallback without ControlMaster
-                    ssh_cmd = NativeSSH._build_direct_ssh_command(self.host_config)
-
             out_stream = kwargs.get("out_stream")
             err_stream = kwargs.get("err_stream")
             effective_timeout = timeout if timeout is not None else self.command_timeout
 
             # Add command
+            ssh_cmd = self._build_ssh_command()
             ssh_cmd.append(command)
 
             if out_stream is not None or err_stream is not None:
@@ -378,52 +389,9 @@ class SSHConnection:
             temp_file = None
 
         try:
-            # Check if this host needs password auth
-            password = None
-            if isinstance(self.host_config, dict):
-                connect_kwargs = self.host_config.get("connect_kwargs", {})
-                password = connect_kwargs.get("password")
-
-            # Determine the host string for scp
-            if isinstance(self.host_config, str):
-                # SSH alias - use it directly
-                host_for_scp = self.host_config
-            else:
-                # Dictionary config - build host string
-                host_for_scp = self.host_config.get(
-                    "hostname", self.host_config.get("host")
-                )
-                if "user" in self.host_config:
-                    host_for_scp = f"{self.host_config['user']}@{host_for_scp}"
-
-            # For password auth, use sshpass
-            if password:
-                scp_cmd = [
-                    "sshpass",
-                    "-p",
-                    password,
-                    "scp",
-                    local_path,
-                    f"{host_for_scp}:{remote}",
-                ]
-            else:
-                # Use scp through the control master for key-based auth
-                control_path = NativeSSH.ensure_control_master(
-                    self.host_config, self.host_id
-                )
-
-                if control_path:
-                    scp_cmd = [
-                        "scp",
-                        "-o",
-                        f"ControlPath={control_path}",
-                        local_path,
-                        f"{host_for_scp}:{remote}",
-                    ]
-                else:
-                    # Fallback to direct scp
-                    scp_cmd = ["scp", local_path, f"{host_for_scp}:{remote}"]
-
+            scp_cmd = self._build_scp_command(
+                upload=True, local_path=local_path, remote=remote
+            )
             self._run_scp_command(scp_cmd, direction="upload")
         finally:
             # Clean up temp file if we created one
@@ -459,52 +427,9 @@ class SSHConnection:
             is_file_obj = False
 
         try:
-            # Check if this host needs password auth
-            password = None
-            if isinstance(self.host_config, dict):
-                connect_kwargs = self.host_config.get("connect_kwargs", {})
-                password = connect_kwargs.get("password")
-
-            # Determine the host string for scp
-            if isinstance(self.host_config, str):
-                # SSH alias - use it directly
-                host_for_scp = self.host_config
-            else:
-                # Dictionary config - build host string
-                host_for_scp = self.host_config.get(
-                    "hostname", self.host_config.get("host")
-                )
-                if "user" in self.host_config:
-                    host_for_scp = f"{self.host_config['user']}@{host_for_scp}"
-
-            # For password auth, use sshpass
-            if password:
-                scp_cmd = [
-                    "sshpass",
-                    "-p",
-                    password,
-                    "scp",
-                    f"{host_for_scp}:{remote}",
-                    local_path,
-                ]
-            else:
-                # Use scp through the control master for key-based auth
-                control_path = NativeSSH.ensure_control_master(
-                    self.host_config, self.host_id
-                )
-
-                if control_path:
-                    scp_cmd = [
-                        "scp",
-                        "-o",
-                        f"ControlPath={control_path}",
-                        f"{host_for_scp}:{remote}",
-                        local_path,
-                    ]
-                else:
-                    # Fallback to direct scp
-                    scp_cmd = ["scp", f"{host_for_scp}:{remote}", local_path]
-
+            scp_cmd = self._build_scp_command(
+                upload=False, local_path=local_path, remote=remote
+            )
             self._run_scp_command(scp_cmd, direction="download")
 
             # If it was a file object, write the content back

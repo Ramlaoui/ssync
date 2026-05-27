@@ -303,6 +303,102 @@ class TestSSHConnection:
         assert result.stderr == "Command timed out after 300 seconds"
 
     @pytest.mark.unit
+    @patch(
+        "ssync.ssh.connection.NativeSSH.ensure_control_master",
+        return_value="/tmp/control.sock",
+    )
+    @patch("subprocess.run")
+    def test_run_reuses_control_master_for_password_auth(
+        self, mock_run, _mock_control_master
+    ):
+        """Password-backed commands reuse the managed SSH control socket."""
+        mock_run.return_value = Mock(returncode=0, stdout=b"", stderr=b"")
+        conn = SSHConnection(
+            {
+                "hostname": "example.com",
+                "user": "alice",
+                "connect_kwargs": {"password": "secret"},
+            },
+            "alice@example.com",
+        )
+
+        result = conn.run("echo ok")
+
+        assert result.ok is True
+        mock_run.assert_called_once_with(
+            [
+                "ssh",
+                "-S",
+                "/tmp/control.sock",
+                "-o",
+                "ControlMaster=no",
+                "alice@example.com",
+                "echo ok",
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.ensure_control_master", return_value=None)
+    @patch("subprocess.run")
+    def test_run_falls_back_to_sshpass_for_password_auth(
+        self, mock_run, _mock_control_master
+    ):
+        """Password-backed commands keep a direct sshpass fallback."""
+        mock_run.return_value = Mock(returncode=0, stdout=b"", stderr=b"")
+        conn = SSHConnection(
+            {
+                "hostname": "example.com",
+                "user": "alice",
+                "connect_kwargs": {"password": "secret"},
+            },
+            "alice@example.com",
+        )
+
+        result = conn.run("echo ok")
+
+        assert result.ok is True
+        mock_run.assert_called_once_with(
+            ["sshpass", "-p", "secret", "ssh", "alice@example.com", "echo ok"],
+            capture_output=True,
+            timeout=120,
+        )
+
+    @pytest.mark.unit
+    @patch(
+        "ssync.ssh.connection.NativeSSH.ensure_control_master",
+        return_value="/tmp/control.sock",
+    )
+    def test_scp_command_reuses_control_master_for_password_auth(
+        self, _mock_control_master
+    ):
+        conn = SSHConnection(
+            {
+                "hostname": "example.com",
+                "user": "alice",
+                "connect_kwargs": {"password": "secret"},
+            },
+            "alice@example.com",
+        )
+
+        cmd = conn._build_scp_command(
+            upload=True,
+            local_path="/tmp/local.txt",
+            remote="/remote/local.txt",
+        )
+
+        assert cmd == [
+            "scp",
+            "-o",
+            "ControlPath=/tmp/control.sock",
+            "-o",
+            "ControlMaster=no",
+            "/tmp/local.txt",
+            "alice@example.com:/remote/local.txt",
+        ]
+
+    @pytest.mark.unit
     @patch("ssync.ssh.connection.NativeSSH._check_control_master")
     @patch("pathlib.Path.exists")
     @patch.object(SSHConnection, "run")

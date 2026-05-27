@@ -316,8 +316,25 @@ class SyncManager:
 
         try:
             # Use subprocess to run rsync locally
-            # Build command based on authentication method
-            if slurm_host.host.password:
+            # Reuse the managed SSH control socket when available, including
+            # password-backed hosts whose master was opened via sshpass.
+            control_path = NativeSSH.ensure_control_master(
+                conn.host_config, conn.host_id
+            )
+            if control_path:
+                ssh_cmd = f"ssh -S {control_path} -o ControlMaster=no"
+                rsync_cmd = (
+                    ["rsync", "-avz", "-e", ssh_cmd]
+                    + exclude_args
+                    + [f"{self.source_dir}/", target]
+                )
+                logger.debug(f"Running rsync via ControlMaster: {control_path}")
+                self._emit_sync_log(
+                    f"Running rsync via ControlMaster: {control_path}",
+                    stream="system",
+                )
+                returncode = self._run_streaming_subprocess(rsync_cmd)
+            elif slurm_host.host.password:
                 # Use sshpass with environment variable for better security
                 env = os.environ.copy()
                 env["SSHPASS"] = slurm_host.host.password
@@ -332,32 +349,13 @@ class SyncManager:
                 )
                 returncode = self._run_streaming_subprocess(rsync_cmd, env=env)
             else:
-                # Use the existing ControlMaster socket to avoid a new SSH handshake
-                control_path = NativeSSH.ensure_control_master(
-                    conn.host_config, conn.host_id
+                rsync_cmd = (
+                    ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
                 )
-                if control_path:
-                    ssh_cmd = f"ssh -S {control_path} -o ControlMaster=no"
-                    rsync_cmd = (
-                        ["rsync", "-avz", "-e", ssh_cmd]
-                        + exclude_args
-                        + [f"{self.source_dir}/", target]
-                    )
-                    logger.debug(f"Running rsync via ControlMaster: {control_path}")
-                    self._emit_sync_log(
-                        f"Running rsync via ControlMaster: {control_path}",
-                        stream="system",
-                    )
-                else:
-                    rsync_cmd = (
-                        ["rsync", "-avz"]
-                        + exclude_args
-                        + [f"{self.source_dir}/", target]
-                    )
-                    logger.debug("Running rsync without ControlMaster")
-                    self._emit_sync_log(
-                        "Running rsync without ControlMaster", stream="system"
-                    )
+                logger.debug("Running rsync without ControlMaster")
+                self._emit_sync_log(
+                    "Running rsync without ControlMaster", stream="system"
+                )
                 returncode = self._run_streaming_subprocess(rsync_cmd)
 
             if returncode == 0:
