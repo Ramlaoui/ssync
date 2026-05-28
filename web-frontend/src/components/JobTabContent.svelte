@@ -68,6 +68,19 @@
     if (!content) return 0;
     return content.split('\n').length;
   }
+
+  function streamContent(outputType: 'stdout' | 'stderr'): string {
+    return (outputType === 'stdout' ? outputData?.stdout : outputData?.stderr) || '';
+  }
+
+  function isOutputPending(outputType: 'stdout' | 'stderr'): boolean {
+    return Boolean(outputData?.refresh_queued && !streamContent(outputType));
+  }
+
+  function existsLabel(exists: boolean | null | undefined, pending: boolean): string {
+    if (pending && !exists) return 'Checking';
+    return exists ? 'Yes' : 'No';
+  }
 </script>
 
 {#if activeTab === 'output'}
@@ -78,6 +91,7 @@
         <button class="retry-btn" onclick={onRetryLoadOutput}>Retry</button>
       </div>
     {:else}
+      {@const outputPending = isOutputPending('stdout')}
       {#if outputData?.stdout_metadata}
         <div class="metadata-strip">
           <div class="metadata-row">
@@ -86,7 +100,7 @@
           </div>
           <div class="metadata-row">
             <span class="metadata-label">Exists</span>
-            <span class="metadata-value">{outputData.stdout_metadata.exists ? 'Yes' : 'No'}</span>
+            <span class="metadata-value">{existsLabel(outputData.stdout_metadata.exists, outputPending)}</span>
           </div>
           <div class="metadata-row">
             <span class="metadata-label">Size</span>
@@ -110,8 +124,10 @@
         </div>
       {/if}
       <OutputViewer
-        content={outputData?.stdout || ''}
+        content={streamContent('stdout')}
         isLoading={loadingOutput}
+        isPending={outputPending}
+        pendingMessage="Retrieving output from cluster..."
         hasMoreContent={loadingMoreOutput}
         onLoadMore={onLoadMoreOutput}
         onScrollToTop={onScrollToTop}
@@ -132,6 +148,7 @@
         <button class="retry-btn" onclick={onRetryLoadOutput}>Retry</button>
       </div>
     {:else}
+      {@const errorPending = isOutputPending('stderr')}
       {#if outputData?.stderr_metadata}
         <div class="metadata-strip">
           <div class="metadata-row">
@@ -140,7 +157,7 @@
           </div>
           <div class="metadata-row">
             <span class="metadata-label">Exists</span>
-            <span class="metadata-value">{outputData.stderr_metadata.exists ? 'Yes' : 'No'}</span>
+            <span class="metadata-value">{existsLabel(outputData.stderr_metadata.exists, errorPending)}</span>
           </div>
           <div class="metadata-row">
             <span class="metadata-label">Size</span>
@@ -164,8 +181,10 @@
         </div>
       {/if}
       <OutputViewer
-        content={outputData?.stderr || ''}
+        content={streamContent('stderr')}
         isLoading={loadingOutput}
+        isPending={errorPending}
+        pendingMessage="Retrieving error output from cluster..."
         hasMoreContent={loadingMoreOutput}
         onLoadMore={onLoadMoreOutput}
         onScrollToTop={onScrollToTop}
