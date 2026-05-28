@@ -22,6 +22,8 @@
     isStreaming?: boolean;
     onRefresh?: (() => void) | null;
     refreshing?: boolean;
+    isPending?: boolean;
+    pendingMessage?: string;
   }
 
   let {
@@ -34,7 +36,9 @@
     type = 'output',
     isStreaming = false,
     onRefresh = null,
-    refreshing = false
+    refreshing = false,
+    isPending = false,
+    pendingMessage = ''
   }: Props = $props();
 
   let outputElement: HTMLPreElement | null = $state(null);
@@ -69,6 +73,7 @@
   let showSizeWarning: boolean = $state(false);
   let warningDismissTimer: NodeJS.Timeout | null = null;
   let userInteractionCount: number = $state(0);
+  let loadingMessage = $derived(pendingMessage || `Loading ${type}...`);
   
   // Line processing
   let lines: string[] = $state([]);
@@ -415,11 +420,9 @@
   // Initialize content when it changes
   run(() => {
     const currentContent = content; // Track content changes
-    if (currentContent) {
-      // Use untrack to prevent tracking nested state reads in initializeContent
-      // This prevents circular dependencies with searchQuery, showSizeWarning, etc.
-      untrack(() => initializeContent());
-    }
+    // Use untrack to prevent tracking nested state reads in initializeContent.
+    // This prevents circular dependencies with searchQuery, showSizeWarning, etc.
+    untrack(() => initializeContent());
   });
 
   // Create debounced search handler (300ms delay)
@@ -649,9 +652,9 @@
       </div>
     {/if}
 
-    {#if isLoading && !renderedContent}
+    {#if (isLoading || isPending) && !renderedContent}
       <div class="loading-state">
-        <LoadingSpinner message="Loading {type}..." />
+        <LoadingSpinner message={loadingMessage} />
       </div>
     {:else if renderedContent}
       <div class="output-wrapper" class:with-line-numbers={showLineNumbers} class:error-type={type === 'error'}>
