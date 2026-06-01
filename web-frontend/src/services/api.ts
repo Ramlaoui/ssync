@@ -23,6 +23,7 @@ function createApiInstance() {
   apiInstance = axios.create({
     baseURL: config.baseURL,
     timeout: 90000, // 90s timeout for API requests
+    withCredentials: true,
     headers: config.apiKey ? {
       'X-API-Key': config.apiKey
     } : {}
@@ -59,7 +60,11 @@ apiConfig.subscribe(config => {
  */
 export async function testConnection(): Promise<boolean> {
   try {
-    const response = await apiInstance.get('/api/hosts');
+    const config = get(apiConfig);
+    if (config.apiKey) {
+      await apiInstance.post('/api/auth/session');
+    }
+    await apiInstance.get('/api/hosts');
     apiConfig.update(c => ({
       ...c,
       authenticated: true,
@@ -100,6 +105,7 @@ export function setApiKey(key: string) {
  * Clear API key
  */
 export function clearApiKey() {
+  void apiInstance.delete('/api/auth/session').catch(() => undefined);
   localStorage.removeItem('ssync_api_key');
   apiConfig.update(c => ({
     ...c,

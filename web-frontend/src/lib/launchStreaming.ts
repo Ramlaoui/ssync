@@ -11,10 +11,6 @@ function buildLaunchStreamUrl(launchId: string): string {
   const rawUrl = `${apiBase}/launches/${encodeURIComponent(launchId)}/events`;
   const url = new URL(rawUrl, window.location.origin);
 
-  if (config.apiKey) {
-    url.searchParams.set('api_key', config.apiKey);
-  }
-
   return url.toString();
 }
 
@@ -31,7 +27,7 @@ export class LaunchEventStream {
   start(launchId: string, onEvent: (event: LaunchEvent) => void, onError: (error: string) => void): void {
     this.close();
 
-    this.eventSource = new EventSource(buildLaunchStreamUrl(launchId));
+    this.eventSource = new EventSource(buildLaunchStreamUrl(launchId), { withCredentials: true });
 
     this.eventSource.onmessage = (message) => {
       try {

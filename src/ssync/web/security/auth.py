@@ -91,8 +91,8 @@ def configure_security_middleware(app, logger) -> None:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,
-            allow_credentials=False,
-            allow_methods=["GET", "POST", "PATCH", "DELETE"],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
             allow_headers=["X-API-Key", "Content-Type"],
             max_age=3600,
         )
@@ -120,10 +120,87 @@ def configure_security_middleware(app, logger) -> None:
     app.add_middleware(RateLimitMiddleware)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _session_cookie_secure(request: Request) -> bool:
+    if os.getenv("SSYNC_SESSION_COOKIE_SECURE") is not None:
+        return _env_bool("SSYNC_SESSION_COOKIE_SECURE", False)
+    return request.url.scheme == "https"
+
+
+def _session_cookie_samesite() -> str:
+    return os.getenv("SSYNC_SESSION_COOKIE_SAMESITE", "lax").lower()
+
+
+def register_auth_routes(
+    app,
+    *,
+    api_key_manager,
+    session_manager,
+    api_key_header,
+    require_api_key,
+) -> None:
+    """Register browser session endpoints."""
+
+    @app.post("/api/auth/session")
+    async def create_session(
+        request: Request,
+        response: Response,
+        api_key: Optional[str] = Depends(api_key_header),
+    ):
+        if not require_api_key:
+            return {"authenticated": True, "session": False}
+
+        if not api_key:
+            raise HTTPException(
+                status_code=401,
+                detail="API key required. Please provide X-API-Key header.",
+            )
+
+        if not api_key_manager.validate_key(api_key):
+            raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+
+        token = session_manager.create_session(api_key)
+        response.set_cookie(
+            key=session_manager.cookie_name,
+            value=token,
+            max_age=session_manager.ttl_seconds,
+            httponly=True,
+            secure=_session_cookie_secure(request),
+            samesite=_session_cookie_samesite(),
+            path="/",
+        )
+        return {
+            "authenticated": True,
+            "session": True,
+            "expires_in": session_manager.ttl_seconds,
+        }
+
+    @app.delete("/api/auth/session")
+    async def delete_session(request: Request, response: Response):
+        session_manager.revoke_session(request.cookies.get(session_manager.cookie_name))
+        response.delete_cookie(key=session_manager.cookie_name, path="/")
+        return {"authenticated": False}
+
+
 def create_auth_dependencies(
-    *, api_key_manager, api_key_header, require_api_key, logger
+    *, api_key_manager, api_key_header, require_api_key, logger, session_manager=None
 ):
     """Create request and websocket auth dependency functions."""
+
+    def api_key_from_session_cookie(request: Request) -> Optional[str]:
+        if session_manager is None:
+            return None
+        cookies = getattr(request, "cookies", {})
+        return session_manager.get_api_key(cookies.get(session_manager.cookie_name))
+
+    def validate_api_key(api_key: Optional[str]) -> bool:
+        return bool(api_key and api_key_manager.validate_key(api_key))
 
     async def verify_api_key(
         request: Request, api_key: Optional[str] = Depends(api_key_header)
@@ -165,14 +242,16 @@ def create_auth_dependencies(
         if not require_api_key or request.url.path == "/health":
             return True
 
-        api_key = request.headers.get("x-api-key") or api_key_query
+        api_key = request.headers.get("x-api-key") or api_key_from_session_cookie(request)
+        if not api_key:
+            api_key = api_key_query
         if not api_key:
             raise HTTPException(
                 status_code=401,
-                detail="API key required. Please provide X-API-Key header or api_key query parameter.",
+                detail="API key required. Please provide X-API-Key header or browser session.",
             )
 
-        if not api_key_manager.validate_key(api_key):
+        if not validate_api_key(api_key):
             raise HTTPException(status_code=401, detail="Invalid or expired API key.")
 
         return True
@@ -181,14 +260,26 @@ def create_auth_dependencies(
         if not require_api_key:
             return True
 
-        api_key = websocket.query_params.get("api_key")
-        logger.info(
-            f"WebSocket auth: api_key from query params: {bool(api_key)}, path: {websocket.url.path}"
-        )
+        api_key = None
+        auth_source = None
+
+        if session_manager is not None:
+            cookies = getattr(websocket, "cookies", {})
+            api_key = session_manager.get_api_key(
+                cookies.get(session_manager.cookie_name)
+            )
+            if api_key:
+                auth_source = "session"
 
         if not api_key:
             api_key = websocket.headers.get("x-api-key")
-            logger.info(f"WebSocket auth: api_key from headers: {bool(api_key)}")
+            if api_key:
+                auth_source = "header"
+
+        if not api_key:
+            api_key = websocket.query_params.get("api_key")
+            if api_key:
+                auth_source = "query"
 
         if not api_key:
             logger.warning(
@@ -197,14 +288,16 @@ def create_auth_dependencies(
             await websocket.close(code=1008, reason="API key required")
             return False
 
-        if not api_key_manager.validate_key(api_key):
+        if not validate_api_key(api_key):
             logger.warning(
                 f"WebSocket auth failed: invalid API key for {websocket.url.path}"
             )
             await websocket.close(code=1008, reason="Invalid or expired API key")
             return False
 
-        logger.info(f"WebSocket auth successful for {websocket.url.path}")
+        logger.info(
+            f"WebSocket auth successful for {websocket.url.path} via {auth_source}"
+        )
         return True
 
     return (

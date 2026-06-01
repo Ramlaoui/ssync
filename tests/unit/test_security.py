@@ -5,14 +5,19 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.security import APIKeyHeader
+from fastapi.testclient import TestClient
 
 from ssync.web.security import (
     APIKeyManager,
     InputSanitizer,
     PathValidator,
     RateLimiter,
+    SessionManager,
     ScriptValidator,
+    create_auth_dependencies,
+    register_auth_routes,
     sanitize_error_message,
 )
 
@@ -622,6 +627,117 @@ class TestAPIKeyManager:
 
         assert manager.validate_key(test_key) is True
         assert key_file.exists() is True
+
+
+class TestSessionAuth:
+    """Tests for browser session cookies used by realtime auth."""
+
+    def _manager_with_key(self, tmp_path, key: str = "secret-key") -> APIKeyManager:
+        manager = APIKeyManager(key_file=tmp_path / ".api_key")
+        manager.keys[key] = {
+            "name": "default",
+            "created_at": "2026-01-01T00:00:00",
+            "expires_at": "2999-01-01T00:00:00",
+            "last_used": None,
+            "usage_count": 0,
+        }
+        return manager
+
+    @pytest.mark.unit
+    def test_create_session_sets_http_only_cookie(self, tmp_path):
+        api_key_manager = self._manager_with_key(tmp_path)
+        session_manager = SessionManager(ttl_seconds=60)
+        app = FastAPI()
+        register_auth_routes(
+            app,
+            api_key_manager=api_key_manager,
+            session_manager=session_manager,
+            api_key_header=APIKeyHeader(name="X-API-Key", auto_error=False),
+            require_api_key=True,
+        )
+
+        response = TestClient(app).post(
+            "/api/auth/session",
+            headers={"X-API-Key": "secret-key"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["session"] is True
+        set_cookie = response.headers["set-cookie"]
+        assert "ssync_session=" in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "Max-Age=60" in set_cookie
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_flexible_auth_accepts_session_cookie(self, tmp_path):
+        api_key_manager = self._manager_with_key(tmp_path)
+        session_manager = SessionManager(ttl_seconds=60)
+        token = session_manager.create_session("secret-key")
+        _, _, verify_api_key_flexible, _ = create_auth_dependencies(
+            api_key_manager=api_key_manager,
+            session_manager=session_manager,
+            api_key_header=APIKeyHeader(name="X-API-Key", auto_error=False),
+            require_api_key=True,
+            logger=Mock(),
+        )
+        request = Mock()
+        request.url.path = "/api/jobs/123/output/stream"
+        request.headers = {}
+        request.cookies = {session_manager.cookie_name: token}
+
+        assert await verify_api_key_flexible(request, api_key_query=None) is True
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_flexible_auth_rejects_invalid_session_cookie(self, tmp_path):
+        api_key_manager = self._manager_with_key(tmp_path)
+        session_manager = SessionManager(ttl_seconds=60)
+        _, _, verify_api_key_flexible, _ = create_auth_dependencies(
+            api_key_manager=api_key_manager,
+            session_manager=session_manager,
+            api_key_header=APIKeyHeader(name="X-API-Key", auto_error=False),
+            require_api_key=True,
+            logger=Mock(),
+        )
+        request = Mock()
+        request.url.path = "/api/jobs/123/output/stream"
+        request.headers = {}
+        request.cookies = {session_manager.cookie_name: "missing"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key_flexible(request, api_key_query=None)
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_websocket_auth_accepts_session_cookie(self, tmp_path):
+        api_key_manager = self._manager_with_key(tmp_path)
+        session_manager = SessionManager(ttl_seconds=60)
+        token = session_manager.create_session("secret-key")
+        _, _, _, verify_websocket_api_key = create_auth_dependencies(
+            api_key_manager=api_key_manager,
+            session_manager=session_manager,
+            api_key_header=APIKeyHeader(name="X-API-Key", auto_error=False),
+            require_api_key=True,
+            logger=Mock(),
+        )
+
+        class FakeWebSocket:
+            cookies = {session_manager.cookie_name: token}
+            headers = {}
+            query_params = {}
+            url = Mock(path="/ws/jobs")
+            closed = None
+
+            async def close(self, code, reason):
+                self.closed = (code, reason)
+
+        websocket = FakeWebSocket()
+
+        assert await verify_websocket_api_key(websocket) is True
+        assert websocket.closed is None
 
 
 class TestSanitizeErrorMessage:

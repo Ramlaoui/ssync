@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { JobStateManager } from './JobStateManager';
+import { apiConfig } from '../services/api';
 import {
   createTestManagerWithDOM,
   simulateWebSocketOpen,
@@ -36,6 +37,12 @@ describe('JobStateManager - WebSocket', () => {
     }
     vi.useRealTimers();
     vi.clearAllTimers();
+    apiConfig.set({
+      baseURL: '',
+      apiKey: '',
+      authenticated: false,
+      authError: null,
+    });
   });
 
   describe('Connection Management', () => {
@@ -45,6 +52,22 @@ describe('JobStateManager - WebSocket', () => {
       const ws = testSetup.mocks.wsFactory.getLastInstance();
       expect(ws).toBeDefined();
       expect(ws?.url).toContain('/ws/jobs');
+    });
+
+    it('should not include the API key in the WebSocket URL', () => {
+      apiConfig.set({
+        baseURL: '',
+        apiKey: 'secret-key',
+        authenticated: true,
+        authError: null,
+      });
+
+      manager.connectWebSocket();
+
+      const ws = testSetup.mocks.wsFactory.getLastInstance();
+      expect(ws?.url).toContain('/ws/jobs');
+      expect(ws?.url).not.toContain('api_key');
+      expect(ws?.url).not.toContain('secret-key');
     });
 
     it('should update connection state when WebSocket opens', () => {

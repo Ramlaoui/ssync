@@ -81,7 +81,7 @@ export function WatchersScreen({
 
   useEffect(() => {
     if (!api.wsBaseURL) return;
-    const ws = new WebSocket(api.buildWebSocketURL("/ws/watchers"));
+    const ws = api.openWebSocket("/ws/watchers");
     wsRef.current = ws;
     ws.onopen = () => setSocketConnected(true);
     ws.onclose = () => setSocketConnected(false);
