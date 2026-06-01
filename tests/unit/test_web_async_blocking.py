@@ -15,6 +15,7 @@ from ssync.models.cluster import Host, SlurmHost
 from ssync.models.job import JobInfo, JobState
 from ssync.request_coalescer import JobRequestCoalescer
 from ssync.web import app as web_app
+from ssync.web.api import job as job_api
 from ssync.web.api import status as status_api
 from ssync.web.models import JobInfoWeb
 from ssync.web.realtime import handlers as realtime_handlers
@@ -147,6 +148,37 @@ def test_launch_route_uses_dedicated_executor():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_job_output_route_all_disables_default_byte_limit(monkeypatch):
+    calls = {}
+
+    async def fake_get_job_output_response(**kwargs):
+        calls.update(kwargs)
+        return {"job_id": kwargs["job_id"], "hostname": kwargs["host"]}
+
+    monkeypatch.setattr(
+        job_api, "get_job_output_response", fake_get_job_output_response
+    )
+
+    get_job_output = _get_route_endpoint("/api/jobs/{job_id}/output", "GET")
+    result = await get_job_output(
+        "8001",
+        host="entalpic",
+        output_type="stdout",
+        lines=None,
+        max_bytes=524288,
+        full_output=True,
+        metadata_only=False,
+        force_refresh=False,
+        force=False,
+        _authenticated=True,
+    )
+
+    assert result == {"job_id": "8001", "hostname": "entalpic"}
+    assert calls["max_bytes"] is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_cancel_job_offloads_blocking_manager_call(monkeypatch, test_cache):
     hostname = "cluster-cancel.example.com"
     slurm_host = _make_slurm_host(hostname)
@@ -187,9 +219,7 @@ async def test_cancel_job_offloads_blocking_manager_call(monkeypatch, test_cache
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_get_job_details_offloads_blocking_manager_call(
-    monkeypatch, test_cache
-):
+async def test_get_job_details_offloads_blocking_manager_call(monkeypatch, test_cache):
     hostname = "cluster-details.example.com"
     slurm_host = _make_slurm_host(hostname)
     job = _make_job("7002", hostname)
@@ -235,7 +265,7 @@ async def test_get_job_details_offloads_blocking_manager_call(
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_get_job_details_force_refresh_returns_cached_job_immediately(
-    monkeypatch
+    monkeypatch,
 ):
     hostname = "cluster-cache-first.example.com"
     cached_job = _make_job("7003", hostname)
@@ -604,6 +634,7 @@ async def test_all_jobs_monitor_uses_cache_only_on_first_cycle(monkeypatch):
         "broadcast_json_to_websockets",
         fake_broadcast,
     )
+
     async def fake_completed_updates(*args, **kwargs):
         return []
 

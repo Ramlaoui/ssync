@@ -217,9 +217,20 @@ class APIClient:
         metadata_only: bool = False,
         force_refresh: bool = False,
         timeout: int = 60,
+        *,
+        output_type: str = "both",
+        lines: int | None = None,
+        max_bytes: int | None = None,
+        full_output: bool = False,
     ) -> dict[str, Any]:
         """Get job output data or metadata from the API."""
-        params = {"host": host}
+        params: dict[str, Any] = {"host": host, "output_type": output_type}
+        if lines is not None:
+            params["lines"] = lines
+        if max_bytes is not None:
+            params["max_bytes"] = max_bytes
+        if full_output:
+            params["all"] = "true"
         if metadata_only:
             params["metadata_only"] = "true"
         if force_refresh:

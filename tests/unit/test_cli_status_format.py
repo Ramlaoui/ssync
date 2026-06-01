@@ -160,4 +160,5 @@ def test_status_help_advertises_format_not_simple():
     assert "table" in result.output
     assert "json" in result.output
     assert "verbose" in result.output
+    assert "--cat-output" not in result.output
     assert "--simple" not in result.output

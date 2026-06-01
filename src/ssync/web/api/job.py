@@ -257,6 +257,11 @@ def register_job_routes(
             le=4194304,
             description="Maximum number of trailing bytes to return when lines is not set",
         ),
+        full_output: bool = Query(
+            False,
+            alias="all",
+            description="Return full output without the default byte limit",
+        ),
         metadata_only: bool = Query(
             False, description="Return only metadata about output files, not content"
         ),
@@ -279,7 +284,7 @@ def register_job_routes(
                 host=host,
                 lines=lines,
                 output_type=output_type,
-                max_bytes=max_bytes,
+                max_bytes=None if full_output else max_bytes,
                 metadata_only=metadata_only,
                 force_refresh=force_refresh,
                 get_slurm_manager=get_slurm_manager,
