@@ -11,6 +11,7 @@ from .commands import (
     LaunchCommand,
     LaunchRecipeCommand,
     ManifestCommand,
+    OutputCommand,
     PartitionsCommand,
     RerenderCommand,
     StatusCommand,
@@ -64,11 +65,6 @@ def cli(ctx, no_ssh_config, verbose):
 @click.option("--state", help="Filter by job state (PD, R, CD, F, CA, TO)")
 @click.option("--active-only", is_flag=True, help="Show only running/pending jobs")
 @click.option("--completed-only", is_flag=True, help="Show only completed jobs")
-@click.option(
-    "--cat-output",
-    type=click.Choice(["stdout", "stderr", "both"]),
-    help="Print job output file(s)",
-)
 @click.pass_context
 def status_command(
     ctx,
@@ -81,7 +77,6 @@ def status_command(
     state,
     active_only,
     completed_only,
-    cat_output,
 ):
     """Check Slurm queue status across hosts."""
     command = StatusCommand(
@@ -100,7 +95,69 @@ def status_command(
         state=state,
         active_only=active_only,
         completed_only=completed_only,
-        cat_output=cat_output,
+    )
+
+    if not success:
+        ctx.exit(1)
+
+
+@cli.command(name="output")
+@click.argument("job_id")
+@click.option("--host", help="Target host (auto-detected if not specified)")
+@click.option(
+    "--stderr", "show_stderr", is_flag=True, help="Print stderr instead of stdout"
+)
+@click.option("--both", "show_both", is_flag=True, help="Print stdout and stderr")
+@click.option("--lines", type=click.IntRange(min=1), help="Print only the last N lines")
+@click.option(
+    "--max-bytes",
+    type=click.IntRange(min=1024, max=4194304),
+    help="Maximum trailing bytes to fetch when --lines is not set",
+)
+@click.option("--all", "show_all", is_flag=True, help="Print the full output file")
+@click.option(
+    "--force-refresh",
+    is_flag=True,
+    help="Refresh output from the cluster when possible",
+)
+@click.pass_context
+def output_command(
+    ctx,
+    job_id,
+    host,
+    show_stderr,
+    show_both,
+    lines,
+    max_bytes,
+    show_all,
+    force_refresh,
+):
+    """Print a Slurm job output file."""
+    if show_stderr and show_both:
+        click.echo("Cannot use --stderr and --both together", err=True)
+        ctx.exit(1)
+    if show_all and lines is not None:
+        click.echo("Cannot use --all and --lines together", err=True)
+        ctx.exit(1)
+    if show_all and max_bytes is not None:
+        click.echo("Cannot use --all and --max-bytes together", err=True)
+        ctx.exit(1)
+
+    output_type = "both" if show_both else "stderr" if show_stderr else "stdout"
+    command = OutputCommand(
+        config_path=config.config_path,
+        slurm_hosts=ctx.obj["slurm_hosts"],
+        verbose=ctx.obj["verbose"],
+    )
+
+    success = command.execute(
+        job_id=job_id,
+        host=host,
+        output_type=output_type,
+        lines=lines,
+        max_bytes=max_bytes,
+        full_output=show_all,
+        force_refresh=force_refresh,
     )
 
     if not success:

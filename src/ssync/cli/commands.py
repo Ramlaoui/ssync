@@ -39,6 +39,12 @@ class BaseCommand:
             return None
 
         matching_hosts = sorted({job.hostname for job in jobs if job.hostname})
+        if not matching_hosts:
+            click.echo(
+                f"Job {job_id} was found, but no host was reported. Specify --host.",
+                err=True,
+            )
+            return None
         if len(matching_hosts) > 1:
             click.echo(
                 (
@@ -135,7 +141,6 @@ class StatusCommand(BaseCommand):
         state: Optional[str] = None,
         active_only: bool = False,
         completed_only: bool = False,
-        cat_output: Optional[str] = None,
     ):
         """Execute status command."""
         output_format = output_format.lower()
@@ -190,13 +195,6 @@ class StatusCommand(BaseCommand):
                 active_only=active_only,
                 completed_only=completed_only,
             )
-
-            # Display results
-            if cat_output and job_ids:
-                click.echo(
-                    "Note: --cat-output not supported with API mode yet",
-                    err=True,
-                )
 
             if output_format == "json":
                 JobDisplay.display_jobs_json(jobs)
@@ -978,6 +976,127 @@ class RerenderCommand(BaseCommand):
             return False
         except Exception as e:
             click.echo(f"Error rerendering run manifest: {e}", err=True)
+            if self.verbose:
+                import traceback
+
+                traceback.print_exc()
+            return False
+
+
+class OutputCommand(BaseCommand):
+    """Handles printing job output to the terminal."""
+
+    def execute(
+        self,
+        job_id: str,
+        host: Optional[str] = None,
+        output_type: str = "stdout",
+        lines: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+        full_output: bool = False,
+        force_refresh: bool = False,
+    ):
+        """Execute output command."""
+        try:
+            api_client = APIClient(verbose=self.verbose)
+
+            success, error_msg = api_client.ensure_server_running(self.config_path)
+            if not success:
+                click.echo(f"Failed to start API server: {error_msg}", err=True)
+                return False
+
+            resolved_host = self._resolve_job_host(api_client, job_id, host)
+            if resolved_host is None:
+                return False
+
+            response = api_client.get_job_output(
+                job_id=job_id,
+                host=resolved_host,
+                output_type=output_type,
+                lines=lines,
+                max_bytes=max_bytes,
+                full_output=full_output,
+                force_refresh=force_refresh,
+            )
+
+            requested_outputs = ["stdout", "stderr"]
+            if output_type != "both":
+                requested_outputs = [output_type]
+
+            found_any_output = False
+            missing_outputs = []
+            include_headers = output_type == "both"
+
+            for current_output in requested_outputs:
+                metadata = response.get(f"{current_output}_metadata")
+                exists = bool(metadata and metadata.get("exists"))
+                content = response.get(current_output)
+
+                if not exists and content is None:
+                    missing_outputs.append(current_output)
+                    continue
+
+                found_any_output = True
+                if include_headers:
+                    click.echo(f"== {current_output} ==")
+
+                if content:
+                    click.echo(content, nl=False)
+                    if include_headers and not content.endswith("\n"):
+                        click.echo()
+
+            if not found_any_output:
+                requested_summary = ", ".join(requested_outputs)
+                click.echo(
+                    f"No {requested_summary} output available for job {job_id} on {resolved_host}",
+                    err=True,
+                )
+                return False
+
+            if missing_outputs:
+                click.echo(
+                    (
+                        f"Skipped unavailable output(s) for job {job_id}: "
+                        + ", ".join(missing_outputs)
+                    ),
+                    err=True,
+                )
+
+            if response.get("content_truncated"):
+                limit = response.get("content_limit_bytes")
+                suffix = f" to {limit} bytes" if limit else ""
+                click.echo(f"Output truncated{suffix}", err=True)
+
+            if response.get("refresh_queued"):
+                click.echo(
+                    "Output refresh queued; showing cached output for now.",
+                    err=True,
+                )
+
+            return True
+
+        except requests.exceptions.ConnectionError:
+            click.echo(
+                "Could not connect to API server. Use 'ssync api' to start it manually.",
+                err=True,
+            )
+            return False
+        except requests.exceptions.HTTPError as e:
+            message = None
+            response = getattr(e, "response", None)
+            if response is not None:
+                try:
+                    payload = response.json()
+                    message = payload.get("detail")
+                except ValueError:
+                    message = response.text.strip() or None
+            click.echo(
+                f"Error reading job output: {message or str(e)}",
+                err=True,
+            )
+            return False
+        except Exception as e:
+            click.echo(f"Error reading job output: {e}", err=True)
             if self.verbose:
                 import traceback
 

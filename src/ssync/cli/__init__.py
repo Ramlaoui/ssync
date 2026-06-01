@@ -1,5 +1,11 @@
 from .cli import main
-from .commands import CopyOutputCommand, LaunchCommand, StatusCommand, SyncCommand
+from .commands import (
+    CopyOutputCommand,
+    LaunchCommand,
+    OutputCommand,
+    StatusCommand,
+    SyncCommand,
+)
 from .display import JobDisplay
 
 __all__ = [
@@ -8,5 +14,6 @@ __all__ = [
     "StatusCommand",
     "SyncCommand",
     "LaunchCommand",
+    "OutputCommand",
     "main",
 ]
