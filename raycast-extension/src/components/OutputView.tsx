@@ -8,13 +8,14 @@ import type { ConnectionSettings, JobInfo, JobOutputResponse } from "../types/ss
 type Props = {
   connection: ConnectionSettings;
   job: JobInfo;
+  initialOutputType?: OutputType;
 };
 
 type OutputType = "stdout" | "stderr";
 
-export function OutputView({ connection, job }: Props) {
+export function OutputView({ connection, job, initialOutputType = "stdout" }: Props) {
   const client = useMemo(() => new SsyncClient(connection), [connection]);
-  const [outputType, setOutputType] = useState<OutputType>("stdout");
+  const [outputType, setOutputType] = useState<OutputType>(initialOutputType);
   const [lines, setLines] = useState<number | undefined>(300);
   const [fullOutput, setFullOutput] = useState(false);
   const [output, setOutput] = useState<JobOutputResponse | null>(null);
@@ -47,9 +48,9 @@ export function OutputView({ connection, job }: Props) {
   }
 
   useEffect(() => {
-    void load({ outputType: "stdout", lines: 300, fullOutput: false });
+    void load({ outputType: initialOutputType, lines: 300, fullOutput: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.job_id, job.hostname]);
+  }, [job.job_id, job.hostname, initialOutputType]);
 
   async function refresh() {
     await load({ forceRefresh: true });

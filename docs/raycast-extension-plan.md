@@ -15,7 +15,7 @@ The first Raycast extension release is a monitoring surface for ssync jobs. It s
 - Default historical job window: `3d`.
 - Default job limit: `50`.
 - Search locally across the loaded job snapshot.
-- Show a single Job Detail view with lazy secondary actions.
+- Show Job Detail as a sectioned read-only inspector list with lazy secondary actions.
 - Fetch Job Output only when requested.
 - Default Job Output to stdout, tail-limited.
 - Allow switching from stdout to stderr when needed.
@@ -46,6 +46,7 @@ The first Raycast extension release is a monitoring surface for ssync jobs. It s
 
 ## Output And Script Views
 
+- Job Detail uses a Raycast `List` inspector so status, placement, timing, paths, and related views are selectable with native keyboard navigation.
 - Job Output defaults to `output_type=stdout&lines=300`.
 - Stderr is a secondary action, not loaded by default.
 - Full output is a deliberate secondary action, not the default.
