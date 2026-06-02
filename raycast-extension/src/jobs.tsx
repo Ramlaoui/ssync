@@ -10,7 +10,7 @@ import {
   showToast,
   useNavigation,
 } from "@raycast/api";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SsyncClient } from "./api/client";
 import {
   STALE_JOB_CACHE_MS,
@@ -66,35 +66,37 @@ export default function Command(props: Props) {
     return <ConnectionForm onConfigured={setConnection} />;
   }
 
-  const context = props.launchContext;
-  if (context?.job && context.view === "output") {
-    return <OutputView connection={connection} job={context.job} />;
-  }
-  if (context?.job && context.view === "script") {
-    return <ScriptView connection={connection} job={context.job} />;
-  }
-  if (context?.job && context.view === "watchers") {
-    return <WatchersView connection={connection} job={context.job} />;
-  }
-  if (context?.job) {
-    return <JobDetail connection={connection} job={context.job} />;
-  }
-
-  return <JobsList connection={connection} onConnectionChanged={setConnection} />;
+  return (
+    <JobsList
+      connection={connection}
+      initialContext={props.launchContext}
+      onConnectionChanged={setConnection}
+    />
+  );
 }
 
 function JobsList({
   connection,
+  initialContext,
   onConnectionChanged,
 }: {
   connection: ConnectionSettings;
+  initialContext?: JobsLaunchContext;
   onConnectionChanged: (connection: ConnectionSettings) => void;
 }) {
   const client = useMemo(() => new SsyncClient(connection), [connection]);
   const { push, pop } = useNavigation();
+  const didPushInitialContext = useRef(false);
   const [cache, setCache] = useState<JobCache | undefined>();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const job = initialContext?.job;
+    if (didPushInitialContext.current || !job) return;
+    didPushInitialContext.current = true;
+    push(targetForLaunchContext({ job, view: initialContext.view }, connection));
+  }, [connection, initialContext, push]);
 
   useEffect(() => {
     let cancelled = false;
@@ -222,6 +224,19 @@ function JobsList({
       />
     </List>
   );
+}
+
+function targetForLaunchContext(context: { job: JobInfo; view?: JobsLaunchContext["view"] }, connection: ConnectionSettings) {
+  if (context.view === "output") {
+    return <OutputView connection={connection} job={context.job} />;
+  }
+  if (context.view === "script") {
+    return <ScriptView connection={connection} job={context.job} />;
+  }
+  if (context.view === "watchers") {
+    return <WatchersView connection={connection} job={context.job} />;
+  }
+  return <JobDetail connection={connection} job={context.job} />;
 }
 
 function JobSection({
