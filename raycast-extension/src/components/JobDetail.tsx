@@ -14,6 +14,7 @@ import {
   webJobUrl,
 } from "../lib/format";
 import { bulletList, codeBlock, escapeMarkdown } from "../lib/markdown";
+import { openJobOutputFile } from "../lib/output-file";
 import type { ConnectionSettings, JobInfo } from "../types/ssync";
 import { OutputView } from "./OutputView";
 import { ScriptView } from "./ScriptView";
@@ -214,6 +215,14 @@ export function JobDetail({ connection, job, onJobUpdated }: Props) {
               primary={
                 <>
                   <Action.Push title="View stdout" icon={Icon.Terminal} target={<OutputView connection={connection} job={currentJob} initialOutputType="stdout" />} />
+                  {currentJob.stdout_file ? (
+                    <Action
+                      title="Open stdout in Editor"
+                      icon={Icon.Pencil}
+                      shortcut={Keyboard.Shortcut.Common.Open}
+                      onAction={() => openJobOutputFile({ client, job: currentJob, outputType: "stdout" })}
+                    />
+                  ) : null}
                   {currentJob.stdout_file ? <Action.CopyToClipboard title="Copy stdout Path" content={currentJob.stdout_file} /> : null}
                 </>
               }
@@ -234,6 +243,14 @@ export function JobDetail({ connection, job, onJobUpdated }: Props) {
               primary={
                 <>
                   <Action.Push title="View stderr" icon={Icon.Terminal} target={<OutputView connection={connection} job={currentJob} initialOutputType="stderr" />} />
+                  {currentJob.stderr_file ? (
+                    <Action
+                      title="Open stderr in Editor"
+                      icon={Icon.Pencil}
+                      shortcut={Keyboard.Shortcut.Common.Open}
+                      onAction={() => openJobOutputFile({ client, job: currentJob, outputType: "stderr" })}
+                    />
+                  ) : null}
                   {currentJob.stderr_file ? <Action.CopyToClipboard title="Copy stderr Path" content={currentJob.stderr_file} /> : null}
                 </>
               }

@@ -107,7 +107,12 @@ export function OutputView({ connection, job, initialOutputType = "stdout" }: Pr
             <Action title={outputType === "stdout" ? "Show stderr" : "Show stdout"} icon={Icon.Terminal} onAction={() => load({ outputType: outputType === "stdout" ? "stderr" : "stdout", lines: 300, fullOutput: false, forceRefresh: true }, { followQueuedRefresh: true })} />
             <Action title="Load 1,000 Lines" icon={Icon.Text} onAction={() => load({ lines: 1000, fullOutput: false })} />
             <Action title="Load Full Output" icon={Icon.TextDocument} onAction={() => load({ fullOutput: true })} />
-            <Action title={`Open ${outputType} File`} icon={Icon.Download} onAction={() => openJobOutputFile({ client, job, outputType })} />
+            <Action
+              title={`Open ${outputType} in Editor`}
+              icon={Icon.Pencil}
+              shortcut={Keyboard.Shortcut.Common.Open}
+              onAction={() => openJobOutputFile({ client, job, outputType })}
+            />
           </ActionPanel.Section>
           <ActionPanel.Section>
             <Action.CopyToClipboard title={`Copy ${outputType}`} content={content || ""} />
