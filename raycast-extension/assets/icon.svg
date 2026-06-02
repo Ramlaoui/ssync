@@ -1,0 +1,28 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="top-orbit" x1="119" y1="197" x2="392" y2="118" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A8B0B7"/>
+      <stop offset="0.45" stop-color="#6E7880"/>
+      <stop offset="1" stop-color="#3E474E"/>
+    </linearGradient>
+    <linearGradient id="bottom-orbit" x1="118" y1="382" x2="394" y2="296" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F7E83"/>
+      <stop offset="0.45" stop-color="#1EB4BC"/>
+      <stop offset="1" stop-color="#42D7DF"/>
+    </linearGradient>
+    <radialGradient id="node" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(248 239) rotate(55) scale(63)">
+      <stop offset="0" stop-color="#B8FF68"/>
+      <stop offset="0.5" stop-color="#4BDC4D"/>
+      <stop offset="1" stop-color="#13A86E"/>
+    </radialGradient>
+    <filter id="soft-shadow" x="48" y="40" width="416" height="432" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#071014" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <g filter="url(#soft-shadow)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M116 211C149 118 280 68 391 116" stroke="url(#top-orbit)" stroke-width="72"/>
+    <path d="M396 301C356 406 218 449 119 374" stroke="url(#bottom-orbit)" stroke-width="76"/>
+    <circle cx="256" cy="256" r="34" fill="url(#node)"/>
+    <circle cx="256" cy="256" r="34" stroke="#E7FFD4" stroke-opacity="0.6" stroke-width="4"/>
+  </g>
+</svg>

@@ -1,0 +1,125 @@
+import { Action, ActionPanel, Detail, Icon, Keyboard, Toast, showToast } from "@raycast/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SsyncClient } from "../api/client";
+import { bytesLabel, formatDate, metadataText } from "../lib/format";
+import { codeBlock, escapeMarkdown } from "../lib/markdown";
+import { openJobOutputFile } from "../lib/output-file";
+import type { ConnectionSettings, JobInfo, JobOutputResponse } from "../types/ssync";
+
+type Props = {
+  connection: ConnectionSettings;
+  job: JobInfo;
+  initialOutputType?: OutputType;
+};
+
+type OutputType = "stdout" | "stderr";
+
+export function OutputView({ connection, job, initialOutputType = "stdout" }: Props) {
+  const client = useMemo(() => new SsyncClient(connection), [connection]);
+  const [outputType, setOutputType] = useState<OutputType>(initialOutputType);
+  const [lines, setLines] = useState<number | undefined>(300);
+  const [fullOutput, setFullOutput] = useState(false);
+  const [output, setOutput] = useState<JobOutputResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const queuedRefreshTimer = useRef<NodeJS.Timeout | null>(null);
+
+  function clearQueuedRefresh() {
+    if (!queuedRefreshTimer.current) return;
+    clearTimeout(queuedRefreshTimer.current);
+    queuedRefreshTimer.current = null;
+  }
+
+  async function load(
+    next?: { outputType?: OutputType; lines?: number; fullOutput?: boolean; forceRefresh?: boolean },
+    options?: { followQueuedRefresh?: boolean },
+  ) {
+    clearQueuedRefresh();
+    const requestedType = next?.outputType || outputType;
+    const requestedFull = next?.fullOutput ?? fullOutput;
+    const requestedLines = requestedFull ? undefined : next?.lines ?? lines;
+    setOutputType(requestedType);
+    setFullOutput(requestedFull);
+    setLines(requestedLines);
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await client.getOutput({
+        job,
+        outputType: requestedType,
+        lines: requestedLines,
+        fullOutput: requestedFull,
+        forceRefresh: next?.forceRefresh,
+      });
+      setOutput(data);
+      if (data.refresh_queued && options?.followQueuedRefresh) {
+        queuedRefreshTimer.current = setTimeout(() => {
+          void load({ outputType: requestedType, lines: requestedLines, fullOutput: requestedFull });
+        }, 2_500);
+      }
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load({ outputType: initialOutputType, lines: 300, fullOutput: false, forceRefresh: true }, { followQueuedRefresh: true });
+    return clearQueuedRefresh;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.job_id, job.hostname, initialOutputType]);
+
+  async function refresh() {
+    await load({ forceRefresh: true }, { followQueuedRefresh: true });
+    await showToast({ style: Toast.Style.Success, title: "Output refreshed" });
+  }
+
+  const content = outputType === "stdout" ? output?.stdout : output?.stderr;
+  const metadata = outputType === "stdout" ? output?.stdout_metadata : output?.stderr_metadata;
+  const title = `${outputType} · ${job.job_id} @ ${job.hostname}`;
+  const markdown = error ? `# ${escapeMarkdown(outputType)}\n\n**Error:** ${escapeMarkdown(error)}` : codeBlock(content, "text");
+
+  return (
+    <Detail
+      isLoading={isLoading}
+      navigationTitle={title}
+      markdown={markdown}
+      metadata={
+        <Detail.Metadata>
+          <Detail.Metadata.Label title="Output" text={outputType} icon={Icon.Terminal} />
+          <Detail.Metadata.Label title="Job" text={job.job_id} />
+          <Detail.Metadata.Label title="Host" text={job.hostname} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Lines" text={fullOutput ? "full output" : lines ? `tail ${lines}` : "tail"} />
+          <Detail.Metadata.Label title="Cached" text={metadataText(output?.cached)} />
+          <Detail.Metadata.Label title="Truncated" text={metadataText(output?.content_truncated)} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Size" text={bytesLabel(metadata?.size_bytes)} />
+          <Detail.Metadata.Label title="Last Modified" text={formatDate(metadata?.last_modified)} />
+          <Detail.Metadata.Label title="Path" text={metadataText(metadata?.path)} />
+        </Detail.Metadata>
+      }
+      actions={
+        <ActionPanel>
+          <ActionPanel.Section>
+            <Action title="Refresh Output" icon={Icon.ArrowClockwise} shortcut={Keyboard.Shortcut.Common.Refresh} onAction={refresh} />
+            <Action title={outputType === "stdout" ? "Show stderr" : "Show stdout"} icon={Icon.Terminal} onAction={() => load({ outputType: outputType === "stdout" ? "stderr" : "stdout", lines: 300, fullOutput: false, forceRefresh: true }, { followQueuedRefresh: true })} />
+            <Action title="Load 1,000 Lines" icon={Icon.Text} onAction={() => load({ lines: 1000, fullOutput: false })} />
+            <Action title="Load Full Output" icon={Icon.TextDocument} onAction={() => load({ fullOutput: true })} />
+            <Action
+              title={`Open ${outputType} in Editor`}
+              icon={Icon.Pencil}
+              shortcut={Keyboard.Shortcut.Common.Open}
+              onAction={() => openJobOutputFile({ client, job, outputType })}
+            />
+          </ActionPanel.Section>
+          <ActionPanel.Section>
+            <Action.CopyToClipboard title={`Copy ${outputType}`} content={content || ""} />
+            {metadata?.path ? <Action.CopyToClipboard title={`Copy ${outputType} Path`} content={metadata.path} /> : null}
+          </ActionPanel.Section>
+        </ActionPanel>
+      }
+    />
+  );
+}
