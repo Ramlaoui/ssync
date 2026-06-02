@@ -1,7 +1,8 @@
 import { Action, ActionPanel, Detail, Icon, Keyboard, Toast, showToast } from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import { SsyncClient } from "../api/client";
-import { codeBlock, escapeMarkdown, kvTable } from "../lib/markdown";
+import { metadataText } from "../lib/format";
+import { codeBlock, escapeMarkdown } from "../lib/markdown";
 import type { ConnectionSettings, JobInfo, JobScriptResponse } from "../types/ssync";
 
 type Props = {
@@ -37,23 +38,24 @@ export function ScriptView({ connection, job }: Props) {
     await showToast({ style: Toast.Style.Success, title: "Script refreshed" });
   }
 
-  const markdown = [
-    `# Script for ${escapeMarkdown(job.name || job.job_id)}`,
-    "",
-    kvTable([
-      ["Job", `${job.job_id} @ ${job.hostname}`],
-      ["Content length", script?.content_length],
-      ["Local source dir", script?.local_source_dir],
-    ]),
-    "",
-    error ? `**Error:** ${escapeMarkdown(error)}` : codeBlock(script?.script_content, "bash"),
-  ].join("\n");
+  const markdown = error
+    ? `# Script for ${escapeMarkdown(job.name || job.job_id)}\n\n**Error:** ${escapeMarkdown(error)}`
+    : codeBlock(script?.script_content, "bash");
 
   return (
     <Detail
       isLoading={isLoading}
       navigationTitle={`Script · ${job.job_id} @ ${job.hostname}`}
       markdown={markdown}
+      metadata={
+        <Detail.Metadata>
+          <Detail.Metadata.Label title="Job" text={job.job_id} icon={Icon.Code} />
+          <Detail.Metadata.Label title="Host" text={job.hostname} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Content Length" text={metadataText(script?.content_length)} />
+          <Detail.Metadata.Label title="Local Source Dir" text={metadataText(script?.local_source_dir)} />
+        </Detail.Metadata>
+      }
       actions={
         <ActionPanel>
           <ActionPanel.Section>

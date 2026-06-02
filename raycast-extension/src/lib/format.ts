@@ -130,6 +130,12 @@ export function bytesLabel(value?: number | null): string {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+export function metadataText(value?: string | number | boolean | null): string {
+  if (value === undefined || value === null || value === "") return "n/a";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  return String(value);
+}
+
 export function webJobUrl(apiUrl: string, job: JobInfo): string {
   const base = apiUrl.replace(/\/+$/, "");
   return `${base}/#/jobs/${encodeURIComponent(job.job_id)}/${encodeURIComponent(job.hostname)}`;

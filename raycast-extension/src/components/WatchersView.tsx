@@ -1,9 +1,9 @@
 import { Action, ActionPanel, Color, Icon, Keyboard, List, Toast, showToast } from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import { SsyncClient } from "../api/client";
-import { formatDate } from "../lib/format";
-import { codeBlock, escapeMarkdown, kvTable } from "../lib/markdown";
-import type { ConnectionSettings, JobInfo, Watcher, WatcherEvent } from "../types/ssync";
+import { formatDate, metadataText } from "../lib/format";
+import { codeBlock, escapeMarkdown } from "../lib/markdown";
+import type { ConnectionSettings, JobInfo, Watcher, WatcherAction, WatcherEvent } from "../types/ssync";
 
 type Props = {
   connection: ConnectionSettings;
@@ -75,7 +75,7 @@ export function WatchersView({ connection, job }: Props) {
                 watcher.timer_mode_active ? { tag: { value: "timer", color: Color.Blue } } : {},
                 watcher.remaining_resubmits !== undefined ? { text: `${watcher.remaining_resubmits} resubmits left` } : {},
               ]}
-              detail={<List.Item.Detail markdown={watcherMarkdown(watcher)} />}
+              detail={<List.Item.Detail markdown={watcherMarkdown(watcher)} metadata={<WatcherMetadata watcher={watcher} />} />}
               actions={<WatcherActions watcher={watcher} onRefresh={refresh} />}
             />
           ))}
@@ -90,7 +90,7 @@ export function WatchersView({ connection, job }: Props) {
               title={`${event.action_type} · ${event.watcher_name}`}
               subtitle={formatDate(event.timestamp)}
               accessories={[{ text: event.success ? "success" : "failed" }]}
-              detail={<List.Item.Detail markdown={eventMarkdown(event)} />}
+              detail={<List.Item.Detail markdown={eventMarkdown(event)} metadata={<EventMetadata event={event} />} />}
               actions={<EventActions event={event} onRefresh={refresh} />}
             />
           ))}
@@ -122,22 +122,54 @@ function EventActions({ event, onRefresh }: { event: WatcherEvent; onRefresh: ()
   );
 }
 
+function WatcherMetadata({ watcher }: { watcher: Watcher }) {
+  return (
+    <List.Item.Detail.Metadata>
+      <List.Item.Detail.Metadata.Label title="State" text={watcher.state} icon={{ source: Icon.Eye, tintColor: watcherStateColor(watcher.state) }} />
+      <List.Item.Detail.Metadata.Label title="Job" text={`${watcher.job_id} @ ${watcher.hostname}`} />
+      <List.Item.Detail.Metadata.Separator />
+      <List.Item.Detail.Metadata.Label title="Created" text={formatDate(watcher.created_at)} />
+      <List.Item.Detail.Metadata.Label title="Last Check" text={formatDate(watcher.last_check)} />
+      <List.Item.Detail.Metadata.Label title="Interval" text={`${watcher.interval_seconds}s`} />
+      <List.Item.Detail.Metadata.Label title="Last Position" text={metadataText(watcher.last_position)} />
+      <List.Item.Detail.Metadata.Separator />
+      <List.Item.Detail.Metadata.Label title="Triggers" text={metadataText(watcher.trigger_count)} />
+      <List.Item.Detail.Metadata.Label title="Failures" text={metadataText(watcher.failure_count)} />
+      <List.Item.Detail.Metadata.Label title="Max Failures" text={metadataText(watcher.max_failures)} />
+      <List.Item.Detail.Metadata.Separator />
+      <List.Item.Detail.Metadata.Label title="Timer Mode" text={metadataText(watcher.timer_mode_enabled)} />
+      <List.Item.Detail.Metadata.Label title="Timer Active" text={metadataText(watcher.timer_mode_active)} />
+      <List.Item.Detail.Metadata.Label title="Trigger On Job End" text={metadataText(watcher.trigger_on_job_end)} />
+      <List.Item.Detail.Metadata.Label title="Resubmits Left" text={metadataText(watcher.remaining_resubmits)} />
+    </List.Item.Detail.Metadata>
+  );
+}
+
+function EventMetadata({ event }: { event: WatcherEvent }) {
+  return (
+    <List.Item.Detail.Metadata>
+      <List.Item.Detail.Metadata.Label
+        title="Result"
+        text={event.success ? "success" : "failed"}
+        icon={{ source: event.success ? Icon.CheckCircle : Icon.XmarkCircle, tintColor: event.success ? Color.Green : Color.Red }}
+      />
+      <List.Item.Detail.Metadata.Label title="Action" text={event.action_type} />
+      <List.Item.Detail.Metadata.Label title="Watcher" text={event.watcher_name} />
+      <List.Item.Detail.Metadata.Label title="Watcher ID" text={metadataText(event.watcher_id)} />
+      <List.Item.Detail.Metadata.Separator />
+      <List.Item.Detail.Metadata.Label title="Job" text={`${event.job_id} @ ${event.hostname}`} />
+      <List.Item.Detail.Metadata.Label title="Timestamp" text={formatDate(event.timestamp)} />
+      <List.Item.Detail.Metadata.Label title="Action Result" text={metadataText(event.action_result)} />
+    </List.Item.Detail.Metadata>
+  );
+}
+
 function watcherMarkdown(watcher: Watcher): string {
-  return [
-    `# ${escapeMarkdown(watcher.name)}`,
-    "",
-    kvTable([
-      ["State", watcher.state],
-      ["Job", `${watcher.job_id} @ ${watcher.hostname}`],
-      ["Created", formatDate(watcher.created_at)],
-      ["Last check", formatDate(watcher.last_check)],
-      ["Interval", `${watcher.interval_seconds}s`],
-      ["Trigger count", watcher.trigger_count],
-      ["Failure count", watcher.failure_count],
-      ["Timer mode", watcher.timer_mode_enabled ? "enabled" : "disabled"],
-      ["Trigger on job end", watcher.trigger_on_job_end ? "yes" : "no"],
-      ["Remaining resubmits", watcher.remaining_resubmits],
-    ]),
+  const lines = [`# ${escapeMarkdown(watcher.name)}`];
+  if (watcher.condition) {
+    lines.push("", `**Condition:** ${escapeMarkdown(watcher.condition)}`);
+  }
+  lines.push(
     "",
     "## Pattern",
     "",
@@ -145,30 +177,22 @@ function watcherMarkdown(watcher: Watcher): string {
     "",
     "## Captures",
     "",
-    codeBlock(JSON.stringify(watcher.captures || [], null, 2), "json"),
+    stringList(watcher.captures),
     "",
     "## Captured Variables",
     "",
-    codeBlock(JSON.stringify(watcher.variables || {}, null, 2), "json"),
+    objectList(watcher.variables),
     "",
     "## Actions",
     "",
-    codeBlock(JSON.stringify(watcher.actions || [], null, 2), "json"),
-  ].join("\n");
+    watcher.actions.length > 0 ? watcher.actions.map(actionMarkdown).join("\n\n") : "_No actions configured._",
+  );
+  return lines.join("\n");
 }
 
 function eventMarkdown(event: WatcherEvent): string {
   return [
     `# ${escapeMarkdown(event.action_type)} event`,
-    "",
-    kvTable([
-      ["Watcher", event.watcher_name],
-      ["Watcher ID", event.watcher_id],
-      ["Job", `${event.job_id} @ ${event.hostname}`],
-      ["Timestamp", formatDate(event.timestamp)],
-      ["Success", event.success ? "yes" : "no"],
-      ["Action result", event.action_result],
-    ]),
     "",
     "## Matched Text",
     "",
@@ -176,8 +200,35 @@ function eventMarkdown(event: WatcherEvent): string {
     "",
     "## Captured Variables",
     "",
-    codeBlock(JSON.stringify(event.captured_vars || {}, null, 2), "json"),
+    objectList(event.captured_vars),
+    ...(event.action_result ? ["", "## Action Result", "", codeBlock(event.action_result, "text")] : []),
   ].join("\n");
+}
+
+function stringList(values?: string[]): string {
+  if (!values || values.length === 0) return "_No captures configured._";
+  return values.map((value) => `- ${escapeMarkdown(value)}`).join("\n");
+}
+
+function objectList(values?: Record<string, unknown>): string {
+  const entries = Object.entries(values || {});
+  if (entries.length === 0) return "_No values captured._";
+  return entries.map(([key, value]) => `- **${escapeMarkdown(key)}:** ${escapeMarkdown(formatUnknown(value))}`).join("\n");
+}
+
+function actionMarkdown(action: WatcherAction, index: number): string {
+  const lines = [`### ${index + 1}. ${escapeMarkdown(action.type)}`];
+  if (action.condition) lines.push("", `**Condition:** ${escapeMarkdown(action.condition)}`);
+  if (action.params && Object.keys(action.params).length > 0) lines.push("", "**Params**", "", objectList(action.params));
+  if (action.config && Object.keys(action.config).length > 0) lines.push("", "**Config**", "", objectList(action.config));
+  return lines.join("\n");
+}
+
+function formatUnknown(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "n/a";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return metadataText(value);
+  return JSON.stringify(value);
 }
 
 function watcherStateColor(state: string): Color {

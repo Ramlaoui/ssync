@@ -1,8 +1,8 @@
 import { Action, ActionPanel, Detail, Icon, Keyboard, Toast, showToast } from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import { SsyncClient } from "../api/client";
-import { bytesLabel, formatDate } from "../lib/format";
-import { codeBlock, escapeMarkdown, kvTable } from "../lib/markdown";
+import { bytesLabel, formatDate, metadataText } from "../lib/format";
+import { codeBlock, escapeMarkdown } from "../lib/markdown";
 import type { ConnectionSettings, JobInfo, JobOutputResponse } from "../types/ssync";
 
 type Props = {
@@ -59,27 +59,28 @@ export function OutputView({ connection, job }: Props) {
   const content = outputType === "stdout" ? output?.stdout : output?.stderr;
   const metadata = outputType === "stdout" ? output?.stdout_metadata : output?.stderr_metadata;
   const title = `${outputType} · ${job.job_id} @ ${job.hostname}`;
-  const markdown = [
-    `# ${escapeMarkdown(outputType)} for ${escapeMarkdown(job.name || job.job_id)}`,
-    "",
-    kvTable([
-      ["Job", `${job.job_id} @ ${job.hostname}`],
-      ["Path", metadata?.path],
-      ["Size", bytesLabel(metadata?.size_bytes)],
-      ["Last modified", formatDate(metadata?.last_modified)],
-      ["Lines", fullOutput ? "full output" : lines ? `tail ${lines}` : "tail"],
-      ["Cached", output?.cached ? "yes" : "no"],
-      ["Truncated", output?.content_truncated ? "yes" : "no"],
-    ]),
-    "",
-    error ? `**Error:** ${escapeMarkdown(error)}` : codeBlock(content, "text"),
-  ].join("\n");
+  const markdown = error ? `# ${escapeMarkdown(outputType)}\n\n**Error:** ${escapeMarkdown(error)}` : codeBlock(content, "text");
 
   return (
     <Detail
       isLoading={isLoading}
       navigationTitle={title}
       markdown={markdown}
+      metadata={
+        <Detail.Metadata>
+          <Detail.Metadata.Label title="Output" text={outputType} icon={Icon.Terminal} />
+          <Detail.Metadata.Label title="Job" text={job.job_id} />
+          <Detail.Metadata.Label title="Host" text={job.hostname} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Lines" text={fullOutput ? "full output" : lines ? `tail ${lines}` : "tail"} />
+          <Detail.Metadata.Label title="Cached" text={metadataText(output?.cached)} />
+          <Detail.Metadata.Label title="Truncated" text={metadataText(output?.content_truncated)} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Size" text={bytesLabel(metadata?.size_bytes)} />
+          <Detail.Metadata.Label title="Last Modified" text={formatDate(metadata?.last_modified)} />
+          <Detail.Metadata.Label title="Path" text={metadataText(metadata?.path)} />
+        </Detail.Metadata>
+      }
       actions={
         <ActionPanel>
           <ActionPanel.Section>

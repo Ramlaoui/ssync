@@ -50,5 +50,6 @@ The first Raycast extension release is a monitoring surface for ssync jobs. It s
 - Stderr is a secondary action, not loaded by default.
 - Full output is a deliberate secondary action, not the default.
 - Job Script opens as a separate formatted detail view.
-- Output and script text should be displayed in a monospace code block with job metadata above it.
+- Output and script text should be displayed in a monospace code block with job metadata in Raycast metadata sidebars.
+- Avoid markdown tables in Raycast views; use `Detail.Metadata` or `List.Item.Detail.Metadata` for structured facts.
 - Raycast action shortcuts may support view-level commands such as refresh, switch to stderr, copy, and load full output. Custom vim-style single-key scrolling is not assumed to be available inside Raycast extension views.

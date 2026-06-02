@@ -2,7 +2,7 @@ import { Action, ActionPanel, Alert, Detail, Icon, Keyboard, Toast, confirmAlert
 import { useEffect, useMemo, useState } from "react";
 import { SsyncClient } from "../api/client";
 import { jobDetailMarkdown } from "../lib/markdown";
-import { compactJobSubtitle, isPending, isRunning, stateColor, stateIcon, stateLabel, webJobUrl } from "../lib/format";
+import { compactJobSubtitle, formatDate, isPending, isRunning, metadataText, stateColor, stateIcon, stateLabel, webJobUrl } from "../lib/format";
 import type { ConnectionSettings, JobInfo } from "../types/ssync";
 import { OutputView } from "./OutputView";
 import { ScriptView } from "./ScriptView";
@@ -77,8 +77,22 @@ export function JobDetail({ connection, job, onJobUpdated }: Props) {
           <Detail.Metadata.Label title="State" text={stateLabel(currentJob.state)} icon={{ source: stateIcon(currentJob.state), tintColor: stateColor(currentJob.state) }} />
           <Detail.Metadata.Label title="Host" text={currentJob.hostname} />
           <Detail.Metadata.Label title="Job ID" text={currentJob.job_id} />
+          <Detail.Metadata.Label title="User" text={metadataText(currentJob.user)} />
           <Detail.Metadata.Separator />
           <Detail.Metadata.Label title="Summary" text={compactJobSubtitle(currentJob)} />
+          <Detail.Metadata.Label title="Partition" text={metadataText(currentJob.partition)} />
+          <Detail.Metadata.Label title="Account" text={metadataText(currentJob.account)} />
+          <Detail.Metadata.Label title="QoS" text={metadataText(currentJob.qos)} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Submitted" text={formatDate(currentJob.submit_time)} />
+          <Detail.Metadata.Label title="Started" text={formatDate(currentJob.start_time)} />
+          <Detail.Metadata.Label title="Ended" text={formatDate(currentJob.end_time)} />
+          <Detail.Metadata.Label title="Runtime" text={metadataText(currentJob.runtime)} />
+          <Detail.Metadata.Label title="Time Limit" text={metadataText(currentJob.time_limit)} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Nodes" text={metadataText(currentJob.nodes)} />
+          <Detail.Metadata.Label title="CPUs" text={metadataText(currentJob.cpus)} />
+          <Detail.Metadata.Label title="Memory" text={metadataText(currentJob.memory)} />
         </Detail.Metadata>
       }
       actions={
