@@ -713,6 +713,7 @@ async def build_download_job_output_response(
     host: str,
     output_type: str,
     compressed: bool,
+    force_refresh: bool = False,
     get_slurm_manager,
 ) -> StreamingResponse:
     cache = get_cache()
@@ -722,7 +723,7 @@ async def build_download_job_output_response(
     content = None
     compression = "none"
     original_size = 0
-    if cached_job:
+    if cached_job and not force_refresh:
         content, compression, original_size = get_cached_output_payload(
             cached_job,
             output_type,

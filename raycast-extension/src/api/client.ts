@@ -17,6 +17,11 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+export type DownloadedOutput = {
+  filename: string;
+  content: Buffer;
+};
+
 export class SsyncApiError extends Error {
   constructor(
     message: string,
@@ -80,6 +85,23 @@ export class SsyncClient {
     });
   }
 
+  async downloadOutput(options: {
+    job: JobInfo;
+    outputType: "stdout" | "stderr";
+    forceRefresh?: boolean;
+  }): Promise<DownloadedOutput> {
+    return this.requestBuffer(`/api/jobs/${encodeURIComponent(options.job.job_id)}/output/download`, {
+      params: {
+        host: options.job.hostname,
+        output_type: options.outputType,
+        compressed: false,
+        force_refresh: options.forceRefresh || undefined,
+      },
+      timeoutMs: 120_000,
+      fallbackFilename: `job_${options.job.job_id}_${options.outputType}.log`,
+    });
+  }
+
   async getScript(job: JobInfo): Promise<JobScriptResponse> {
     return this.request<JobScriptResponse>(`/api/jobs/${encodeURIComponent(job.job_id)}/script`, {
       params: { host: job.hostname },
@@ -113,27 +135,16 @@ export class SsyncClient {
   }
 
   private request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const base = this.connection.apiUrl.replace(/\/+$/, "");
-    const url = new URL(path, base);
-    for (const [key, value] of Object.entries(options.params || {})) {
-      if (value === undefined || value === null || value === "") continue;
-      url.searchParams.set(key, String(value));
-    }
-
+    const url = this.buildUrl(path, options.params);
     const isHttps = url.protocol === "https:";
     const transport = isHttps ? https : http;
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    };
-    if (this.connection.apiKey) headers["X-API-Key"] = this.connection.apiKey;
 
     return new Promise<T>((resolve, reject) => {
       const request = transport.request(
         url,
         {
           method: options.method || "GET",
-          headers,
+          headers: this.requestHeaders("application/json"),
           timeout: options.timeoutMs || 30_000,
           ...(isHttps ? { rejectUnauthorized: false } : {}),
         },
@@ -174,6 +185,72 @@ export class SsyncClient {
       request.end();
     });
   }
+
+  private requestBuffer(
+    path: string,
+    options: RequestOptions & { fallbackFilename: string },
+  ): Promise<DownloadedOutput> {
+    const url = this.buildUrl(path, options.params);
+    const isHttps = url.protocol === "https:";
+    const transport = isHttps ? https : http;
+
+    return new Promise<DownloadedOutput>((resolve, reject) => {
+      const request = transport.request(
+        url,
+        {
+          method: options.method || "GET",
+          headers: this.requestHeaders("text/plain"),
+          timeout: options.timeoutMs || 60_000,
+          ...(isHttps ? { rejectUnauthorized: false } : {}),
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => {
+            const content = Buffer.concat(chunks);
+            const statusCode = response.statusCode || 0;
+
+            if (statusCode >= 400) {
+              reject(new SsyncApiError(errorMessage(statusCode, content.toString("utf8")), statusCode));
+              return;
+            }
+
+            resolve({
+              filename: filenameFromContentDisposition(response.headers["content-disposition"], options.fallbackFilename),
+              content,
+            });
+          });
+        },
+      );
+
+      request.on("timeout", () => {
+        request.destroy(new SsyncApiError("Request timed out"));
+      });
+      request.on("error", (error) => {
+        reject(error instanceof SsyncApiError ? error : new SsyncApiError(error.message));
+      });
+      request.end();
+    });
+  }
+
+  private buildUrl(path: string, params?: RequestOptions["params"]): URL {
+    const base = this.connection.apiUrl.replace(/\/+$/, "");
+    const url = new URL(path, base);
+    for (const [key, value] of Object.entries(params || {})) {
+      if (value === undefined || value === null || value === "") continue;
+      url.searchParams.set(key, String(value));
+    }
+    return url;
+  }
+
+  private requestHeaders(accept: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      Accept: accept,
+      "Content-Type": "application/json",
+    };
+    if (this.connection.apiKey) headers["X-API-Key"] = this.connection.apiKey;
+    return headers;
+  }
 }
 
 function errorMessage(statusCode: number, text: string): string {
@@ -186,4 +263,14 @@ function errorMessage(statusCode: number, text: string): string {
     // Fall through to raw body preview.
   }
   return `ssync API returned HTTP ${statusCode}: ${text.slice(0, 200)}`;
+}
+
+function filenameFromContentDisposition(header: string | string[] | undefined, fallback: string): string {
+  const raw = Array.isArray(header) ? header[0] : header;
+  const match = raw?.match(/filename="?([^";]+)"?/);
+  return sanitizeFilename(match?.[1] || fallback);
+}
+
+function sanitizeFilename(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, "_") || "output.log";
 }

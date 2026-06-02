@@ -1,8 +1,9 @@
 import { Action, ActionPanel, Detail, Icon, Keyboard, Toast, showToast } from "@raycast/api";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SsyncClient } from "../api/client";
 import { bytesLabel, formatDate, metadataText } from "../lib/format";
 import { codeBlock, escapeMarkdown } from "../lib/markdown";
+import { openJobOutputFile } from "../lib/output-file";
 import type { ConnectionSettings, JobInfo, JobOutputResponse } from "../types/ssync";
 
 type Props = {
@@ -21,8 +22,19 @@ export function OutputView({ connection, job, initialOutputType = "stdout" }: Pr
   const [output, setOutput] = useState<JobOutputResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const queuedRefreshTimer = useRef<NodeJS.Timeout | null>(null);
 
-  async function load(next?: { outputType?: OutputType; lines?: number; fullOutput?: boolean; forceRefresh?: boolean }) {
+  function clearQueuedRefresh() {
+    if (!queuedRefreshTimer.current) return;
+    clearTimeout(queuedRefreshTimer.current);
+    queuedRefreshTimer.current = null;
+  }
+
+  async function load(
+    next?: { outputType?: OutputType; lines?: number; fullOutput?: boolean; forceRefresh?: boolean },
+    options?: { followQueuedRefresh?: boolean },
+  ) {
+    clearQueuedRefresh();
     const requestedType = next?.outputType || outputType;
     const requestedFull = next?.fullOutput ?? fullOutput;
     const requestedLines = requestedFull ? undefined : next?.lines ?? lines;
@@ -40,6 +52,11 @@ export function OutputView({ connection, job, initialOutputType = "stdout" }: Pr
         forceRefresh: next?.forceRefresh,
       });
       setOutput(data);
+      if (data.refresh_queued && options?.followQueuedRefresh) {
+        queuedRefreshTimer.current = setTimeout(() => {
+          void load({ outputType: requestedType, lines: requestedLines, fullOutput: requestedFull });
+        }, 2_500);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
@@ -48,12 +65,13 @@ export function OutputView({ connection, job, initialOutputType = "stdout" }: Pr
   }
 
   useEffect(() => {
-    void load({ outputType: initialOutputType, lines: 300, fullOutput: false });
+    void load({ outputType: initialOutputType, lines: 300, fullOutput: false, forceRefresh: true }, { followQueuedRefresh: true });
+    return clearQueuedRefresh;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job.job_id, job.hostname, initialOutputType]);
 
   async function refresh() {
-    await load({ forceRefresh: true });
+    await load({ forceRefresh: true }, { followQueuedRefresh: true });
     await showToast({ style: Toast.Style.Success, title: "Output refreshed" });
   }
 
@@ -86,9 +104,10 @@ export function OutputView({ connection, job, initialOutputType = "stdout" }: Pr
         <ActionPanel>
           <ActionPanel.Section>
             <Action title="Refresh Output" icon={Icon.ArrowClockwise} shortcut={Keyboard.Shortcut.Common.Refresh} onAction={refresh} />
-            <Action title={outputType === "stdout" ? "Show stderr" : "Show stdout"} icon={Icon.Terminal} onAction={() => load({ outputType: outputType === "stdout" ? "stderr" : "stdout", lines: 300, fullOutput: false })} />
+            <Action title={outputType === "stdout" ? "Show stderr" : "Show stdout"} icon={Icon.Terminal} onAction={() => load({ outputType: outputType === "stdout" ? "stderr" : "stdout", lines: 300, fullOutput: false, forceRefresh: true }, { followQueuedRefresh: true })} />
             <Action title="Load 1,000 Lines" icon={Icon.Text} onAction={() => load({ lines: 1000, fullOutput: false })} />
             <Action title="Load Full Output" icon={Icon.TextDocument} onAction={() => load({ fullOutput: true })} />
+            <Action title={`Open ${outputType} File`} icon={Icon.Download} onAction={() => openJobOutputFile({ client, job, outputType })} />
           </ActionPanel.Section>
           <ActionPanel.Section>
             <Action.CopyToClipboard title={`Copy ${outputType}`} content={content || ""} />

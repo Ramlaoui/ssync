@@ -52,6 +52,10 @@ _Avoid_: Job page when speaking across multiple clients
 The stdout and stderr content associated with a job.
 _Avoid_: Logs when specifically referring to scheduler output files
 
+**Local Job Output Copy**:
+A desktop-local copy of Job Output used when a client opens the output in an external application.
+_Avoid_: Remote output file
+
 **Job Script**:
 The submitted batch script associated with a job.
 _Avoid_: Launch script

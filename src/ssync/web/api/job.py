@@ -226,6 +226,9 @@ def register_job_routes(
         host: str = Query(..., description="Host where job is running"),
         output_type: str = Query("stdout", regex="^(stdout|stderr)$"),
         compressed: bool = Query(default=False, description="Download as gzip"),
+        force_refresh: bool = Query(
+            False, description="Force refresh from SSH even if cached"
+        ),
         _authenticated: bool = Depends(verify_api_key_dependency),
     ):
         """Download job output file, optionally compressed."""
@@ -236,6 +239,7 @@ def register_job_routes(
             host=host,
             output_type=output_type,
             compressed=compressed,
+            force_refresh=force_refresh,
             get_slurm_manager=get_slurm_manager,
         )
 

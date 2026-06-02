@@ -7,7 +7,12 @@
 
 /* eslint-disable @typescript-eslint/ban-types */
 
-type ExtensionPreferences = {}
+type ExtensionPreferences = {
+  /** Output Editor - Application used when opening downloaded ssync job output files. */
+  "outputEditor": "default" | "vscode" | "cursor" | "ghostty-nvim" | "custom",
+  /** Custom Output Editor - Application used when Output Editor is set to Custom Application. */
+  "outputEditorApplication"?: import("@raycast/api").Application
+}
 
 /** Preferences accessible in all the extension's commands */
 declare type Preferences = ExtensionPreferences

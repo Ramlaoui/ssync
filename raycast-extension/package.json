@@ -11,6 +11,45 @@
   "platforms": [
     "macOS"
   ],
+  "preferences": [
+    {
+      "name": "outputEditor",
+      "type": "dropdown",
+      "required": false,
+      "title": "Output Editor",
+      "description": "Application used when opening downloaded ssync job output files.",
+      "default": "default",
+      "data": [
+        {
+          "title": "System Default",
+          "value": "default"
+        },
+        {
+          "title": "Visual Studio Code",
+          "value": "vscode"
+        },
+        {
+          "title": "Cursor",
+          "value": "cursor"
+        },
+        {
+          "title": "Neovim in Ghostty",
+          "value": "ghostty-nvim"
+        },
+        {
+          "title": "Custom Application",
+          "value": "custom"
+        }
+      ]
+    },
+    {
+      "name": "outputEditorApplication",
+      "type": "appPicker",
+      "required": false,
+      "title": "Custom Output Editor",
+      "description": "Application used when Output Editor is set to Custom Application."
+    }
+  ],
   "commands": [
     {
       "name": "jobs",

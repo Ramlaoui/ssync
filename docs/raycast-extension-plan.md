@@ -19,6 +19,7 @@ The first Raycast extension release is a monitoring surface for ssync jobs. It s
 - Fetch Job Output only when requested.
 - Default Job Output to stdout, tail-limited.
 - Allow switching from stdout to stderr when needed.
+- Allow opening a refreshed Local Job Output Copy in a configured external editor.
 - Fetch Job Script only when requested.
 - Fetch Watchers and Watcher Events only when requested.
 - Keep watchers read-only in v1.
@@ -40,9 +41,10 @@ The first Raycast extension release is a monitoring surface for ssync jobs. It s
 - Do not poll on every search keystroke.
 - Do not fetch output, script, manifest, watchers, or watcher events while rendering the main Jobs list.
 - Do not fetch both stdout and stderr by default.
-- Do not force-refresh by default.
+- Do not force-refresh main job status by default.
 - Manual refresh may ask the ssync API server for fresh job status.
 - Background menu-bar refresh must only fetch job status.
+- Opening Job Output should force-refresh the selected stream once, then perform at most one delayed follow-up read if the ssync API server queued a background output refresh.
 
 ## Output And Script Views
 
@@ -50,6 +52,8 @@ The first Raycast extension release is a monitoring surface for ssync jobs. It s
 - Job Output defaults to `output_type=stdout&lines=300`.
 - Stderr is a secondary action, not loaded by default.
 - Full output is a deliberate secondary action, not the default.
+- Opening a Local Job Output Copy downloads the full selected stream and stores it under the system temporary directory before opening it externally.
+- The external output editor is user-configurable: system default, Visual Studio Code, Cursor, Neovim in Ghostty, or a custom Raycast app picker value.
 - Job Script opens as a separate formatted detail view.
 - Output and script text should be displayed in a monospace code block with job metadata in Raycast metadata sidebars.
 - Avoid markdown tables in Raycast views; use `Detail.Metadata` or `List.Item.Detail.Metadata` for structured facts.
