@@ -1,11 +1,13 @@
 import {
   Action,
   ActionPanel,
+  Alert,
   Icon,
   Keyboard,
   LaunchProps,
   List,
   Toast,
+  confirmAlert,
   open,
   showToast,
   useNavigation,
@@ -121,13 +123,14 @@ function JobsList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.apiUrl, connection.apiKey, connection.historyWindow, connection.jobLimit]);
 
-  async function refreshJobs(options: { silent?: boolean } = {}) {
+  async function refreshJobs(options: { silent?: boolean; forceRefresh?: boolean } = {}) {
     if (!options.silent) setIsLoading(true);
     setError(null);
     try {
       const responses = await client.getStatus({
         since: connection.historyWindow,
         limit: connection.jobLimit,
+        forceRefresh: options.forceRefresh,
       });
       const nextCache = { loadedAt: Date.now(), responses };
       setCache(nextCache);
@@ -140,6 +143,35 @@ function JobsList({
       }
     } finally {
       if (!options.silent) setIsLoading(false);
+    }
+  }
+
+  async function cancelJob(job: JobInfo) {
+    const confirmed = await confirmAlert({
+      title: `Cancel job ${job.job_id}?`,
+      message: `${job.name || "This job"} on ${job.hostname} will be cancelled with scancel.`,
+      primaryAction: {
+        title: "Cancel Job",
+        style: Alert.ActionStyle.Destructive,
+      },
+    });
+    if (!confirmed) return;
+
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: "Cancelling job",
+      message: `${job.job_id} @ ${job.hostname}`,
+    });
+    try {
+      await client.cancelJob(job);
+      toast.style = Toast.Style.Success;
+      toast.title = "Job cancelled";
+      toast.message = `${job.job_id} @ ${job.hostname}`;
+      await refreshJobs({ silent: true, forceRefresh: true });
+    } catch (cancelError) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Failed to cancel job";
+      toast.message = cancelError instanceof Error ? cancelError.message : String(cancelError);
     }
   }
 
@@ -206,6 +238,7 @@ function JobsList({
         jobs={runningJobs}
         connection={connection}
         onRefresh={() => refreshJobs()}
+        onCancel={cancelJob}
         onConfigure={configureConnection}
       />
       <JobSection
@@ -213,6 +246,7 @@ function JobsList({
         jobs={pendingJobs}
         connection={connection}
         onRefresh={() => refreshJobs()}
+        onCancel={cancelJob}
         onConfigure={configureConnection}
       />
       <JobSection
@@ -220,6 +254,7 @@ function JobsList({
         jobs={historicalJobs}
         connection={connection}
         onRefresh={() => refreshJobs()}
+        onCancel={cancelJob}
         onConfigure={configureConnection}
       />
     </List>
@@ -244,12 +279,14 @@ function JobSection({
   jobs,
   connection,
   onRefresh,
+  onCancel,
   onConfigure,
 }: {
   title: string;
   jobs: JobInfo[];
   connection: ConnectionSettings;
   onRefresh: () => void;
+  onCancel: (job: JobInfo) => Promise<void>;
   onConfigure: () => void;
 }) {
   if (jobs.length === 0) return null;
@@ -261,6 +298,7 @@ function JobSection({
           connection={connection}
           job={job}
           onRefresh={onRefresh}
+          onCancel={onCancel}
           onConfigure={onConfigure}
         />
       ))}
@@ -272,11 +310,13 @@ function JobListItem({
   connection,
   job,
   onRefresh,
+  onCancel,
   onConfigure,
 }: {
   connection: ConnectionSettings;
   job: JobInfo;
   onRefresh: () => void;
+  onCancel: (job: JobInfo) => Promise<void>;
   onConfigure: () => void;
 }) {
   const accessories = [
@@ -313,6 +353,14 @@ function JobListItem({
           </ActionPanel.Section>
           <ActionPanel.Section>
             <Action title="Refresh Jobs" icon={Icon.ArrowClockwise} shortcut={Keyboard.Shortcut.Common.Refresh} onAction={onRefresh} />
+            {isRunning(job) || isPending(job) ? (
+              <Action
+                title="Cancel Job"
+                icon={Icon.Stop}
+                style={Action.Style.Destructive}
+                onAction={() => onCancel(job)}
+              />
+            ) : null}
             <Action title="Open in ssync Web" icon={Icon.Globe} onAction={() => open(webJobUrl(connection.apiUrl, job))} />
             <Action title="Configure Connection" icon={Icon.Gear} onAction={onConfigure} />
           </ActionPanel.Section>
