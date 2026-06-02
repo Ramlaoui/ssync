@@ -1,0 +1,56 @@
+{
+  "name": "ssync",
+  "title": "Ssync",
+  "description": "Monitor ssync SLURM jobs from Raycast",
+  "icon": "icon.png",
+  "author": "ramlaoui",
+  "license": "MIT",
+  "categories": [
+    "Developer Tools"
+  ],
+  "platforms": [
+    "macOS"
+  ],
+  "commands": [
+    {
+      "name": "jobs",
+      "title": "Jobs",
+      "subtitle": "ssync",
+      "description": "Monitor running, pending, and historical ssync jobs",
+      "mode": "view",
+      "keywords": [
+        "slurm",
+        "hpc",
+        "cluster"
+      ]
+    },
+    {
+      "name": "menu-bar",
+      "title": "Job Summary",
+      "subtitle": "ssync",
+      "description": "Show running and pending ssync jobs in the menu bar",
+      "mode": "menu-bar",
+      "interval": "5m",
+      "keywords": [
+        "slurm",
+        "hpc",
+        "cluster"
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.104.19",
+    "react": "19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.17",
+    "@types/react": "19.0.10",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix"
+  }
+}
