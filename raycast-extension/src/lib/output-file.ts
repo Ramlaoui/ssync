@@ -98,11 +98,12 @@ async function openWithConfiguredEditor(filePath: string): Promise<void> {
 }
 
 async function openInGhosttyNvim(filePath: string): Promise<void> {
+  const initialCommand = `shell:exec nvim -- ${shellQuote(filePath)}`;
   if (process.platform === "darwin") {
-    await execFileAsync("/usr/bin/open", ["-na", "Ghostty", "--args", "-e", "nvim", filePath]);
+    await execFileAsync("/usr/bin/open", ["-na", "Ghostty", "--args", `--initial-command=${initialCommand}`]);
     return;
   }
-  await execFileAsync("ghostty", ["-e", "nvim", filePath]);
+  await execFileAsync("ghostty", [`--initial-command=${initialCommand}`]);
 }
 
 function safePathSegment(value: string): string {
@@ -113,4 +114,8 @@ function safeOutputFilename(filename: string, outputType: OutputType): string {
   const safe = safePathSegment(filename);
   if (safe.endsWith(".log")) return safe;
   return `${safe || outputType}.log`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
