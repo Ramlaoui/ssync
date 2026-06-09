@@ -4,6 +4,7 @@ import asyncio
 import re
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -245,6 +246,7 @@ class LaunchManager:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
+        launch_script_id = uuid.uuid4().hex[:12]
         script_name = "inline_script.sh"
         if script_path is not None:
             script_path = Path(script_path)
@@ -370,7 +372,12 @@ class LaunchManager:
             logger.info("Preparing clean compute script for Slurm submission...")
             remote_script_dir = remote_work_dir / "scripts"
             temp_dir = Path(tempfile.mkdtemp(prefix="ssync-launch-"))
-            clean_script_path = temp_dir / f"clean_{script_name}"
+            script_path_parts = Path(script_name)
+            script_suffix = script_path_parts.suffix or ".sh"
+            clean_script_path = (
+                temp_dir
+                / f"clean_{script_path_parts.stem}_{launch_script_id}{script_suffix}"
+            )
 
             with open(clean_script_path, "w") as f:
                 f.write(clean_compute_script)
