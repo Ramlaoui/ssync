@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -172,6 +173,52 @@ async def test_job_end_resubmit_passes_job_end_state_to_action(
     assert len(captured_action_vars) == 1
     assert captured_action_vars[0]["job_end_state"] == "completed"
     assert captured_action_vars[0]["ckpt_path"] == "/data/epoch10.pt"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_job_end_action_claim_prevents_concurrent_resubmit(
+    monkeypatch, test_cache
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_id = engine._store_watcher(
+        "12347",
+        "cluster",
+        WatcherDefinition(
+            name="auto resubmit",
+            actions=[WatcherAction(type=ActionType.RESUBMIT, params={})],
+            trigger_on_job_end=True,
+            trigger_job_states=["timeout"],
+        ),
+    )
+    watcher = engine._get_watcher(watcher_id)
+
+    executed_actions = []
+
+    async def fake_execute_action(_watcher_arg, action, matched_text, captured_vars):
+        executed_actions.append((action.type.value, matched_text, dict(captured_vars)))
+        await asyncio.sleep(0.05)
+        return True, "Resubmitted as job 12348"
+
+    monkeypatch.setattr(engine, "_execute_action", fake_execute_action)
+
+    first, second = await asyncio.gather(
+        engine._handle_job_end_trigger(watcher, JobState.TIMEOUT),
+        engine._handle_job_end_trigger(watcher, JobState.TIMEOUT),
+    )
+
+    assert {first, second} == {
+        JobEndHandlingResult.COMPLETE,
+        JobEndHandlingResult.RETRY_PENDING,
+    }
+    assert len(executed_actions) == 1
+
+    variables = engine._get_watcher_variables(watcher_id)
+    assert variables["__ssync_job_end_action_success_0"] == "1"
+    assert variables["__ssync_job_end_completed"] == "1"
+    assert "__ssync_job_end_action_claim_0" in variables
 
 
 @pytest.mark.unit
