@@ -439,6 +439,33 @@
           { label: "Exit Code", value: job.exit_code },
           { label: "Priority", value: job.priority },
           {
+            label: "Pending Priority Rank",
+            value:
+              job.priority_rank != null && job.priority_queue_size != null
+                ? `${job.priority_rank} of ${job.priority_queue_size}`
+                : undefined,
+          },
+          {
+            label: "Visible Jobs Ahead",
+            value:
+              job.priority_jobs_ahead != null
+                ? String(job.priority_jobs_ahead)
+                : undefined,
+          },
+          {
+            label: "Priority Percentile",
+            value:
+              job.priority_percentile != null
+                ? `${job.priority_percentile}% (higher is better)`
+                : undefined,
+          },
+          { label: "Priority Scope", value: job.priority_scope },
+          {
+            label: "Priority Snapshot",
+            value: job.priority_snapshot_at,
+            format: formatTime,
+          },
+          {
             label: "Array",
             value: hasValue(job.array_job_id)
               ? `${job.array_job_id}${hasValue(job.array_task_id) ? ` / task ${job.array_task_id}` : ""}`

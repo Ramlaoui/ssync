@@ -96,13 +96,21 @@ class JobDisplay:
         return value[: max(width - 3, 0)] + "..."
 
     @staticmethod
-    def _job_status_record(job: JobInfo) -> dict[str, Optional[str]]:
+    def _job_status_record(job: JobInfo) -> dict[str, object]:
         return {
             "job_id": job.job_id,
             "state": job.state.value,
             "name": job.name,
             "host": job.hostname,
             "partition": job.partition,
+            "qos": job.qos,
+            "priority": job.priority,
+            "priority_rank": job.priority_rank,
+            "priority_jobs_ahead": job.priority_jobs_ahead,
+            "priority_queue_size": job.priority_queue_size,
+            "priority_percentile": job.priority_percentile,
+            "priority_scope": job.priority_scope,
+            "priority_snapshot_at": job.priority_snapshot_at,
             "runtime": job.runtime,
             "reason": job.reason,
             "submitted_at": job.submit_time,
@@ -132,6 +140,19 @@ class JobDisplay:
             ("STATE", 7, lambda job: job.state.value),
             ("HOST", 12, lambda job: job.hostname),
             ("PARTITION", 16, lambda job: job.partition),
+            ("PRIORITY", 10, lambda job: job.priority),
+            (
+                "QUEUE",
+                18,
+                lambda job: (
+                    f"{job.priority_rank}/{job.priority_queue_size} "
+                    f"({job.priority_percentile:g}%)"
+                    if job.priority_rank is not None
+                    and job.priority_queue_size is not None
+                    and job.priority_percentile is not None
+                    else None
+                ),
+            ),
             ("NAME", 24, lambda job: job.name),
             ("RUNTIME", 12, lambda job: job.runtime),
             ("REASON", 32, lambda job: job.reason),
@@ -160,6 +181,22 @@ class JobDisplay:
                 click.echo(f"  User: {job.user}")
             if job.partition:
                 click.echo(f"  Partition: {job.partition}")
+            if job.qos:
+                click.echo(f"  QOS: {job.qos}")
+            if job.priority:
+                click.echo(f"  Priority: {job.priority}")
+            if job.priority_rank is not None and job.priority_queue_size is not None:
+                click.echo(
+                    f"  Pending Priority Rank: {job.priority_rank}/{job.priority_queue_size}"
+                )
+            if job.priority_jobs_ahead is not None:
+                click.echo(f"  Visible Pending Jobs Ahead: {job.priority_jobs_ahead}")
+            if job.priority_percentile is not None:
+                click.echo(
+                    f"  Priority Percentile: {job.priority_percentile:g}% (higher is better)"
+                )
+            if job.priority_snapshot_at:
+                click.echo(f"  Priority Snapshot: {job.priority_snapshot_at}")
 
             # Resources
             resources = []

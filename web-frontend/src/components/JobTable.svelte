@@ -329,6 +329,7 @@
             </div>
           {/if}
         </th>
+        <th>Priority / Queue</th>
         <th class="sortable" onclick={stopPropagation(() => handleSort('submit_time'))}>
           <span>Submitted</span>
           {#if sortBy === 'submit_time'}
@@ -341,13 +342,13 @@
     <tbody>
       {#if loading}
         <tr>
-          <td colspan="7" class="loading-cell">
+          <td colspan="8" class="loading-cell">
             <LoadingSpinner size="md" message="Loading jobs..." />
           </td>
         </tr>
       {:else if processedJobs.length === 0}
         <tr>
-          <td colspan="7" class="loading-cell">
+          <td colspan="8" class="loading-cell">
             <LoadingSpinner size="md" message="Loading jobs..." />
           </td>
         </tr>
@@ -368,6 +369,20 @@
               >
                 {jobUtils.getStateLabel(job.state)}
               </span>
+            </td>
+            <td class="whitespace-nowrap text-xs text-gray-600">
+              <div class="font-mono text-sm text-gray-800">{job.priority || '-'}</div>
+              {#if job.priority_rank != null && job.priority_queue_size != null}
+                <div
+                  class="text-gray-500"
+                  title={`${job.priority_scope || 'visible pending records'}${job.priority_snapshot_at ? ` · snapshot ${job.priority_snapshot_at}` : ''}`}
+                >
+                  {job.priority_rank}/{job.priority_queue_size}
+                  {#if job.priority_percentile != null}
+                    · {job.priority_percentile}%
+                  {/if}
+                </div>
+              {/if}
             </td>
             <td class="job-time">{formatTime(job.submit_time)}</td>
             <td class="job-duration">{formatDuration(job.runtime)}</td>

@@ -567,6 +567,14 @@ class JobDataCache:
         3. New None/empty values (fallback)
         """
         merged_data = {}
+        ephemeral_fields = {
+            "priority_rank",
+            "priority_jobs_ahead",
+            "priority_queue_size",
+            "priority_percentile",
+            "priority_scope",
+            "priority_snapshot_at",
+        }
         for field in fields(JobInfo):
             new_val = getattr(new_job, field.name)
             existing_val = getattr(existing_job, field.name)
@@ -581,7 +589,9 @@ class JobDataCache:
                 "node_list",
             ]
 
-            if field.name in critical_fields:
+            if field.name in ephemeral_fields:
+                merged_data[field.name] = new_val
+            elif field.name in critical_fields:
                 if existing_val and not new_val:
                     merged_data[field.name] = existing_val
                     logger.debug(

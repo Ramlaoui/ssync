@@ -28,6 +28,8 @@ def _make_jobs() -> list[JobInfo]:
             state=JobState.RUNNING,
             hostname="adastra",
             partition="mi300-shared",
+            qos="normal",
+            priority="1100",
             runtime="00:07:07",
             submit_time="2026-05-24T06:00:00",
             stdout_file="/work/slurm-4993854.out",
@@ -40,6 +42,14 @@ def _make_jobs() -> list[JobInfo]:
             state=JobState.PENDING,
             hostname="adastra",
             partition="mi300-shared",
+            qos="normal",
+            priority="900",
+            priority_rank=2,
+            priority_jobs_ahead=1,
+            priority_queue_size=5,
+            priority_percentile=75.0,
+            priority_scope="visible_pending_records:partition=mi300-shared",
+            priority_snapshot_at="2026-05-24T06:01:30+00:00",
             runtime="00:00:00",
             reason="QOSGrpNodeLimit",
             submit_time="2026-05-24T06:01:00",
@@ -82,6 +92,9 @@ def test_status_defaults_to_compact_table(monkeypatch, tmp_path, capsys):
     assert "STATE" in output
     assert "HOST" in output
     assert "PARTITION" in output
+    assert "PRIORITY" in output
+    assert "QUEUE" in output
+    assert "2/5 (75%)" in output
     assert "4993854" in output
     assert "adastra" in output
     assert "mi300-shared" in output
@@ -126,6 +139,14 @@ def test_status_json_outputs_flat_job_records(monkeypatch, tmp_path, capsys):
             "name": "train-model",
             "host": "adastra",
             "partition": "mi300-shared",
+            "qos": "normal",
+            "priority": "1100",
+            "priority_rank": None,
+            "priority_jobs_ahead": None,
+            "priority_queue_size": None,
+            "priority_percentile": None,
+            "priority_scope": None,
+            "priority_snapshot_at": None,
             "runtime": "00:07:07",
             "reason": None,
             "submitted_at": "2026-05-24T06:00:00",
@@ -140,6 +161,14 @@ def test_status_json_outputs_flat_job_records(monkeypatch, tmp_path, capsys):
             "name": "queued-model",
             "host": "adastra",
             "partition": "mi300-shared",
+            "qos": "normal",
+            "priority": "900",
+            "priority_rank": 2,
+            "priority_jobs_ahead": 1,
+            "priority_queue_size": 5,
+            "priority_percentile": 75.0,
+            "priority_scope": "visible_pending_records:partition=mi300-shared",
+            "priority_snapshot_at": "2026-05-24T06:01:30+00:00",
             "runtime": "00:00:00",
             "reason": "QOSGrpNodeLimit",
             "submitted_at": "2026-05-24T06:01:00",
