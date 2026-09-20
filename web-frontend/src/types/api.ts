@@ -31,6 +31,12 @@ export interface JobInfo {
   account?: string | null;
   qos?: string | null;
   priority?: string | null;
+  priority_rank?: number | null;
+  priority_jobs_ahead?: number | null;
+  priority_queue_size?: number | null;
+  priority_percentile?: number | null;
+  priority_scope?: string | null;
+  priority_snapshot_at?: string | null;
   array_job_id?: string | null;
   array_task_id?: string | null;
 

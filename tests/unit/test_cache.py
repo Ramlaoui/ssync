@@ -156,6 +156,41 @@ class TestBasicJobCaching:
         cache.close()
 
     @pytest.mark.unit
+    def test_cache_job_clears_stale_priority_position(self, tmp_path):
+        cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
+        ranked_job = JobInfo(
+            job_id="123",
+            name="pending",
+            state=JobState.PENDING,
+            hostname="test.host",
+            priority_rank=2,
+            priority_jobs_ahead=1,
+            priority_queue_size=5,
+            priority_percentile=75.0,
+            priority_scope="visible_pending_records:partition=gpu",
+            priority_snapshot_at="2026-09-18T12:00:00+00:00",
+        )
+        cache.cache_job(ranked_job)
+
+        unranked_job = JobInfo(
+            job_id="123",
+            name="pending",
+            state=JobState.PENDING,
+            hostname="test.host",
+        )
+        cache.cache_job(unranked_job)
+
+        cached = cache.get_cached_job("123", "test.host")
+        assert cached is not None
+        assert cached.job_info.priority_rank is None
+        assert cached.job_info.priority_jobs_ahead is None
+        assert cached.job_info.priority_queue_size is None
+        assert cached.job_info.priority_percentile is None
+        assert cached.job_info.priority_scope is None
+        assert cached.job_info.priority_snapshot_at is None
+        cache.close()
+
+    @pytest.mark.unit
     def test_cache_job_updates_is_active(self, tmp_path, sample_job_info):
         """Test that is_active flag is updated based on job state."""
         cache = JobDataCache(cache_dir=tmp_path, max_age_days=30)
