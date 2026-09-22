@@ -206,6 +206,95 @@ describe('JobStateManager - WebSocket', () => {
       expect(updatedJob?.state).toBe('R');
     });
 
+    it('should preserve pending priority data across unranked WebSocket refreshes', async () => {
+      const ws = testSetup.mocks.wsFactory.getLastInstance();
+      const rankedJob = createMockJob({
+        job_id: '123',
+        hostname: 'test.com',
+        state: 'PD',
+        priority_rank: 2,
+        priority_jobs_ahead: 1,
+        priority_queue_size: 10,
+        priority_percentile: 88.9,
+        priority_scope: 'visible_pending_records:partition=gpu',
+        priority_snapshot_at: '2026-09-21T15:00:00+00:00',
+      });
+
+      manager['queueUpdate']({
+        jobId: rankedJob.job_id,
+        hostname: rankedJob.hostname,
+        job: rankedJob,
+        source: 'api',
+        timestamp: Date.now(),
+        priority: 'normal',
+      }, true);
+
+      ws?.simulateMessage({
+        type: 'job_update',
+        job_id: '123',
+        hostname: 'test.com',
+        job: createMockJob({
+          job_id: '123',
+          hostname: 'test.com',
+          state: 'PD',
+        }),
+      });
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      const updatedJob = get(manager.getAllJobs()).find(job => job.job_id === '123');
+      expect(updatedJob).toMatchObject({
+        priority_rank: 2,
+        priority_jobs_ahead: 1,
+        priority_queue_size: 10,
+        priority_percentile: 88.9,
+        priority_scope: 'visible_pending_records:partition=gpu',
+        priority_snapshot_at: '2026-09-21T15:00:00+00:00',
+      });
+    });
+
+    it('should clear pending priority data when a WebSocket update starts the job', async () => {
+      const ws = testSetup.mocks.wsFactory.getLastInstance();
+      const rankedJob = createMockJob({
+        job_id: '123',
+        hostname: 'test.com',
+        state: 'PD',
+        priority_rank: 2,
+        priority_jobs_ahead: 1,
+        priority_queue_size: 10,
+        priority_percentile: 88.9,
+        priority_scope: 'visible_pending_records:partition=gpu',
+        priority_snapshot_at: '2026-09-21T15:00:00+00:00',
+      });
+
+      manager['queueUpdate']({
+        jobId: rankedJob.job_id,
+        hostname: rankedJob.hostname,
+        job: rankedJob,
+        source: 'api',
+        timestamp: Date.now(),
+        priority: 'normal',
+      }, true);
+
+      ws?.simulateMessage({
+        type: 'state_change',
+        job_id: '123',
+        hostname: 'test.com',
+        job: createMockJob({
+          job_id: '123',
+          hostname: 'test.com',
+          state: 'R',
+        }),
+      });
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      const updatedJob = get(manager.getAllJobs()).find(job => job.job_id === '123');
+      expect(updatedJob?.state).toBe('R');
+      expect(updatedJob?.priority_rank).toBeUndefined();
+      expect(updatedJob?.priority_snapshot_at).toBeUndefined();
+    });
+
     it('should handle state_change message with high priority', async () => {
       const ws = testSetup.mocks.wsFactory.getLastInstance();
 

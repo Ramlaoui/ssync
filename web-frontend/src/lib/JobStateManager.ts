@@ -1248,13 +1248,32 @@ class JobStateManager {
             debugLog(`[JobStateManager] Updating existing job ${cacheKey} from ${update.source} (no state change)`);
           }
 
+          let nextJob = update.job;
+          if (
+            update.source === 'websocket' &&
+            existing?.job.state === 'PD' &&
+            update.job.state === 'PD' &&
+            update.job.priority_rank == null &&
+            existing.job.priority_rank != null
+          ) {
+            nextJob = {
+              ...update.job,
+              priority_rank: existing.job.priority_rank,
+              priority_jobs_ahead: existing.job.priority_jobs_ahead,
+              priority_queue_size: existing.job.priority_queue_size,
+              priority_percentile: existing.job.priority_percentile,
+              priority_scope: existing.job.priority_scope,
+              priority_snapshot_at: existing.job.priority_snapshot_at,
+            };
+          }
+
           // Ensure hostname is set on the job object
-          if (!update.job.hostname) {
-            update.job.hostname = update.hostname;
+          if (!nextJob.hostname) {
+            nextJob.hostname = update.hostname;
           }
 
           newCache.set(cacheKey, {
-            job: update.job,
+            job: nextJob,
             lastUpdated: update.timestamp,
             lastSource: update.source,
             output: existing?.output,
