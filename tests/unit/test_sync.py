@@ -88,7 +88,10 @@ def test_sync_to_host_reuses_control_master_for_password_auth(
             "rsync",
             "-avz",
             "-e",
-            "ssh -S /tmp/control.sock -o ControlMaster=no",
+            (
+                "ssh -S /tmp/control.sock -o ControlMaster=no "
+                "-o BatchMode=yes -o ProxyCommand=false"
+            ),
             f"{source_dir}/",
             "alice@example.com:/work/alice/workspace/",
         ]
@@ -97,7 +100,7 @@ def test_sync_to_host_reuses_control_master_for_password_auth(
 
 @pytest.mark.unit
 @patch("ssync.sync.NativeSSH.ensure_control_master", return_value=None)
-def test_sync_to_host_keeps_sshpass_fallback_for_password_auth(
+def test_sync_to_host_does_not_fall_back_to_repeated_password_auth(
     _mock_control_master,
     tmp_path,
 ):
@@ -125,15 +128,5 @@ def test_sync_to_host_keeps_sshpass_fallback_for_password_auth(
         scratch_dir=Path("/scratch/alice"),
     )
 
-    assert sync_manager.sync_to_host(slurm_host) is True
-
-    args, kwargs = sync_manager._run_streaming_subprocess.call_args
-    assert args[0] == [
-        "sshpass",
-        "-e",
-        "rsync",
-        "-avz",
-        f"{source_dir}/",
-        "alice@example.com:/work/alice/workspace/",
-    ]
-    assert kwargs["env"]["SSHPASS"] == "secret"
+    assert sync_manager.sync_to_host(slurm_host) is False
+    sync_manager._run_streaming_subprocess.assert_not_called()

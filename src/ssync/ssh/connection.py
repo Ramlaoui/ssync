@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..utils.logging import setup_logger
-from .native import NativeSSH, SSHResult
+from .native import ControlMasterUnavailableError, NativeSSH, SSHResult
 
 logger = setup_logger(__name__)
 
@@ -109,17 +109,13 @@ class SSHConnection:
         control_path = NativeSSH.ensure_control_master(self.host_config, self.host_id)
         if control_path:
             return [
-                "ssh",
-                "-S",
-                control_path,
-                "-o",
-                "ControlMaster=no",
+                *NativeSSH.control_ssh_prefix(control_path),
                 self._host_argument(),
             ]
 
         password = self._get_password()
         if password:
-            return ["sshpass", "-p", password, "ssh", self._host_argument()]
+            raise ControlMasterUnavailableError(self.host_id)
 
         return NativeSSH._build_direct_ssh_command(self.host_config)
 
@@ -131,16 +127,12 @@ class SSHConnection:
         control_path = NativeSSH.ensure_control_master(self.host_config, self.host_id)
 
         if control_path:
-            base_cmd = [
-                "scp",
-                "-o",
-                f"ControlPath={control_path}",
-                "-o",
-                "ControlMaster=no",
-            ]
+            base_cmd = NativeSSH.control_scp_prefix(control_path)
         else:
             password = self._get_password()
-            base_cmd = ["sshpass", "-p", password, "scp"] if password else ["scp"]
+            if password:
+                raise ControlMasterUnavailableError(self.host_id)
+            base_cmd = ["scp"]
 
         if upload:
             return base_cmd + [local_path, remote_target]
@@ -241,6 +233,24 @@ class SSHConnection:
         timeout: Optional[float] = None,
         **kwargs,
     ) -> SSHCommandResult:
+        """Run one command without exceeding the host's SSH session limit."""
+        with NativeSSH.command_slot(self.host_id):
+            return self._run_unthrottled(
+                command,
+                hide=hide,
+                warn=warn,
+                timeout=timeout,
+                **kwargs,
+            )
+
+    def _run_unthrottled(
+        self,
+        command: str,
+        hide: bool = True,
+        warn: bool = True,
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> SSHCommandResult:
         """Run command matching Fabric's API.
 
         Args:
@@ -333,6 +343,10 @@ class SSHConnection:
 
             return result
 
+        except ControlMasterUnavailableError as e:
+            logger.debug("%s", e)
+            failed = SSHResult(success=False, stdout="", stderr=str(e), return_code=255)
+            return SSHCommandResult(failed)
         except Exception as e:
             logger.error(f"Error running command: {e}")
             # Return a failed result
@@ -389,10 +403,11 @@ class SSHConnection:
             temp_file = None
 
         try:
-            scp_cmd = self._build_scp_command(
-                upload=True, local_path=local_path, remote=remote
-            )
-            self._run_scp_command(scp_cmd, direction="upload")
+            with NativeSSH.command_slot(self.host_id):
+                scp_cmd = self._build_scp_command(
+                    upload=True, local_path=local_path, remote=remote
+                )
+                self._run_scp_command(scp_cmd, direction="upload")
         finally:
             # Clean up temp file if we created one
             if temp_file and os.path.exists(temp_file):
@@ -427,16 +442,17 @@ class SSHConnection:
             is_file_obj = False
 
         try:
-            scp_cmd = self._build_scp_command(
-                upload=False, local_path=local_path, remote=remote
-            )
-            self._run_scp_command(scp_cmd, direction="download")
+            with NativeSSH.command_slot(self.host_id):
+                scp_cmd = self._build_scp_command(
+                    upload=False, local_path=local_path, remote=remote
+                )
+                self._run_scp_command(scp_cmd, direction="download")
 
-            # If it was a file object, write the content back
-            if is_file_obj:
-                with open(local_path, "rb") as f:
-                    local.write(f.read())
-                os.unlink(local_path)
+                # If it was a file object, write the content back
+                if is_file_obj:
+                    with open(local_path, "rb") as f:
+                        local.write(f.read())
+                    os.unlink(local_path)
         except Exception:
             # Clean up temp file on error
             if is_file_obj and os.path.exists(local_path):

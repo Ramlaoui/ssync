@@ -5,12 +5,18 @@ allows unlimited parallel SSH commands through that single connection.
 """
 
 import asyncio
+import fcntl
 import hashlib
 import os
+import shutil
+import signal
 import subprocess
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Iterator, Optional, Union
 
 from ..utils.logging import setup_logger
 
@@ -27,11 +33,25 @@ class SSHResult:
     return_code: int
 
 
+class ControlMasterUnavailableError(RuntimeError):
+    """Raised when a password-backed host has no reusable SSH master."""
+
+    def __init__(self, host_id: str):
+        super().__init__(
+            f"ControlMaster unavailable for password-authenticated host {host_id}"
+        )
+
+
 class NativeSSH:
     """Native SSH implementation using ControlMaster - one connection per host."""
 
     # Class-level tracking of established control masters
     _control_masters: Dict[str, str] = {}  # host_id -> control_path
+    _master_processes: Dict[str, subprocess.Popen] = {}
+    _host_locks: Dict[str, threading.Lock] = {}
+    _host_locks_guard = threading.Lock()
+    _command_semaphores: Dict[str, threading.BoundedSemaphore] = {}
+    _command_semaphores_guard = threading.Lock()
 
     @classmethod
     def get_control_path(cls, host_id: str) -> str:
@@ -56,180 +76,335 @@ class NativeSSH:
     # Class-level tracking of failed connection attempts to avoid repeated failures
     _failed_hosts: Dict[str, float] = {}  # host_id -> last_failed_time
     _FAILURE_BACKOFF = 60.0  # Don't retry failed hosts for 60 seconds
+    _MASTER_START_TIMEOUT = 8.0
+    _MASTER_HOLD_COMMAND = "exec cat >/dev/null"
+    _MAX_COMMANDS_PER_HOST = 8
+    _CONTROL_CLIENT_OPTIONS = (
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ProxyCommand=false",
+    )
 
     @classmethod
     def ensure_control_master(
         cls, host_config: Union[str, Dict], host_id: str
     ) -> Optional[str]:
-        """Ensure ControlMaster is established for a host.
+        """Return one reusable SSH master socket for a host.
 
-        Args:
-            host_config: SSH config (string alias or dict)
-            host_id: Unique identifier for the host
-
-        Returns:
-            Control socket path if successful, None otherwise
+        Creation is serialized per host. The SSH process remains in the
+        foreground with a harmless blocking remote command because some
+        ProxyJump/password hosts close an idle ``ssh -N -f`` session before its
+        socket can be reused.
         """
-        import time
+        control_path = cls.get_control_path(host_id)
 
-        # Check if this host recently failed - if so, skip retry for backoff period
-        if host_id in cls._failed_hosts:
-            time_since_failure = time.time() - cls._failed_hosts[host_id]
-            if time_since_failure < cls._FAILURE_BACKOFF:
-                logger.debug(
-                    f"Skipping ControlMaster retry for {host_id} "
-                    f"(failed {time_since_failure:.1f}s ago, backoff={cls._FAILURE_BACKOFF}s)"
+        with cls._get_host_lock(host_id):
+            existing = cls._reuse_control_master(host_config, host_id, control_path)
+            if existing:
+                return existing
+
+            last_failure = cls._failed_hosts.get(host_id)
+            if last_failure is not None:
+                elapsed = time.monotonic() - last_failure
+                if elapsed < cls._FAILURE_BACKOFF:
+                    logger.debug(
+                        "Skipping ControlMaster retry for %s for another %.1fs",
+                        host_id,
+                        cls._FAILURE_BACKOFF - elapsed,
+                    )
+                    return None
+
+            try:
+                with cls._control_creation_lock(control_path):
+                    # Another ssync process may have created it while we waited.
+                    existing = cls._reuse_control_master(
+                        host_config, host_id, control_path
+                    )
+                    if existing:
+                        return existing
+
+                    cls._discard_local_master(host_id)
+                    cls._remove_socket(control_path)
+                    return cls._start_control_master(host_config, host_id, control_path)
+            except OSError as exc:
+                cls._record_failure(host_id)
+                logger.error(
+                    "Could not lock ControlMaster creation for %s: %s",
+                    host_id,
+                    exc,
                 )
                 return None
 
-        # Get control path
-        control_path = cls.get_control_path(host_id)
+    @classmethod
+    def _get_host_lock(cls, host_id: str) -> threading.Lock:
+        with cls._host_locks_guard:
+            return cls._host_locks.setdefault(host_id, threading.Lock())
 
-        # Check if socket already exists on disk (from previous session)
-        if Path(control_path).exists():
-            # Verify it's still valid
-            if cls._check_control_master(control_path, host_config):
-                # Existing ControlMaster is valid, use it!
-                cls._control_masters[host_id] = control_path
-                # Clear failure record on success
-                cls._failed_hosts.pop(host_id, None)
-                logger.debug(f"Found existing ControlMaster for {host_id}")
-                return control_path
-            else:
-                # Socket exists but is stale, remove it
-                try:
-                    Path(control_path).unlink()
-                    logger.debug(f"Removed stale socket for {host_id}")
-                except OSError:
-                    pass
+    @classmethod
+    @contextmanager
+    def command_slot(cls, host_id: str) -> Iterator[None]:
+        """Limit simultaneous sessions opened through one host connection."""
+        with cls._command_semaphores_guard:
+            semaphore = cls._command_semaphores.setdefault(
+                host_id,
+                threading.BoundedSemaphore(
+                    cls._max_commands_for_host(host_id)
+                ),
+            )
 
-        # Check if we already tracked this control master
-        if host_id in cls._control_masters:
-            control_path = cls._control_masters[host_id]
-            # Verify it's still valid
-            if cls._check_control_master(control_path, host_config):
-                return control_path
-            else:
-                # Clean up stale entry
-                del cls._control_masters[host_id]
+        semaphore.acquire()
+        try:
+            yield
+        finally:
+            semaphore.release()
 
-        # Build SSH command for master
-        ssh_cmd = ["ssh"]
-
-        # Handle different config types
-        if isinstance(host_config, str):
-            # SSH config alias
-            ssh_cmd.append(host_config)
-        elif isinstance(host_config, dict):
-            # Build from dict
-            hostname = host_config.get("hostname", host_config.get("host"))
-            if not hostname:
-                logger.error("No hostname in config")
-                return None
-
-            # Check if it's an SSH alias (no dots, no user)
-            if "." not in hostname and "user" not in host_config:
-                ssh_cmd.append(hostname)
-            else:
-                # Build user@host
-                if "user" in host_config:
-                    ssh_cmd.append(f"{host_config['user']}@{hostname}")
-                else:
-                    ssh_cmd.append(hostname)
-
-                # Add port if needed
-                if "port" in host_config and host_config["port"] != 22:
-                    ssh_cmd.extend(["-p", str(host_config["port"])])
-
-        # Add ControlMaster options
-        # Override any existing ControlMaster settings from SSH config
-        ssh_cmd.extend(
-            [
-                "-o",
-                "ControlMaster=yes",  # Override SSH config
-                "-o",
-                f"ControlPath={control_path}",  # Our socket path
-                "-o",
-                "ControlPersist=600",  # Keep alive for 10 minutes
-                "-o",
-                "ServerAliveInterval=60",
-                "-o",
-                "ServerAliveCountMax=3",
-                "-o",
-                "ConnectTimeout=5",  # Reduced from 10s to 5s for faster failure
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-N",  # No command
-                "-f",  # Background
-            ]
+    @classmethod
+    def _max_commands_for_host(cls, host_id: str) -> int:
+        normalized_host_id = "".join(
+            character if character.isalnum() else "_"
+            for character in host_id.upper()
         )
-
-        # Handle password if present
-        password = None
-        if isinstance(host_config, dict):
-            connect_kwargs = host_config.get("connect_kwargs", {})
-            password = connect_kwargs.get("password")
-
-        if password:
-            # Check for sshpass
-            if (
-                subprocess.run(["which", "sshpass"], capture_output=True).returncode
-                == 0
-            ):
-                ssh_cmd = ["sshpass", "-p", password] + ssh_cmd
-                logger.debug(f"Using sshpass for {host_id}")
-            else:
-                logger.warning(f"Password auth requires sshpass for {host_id}")
-                # Try anyway - maybe SSH askpass is configured
-                pass
-
-        logger.debug(f"Establishing ControlMaster for {host_id}")
+        configured = os.getenv(
+            f"SSYNC_MAX_COMMANDS_PER_HOST_{normalized_host_id}",
+            os.getenv("SSYNC_MAX_COMMANDS_PER_HOST"),
+        )
+        if configured is None:
+            return cls._MAX_COMMANDS_PER_HOST
 
         try:
-            # For debugging, log the command (without password)
-            safe_cmd = [c if not password or c != password else "***" for c in ssh_cmd]
-            logger.debug(f"SSH command: {' '.join(safe_cmd[:10])}...")
+            return max(1, int(configured))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid SSH command limit %r for host %s",
+                configured,
+                host_id,
+            )
+            return cls._MAX_COMMANDS_PER_HOST
 
-            # Start control master with shorter timeout for faster failure
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=5)
+    @classmethod
+    @contextmanager
+    def _control_creation_lock(cls, control_path: str) -> Iterator[None]:
+        lock_path = Path(f"{control_path}.lock")
+        with lock_path.open("a") as lock_file:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
-            # Wait a bit for socket to be created
-            import time
+    @classmethod
+    def _reuse_control_master(
+        cls,
+        host_config: Union[str, Dict],
+        host_id: str,
+        control_path: str,
+    ) -> Optional[str]:
+        process = cls._master_processes.get(host_id)
+        if (
+            process is not None
+            and process.poll() is None
+            and Path(control_path).exists()
+        ):
+            cls._control_masters[host_id] = control_path
+            cls._failed_hosts.pop(host_id, None)
+            return control_path
 
-            time.sleep(1)
+        if not Path(control_path).exists():
+            return None
 
-            # Check if socket was created
-            if Path(control_path).exists():
+        if cls._check_control_master(control_path, host_config):
+            cls._control_masters[host_id] = control_path
+            cls._failed_hosts.pop(host_id, None)
+            return control_path
+
+        cls._discard_local_master(host_id)
+        cls._remove_socket(control_path)
+        return None
+
+    @classmethod
+    def _start_control_master(
+        cls,
+        host_config: Union[str, Dict],
+        host_id: str,
+        control_path: str,
+    ) -> Optional[str]:
+        password = cls._get_password(host_config)
+        if password and shutil.which("sshpass") is None:
+            cls._record_failure(host_id)
+            logger.error("Password auth requires sshpass for %s", host_id)
+            return None
+
+        ssh_cmd = cls._build_control_master_command(
+            host_config, control_path, password=bool(password)
+        )
+        env = os.environ.copy()
+        if password:
+            env["SSHPASS"] = password
+
+        logger.debug("Establishing supervised ControlMaster for %s", host_id)
+        try:
+            process = subprocess.Popen(
+                ssh_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                start_new_session=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            cls._record_failure(host_id)
+            logger.error("Could not start ControlMaster for %s: %s", host_id, exc)
+            return None
+
+        deadline = time.monotonic() + cls._MASTER_START_TIMEOUT
+        while time.monotonic() < deadline:
+            if Path(control_path).exists() and cls._check_control_master(
+                control_path, host_config
+            ):
+                cls._master_processes[host_id] = process
                 cls._control_masters[host_id] = control_path
-                # Clear failure record on success
                 cls._failed_hosts.pop(host_id, None)
-                logger.debug(f"ControlMaster established for {host_id}")
+                logger.info("ControlMaster established for %s", host_id)
                 return control_path
-            else:
-                # Record failure with timestamp for backoff
-                cls._failed_hosts[host_id] = time.time()
-                if result.stderr:
-                    logger.error(
-                        f"Failed to establish ControlMaster for {host_id}: {result.stderr}"
-                    )
-                if result.stdout:
-                    logger.debug(f"SSH stdout: {result.stdout}")
-                return None
 
-        except subprocess.TimeoutExpired:
-            # Record failure with timestamp for backoff
-            import time
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
 
-            cls._failed_hosts[host_id] = time.time()
-            logger.error(f"Timeout establishing ControlMaster for {host_id}")
+        return_code = process.poll()
+        cls._stop_process(process)
+        cls._remove_socket(control_path)
+        cls._record_failure(host_id)
+        if return_code is None:
+            logger.error(
+                "ControlMaster for %s did not create a usable socket within %.0fs",
+                host_id,
+                cls._MASTER_START_TIMEOUT,
+            )
+        else:
+            logger.error(
+                "ControlMaster for %s exited before its socket was ready (code %s)",
+                host_id,
+                return_code,
+            )
+        return None
+
+    @classmethod
+    def _build_control_master_command(
+        cls,
+        host_config: Union[str, Dict],
+        control_path: str,
+        *,
+        password: bool,
+    ) -> list[str]:
+        ssh_cmd = [
+            "ssh",
+            "-o",
+            "ControlMaster=yes",
+            "-o",
+            f"ControlPath={control_path}",
+            "-o",
+            "ControlPersist=600",
+            "-o",
+            "ServerAliveInterval=60",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+        ]
+        if isinstance(host_config, dict) and host_config.get("port", 22) != 22:
+            ssh_cmd.extend(["-p", str(host_config["port"])])
+        ssh_cmd.extend([cls._host_argument(host_config), cls._MASTER_HOLD_COMMAND])
+        if password:
+            ssh_cmd = ["sshpass", "-e", *ssh_cmd]
+        return ssh_cmd
+
+    @classmethod
+    def control_ssh_prefix(cls, control_path: str) -> list[str]:
+        """Build an SSH client that can only use an existing control socket.
+
+        OpenSSH normally falls back to a direct connection when the socket
+        disappears between validation and command startup. ``ProxyCommand=false``
+        makes that fallback fail locally, while ``BatchMode=yes`` guarantees it
+        can never display a password prompt.
+        """
+        return ["ssh", "-S", control_path, *cls._CONTROL_CLIENT_OPTIONS]
+
+    @classmethod
+    def control_scp_prefix(cls, control_path: str) -> list[str]:
+        """Build an SCP client that can only use an existing control socket."""
+        return [
+            "scp",
+            "-o",
+            f"ControlPath={control_path}",
+            *cls._CONTROL_CLIENT_OPTIONS,
+        ]
+
+    @staticmethod
+    def _host_argument(host_config: Union[str, Dict]) -> str:
+        if isinstance(host_config, str):
+            return host_config
+        hostname = host_config.get("hostname", host_config.get("host"))
+        if not hostname:
+            raise ValueError("No hostname in SSH config")
+        if "user" in host_config:
+            return f"{host_config['user']}@{hostname}"
+        return hostname
+
+    @staticmethod
+    def _get_password(host_config: Union[str, Dict]) -> Optional[str]:
+        if not isinstance(host_config, dict):
             return None
-        except Exception as e:
-            # Record failure with timestamp for backoff
-            import time
+        return host_config.get("connect_kwargs", {}).get("password")
 
-            cls._failed_hosts[host_id] = time.time()
-            logger.error(f"Error establishing ControlMaster for {host_id}: {e}")
-            return None
+    @classmethod
+    def _record_failure(cls, host_id: str) -> None:
+        cls._failed_hosts[host_id] = time.monotonic()
+
+    @staticmethod
+    def _stop_process(process: subprocess.Popen) -> None:
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    process.kill()
+                process.wait(timeout=2)
+
+    @classmethod
+    def _discard_local_master(cls, host_id: str) -> None:
+        process = cls._master_processes.pop(host_id, None)
+        if process is not None:
+            cls._stop_process(process)
+        cls._control_masters.pop(host_id, None)
+
+    @staticmethod
+    def _remove_socket(control_path: str) -> None:
+        try:
+            Path(control_path).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.debug(
+                "Could not remove stale control socket %s: %s", control_path, exc
+            )
 
     @classmethod
     def _check_control_master(
@@ -247,16 +422,15 @@ class NativeSSH:
         if not Path(control_path).exists():
             return False
 
-        # Get hostname for check command
-        if isinstance(host_config, str):
-            hostname = host_config
-        else:
-            hostname = host_config.get("hostname", host_config.get("host", ""))
-            if "user" in host_config and "." in hostname:
-                hostname = f"{host_config['user']}@{hostname}"
-
         # Check if control master is responsive
-        check_cmd = ["ssh", "-S", control_path, "-O", "check", hostname]
+        check_cmd = [
+            "ssh",
+            "-S",
+            control_path,
+            "-O",
+            "check",
+            cls._host_argument(host_config),
+        ]
 
         try:
             result = subprocess.run(check_cmd, capture_output=True, timeout=5)
@@ -287,22 +461,23 @@ class NativeSSH:
         control_path = cls.ensure_control_master(host_config, host_id)
 
         if not control_path:
+            if cls._get_password(host_config):
+                error = ControlMasterUnavailableError(host_id)
+                return SSHResult(
+                    success=False,
+                    stdout="",
+                    stderr=str(error),
+                    return_code=255,
+                )
             # Fallback to direct SSH without ControlMaster
             logger.warning(f"Running without ControlMaster for {host_id}")
             ssh_cmd = cls._build_direct_ssh_command(host_config)
         else:
             # Use control master socket
-            ssh_cmd = ["ssh", "-S", control_path]
-
-            # Add hostname
-            if isinstance(host_config, str):
-                ssh_cmd.append(host_config)
-            else:
-                hostname = host_config.get("hostname", host_config.get("host"))
-                if "user" in host_config and "." in hostname:
-                    ssh_cmd.append(f"{host_config['user']}@{hostname}")
-                else:
-                    ssh_cmd.append(hostname)
+            ssh_cmd = [
+                *cls.control_ssh_prefix(control_path),
+                cls._host_argument(host_config),
+            ]
 
         # Add the command
         ssh_cmd.append(command)
@@ -352,28 +527,16 @@ class NativeSSH:
         Returns:
             SSH command arguments
         """
-        ssh_cmd = ["ssh"]
-
-        if isinstance(host_config, str):
-            ssh_cmd.append(host_config)
-        else:
-            hostname = host_config.get("hostname", host_config.get("host"))
-            if "user" in host_config:
-                ssh_cmd.append(f"{host_config['user']}@{hostname}")
-            else:
-                ssh_cmd.append(hostname)
-
-            if "port" in host_config and host_config["port"] != 22:
-                ssh_cmd.extend(["-p", str(host_config["port"])])
-
-        ssh_cmd.extend(
-            [
-                "-o",
-                "ConnectTimeout=5",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-            ]  # Faster timeout
-        )
+        ssh_cmd = [
+            "ssh",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+        ]
+        if isinstance(host_config, dict) and host_config.get("port", 22) != 22:
+            ssh_cmd.extend(["-p", str(host_config["port"])])
+        ssh_cmd.append(cls._host_argument(host_config))
 
         return ssh_cmd
 
@@ -384,28 +547,24 @@ class NativeSSH:
         Args:
             host_id: Host identifier
         """
-        if host_id in cls._control_masters:
-            control_path = cls._control_masters[host_id]
+        with cls._get_host_lock(host_id):
+            control_path = cls._control_masters.get(host_id)
+            if control_path and Path(control_path).exists():
+                try:
+                    exit_cmd = ["ssh", "-S", control_path, "-O", "exit", "dummy"]
+                    subprocess.run(exit_cmd, capture_output=True, timeout=5)
+                except (subprocess.SubprocessError, OSError):
+                    pass
 
-            # Send exit command
-            try:
-                # We need the hostname for the exit command
-                exit_cmd = ["ssh", "-S", control_path, "-O", "exit", "dummy"]
-                subprocess.run(exit_cmd, capture_output=True, timeout=5)
-            except (subprocess.SubprocessError, OSError):
-                pass
-
-            # Remove socket file
-            try:
-                Path(control_path).unlink()
-            except OSError:
-                pass
-
-            del cls._control_masters[host_id]
-            logger.info(f"Cleaned up ControlMaster for {host_id}")
+            cls._discard_local_master(host_id)
+            if control_path:
+                cls._remove_socket(control_path)
+            cls._failed_hosts.pop(host_id, None)
+            logger.info("Cleaned up ControlMaster for %s", host_id)
 
     @classmethod
     def cleanup_all(cls):
         """Clean up all ControlMaster connections."""
-        for host_id in list(cls._control_masters.keys()):
+        host_ids = set(cls._control_masters) | set(cls._master_processes)
+        for host_id in list(host_ids):
             cls.cleanup_control_master(host_id)

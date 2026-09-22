@@ -1,6 +1,7 @@
 """Slurm query operations (squeue/sacct/scontrol)."""
 
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Protocol
@@ -30,6 +31,7 @@ class SlurmQuery:
         self.parser = SlurmParser()
         self._available_fields_cache = {}
         self._username_cache = {}
+        self._username_cache_lock = threading.Lock()
         self._partition_cache: dict[str, tuple[float, List[PartitionResources]]] = {}
         self._partition_cache_ttl = 20.0
         self._priority_snapshot_cache: dict[
@@ -1147,6 +1149,13 @@ class SlurmQuery:
         if user:
             return user
 
+        with self._username_cache_lock:
+            return self._resolve_username(conn, hostname)
+
+    def _resolve_username(
+        self, conn: SSHConnection, hostname: str
+    ) -> Optional[str]:
+        """Resolve and cache one username while concurrent callers wait."""
         if hostname in self._username_cache:
             cached_username = self._username_cache[hostname]
             logger.debug(f"Using cached username for {hostname}: {cached_username}")

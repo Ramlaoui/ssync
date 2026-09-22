@@ -1,5 +1,6 @@
 import fnmatch
 import os
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -8,7 +9,7 @@ from pathlib import Path
 from .launch_events import LaunchEventEmitter
 from .manager import SlurmManager
 from .models.cluster import PathRestrictions, SlurmHost
-from .ssh.native import NativeSSH
+from .ssh.native import ControlMasterUnavailableError, NativeSSH
 from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -315,48 +316,38 @@ class SyncManager:
             logger.warning(f"Failed to create remote directory {target_dir}: {e}")
 
         try:
-            # Use subprocess to run rsync locally
-            # Reuse the managed SSH control socket when available, including
-            # password-backed hosts whose master was opened via sshpass.
-            control_path = NativeSSH.ensure_control_master(
-                conn.host_config, conn.host_id
-            )
-            if control_path:
-                ssh_cmd = f"ssh -S {control_path} -o ControlMaster=no"
-                rsync_cmd = (
-                    ["rsync", "-avz", "-e", ssh_cmd]
-                    + exclude_args
-                    + [f"{self.source_dir}/", target]
+            with NativeSSH.command_slot(conn.host_id):
+                # Reuse the managed SSH control socket when available, including
+                # password-backed hosts whose master was opened via sshpass.
+                control_path = NativeSSH.ensure_control_master(
+                    conn.host_config, conn.host_id
                 )
-                logger.debug(f"Running rsync via ControlMaster: {control_path}")
-                self._emit_sync_log(
-                    f"Running rsync via ControlMaster: {control_path}",
-                    stream="system",
-                )
-                returncode = self._run_streaming_subprocess(rsync_cmd)
-            elif slurm_host.host.password:
-                # Use sshpass with environment variable for better security
-                env = os.environ.copy()
-                env["SSHPASS"] = slurm_host.host.password
-                rsync_cmd = (
-                    ["sshpass", "-e", "rsync", "-avz"]
-                    + exclude_args
-                    + [f"{self.source_dir}/", target]
-                )
-                logger.debug("Running rsync with password authentication")
-                self._emit_sync_log(
-                    "Running rsync with password authentication", stream="system"
-                )
-                returncode = self._run_streaming_subprocess(rsync_cmd, env=env)
-            else:
-                rsync_cmd = (
-                    ["rsync", "-avz"] + exclude_args + [f"{self.source_dir}/", target]
-                )
-                logger.debug("Running rsync without ControlMaster")
-                self._emit_sync_log(
-                    "Running rsync without ControlMaster", stream="system"
-                )
-                returncode = self._run_streaming_subprocess(rsync_cmd)
+                if control_path:
+                    ssh_cmd = shlex.join(NativeSSH.control_ssh_prefix(control_path))
+                    rsync_cmd = (
+                        ["rsync", "-avz", "-e", ssh_cmd]
+                        + exclude_args
+                        + [f"{self.source_dir}/", target]
+                    )
+                    logger.debug(f"Running rsync via ControlMaster: {control_path}")
+                    self._emit_sync_log(
+                        f"Running rsync via ControlMaster: {control_path}",
+                        stream="system",
+                    )
+                    returncode = self._run_streaming_subprocess(rsync_cmd)
+                elif slurm_host.host.password:
+                    raise ControlMasterUnavailableError(conn.host_id)
+                else:
+                    rsync_cmd = (
+                        ["rsync", "-avz"]
+                        + exclude_args
+                        + [f"{self.source_dir}/", target]
+                    )
+                    logger.debug("Running rsync without ControlMaster")
+                    self._emit_sync_log(
+                        "Running rsync without ControlMaster", stream="system"
+                    )
+                    returncode = self._run_streaming_subprocess(rsync_cmd)
 
             if returncode == 0:
                 logger.info(f"Successfully synced to {slurm_host.host.hostname}")
