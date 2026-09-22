@@ -1,8 +1,5 @@
 <script lang="ts">
-  import { run, createBubbler, stopPropagation } from 'svelte/legacy';
-
-  const bubble = createBubbler();
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { push } from "svelte-spa-router";
   import type { AxiosError } from "axios";
   import { api } from "../services/api";
@@ -10,44 +7,51 @@
   import { jobStateManager } from "../lib/JobStateManager";
   import { streamJobOutput, type OutputStreamSession } from "../lib/streaming";
   import type { Readable } from "svelte/store";
-  import JobSidebar from "../components/JobSidebar.svelte";
-  import JobHeader from "../components/JobHeader.svelte";
-  import JobDetailsView from "../components/JobDetailsView.svelte";
+  import JobOverview from '../components/workspace/JobOverview.svelte';
+  import JobActivity from '../components/workspace/JobActivity.svelte';
+  import JobStatus from '../components/workspace/JobStatus.svelte';
+  import IconButton from '../components/workspace/IconButton.svelte';
+  import Dialog from '../lib/components/ui/Dialog.svelte';
+  import { jobsWorkspace } from '../stores/workspace';
+  import { jobRoute } from '../lib/jobsPresentation';
+  import { jobUtils } from '../lib/jobUtils';
+  import { prepareRelaunch } from '../lib/relaunch';
   import JobTabContent from "../components/JobTabContent.svelte";
   import WatcherAttachmentDialog from "../components/WatcherAttachmentDialog.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
-  import { Info, Terminal, AlertTriangle, Code, ArrowLeft, Eye } from 'lucide-svelte';
+  import { ArrowLeft, Server, Eye, Maximize2, Minimize2, X, Copy, RefreshCw, Square, RotateCcw } from 'lucide-svelte';
   import { navigationActions } from '../stores/navigation';
   import { fetchJobWatchers, prefetchJobWatchers } from '../stores/watchers';
-
   interface Props {
-    params?: any;
-    showSidebarOnly?: boolean;
+    params?: {
+      id?: string;
+      host?: string;
+    };
+    embedded?: boolean;
+    onclose?: () => void;
+    onexpand?: () => void;
   }
-
-  let { params = {}, showSidebarOnly = false }: Props = $props();
-
-  let job: JobInfo | null = $state(null);
+  let { params = {}, embedded = false, onclose = closeJob, onexpand = () => { } }: Props = $props();
+  let cancelOpen = $state(false);
+  let canceling = $state(false);
+  let relaunching = $state(false);
+  let notice = $state('');
+  let jobRequestVersion = 0;
+  let scriptRequestVersion = 0;
   let jobStore: Readable<JobInfo | null> | null = $state(null);
+  const job = $derived.by((): JobInfo | null => jobStore ? $jobStore : null);
   let loading = $state(false);
   let initialLoadComplete = $state(false);
   let error: string | null = $state(null);
-  type JobTab = 'details' | 'output' | 'errors' | 'script' | 'watchers';
-  const validTabs: JobTab[] = ['details', 'output', 'errors', 'script', 'watchers'];
-
+  type JobTab = 'details' | 'output' | 'errors' | 'script' | 'watchers' | 'activity';
+  const validTabs: JobTab[] = ['details', 'output', 'errors', 'script', 'watchers', 'activity'];
   let activeTab = $state<JobTab>('details');
-  let sidebarCollapsed = $state(false);
-  let isMobile = $state(false);
-  let showMobileSidebar = $state(false);
   let showAttachWatchersDialog = $state(false);
-  let isClosingSidebar = $state(false);
-
   // Output related state
   type OutputStreamType = 'stdout' | 'stderr';
   const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
   const MAX_OUTPUT_BUFFER_CHARS = 768 * 1024;
   const OUTPUT_HEAD_BUFFER_CHARS = 128 * 1024;
-
   let outputData: OutputData | null = $state(null);
   let outputError: string | null = $state(null);
   let loadingOutput = $state(false);
@@ -58,99 +62,76 @@
   let currentOutputType: OutputStreamType | null = $state(null);
   let outputStreamSession: OutputStreamSession | null = null;
   let outputRequestVersion = 0;
-
   // Script related state
   let scriptData: ScriptData | null = $state(null);
   let scriptError: string | null = $state(null);
   let loadingScript = $state(false);
-
-  // Check mobile
-  function checkMobile() {
-    isMobile = window.innerWidth < 768;
-  }
-
   function getRouteSearchParams(): URLSearchParams {
-    if (typeof window === 'undefined') return new URLSearchParams();
-
+    if (typeof window === 'undefined')
+      return new URLSearchParams();
     const hashQueryIndex = window.location.hash.indexOf('?');
     if (hashQueryIndex >= 0) {
       return new URLSearchParams(window.location.hash.slice(hashQueryIndex + 1));
     }
-
     return new URLSearchParams(window.location.search);
   }
-
   function getInitialActiveTab(): JobTab {
-    const routeTab = getRouteSearchParams().get('tab');
+    const routeTab = embedded ? $jobsWorkspace.tab : getRouteSearchParams().get('tab');
     return validTabs.includes(routeTab as JobTab) ? (routeTab as JobTab) : 'details';
   }
-
   function updateActiveTabInUrl(tab: JobTab) {
-    if (typeof window === 'undefined' || !params.id || !params.host) return;
-
+    jobsWorkspace.update(state => ({ ...state, tab }));
+    if (embedded || typeof window === 'undefined' || !params.id || !params.host)
+      return;
     const routeParams = getRouteSearchParams();
     if (tab === 'details') {
       routeParams.delete('tab');
-    } else {
+    }
+    else {
       routeParams.set('tab', tab);
     }
-
     const nextQuery = routeParams.toString();
-    const nextUrl = `${window.location.origin}/#/jobs/${encodeURIComponent(params.id)}/${encodeURIComponent(params.host)}${nextQuery ? `?${nextQuery}` : ''}`;
+    const nextUrl = `${window.location.origin}${window.location.pathname}#/jobs/${encodeURIComponent(params.id)}/${encodeURIComponent(params.host)}${nextQuery ? `?${nextQuery}` : ''}`;
     window.history.replaceState({}, '', nextUrl);
   }
-
-  // Handle mobile sidebar closure without navigation
-  function handleMobileSidebarClose() {
-    isClosingSidebar = true;
-    setTimeout(() => {
-      showMobileSidebar = false;
-      isClosingSidebar = false;
-    }, 300);
-  }
-
-  // Handle mobile job selection - called after JobSidebar navigates
-  function handleMobileJobSelect() {
-    // JobSidebar has already handled navigation, close sidebar immediately
-    // The navigation will happen independently
-    showMobileSidebar = false;
-    isClosingSidebar = false;
-  }
-
   // Load job data using JobStateManager
   async function loadJob(forceRefresh = false) {
     if (!params.id || !params.host) {
       error = "Invalid job parameters";
       return;
     }
-
     // For initial load or force refresh, show loading state
     if (!initialLoadComplete || forceRefresh) {
       loading = true;
     }
     error = null;
-
+    const requestVersion = ++jobRequestVersion;
     try {
       // Fetch the job data (will update the store automatically)
       const jobData = await jobStateManager.fetchSingleJob(params.id, params.host, forceRefresh);
-
+      if (requestVersion !== jobRequestVersion)
+        return;
       if (!jobData) {
         error = "Job not found";
       }
-
       initialLoadComplete = true;
-    } catch (err: unknown) {
+    }
+    catch (err: unknown) {
+      if (requestVersion !== jobRequestVersion)
+        return;
       const axiosError = err as AxiosError;
       if (axiosError.response?.status === 404) {
         error = "Job not found";
-      } else {
+      }
+      else {
         error = `Failed to load job: ${axiosError.message}`;
       }
-    } finally {
-      loading = false;
+    }
+    finally {
+      if (requestVersion === jobRequestVersion)
+        loading = false;
     }
   }
-
   // Load output data
   function clearOutputRetryTimer() {
     if (outputRetryTimer) {
@@ -158,22 +139,21 @@
       outputRetryTimer = null;
     }
   }
-
   function stopOutputStream() {
     outputStreamSession?.close();
     outputStreamSession = null;
   }
-
   function getActiveOutputType(tab: string = activeTab): OutputStreamType | null {
-    if (tab === 'output') return 'stdout';
-    if (tab === 'errors') return 'stderr';
+    if (tab === 'output')
+      return 'stdout';
+    if (tab === 'errors')
+      return 'stderr';
     return null;
   }
-
   function emptyOutputData(outputType: OutputStreamType): OutputData {
     return {
-      job_id: params.id,
-      hostname: params.host,
+      job_id: params.id || '',
+      hostname: params.host || '',
       output_type: outputType,
       stdout: null,
       stderr: null,
@@ -186,30 +166,20 @@
       refresh_queued: false,
     };
   }
-
-  function mergeOutputData(
-    outputType: OutputStreamType,
-    patch: Partial<OutputData>,
-  ): OutputData {
-    const base =
-      outputData && outputData.output_type === outputType
-        ? outputData
-        : emptyOutputData(outputType);
+  function mergeOutputData(outputType: OutputStreamType, patch: Partial<OutputData>): OutputData {
+    const base = outputData && outputData.output_type === outputType
+      ? outputData
+      : emptyOutputData(outputType);
     return {
       ...base,
       ...patch,
       output_type: outputType,
     };
   }
-
-  function appendBoundedChunk(
-    current: string | null | undefined,
-    chunk: string,
-  ): string {
+  function appendBoundedChunk(current: string | null | undefined, chunk: string): string {
     if (!chunk) {
       return current || '';
     }
-
     const next = `${current || ''}${chunk}`;
     if (next.length <= MAX_OUTPUT_BUFFER_CHARS) {
       return next;
@@ -221,8 +191,9 @@
     }
     return `${next.slice(0, OUTPUT_HEAD_BUFFER_CHARS)}${marker}${next.slice(next.length - tailSize)}`;
   }
-
-  function resetOutputState(options: { clearError?: boolean } = {}) {
+  function resetOutputState(options: {
+    clearError?: boolean;
+  } = {}) {
     stopOutputStream();
     clearOutputRetryTimer();
     outputBackgroundRetryCount = 0;
@@ -235,9 +206,9 @@
     }
     outputRequestVersion += 1;
   }
-
   function scheduleOutputRetry(outputType: OutputStreamType) {
-    if (outputBackgroundRetryCount >= 2) return;
+    if (outputBackgroundRetryCount >= 2)
+      return;
     clearOutputRetryTimer();
     outputRetryTimer = setTimeout(() => {
       if (getActiveOutputType() !== outputType) {
@@ -247,19 +218,17 @@
       void loadOutput(outputType, { backgroundRetry: true });
     }, 1200);
   }
-
-  async function loadOutput(
-    outputType: OutputStreamType,
-    options: { backgroundRetry?: boolean; forceRefresh?: boolean } = {},
-  ) {
-    if (!job) return;
-
+  async function loadOutput(outputType: OutputStreamType, options: {
+    backgroundRetry?: boolean;
+    forceRefresh?: boolean;
+  } = {}) {
+    if (!job || !params.id || !params.host)
+      return;
     if (!options.backgroundRetry) {
       outputBackgroundRetryCount = 0;
       clearOutputRetryTimer();
       stopOutputStream();
     }
-
     loadingOutput = !options.backgroundRetry;
     outputError = null;
     currentOutputType = outputType;
@@ -267,7 +236,6 @@
       outputData = emptyOutputData(outputType);
     }
     const requestVersion = ++outputRequestVersion;
-
     try {
       if (job.state === 'R') {
         const metadataResponse = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
@@ -279,79 +247,66 @@
             force_refresh: options.forceRefresh ? 'true' : undefined,
           },
         });
-
         if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
           return;
         }
-
         outputData = mergeOutputData(outputType, metadataResponse.data);
         loadingOutput = false;
         refreshingOutput = false;
-
-        outputStreamSession = streamJobOutput(
-          params.id,
-          params.host,
-          outputType,
-          {
-            onMetadata: (metadata) => {
-              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
-                return;
-              }
-              outputData = mergeOutputData(outputType, {
-                content_truncated: Boolean(metadata.truncated),
-                content_limit_bytes: DEFAULT_OUTPUT_MAX_BYTES,
-              });
-            },
-            onChunk: (chunk) => {
-              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
-                return;
-              }
-              const currentContent = (
-                outputType === 'stdout' ? outputData?.stdout : outputData?.stderr
-              ) || '';
-              const willTrim =
-                currentContent.length + chunk.length > MAX_OUTPUT_BUFFER_CHARS;
-              outputData = mergeOutputData(outputType, {
-                stdout:
-                  outputType === 'stdout'
-                    ? appendBoundedChunk(currentContent, chunk)
-                    : null,
-                stderr:
-                  outputType === 'stderr'
-                    ? appendBoundedChunk(currentContent, chunk)
-                    : null,
-                content_truncated: Boolean(outputData?.content_truncated || willTrim),
-              });
-            },
-            onTruncationNotice: () => {
-              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
-                return;
-              }
-              outputData = mergeOutputData(outputType, {
-                content_truncated: true,
-              });
-            },
-            onComplete: () => {
-              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
-                return;
-              }
-              stopOutputStream();
-              loadingOutput = false;
-              refreshingOutput = false;
-            },
-            onError: (message) => {
-              if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
-                return;
-              }
-              stopOutputStream();
-              outputError = message;
-              loadingOutput = false;
-              refreshingOutput = false;
-            },
+        outputStreamSession = streamJobOutput(params.id, params.host, outputType, {
+          onMetadata: (metadata) => {
+            if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+              return;
+            }
+            outputData = mergeOutputData(outputType, {
+              content_truncated: Boolean(metadata.truncated),
+              content_limit_bytes: DEFAULT_OUTPUT_MAX_BYTES,
+            });
           },
-          DEFAULT_OUTPUT_MAX_BYTES,
-        );
-      } else {
+          onChunk: (chunk) => {
+            if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+              return;
+            }
+            const currentContent = (outputType === 'stdout' ? outputData?.stdout : outputData?.stderr) || '';
+            const willTrim = currentContent.length + chunk.length > MAX_OUTPUT_BUFFER_CHARS;
+            outputData = mergeOutputData(outputType, {
+              stdout: outputType === 'stdout'
+                ? appendBoundedChunk(currentContent, chunk)
+                : null,
+              stderr: outputType === 'stderr'
+                ? appendBoundedChunk(currentContent, chunk)
+                : null,
+              content_truncated: Boolean(outputData?.content_truncated || willTrim),
+            });
+          },
+          onTruncationNotice: () => {
+            if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+              return;
+            }
+            outputData = mergeOutputData(outputType, {
+              content_truncated: true,
+            });
+          },
+          onComplete: () => {
+            if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+              return;
+            }
+            stopOutputStream();
+            loadingOutput = false;
+            refreshingOutput = false;
+          },
+          onError: (message) => {
+            if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
+              return;
+            }
+            stopOutputStream();
+            outputError = message;
+            loadingOutput = false;
+            refreshingOutput = false;
+          },
+        }, DEFAULT_OUTPUT_MAX_BYTES);
+      }
+      else {
         const response = await api.get<OutputData>(`/api/jobs/${params.id}/output`, {
           params: {
             host: params.host,
@@ -360,108 +315,149 @@
             force_refresh: options.forceRefresh ? 'true' : undefined,
           },
         });
-
         if (requestVersion !== outputRequestVersion || currentOutputType !== outputType) {
           return;
         }
-
         outputData = response.data;
         if (response.data.refresh_queued) {
           scheduleOutputRetry(outputType);
-        } else {
+        }
+        else {
           clearOutputRetryTimer();
         }
       }
-    } catch (err: unknown) {
+    }
+    catch (err: unknown) {
       const axiosError = err as AxiosError;
-      outputError = `Failed to load output: ${axiosError.message}`;
-    } finally {
+      if (requestVersion === outputRequestVersion)
+        outputError = `Failed to load output: ${axiosError.message}`;
+    }
+    finally {
       if (requestVersion === outputRequestVersion) {
         loadingOutput = false;
         refreshingOutput = false;
       }
     }
   }
-
   // Refresh output data
   async function refreshOutput() {
     const outputType = getActiveOutputType();
-    if (!job || !outputType) return;
-
+    if (!job || !outputType)
+      return;
     refreshingOutput = true;
     outputError = null;
     outputBackgroundRetryCount = 0;
     clearOutputRetryTimer();
-
     try {
       await loadOutput(outputType, { forceRefresh: true });
-    } catch (err: unknown) {
+    }
+    catch (err: unknown) {
       const axiosError = err as AxiosError;
       outputError = `Failed to refresh output: ${axiosError.message}`;
     }
   }
-
   // Load script data
   async function loadScript() {
-    if (!job) return;
-
+    if (!job)
+      return;
     loadingScript = true;
     scriptError = null;
-
+    const requestVersion = ++scriptRequestVersion;
     try {
-      const response = await api.get<ScriptData>(`/api/jobs/${params.id}/script?host=${params.host}`);
-      scriptData = response.data;
-    } catch (err: unknown) {
+      const response = await api.get<ScriptData>(`/api/jobs/${encodeURIComponent(params.id!)}/script`, { params: { host: params.host } });
+      if (requestVersion === scriptRequestVersion)
+        scriptData = response.data;
+    }
+    catch (err: unknown) {
       const axiosError = err as AxiosError;
-      scriptError = `Failed to load script: ${axiosError.message}`;
-    } finally {
-      loadingScript = false;
+      if (requestVersion === scriptRequestVersion)
+        scriptError = `Failed to load script: ${axiosError.message}`;
+    }
+    finally {
+      if (requestVersion === scriptRequestVersion)
+        loadingScript = false;
     }
   }
-
   // Event handlers
-  function handleShareJob() {
-    const url = `${window.location.origin}/jobs/${params.id}/${params.host}`;
-    navigator.clipboard.writeText(url);
-  }
-
-  async function handleCancelJob() {
-    if (!job || !confirm('Are you sure you want to cancel this job?')) return;
-
+  async function copy(value: string) {
     try {
-      await api.post(`/api/jobs/${params.id}/cancel?host=${params.host}`);
-      // Force refresh through JobStateManager
-      await loadJob(true);
-    } catch (err: unknown) {
-      const axiosError = err as AxiosError;
-      error = `Failed to cancel job: ${axiosError.message}`;
+      await navigator.clipboard.writeText(value);
+      notice = 'Copied to clipboard';
+    }
+    catch {
+      notice = 'Clipboard is unavailable in this browser.';
     }
   }
-
+  function handleShareJob() { if (params.id && params.host)
+    void copy(window.location.origin + window.location.pathname + '#' + jobRoute(params.id, params.host, activeTab)); }
+  async function handleCancelJob() {
+    if (!job || canceling)
+      return;
+    canceling = true;
+    try {
+      await api.post('/api/jobs/' + encodeURIComponent(job.job_id) + '/cancel', null, { params: { host: job.hostname } });
+      cancelOpen = false;
+      await loadJob(true);
+    }
+    catch (err) {
+      notice = err instanceof Error ? err.message : 'Could not cancel the job.';
+    }
+    finally {
+      canceling = false;
+    }
+  }
+  async function relaunch() {
+    if (!job || relaunching)
+      return;
+    relaunching = true;
+    try {
+      await prepareRelaunch(job);
+      await push('/launch');
+    }
+    catch (err) {
+      notice = err instanceof Error ? err.message : 'Could not prepare relaunch.';
+    }
+    finally {
+      relaunching = false;
+    }
+  }
+  function closeJob() {
+    jobsWorkspace.update(state => ({ ...state, selection: null }));
+    void push('/');
+  }
+  function restore() {
+    if (params.id && params.host)
+      jobsWorkspace.update(state => ({ ...state, selection: { id: params.id!, host: params.host! }, tab: activeTab }));
+    void push('/');
+  }
+  function downloadScript() {
+    if (!scriptData)
+      return;
+    const url = URL.createObjectURL(new Blob([scriptData.script_content], { type: 'text/plain' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'job_' + params.id + '.sh';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
   function handleAttachWatchers() {
     showAttachWatchersDialog = true;
   }
-
   // Tab management
   function handleTabClick(tab: JobTab) {
     activeTab = tab;
     updateActiveTabInUrl(tab);
   }
-
   function handleBackNavigation() {
     // Use smart navigation based on where we came from
     navigationActions.goBack();
   }
-
   // Track previous params to avoid recreating store on every reactive run
-  let prevParamsId: string | undefined = $state();
-  let prevParamsHost: string | undefined = $state();
   let prefetchedWatcherKey: string | undefined = $state();
-
   function prefetchWatchersForJob(jobId: string, hostname: string) {
     const key = `${hostname}::${jobId}`;
-    if (prefetchedWatcherKey === key) return;
-
+    if (prefetchedWatcherKey === key)
+      return;
     prefetchedWatcherKey = key;
     queueMicrotask(() => {
       void prefetchJobWatchers(jobId, hostname).catch((err) => {
@@ -469,77 +465,57 @@
       });
     });
   }
-
-  // Reactive block 1: Set up job store when params change (not on every run)
-  run(() => {
-    if (params.id && params.host && !showSidebarOnly) {
-      // Only set up store if params actually changed
-      if (params.id !== prevParamsId || params.host !== prevParamsHost) {
-        // Clear previous data when switching jobs
-        resetOutputState();
-        scriptData = null;
-        scriptError = null;
-        error = null;
-        activeTab = getInitialActiveTab();
-        initialLoadComplete = false;
-
-        // Update tracked params
-        prevParamsId = params.id;
-        prevParamsHost = params.host;
-
-        // Get reactive store for this job (only when params change)
-        jobStore = jobStateManager.getJob(params.id, params.host);
-
-        // Set current view for priority updates
-        jobStateManager.setCurrentViewJob(params.id, params.host);
-
-        // Load the job data
-        loadJob();
-        prefetchWatchersForJob(params.id, params.host);
-      }
-    }
-  });
-
-  // Reactive block 2: Subscribe to job updates from the store
-  run(() => {
-    if (jobStore) {
-      job = $jobStore;
-    }
-  });
-
-  // Reactive block 3: Load output data when tab changes
-  run(() => {
-    const outputType = getActiveOutputType();
-
-    if (!job || !outputType) {
-      if (activeTab !== 'output' && activeTab !== 'errors' && (outputData || outputError || currentOutputType)) {
-        resetOutputState();
-      }
+  $effect(() => {
+    const { id, host } = params;
+    if (!id || !host)
       return;
-    }
-
-    if (currentOutputType !== outputType && (outputData || outputError)) {
+    // Only changing the job identity resets the inspector. Resource updates and
+    // tab changes must not start a second fetch or discard the active stream.
+    untrack(() => {
       resetOutputState();
-      currentOutputType = outputType;
-    }
-
-    if (!outputData && !outputError && !loadingOutput) {
-      void loadOutput(outputType);
+      jobRequestVersion++;
+      scriptRequestVersion++;
+      notice = '';
+      cancelOpen = false;
+      showAttachWatchersDialog = false;
+      scriptData = null;
+      loadingScript = false;
+      scriptError = null;
+      error = null;
+      activeTab = getInitialActiveTab();
+      initialLoadComplete = false;
+      jobStore = jobStateManager.getJob(id, host);
+      jobStateManager.setCurrentViewJob(id, host);
+      void loadJob();
+      prefetchWatchersForJob(id, host);
+    });
+  });
+  $effect(() => {
+    const selectedJob = job;
+    const outputType = getActiveOutputType();
+    const identityMatches = selectedJob?.job_id === params.id && selectedJob?.hostname === params.host;
+    untrack(() => {
+      if (!selectedJob || !identityMatches || !outputType) {
+        if (!outputType && (outputData || outputError || currentOutputType))
+          resetOutputState();
+        return;
+      }
+      if (currentOutputType !== outputType && (outputData || outputError))
+        resetOutputState();
+      if (!outputData && !outputError && !loadingOutput)
+        void loadOutput(outputType);
+    });
+  });
+  $effect(() => {
+    if (job?.job_id === params.id && job?.hostname === params.host && activeTab === 'script') {
+      untrack(() => {
+        if (!scriptData && !scriptError && !loadingScript)
+          void loadScript();
+      });
     }
   });
-
-  // Reactive block 4: Load script data when tab changes
-  run(() => {
-    if (job && activeTab === 'script' && !scriptData && !scriptError && !loadingScript) {
-      loadScript();
-    }
-  });
-
   onMount(async () => {
     // Job loading is now handled by reactive statement above
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-
     // Set navigation context for job page
     if (params.id && params.host) {
       navigationActions.setContext('job', {
@@ -549,386 +525,343 @@
       // Note: setCurrentViewJob is now called in the reactive block to avoid duplication
     }
   });
-
   onDestroy(() => {
-    window.removeEventListener("resize", checkMobile);
+    jobRequestVersion++;
+    scriptRequestVersion++;
     resetOutputState();
-
     // Clear current view job
     jobStateManager.setCurrentViewJob(null, null);
   });
 </script>
 
-<div class="job-page">
-  <!-- Desktop-only navigation header -->
-  {#if !showSidebarOnly && !isMobile}
-    <header class="desktop-header sticky top-0 z-40" style="background: var(--card); border-bottom: 1px solid var(--border);">
-      <div class="px-6">
-        <div class="flex h-16 items-center justify-between">
-          <!-- Left side - Back button -->
-          <button
-            class="desktop-back-button flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors"
-            onclick={handleBackNavigation}
-          >
-            <ArrowLeft class="w-4 h-4" />
-            Back
-          </button>
-
-          <!-- Right side - Job info (if available) -->
-          {#if job}
-            <div class="flex items-center gap-3">
-              <span class="text-sm desktop-job-info">Job {job.job_id}</span>
-              {#if job.hostname}
-                <span class="text-sm desktop-job-info-secondary">on {job.hostname}</span>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </div>
-    </header>
-  {/if}
-  {#if showSidebarOnly}
-    <!-- Jobs Page with Sidebar Only -->
-    <div class="page-layout">
-      {#if !isMobile}
-        <JobSidebar
-          currentJobId=""
-          currentHost=""
-          bind:collapsed={sidebarCollapsed}
-          {isMobile}
-        />
+<section class="job-panel" class:embedded aria-label="Job detail">
+  <div class="job-panel-toolbar">
+    <div class="job-panel-meta">
+      {#if !embedded}
+        <button class="relay-text-button" onclick={restore}>
+          <ArrowLeft size={16}/>
+          Jobs
+        </button>
       {/if}
-
-      <div class="flex flex-col flex-1 min-h-0 h-full overflow-hidden">
-        <JobHeader
-          {job}
-          {isMobile}
-          {showSidebarOnly}
-          onToggleSidebar={() => showMobileSidebar = true}
-        />
-
-        <!-- Empty State Content -->
-        <div class="flex-1 flex items-center justify-center" style="background: var(--secondary);">
-          <div class="text-center">
-            <svg class="mx-auto h-12 w-12" style="color: var(--muted-foreground);" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <h3 class="mt-2 text-sm font-medium" style="color: var(--foreground);">No job selected</h3>
-            <p class="mt-1 text-sm" style="color: var(--muted-foreground);">Choose a job from the sidebar to view its details</p>
-          </div>
-        </div>
+      {#if job}
+        <JobStatus state={job.state}/>
+        <span class="mono">#{job.job_id}</span>
+      {/if}
+    </div>
+    <div class="job-panel-controls">
+      <IconButton label="Refresh job" disabled={loading} onclick={()=>void loadJob(true)}>
+        <RefreshCw size={16} class={loading?'animate-spin':''}/>
+      </IconButton>
+      {#if embedded}
+        <IconButton label="Maximize job" onclick={onexpand}>
+          <Maximize2 size={16}/>
+        </IconButton>
+      {:else}
+        <IconButton label="Restore split view" onclick={restore}>
+          <Minimize2 size={16}/>
+        </IconButton>
+      {/if}
+      <IconButton label="Close job" onclick={onclose}>
+        <X size={18}/>
+      </IconButton>
+    </div>
+  </div>
+  {#if job}
+    <div class="job-panel-heading">
+      <h1>{job.name||job.job_id}</h1>
+      <div>
+        <Server size={14}/>
+        {job.hostname}
+        {#if job.user}
+          <span>·</span>
+          {job.user}
+        {/if}
+        {#if job.partition}
+          <span>·</span>
+          {job.partition}
+        {/if}
       </div>
     </div>
-
-    <!-- Mobile Sidebar for Jobs Page -->
-    {#if isMobile && showMobileSidebar}
-      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" tabindex="-1" onclick={handleMobileSidebarClose} onkeydown={() => {}}>
-        <div role="dialog" tabindex="0" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}}>
-          <JobSidebar
-            currentJobId=""
-            currentHost=""
-            collapsed={false}
-            {isMobile}
-            onMobileJobSelect={handleMobileJobSelect}
-            onClose={handleMobileSidebarClose}
-          />
-        </div>
-      </div>
-    {/if}
-
-  {:else}
-    <!-- Regular Job Detail Page -->
-    {#if isMobile && showMobileSidebar}
-      <div class="fixed inset-0 bg-black/50 z-50 flex backdrop-blur-sm {isClosingSidebar ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}" role="dialog" tabindex="-1" onclick={handleMobileSidebarClose} onkeydown={() => {}}>
-        <div role="dialog" tabindex="0" onclick={stopPropagation(bubble('click'))} onkeydown={() => {}}>
-          <JobSidebar
-            currentJobId={params.id || ''}
-            currentHost={params.host || ''}
-            collapsed={false}
-            {isMobile}
-            onMobileJobSelect={handleMobileJobSelect}
-            onClose={handleMobileSidebarClose}
-          />
-        </div>
-      </div>
-    {:else}
-      <div class="page-layout" class:sidebar-collapsed={sidebarCollapsed}>
-        {#if !isMobile}
-          <JobSidebar
-            currentJobId={params.id || ''}
-            currentHost={params.host || ''}
-            bind:collapsed={sidebarCollapsed}
-            {isMobile}
-          />
-        {/if}
-
-        <div class="flex flex-col flex-1 min-h-0 {isMobile ? 'h-full overflow-hidden' : 'h-full overflow-hidden'}">
-          <JobHeader
-            {job}
-            {isMobile}
-            {showSidebarOnly}
-            refreshing={loading}
-            onToggleSidebar={() => showMobileSidebar = !showMobileSidebar}
-            onShareJob={handleShareJob}
-            onCancelJob={handleCancelJob}
-            onAttachWatchers={handleAttachWatchers}
-            onRefreshJob={() => loadJob(true)}
-          />
-
-          {#if error}
-            <div class="bg-red-50 border-b border-red-200 p-3">
-              <p class="text-sm font-medium text-red-800">{error}</p>
-            </div>
-          {/if}
-
-          {#if loading}
-            <LoadingSpinner message="Loading job..." />
-          {:else if job}
-            <!-- Tab Navigation -->
-            <div class="tab-navigation">
-              <nav class="tab-nav-container">
-                <button
-                  class="tab-button {activeTab === 'details' ? 'tab-button-active' : ''}"
-                  onclick={() => handleTabClick('details')}
-                >
-                  <Info class="w-4 h-4" />
-                  <span class="tab-label">Details</span>
-                </button>
-                <button
-                  class="tab-button {activeTab === 'output' ? 'tab-button-active' : ''}"
-                  onclick={() => handleTabClick('output')}
-                >
-                  <Terminal class="w-4 h-4" />
-                  <span class="tab-label">Output</span>
-                </button>
-                <button
-                  class="tab-button {activeTab === 'errors' ? 'tab-button-active' : ''}"
-                  onclick={() => handleTabClick('errors')}
-                >
-                  <AlertTriangle class="w-4 h-4" />
-                  <span class="tab-label">Errors</span>
-                </button>
-                <button
-                  class="tab-button {activeTab === 'script' ? 'tab-button-active' : ''}"
-                  onclick={() => handleTabClick('script')}
-                >
-                  <Code class="w-4 h-4" />
-                  <span class="tab-label">Script</span>
-                </button>
-                <button
-                  class="tab-button {activeTab === 'watchers' ? 'tab-button-active' : ''}"
-                  onclick={() => handleTabClick('watchers')}
-                >
-                  <Eye class="w-4 h-4" />
-                  <span class="tab-label">Watchers</span>
-                </button>
-              </nav>
-            </div>
-
-            <!-- Tab Content -->
-            <div class="flex-1 overflow-hidden {isMobile ? 'min-h-0' : ''}">
-              {#if activeTab === 'details'}
-                <div class="overflow-y-auto h-full">
-                  <JobDetailsView {job} />
-                </div>
-              {:else}
-                <div class="h-full flex flex-col">
-                  <JobTabContent
-                  {job}
-                  {activeTab}
-                  {outputData}
-                  {outputError}
-                  {loadingOutput}
-                  {loadingMoreOutput}
-                  {scriptData}
-                  {scriptError}
-                  {loadingScript}
-                  onRetryLoadOutput={() => {
-                    const outputType = getActiveOutputType();
-                    if (outputType) {
-                      void loadOutput(outputType);
-                    }
-                  }}
-                  onLoadMoreOutput={() => {}}
-                  onScrollToTop={() => {}}
-                  onScrollToBottom={() => {}}
-                  onRetryLoadScript={loadScript}
-                  onDownloadScript={() => {}}
-                  onRefreshOutput={refreshOutput}
-                  {refreshingOutput}
-                  />
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </div>
-    {/if}
   {/if}
-</div>
+  {#if error}
+    <div class="relay-banner error" role="alert">
+      <span>{error}</span>
+      <button class="relay-text-button" onclick={()=>void loadJob(true)}>Retry</button>
+    </div>
+  {/if}
+  {#if notice}
+    <div class="job-panel-notice" role="status">
+      <span>{notice}</span>
+      <IconButton label="Dismiss message" onclick={()=>notice=''}>
+        <X size={14}/>
+      </IconButton>
+    </div>
+  {/if}
+  {#if loading&&!job}
+    <LoadingSpinner message="Loading job…"/>
+    {:else if job}
+      <nav class="relay-tabs job-panel-tabs" aria-label="Job sections">
+        {#each [{id:'details',label:'Overview'},{id:'output',label:'Output'},{id:'script',label:'Script'},{id:'watchers',label:'Watchers'},{id:'activity',label:'Activity'}] as tab}
+          <button class:active={activeTab===tab.id||(tab.id==='output'&&activeTab==='errors')} onclick={()=>handleTabClick(tab.id as JobTab)} aria-current={activeTab===tab.id?'page':undefined}>{tab.label}</button>
+        {/each}
+      </nav>
+      {#if activeTab==='output'||activeTab==='errors'}
+        <div class="job-output-streams" aria-label="Output stream">
+          <button class:active={activeTab==='output'} onclick={()=>handleTabClick('output')}>stdout</button>
+          <button class:active={activeTab==='errors'} onclick={()=>handleTabClick('errors')}>stderr</button>
+        </div>
+      {/if}
+      <div class="job-panel-body" class:scrollable={activeTab==='details'||activeTab==='activity'}>
+        {#if activeTab==='details'}
+          <JobOverview {job} onwatchers={()=>handleTabClick('watchers')} oncopy={value=>void copy(value)}/>
+          {:else if activeTab==='activity'}
+            {#key job.hostname+':'+job.job_id}
+              <JobActivity {job}/>
+            {/key}
+          {:else}
+            <JobTabContent {job} {activeTab} {outputData} {outputError} {loadingOutput} {loadingMoreOutput} {scriptData} {scriptError} {loadingScript} onRetryLoadOutput={()=>{const type=getActiveOutputType();if(type)void loadOutput(type);}} onRetryLoadScript={loadScript} onDownloadScript={downloadScript} onRefreshOutput={refreshOutput} {refreshingOutput}/>
+          {/if}
+      </div>
+      <footer class="job-panel-footer">
+        <button class="relay-button" disabled={relaunching} onclick={()=>void relaunch()}>
+          <RotateCcw size={15}/>
+          {relaunching?'Preparing…':'Relaunch'}
+        </button>
+        <IconButton label="Attach watchers" onclick={handleAttachWatchers}>
+          <Eye size={17}/>
+        </IconButton>
+        <IconButton label="Copy job link" onclick={handleShareJob}>
+          <Copy size={17}/>
+        </IconButton>
+        {#if jobUtils.canCancelJob(job.state)}
+          <IconButton label="Cancel job" onclick={()=>cancelOpen=true}>
+            <Square size={16}/>
+          </IconButton>
+        {/if}
+      </footer>
+    {/if}
+</section>
 
-{#if showAttachWatchersDialog && job}
-  <WatcherAttachmentDialog
-    jobId={job.job_id}
-    hostname={params.host}
-    on:close={() => showAttachWatchersDialog = false}
-    on:success={() => {
-      showAttachWatchersDialog = false;
-      loadJob(true);
-      if (job) {
-        void fetchJobWatchers(job.job_id, params.host, { silent: true, maxAgeMs: 0 });
-      }
-    }}
-  />
+{#if showAttachWatchersDialog&&job}
+  <WatcherAttachmentDialog jobId={job.job_id} hostname={job.hostname} on:close={()=>showAttachWatchersDialog=false} on:success={()=>{showAttachWatchersDialog=false;if(job)void fetchJobWatchers(job.job_id,job.hostname,{silent:true,maxAgeMs:0});}}/>
 {/if}
 
+<Dialog bind:open={cancelOpen} title="Cancel this job?" closeOnEscape={!canceling} closeOnBackdropClick={!canceling}>
+  <p class="cancel-copy">Cancel #{job?.job_id} on {job?.hostname}? Running work will stop.</p>
+  {#snippet footer()}
+    <button class="relay-button" disabled={canceling} onclick={()=>cancelOpen=false}>Keep running</button>
+    <button class="relay-button danger" disabled={canceling} onclick={()=>void handleCancelJob()}>{canceling?'Cancelling…':'Cancel job'}</button>
+  {/snippet}
+</Dialog>
+
 <style>
-  .job-page {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
+  .job-panel {
     display: flex;
     flex-direction: column;
-    background: var(--background);
-    overflow: hidden;
-  }
-
-  /* Remove fixed positioning on mobile to allow natural scrolling */
-  @media (max-width: 768px) {
-    .job-page {
-      position: relative;
-      min-height: 100vh;
-      overflow-y: visible;
-    }
-  }
-
-  .page-layout {
-    display: flex;
     flex: 1;
-    overflow: hidden;
-  }
-
-  /* Allow scrolling on mobile */
-  @media (max-width: 768px) {
-    .page-layout {
-      overflow-y: auto;
-      overflow-x: hidden;
-      height: calc(100vh - var(--mobile-nav-height, 56px));
-      position: relative;
-    }
-  }
-
-  /* Tab navigation container */
-  .tab-navigation {
-    border-bottom: 1px solid var(--border);
+    min-height: 0;
+    min-width: 0;
     background: var(--card);
-    padding: 0 1.5rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none; /* Firefox */
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    margin: 20px 24px 24px;
   }
 
-  .tab-navigation::-webkit-scrollbar {
-    display: none; /* Chrome/Safari */
+  .job-panel.embedded {
+    height: 100%;
+    margin: 0;
   }
 
-  /* On mobile, reduce padding */
-  @media (max-width: 768px) {
-    .tab-navigation {
-      padding: 0 0.75rem;
-    }
-  }
-
-  .tab-nav-container {
-    display: flex;
-    gap: 0;
-    min-width: max-content; /* Prevent wrapping, allow horizontal scroll */
-  }
-
-  .tab-button {
+  .job-panel-toolbar {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 1rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: rgb(107 114 128 / 1); /* text-gray-500 */
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-    background: none;
-    border-left: none;
-    border-right: none;
-    border-top: none;
-    cursor: pointer;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 13px 24px 0;
+  }
+
+  .job-panel-meta,.job-panel-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .job-panel-meta {
+    font-size: .8125rem;
+    color: var(--muted-foreground);
+    min-width: 0;
+  }
+
+  .job-panel-meta>.relay-text-button {
+    margin-right: 13px;
+  }
+
+  .job-panel-meta>.mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
-    flex-shrink: 0; /* Prevent buttons from shrinking */
   }
 
-  /* Dark mode colors */
-  :global(.dark) .tab-button {
+  .job-panel-heading {
+    padding: 12px 24px 23px;
+  }
+
+  .job-panel-heading h1 {
+    font-size: clamp(1.5rem,2.2vw,2rem);
+    line-height: 1.25;
+    letter-spacing: -.03em;
+    font-weight: 600;
+    margin: 0 0 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .job-panel-heading>div {
+    display: flex;
+    gap: 9px;
+    align-items: center;
+    flex-wrap: wrap;
     color: var(--muted-foreground);
+    font-size: .875rem;
   }
 
-  .tab-button:hover {
-    color: rgb(55 65 81 / 1); /* text-gray-700 */
+  .job-panel-tabs {
+    padding: 0 24px;
+    gap: 28px;
+    flex-shrink: 0;
   }
 
-  :global(.dark) .tab-button:hover {
-    color: var(--foreground);
+  .job-panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
-  .tab-button-active {
-    color: rgb(31 41 55 / 1); /* text-gray-900 */
-    border-bottom-color: var(--foreground);
+  .job-panel-body.scrollable {
+    overflow: auto;
+    display: block;
   }
 
-  :global(.dark) .tab-button-active {
-    color: var(--foreground);
-    border-bottom-color: var(--foreground);
+  .job-panel-footer {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding: 12px 24px;
+    flex-shrink: 0;
   }
 
-  /* On mobile, make tabs more compact */
-  @media (max-width: 768px) {
-    .tab-button {
-      padding: 0.75rem 0.75rem;
-      font-size: 0.8125rem; /* Slightly smaller text */
-      gap: 0.375rem; /* Tighter spacing */
-    }
-
-    /* Hide labels on very small screens, show only icons */
-    @media (max-width: 480px) {
-      .tab-label {
-        display: none;
-      }
-
-      .tab-button {
-        padding: 0.75rem 1rem;
-        justify-content: center;
-      }
-    }
+  .job-panel-footer>.relay-button {
+    margin-right: auto;
   }
 
-  /* Desktop header button styles */
-  .desktop-back-button {
-    color: var(--muted-foreground);
+  .job-panel-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 20px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    font-size: .8125rem;
+  }
+
+  .job-output-streams {
+    display: flex;
+    gap: 4px;
+    padding: 12px 24px;
+    flex-shrink: 0;
+  }
+
+  .job-output-streams>button {
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: .8125rem;
     background: transparent;
+    color: var(--muted-foreground);
   }
 
-  .desktop-back-button:hover {
-    color: var(--foreground);
+  .job-output-streams>button.active {
     background: var(--secondary);
+    color: var(--foreground);
+    border-color: var(--border);
   }
 
-  .desktop-job-info {
+  .job-output-streams>button:hover {
+    background: var(--hover);
+  }
+
+  .embedded .job-panel-toolbar {
+    padding: 12px 14px 0;
+  }
+
+  .embedded .job-panel-meta {
+    gap: 7px;
+    font-size: .75rem;
+  }
+
+  .embedded .job-panel-controls {
+    gap: 0;
+  }
+
+  .embedded .job-panel-heading {
+    padding: 10px 20px 20px;
+  }
+
+  .embedded .job-panel-heading h1 {
+    font-size: 1.2rem;
+  }
+
+  .embedded .job-panel-heading>div {
+    font-size: .8125rem;
+  }
+
+  .embedded .job-panel-tabs {
+    padding: 0 20px;
+    gap: 20px;
+  }
+
+  .embedded .job-panel-tabs button {
+    font-size: .8125rem;
+  }
+
+  .embedded .job-panel-footer {
+    padding: 12px 18px;
+  }
+
+  .cancel-copy {
+    font-size: .9375rem;
     color: var(--muted-foreground);
   }
 
-  .desktop-job-info-secondary {
-    color: var(--muted-foreground);
-    opacity: 0.7;
+  @media (max-width:760px) {
+    .job-panel {
+      margin: 10px;
+    }
+    .job-panel-toolbar {
+      padding: 10px 14px 0;
+    }
+    .job-panel-heading {
+      padding: 12px 18px 20px;
+    }
+    .job-panel-tabs {
+      padding: 0 18px;
+      gap: 22px;
+    }
+    .job-panel-heading h1 {
+      font-size: 1.4rem;
+    }
+    .job-panel-meta>.relay-text-button {
+      margin-right: 2px;
+    }
+    .job-panel-controls {
+      gap: 0;
+    }
+    .job-panel-footer {
+      padding: 12px 18px;
+    }
   }
-
 </style>

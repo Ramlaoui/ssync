@@ -24,6 +24,7 @@
   import {
     BarChart3,
     Clock3,
+    ChevronRight,
     Eye,
     Filter,
     Layers,
@@ -643,24 +644,22 @@
 
 <div class="watchers-page">
   <NavigationHeader
+    showBackButton={false}
     showRefresh={true}
     refreshing={pageRefreshing}
     on:refresh={() => refreshData()}
   >
     {#snippet left()}
       <div class="page-copy">
-        <div class="page-title-row">
-          <Eye class="w-4 h-4" />
-          <span>Watchers</span>
-        </div>
-        <p>Monitor watcher state and related events in one unified workspace.</p>
+        <h1>Watchers</h1>
+
       </div>
     {/snippet}
 
     {#snippet actions()}
       <button class="create-button" onclick={openAttachDialog}>
         <Plus class="w-4 h-4" />
-        Create
+        New watcher
       </button>
     {/snippet}
 
@@ -671,7 +670,7 @@
           <input
             type="text"
             bind:value={searchQuery}
-            placeholder="Search watchers, actions, jobs, or event text"
+            placeholder="Search watchers…" aria-label="Search watchers"
           />
         </label>
 
@@ -728,33 +727,10 @@
 
   <main class="workspace">
     <section class="primary-column">
-      <div class="summary-grid">
-        <article class="summary-card">
-          <span class="summary-label">Active</span>
-          <strong>{watcherCounts.active}</strong>
-          <small>{watcherCounts.total} total watchers</small>
-        </article>
-        <article class="summary-card">
-          <span class="summary-label">Events</span>
-          <strong>{recentEventCount}</strong>
-          <small>recent watcher events</small>
-        </article>
-        <article class="summary-card">
-          <span class="summary-label">Hosts</span>
-          <strong>{hostCount}</strong>
-          <small>clusters with watchers</small>
-        </article>
-        <article class="summary-card">
-          <span class="summary-label">Static</span>
-          <strong>{watcherCounts.static}</strong>
-          <small>manual-only watchers</small>
-        </article>
-      </div>
-
       <div class="list-header">
         <div>
           <h2>{filteredWatchers.length} watcher{filteredWatchers.length === 1 ? '' : 's'}</h2>
-          <p>Run watcher actions in place without leaving the board.</p>
+
         </div>
       </div>
 
@@ -777,36 +753,6 @@
               class:selected={selectedWatcher?.id === watcher.id}
               class="watcher-shell"
             >
-              <div class="watcher-shell-header">
-                <div class="watcher-shell-copy">
-                  <div class="watcher-shell-title">
-                    <span class="item-state" data-state={watcher.state}></span>
-                    <strong>{watcher.name}</strong>
-                  </div>
-                  <div class="watcher-shell-subtitle">
-                    <span>
-                      Job #{watcher.job_id}
-                      {#if watcher.job_name}
-                        • {watcher.job_name}
-                      {/if}
-                    </span>
-                    <span>{watcher.hostname}</span>
-                  </div>
-                </div>
-                <button
-                  class="inspect-chip"
-                  onclick={() => inspectWatcher(watcher.id, { scrollToActivity: true })}
-                >
-                  {eventSummaryByWatcher[watcher.id]?.count || 0} event{eventSummaryByWatcher[watcher.id]?.count === 1 ? '' : 's'}
-                </button>
-              </div>
-
-              <div class="watcher-shell-meta">
-                <span>{watcher.actions?.length || 0} action{watcher.actions?.length === 1 ? '' : 's'}</span>
-                <span>{watcher.interval_seconds}s interval</span>
-                <span>{formatRelativeTime(latestEvent?.timestamp || watcher.last_check)}</span>
-              </div>
-
               <WatcherCard
                 watcher={watcher}
                 showJobLink={true}
@@ -816,11 +762,15 @@
                 on:inspect={handleWatcherInspect}
                 on:refresh={handleWatcherRefresh}
               />
+              <div class="watcher-shell-footer"><span>{watcher.hostname} · {watcher.interval_seconds}s interval</span><button class="relay-text-button" onclick={() => inspectWatcher(watcher.id, { scrollToActivity: true })}>Activity <ChevronRight size={14}/></button></div>
             </article>
           {/each}
         </div>
       {/if}
 
+    </section>
+
+    <aside class="activity-column" aria-label="Watcher activity">
       {#if selectedWatcher}
         <div id="watcher-activity-panel" class="activity-card selected-activity-card">
           <div class="detail-header">
@@ -877,9 +827,7 @@
           />
         </div>
       {/if}
-    </section>
 
-    <aside class="activity-column" aria-label="Watcher activity overview">
       {#if $watchers.length > 0 || latestEvents.length > 0}
         <div class="board-panel host-panel">
           <div class="board-heading">
@@ -1047,7 +995,6 @@
     color: var(--foreground);
   }
 
-  .page-copy p,
   .detail-header p {
     margin: 0;
     color: var(--muted-foreground);
@@ -1061,8 +1008,8 @@
     border: none;
     border-radius: 0.75rem;
     padding: 0.72rem 1rem;
-    background: var(--foreground);
-    color: var(--background);
+    background: var(--accent);
+    color: var(--accent-foreground);
     font-weight: 600;
     cursor: pointer;
   }
@@ -1236,13 +1183,6 @@
     gap: 1rem;
   }
 
-  .summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
-  .summary-card,
   .board-panel,
   .activity-card,
   .watcher-shell {
@@ -1252,40 +1192,10 @@
     background: var(--card);
   }
 
-  .summary-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    padding: 0.9rem;
-  }
-
-  .summary-label {
-    color: var(--muted-foreground);
-    font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .summary-card strong {
-    font-size: 1.15rem;
-    color: var(--foreground);
-  }
-
-  .summary-card small {
-    color: var(--muted-foreground);
-    font-size: 0.76rem;
-  }
-
   .list-header h2 {
     margin: 0;
     color: var(--foreground);
     font-size: 1.1rem;
-  }
-
-  .list-header p {
-    margin: 0.3rem 0 0;
-    color: var(--muted-foreground);
-    font-size: 0.84rem;
   }
 
   .panel-empty {
@@ -1322,62 +1232,6 @@
     transform: translateY(-1px);
   }
 
-  .watcher-shell-header,
-  .watcher-shell-title,
-  .watcher-shell-subtitle,
-  .watcher-shell-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    min-width: 0;
-  }
-
-  .watcher-shell-header,
-  .watcher-shell-meta {
-    justify-content: space-between;
-  }
-
-  .watcher-shell-copy {
-    min-width: 0;
-    display: grid;
-    gap: 0.25rem;
-  }
-
-  .watcher-shell-title strong {
-    color: var(--foreground);
-    font-size: 0.95rem;
-    line-height: 1.3;
-  }
-
-  .watcher-shell-subtitle,
-  .watcher-shell-meta {
-    color: var(--muted-foreground);
-    font-size: 0.78rem;
-    flex-wrap: wrap;
-  }
-
-  .item-state {
-    width: 0.7rem;
-    height: 0.7rem;
-    border-radius: 999px;
-    flex-shrink: 0;
-    background: var(--muted-foreground);
-  }
-
-  .item-state[data-state='active'] {
-    background: var(--success);
-  }
-
-  .item-state[data-state='paused'] {
-    background: var(--warning);
-  }
-
-  .item-state[data-state='static'],
-  .item-state[data-state='completed'] {
-    background: var(--accent);
-  }
-
-  .inspect-chip,
   .detail-pill,
   .peer-chip {
     display: inline-flex;
@@ -1613,9 +1467,6 @@
   }
 
   @media (max-width: 900px) {
-    .summary-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
   }
 
   @media (max-width: 720px) {
@@ -1641,9 +1492,14 @@
     .watcher-grid {
       grid-template-columns: 1fr;
     }
-
-    .summary-grid {
-      grid-template-columns: 1fr 1fr;
-    }
   }
+.watcher-shell,.board-panel,.activity-card{border-radius:var(--radius-card);background:var(--card)}.watcher-shell{transition:border-color var(--motion-state),background var(--motion-state)}.watcher-shell:hover{border-color:color-mix(in srgb,var(--accent) 60%,var(--border))}.watcher-shell.selected{border-color:var(--accent)}.state-chip[data-state='active'] .state-chip-dot{background:var(--accent)}.state-chip[data-state='completed'] .state-chip-dot{background:var(--success)}.state-chips{gap:18px;border-bottom:1px solid var(--border);padding-bottom:0}.state-chip{border:0;border-radius:0;border-bottom:2px solid transparent;background:transparent;padding:12px 0;font-size:.875rem;font-weight:450}.state-chip.active{border-bottom-color:var(--accent);background:transparent;color:var(--accent)}.toolbar-search,.toolbar-select{border-radius:10px;background:var(--card)}.workspace{padding:24px 32px;gap:24px}@media(max-width:760px){.workspace{padding:20px 16px}.toolbar{flex-wrap:wrap}.toolbar-search{flex-basis:100%}}
+
+  .page-copy h1 { margin:0; font-size:2.125rem; line-height:1.2; letter-spacing:-.04em; font-weight:650; }
+  .workspace { grid-template-columns:minmax(0,1fr) minmax(300px,380px); }
+  .watcher-shell { padding:14px; }
+  .watcher-shell :global(.watcher-card-selected) { box-shadow:none; }
+  .watcher-shell-footer { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:12px; color:var(--muted-foreground); padding:6px 4px 0; }
+  .activity-column { max-height:calc(100dvh - 245px); overflow:auto; }
+  @media(max-width:1100px) { .workspace { grid-template-columns:1fr; } .activity-column { position:static; max-height:none; } }
 </style>

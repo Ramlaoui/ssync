@@ -1,4 +1,5 @@
 <script lang="ts">
+  import relayTokens from '../lib/design/relay-tokens.json';
   import { run } from 'svelte/legacy';
 
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
@@ -72,9 +73,10 @@
 
   function getThemeExtension() {
     const isDark = theme === 'dark' || theme === 'dracula';
+    const palette = Object.fromEntries(Object.entries(relayTokens.colors).map(([name, values]) => [name, values[isDark ? 'dark' : 'light']]));
     // Softer, more consistent colors with the page theme
-    const backgroundColor = theme === 'dracula' ? '#282a36' : (isDark ? '#1a1f2e' : (isMobile ? '#fafbfc' : '#fafbfc'));
-    const foregroundColor = theme === 'dracula' ? '#f8f8f2' : (isDark ? '#e2e8f0' : '#374151');
+    const backgroundColor = theme === 'dracula' ? '#282a36' : palette.CodeCanvas;
+    const foregroundColor = theme === 'dracula' ? '#f8f8f2' : palette.Ink;
     const mobileFont = '"SF Mono", "Monaco", "Menlo", "Consolas", "Courier New", monospace';
     const desktopFont = '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace';
 
@@ -101,7 +103,7 @@
         color: foregroundColor,
         fontSize: baseFontSize,
         fontFamily: fontFamily,
-        caretColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
+        caretColor: theme === 'dracula' ? '#ff79c6' : palette.Accent,
         lineHeight: lineHeight,
         letterSpacing: isMobile ? '0.01em' : 'normal',
       },
@@ -118,11 +120,11 @@
         lineHeight: lineHeight,
       },
       '.cm-cursor': {
-        borderColor: theme === 'dracula' ? '#ff79c6' : (isMobile ? '#6366f1' : '#10b981'),
+        borderColor: theme === 'dracula' ? '#ff79c6' : palette.Accent,
         borderWidth: isMobile ? '2px' : '1px',
       },
       '.cm-selectionBackground': {
-        backgroundColor: theme === 'dracula' ? 'rgba(255, 121, 198, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+        backgroundColor: theme === 'dracula' ? 'rgba(255, 121, 198, 0.2)' : palette.AccentSoft,
       },
       '.cm-activeLine': {
         backgroundColor: isDark ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 0, 0, 0.02)',
@@ -132,7 +134,7 @@
       },
       '.cm-gutters': {
         backgroundColor: isDark ? 'rgba(0, 0, 0, 0.1)' : 'transparent',
-        color: isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(156, 163, 175, 0.8)',
+        color: palette.InkSecondary,
         border: 'none',
         fontSize: baseFontSize,
         fontFamily: fontFamily,
@@ -142,7 +144,7 @@
         paddingTop: isMobile ? '1rem' : '1.5rem',
       },
       '.cm-lineNumbers': {
-        color: isDark ? 'rgba(255, 255, 255, 0.4)' : (isMobile ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.4)'),
+        color: palette.InkSecondary,
         paddingRight: isMobile ? '0.75rem' : '1rem',
         paddingLeft: isMobile ? '0.5rem' : '0.75rem',
         fontSize: baseFontSize,
@@ -151,10 +153,10 @@
         textAlign: 'right',
       },
       '.cm-foldGutter': {
-        color: isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)',
+        color: palette.InkSecondary,
       },
       '.cm-placeholder': {
-        color: isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)',
+        color: palette.InkSecondary,
         fontStyle: 'italic',
       },
       '.cm-line': {
@@ -171,7 +173,7 @@
         color: theme === 'dracula' ? '#f1fa8c' : (isDark ? '#98c379' : (isMobile ? '#059669' : '#032f62'))
       },
       '.cm-comment': {
-        color: theme === 'dracula' ? '#6272a4' : (isDark ? '#5c6370' : (isMobile ? '#6b7280' : '#6a737d')),
+        color: theme === 'dracula' ? '#6272a4' : palette.InkSecondary,
         fontStyle: 'italic',
         opacity: isMobile ? '0.8' : '1'
       },

@@ -1,871 +1,632 @@
 <script lang="ts">
-  import { run } from "svelte/legacy";
-
-  import type { AxiosError } from "axios";
-  import { Clock, RefreshCw, Search, X } from "lucide-svelte";
-  import { onDestroy, onMount } from "svelte";
-  import { location, push } from "svelte-spa-router";
-  import ArrayJobCard from "../components/ArrayJobCard.svelte";
-  import JobTable from "../components/JobTable.svelte";
-  import NavigationHeader from "../components/NavigationHeader.svelte";
-  import { getArrayGroupTasks } from "../lib/arrayJobs";
-  import Badge from "../lib/components/ui/Badge.svelte";
-  import CollapsibleSection from "../lib/components/ui/CollapsibleSection.svelte";
-  import { jobStateManager } from "../lib/JobStateManager";
-  import { api } from "../services/api";
-  import { navigationActions } from "../stores/navigation";
-  import { preferences } from "../stores/preferences";
-  import { fetchAllWatchers } from "../stores/watchers";
-  import type { HostInfo, JobFilters, JobInfo, PartitionStatusResponse } from "../types/api";
-
-  let hosts: HostInfo[] = $state([]);
-  let loading = $state(false);
-  let hostsLoading = false;
-  let error: string | null = $state(null);
-  let partitionStates: PartitionStatusResponse[] = $state([]);
-  let partitionsLoading = $state(false);
-  let partitionsError: string | null = $state(null);
-  let search = $state("");
-  let filters: JobFilters = $state({
-    host: "",
-    user: "",
-    since: $preferences.defaultSince || "14d",
-    limit: 50, // Default, will be overridden by preferences
-    state: "",
-    activeOnly: false,
-    completedOnly: false,
-  });
-
-  // Mobile UI state
-  let isMobile = $state(
-    typeof window !== "undefined" && window.innerWidth < 768,
-  );
-  let searchFocused = false;
-  let searchExpanded = $state(false);
-  let searchInput: HTMLInputElement | null = $state(null);
-
-  // Auto-refresh state
-  let autoRefreshEnabled = $state(false);
-  let autoRefreshInterval = $state(30); // seconds
-  let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
-
-  // Get reactive stores from JobStateManager
-  const allJobs = jobStateManager.getAllJobs();
-  const connectionStatus = jobStateManager.getConnectionStatus();
-  const managerState = jobStateManager.getState();
-  const arrayJobGroups = jobStateManager.getArrayJobGroups();
+  import { onMount, tick } from 'svelte';
+  import { push } from 'svelte-spa-router';
+  import { Search, X, Server, Plus, RefreshCw, ArrowDownWideNarrow, ChevronRight, Layers, SlidersHorizontal, TriangleAlert } from 'lucide-svelte';
+  import JobPage from './JobPage.svelte';
+  import ArrayJobCard from '../components/ArrayJobCard.svelte';
+  import JobStatus from '../components/workspace/JobStatus.svelte';
+  import IconButton from '../components/workspace/IconButton.svelte';
+  import { jobStateManager } from '../lib/JobStateManager';
+  import { getArrayGroupTasks } from '../lib/arrayJobs';
+  import { filterJobs, withinHistoryWindow, matchesJobView, gpuCount, jobRoute, relativeTime } from '../lib/jobsPresentation';
+  import { jobUtils } from '../lib/jobUtils';
+  import { api, apiConfig } from '../services/api';
+  import { jobsWorkspace, selectJob, type JobView } from '../stores/workspace';
+  import { preferences, preferencesActions } from '../stores/preferences';
+  import { fetchAllWatchers } from '../stores/watchers';
+  import { focusTrap } from '../lib/actions';
+  import type { JobInfo, HostInfo } from '../types/api';
+  const jobs = jobStateManager.getAllJobs();
+  const groups = jobStateManager.getArrayJobGroups();
   const hostStates = jobStateManager.getHostStates();
-
-  // Search scoring function - returns relevance score (lower is better)
-  function getSearchScore(job: any, searchTerm: string): number {
-    if (!searchTerm) return 0;
-    const term = searchTerm.toLowerCase();
-
-    // Exact match scores
-    if (job.job_id.toLowerCase() === term) return 0;
-    if (job.name?.toLowerCase() === term) return 1;
-    if (job.user?.toLowerCase() === term) return 2;
-
-    // Starts with scores
-    if (job.job_id.toLowerCase().startsWith(term)) return 10;
-    if (job.name?.toLowerCase().startsWith(term)) return 11;
-    if (job.user?.toLowerCase().startsWith(term)) return 12;
-
-    // Contains scores
-    if (job.job_id.toLowerCase().includes(term)) return 20;
-    if (job.name?.toLowerCase().includes(term)) return 21;
-    if (job.user?.toLowerCase().includes(term)) return 22;
-    if (job.hostname?.toLowerCase().includes(term)) return 23;
-
-    // No match
-    return 999;
-  }
-
-  // Filter jobs and exclude those that are part of array groups
-  let filteredJobs = $derived(
-    (() => {
-      try {
-        let jobs = [...$allJobs];
-
-        // Defensive deduplication: Ensure no duplicate job_id + hostname combinations
-        const uniqueJobs = new Map();
-        jobs.forEach((job) => {
-          const key = `${job.hostname}:${job.job_id}`;
-          uniqueJobs.set(key, job);
-        });
-        jobs = Array.from(uniqueJobs.values());
-
-        // Exclude jobs that are part of array groups
-        if ($arrayJobGroups.length > 0) {
-          const arrayJobIds = new Set(
-            $arrayJobGroups.flatMap((group) =>
-              getArrayGroupTasks(group).map(
-                (task) => `${task.hostname}:${task.job_id}`,
-              ),
-            ),
-          );
-          jobs = jobs.filter(
-            (j) => !arrayJobIds.has(`${j.hostname}:${j.job_id}`),
-          );
-        }
-
-        // Apply filters
-        if (filters.host) {
-          jobs = jobs.filter((j) => j.hostname === filters.host);
-        }
-        if (filters.user) {
-          jobs = jobs.filter((j) =>
-            j.user?.toLowerCase().includes(filters.user.toLowerCase()),
-          );
-        }
-        if (filters.state) {
-          jobs = jobs.filter((j) => j && j.state === filters.state);
-        }
-        if (filters.activeOnly) {
-          jobs = jobs.filter(
-            (j) => j && j.state && (j.state === "R" || j.state === "PD"),
-          );
-        }
-        if (filters.completedOnly) {
-          jobs = jobs.filter(
-            (j) =>
-              j &&
-              j.state &&
-              (j.state === "CD" ||
-                j.state === "F" ||
-                j.state === "CA" ||
-                j.state === "TO"),
-          );
-        }
-
-        // Apply search with ranking
-        if (search) {
-          // Filter and score jobs
-          const scoredJobs = jobs
-            .map((job) => ({ job, score: getSearchScore(job, search) }))
-            .filter((item) => item.score < 999)
-            .sort((a, b) => a.score - b.score)
-            .map((item) => item.job);
-
-          jobs = scoredJobs;
-        }
-
-        // Apply limit
-        if (filters.limit > 0) {
-          jobs = jobs.slice(0, filters.limit);
-        }
-
-        return jobs;
-      } catch (error) {
-        console.error("[JobsPage] Error in filteredJobs computation:", error);
-        return [];
-      }
-    })(),
-  );
-
-  // Filter array groups based on search and filters
-  let filteredArrayGroups = $derived(
-    (() => {
-      let groups = [...$arrayJobGroups];
-
-      // Apply filters
-      if (filters.host) {
-        groups = groups.filter((g) => g.hostname === filters.host);
-      }
-      if (filters.user) {
-        groups = groups.filter((g) =>
-          g.user?.toLowerCase().includes(filters.user.toLowerCase()),
-        );
-      }
-      if (filters.state) {
-        // Filter groups that have tasks in the specified state
-        groups = groups.filter((g) =>
-          getArrayGroupTasks(g).some((t) => t.state === filters.state),
-        );
-      }
-      if (filters.activeOnly) {
-        groups = groups.filter(
-          (g) => g.running_count > 0 || g.pending_count > 0,
-        );
-      }
-      if (filters.completedOnly) {
-        groups = groups.filter(
-          (g) =>
-            g.completed_count > 0 ||
-            g.failed_count > 0 ||
-            g.cancelled_count > 0,
-        );
-      }
-
-      // Apply search
-      if (search) {
-        const term = search.toLowerCase();
-        groups = groups.filter(
-          (g) =>
-            g.array_job_id.toLowerCase().includes(term) ||
-            g.job_name.toLowerCase().includes(term) ||
-            g.user?.toLowerCase().includes(term),
-        );
-      }
-
-      return groups;
-    })(),
-  );
-
-  let totalPartitions = $derived(
-    partitionStates.reduce((sum, host) => sum + host.partitions.length, 0),
-  );
-
-  let latestPartitionUpdate = $derived(
-    (() => {
-      const timestamps = partitionStates
-        .map((h) => h.updated_at)
-        .filter((t): t is string => Boolean(t))
-        .map((t) => new Date(t).getTime());
-      if (timestamps.length === 0) return null;
-      return new Date(Math.max(...timestamps)).toISOString();
-    })(),
-  );
-
-  let partitionsSectionExpanded = $derived(
-    totalPartitions > 0 && totalPartitions <= 8,
-  );
-
-  let partitionsSubtitle = $derived(
-    latestPartitionUpdate
-      ? `Updated ${formatTimeAgo(latestPartitionUpdate)}`
-      : "",
-  );
-
-  // Track active arrays for smart collapsible defaults
-  let activeArrayCount = $derived(
-    filteredArrayGroups.filter(
-      (g) => g.running_count > 0 || g.pending_count > 0,
-    ).length,
-  );
-
-  let hasActiveArrays = $derived(activeArrayCount > 0);
-
-  // Smart default: collapse if all completed OR > 10 arrays
-  let arraysSectionExpanded = $derived(
-    hasActiveArrays && filteredArrayGroups.length <= 10,
-  );
-
-  // Compute loading states from manager
-  let progressiveLoading = $derived(
-    Array.from($managerState.hostStates.values()).some(
-      (h) => h.status === "loading",
-    ),
-  );
-  let dataFromCache = $derived($managerState.dataSource === "cache");
-
-  // Track hosts with errors
-  let hostsWithErrors = $derived(
-    Array.from($hostStates.values()).filter((h) => h.status === "error"),
-  );
-  let hostsWithTimeouts = $derived(hostsWithErrors.filter((h) => h.isTimeout));
-
-  function checkMobile() {
-    isMobile = window.innerWidth < 768;
-  }
-
-  function formatTimeAgo(value: string | null | undefined): string {
-    if (!value) return "";
-    const ts = new Date(value).getTime();
-    if (Number.isNaN(ts)) return "";
-    const diff = Date.now() - ts;
-    if (diff < 60000) return "just now";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return new Date(value).toLocaleDateString();
-  }
-
-  async function loadHosts(): Promise<void> {
-    if (hostsLoading) return;
-
-    hostsLoading = true;
-    try {
-      const response = await api.get<HostInfo[]>("/api/hosts");
-      hosts = response.data;
-    } catch (err: unknown) {
-      const axiosError = err as AxiosError;
-      error = `Failed to load hosts: ${axiosError.message}`;
-    } finally {
-      hostsLoading = false;
-    }
-  }
-
-  async function loadJobs(forceRefresh = false): Promise<void> {
-    error = null;
-    loading = true;
-
-    try {
-      const syncFilters = {
-        user: filters.user || undefined,
-        since: filters.since || undefined,
-        limit: filters.limit,
-        state: filters.state || undefined,
-        activeOnly: filters.activeOnly,
-        completedOnly: filters.completedOnly,
-        search: search || undefined,
-        groupArrayJobs: $preferences.groupArrayJobs,
-      };
-
-      if (forceRefresh) {
-        await jobStateManager.forceRefresh(syncFilters);
-      } else if (filters.host) {
-        // Sync specific host
-        await jobStateManager.syncHost(filters.host, false, true, syncFilters);
-      } else {
-        // Sync all hosts
-        await jobStateManager.syncAllHosts(false, true, syncFilters);
-      }
-    } catch (err: unknown) {
-      const axiosError = err as AxiosError;
-      error = `Failed to load jobs: ${axiosError.message}`;
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function loadPartitions(forceRefresh = false): Promise<void> {
-    partitionsError = null;
-    partitionsLoading = true;
-
-    try {
-      const params = new URLSearchParams();
-      if (filters.host) params.append("host", filters.host);
-      if (forceRefresh) params.append("force_refresh", "true");
-      const url = params.toString()
-        ? `/api/partitions?${params.toString()}`
-        : "/api/partitions";
-      const response = await api.get<PartitionStatusResponse[]>(url);
-      partitionStates = response.data;
-    } catch (err: unknown) {
-      const axiosError = err as AxiosError;
-      partitionsError = `Failed to load partition state: ${axiosError.message}`;
-    } finally {
-      partitionsLoading = false;
-    }
-  }
-
-  async function refreshAll(forceRefresh = false): Promise<void> {
-    await Promise.all([loadJobs(forceRefresh), loadPartitions(forceRefresh)]);
-  }
-
-  function handleFilterChange(): void {
-    clearTimeout(filterChangeTimeout);
-    filterChangeTimeout = setTimeout(() => {
-      // Filters are applied reactively through the reactive statements
-      // No need to check jobsByHost here as it's a reactive value
-    }, 800);
-  }
-
-  let filterChangeTimeout: ReturnType<typeof setTimeout>;
-
-  function handleJobSelect(job: JobInfo): void {
-    // Track where we're coming from for smart back navigation
-    navigationActions.setPreviousRoute($location);
-    const encodedJobId = encodeURIComponent(job.job_id);
-    push(`/jobs/${encodedJobId}/${job.hostname}`);
-  }
-
-  function handleManualRefresh(): void {
-    if (!loading && !partitionsLoading) {
-      refreshAll(true);
-    }
-  }
-
-  function setupAutoRefresh(): void {
-    // Clear existing timer
-    if (autoRefreshTimer) {
-      clearInterval(autoRefreshTimer);
-      autoRefreshTimer = null;
-    }
-
-    // Set up new timer if enabled
-    if (autoRefreshEnabled && autoRefreshInterval > 0) {
-      autoRefreshTimer = setInterval(() => {
-        if (!loading && !partitionsLoading) {
-          refreshAll(false); // Gentle refresh, no cache clear
-        }
-      }, autoRefreshInterval * 1000);
-    }
-  }
-
-  function handleRefreshSettingsChanged(
-    event: CustomEvent<{ autoRefreshEnabled: boolean; autoRefreshInterval: number }>,
-  ): void {
-    const { autoRefreshEnabled: enabled, autoRefreshInterval: interval } =
-      event.detail;
-    autoRefreshEnabled = enabled;
-    autoRefreshInterval = interval;
-    setupAutoRefresh();
-
-    // Save to localStorage
-    const prefs = JSON.parse(localStorage.getItem("ssync_preferences") || "{}");
-    prefs.autoRefresh = enabled;
-    prefs.refreshInterval = interval;
-    localStorage.setItem("ssync_preferences", JSON.stringify(prefs));
-  }
-
-  function handleJobsPerPageChanged(
-    event: CustomEvent<{ jobsPerPage: number }>,
-  ): void {
-    const { jobsPerPage } = event.detail;
-    filters.limit = jobsPerPage;
-  }
-
-  // React to auto-refresh settings changes
-  run(() => {
-    if (typeof autoRefreshEnabled !== "undefined") {
-      setupAutoRefresh();
-    }
+  const manager = jobStateManager.getState();
+  const tabs: {
+    id: JobView;
+    label: string;
+  }[] = [{ id: 'all', label: 'All jobs' }, { id: 'running', label: 'Running' }, { id: 'pending', label: 'Pending' }, { id: 'attention', label: 'Needs attention' }, { id: 'historical', label: 'Historical' }];
+  let hosts = $state<HostInfo[]>([]);
+  let refreshing = $state(false);
+  let error = $state('');
+  let extraFilters = $state(false);
+  let visibleLimit = $state(50);
+  let scrollElement: HTMLDivElement;
+  let focusedRow: HTMLButtonElement | undefined;
+  let narrow = $state(false);
+  const loading = $derived(refreshing || Array.from($hostStates.values()).some(h => h.status === 'loading'));
+  const historyJobs = $derived($jobs.filter(job => withinHistoryWindow(job, $preferences.defaultSince)));
+  const filtered = $derived(filterJobs(historyJobs, $jobsWorkspace));
+  const arrayGroups = $derived($preferences.groupArrayJobs ? $groups.filter(group => getArrayGroupTasks(group).some(job => withinHistoryWindow(job, $preferences.defaultSince) && filterJobs([job], $jobsWorkspace).length > 0)) : []);
+  const groupedKeys = $derived(new Set(arrayGroups.flatMap(group => getArrayGroupTasks(group).map(job => `${job.hostname}:${job.job_id}`))));
+  const rows = $derived(filtered.filter(job => !groupedKeys.has(`${job.hostname}:${job.job_id}`)).slice(0, visibleLimit));
+  const visibleHosts = $derived([...new Set([...rows.map(job => job.hostname), ...arrayGroups.map(group => group.hostname)])]);
+  const hostNames = $derived([...new Set([...hosts.map(host => host.hostname), ...$hostStates.keys()])]);
+  const selected = $derived($jobsWorkspace.selection);
+  const hostErrors = $derived(Array.from($hostStates.values()).filter(host => host.status === 'error'));
+  const running = $derived($jobs.filter(job => matchesJobView(job, 'running')).length);
+  const pending = $derived($jobs.filter(job => matchesJobView(job, 'pending')).length);
+  $effect(() => { visibleLimit = $preferences.jobsPerPage; });
+  $effect(() => {
+    if (!$preferences.autoRefresh)
+      return;
+    const timer = setInterval(() => { if (!document.hidden)
+      void refresh(false, visibleLimit, false); }, Math.max(10000, $preferences.refreshInterval));
+    return () => clearInterval(timer);
   });
-
-  let totalJobs = $derived(
-    filteredJobs.length +
-      filteredArrayGroups.reduce((sum, g) => sum + g.total_tasks, 0),
-  );
-
-  onMount(async () => {
-    // Load hosts first
-    await loadHosts();
-
-    loadPartitions().catch((err) =>
-      console.warn("Failed to load partition state:", err),
-    );
-
-    // Load watchers for eye icon display (non-blocking)
-    fetchAllWatchers().catch((err) =>
-      console.warn("Failed to load watchers:", err),
-    );
-
-    // ⚡ PERFORMANCE FIX: Don't force sync on mount - let WebSocket deliver initial data
-    // The JobStateManager connects WebSocket on initialization and will receive initial
-    // data automatically. Forcing a sync here causes a race condition with the WebSocket
-    // initial fetch, resulting in 0 jobs being returned due to backend concurrency locks.
-    // The user can always click the refresh button if they want to force a refresh.
-
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-
-    // Load preferences from localStorage
-    const savedPrefs = localStorage.getItem("ssync_preferences");
-    if (savedPrefs) {
-      try {
-        const prefs = JSON.parse(savedPrefs);
-        autoRefreshEnabled = prefs.autoRefresh || false;
-        autoRefreshInterval = prefs.refreshInterval || 30;
-        filters.limit = prefs.jobsPerPage || 50;
-        setupAutoRefresh();
-      } catch (e) {
-        console.error("Failed to load preferences:", e);
-      }
+  async function refresh(force = false, limit = visibleLimit, userInitiated = true) {
+    if (refreshing)
+      return;
+    refreshing = true;
+    error = '';
+    try {
+      const filters = { since: $preferences.defaultSince, limit, groupArrayJobs: $preferences.groupArrayJobs };
+      if (force)
+        await jobStateManager.forceRefresh(filters);
+      else
+        await jobStateManager.syncAllHosts(false, userInitiated, filters);
     }
-
-    // Listen for settings changes
-    window.addEventListener("jobsPerPageChanged", handleJobsPerPageChanged);
+    catch (err) {
+      error = err instanceof Error ? err.message : 'Could not refresh jobs.';
+    }
+    finally {
+      refreshing = false;
+    }
+  }
+  async function more() { visibleLimit += $preferences.jobsPerPage; if (visibleLimit > filtered.length)
+    await refresh(false, visibleLimit); }
+  function open(job: JobInfo, event: MouseEvent) { focusedRow = event.currentTarget as HTMLButtonElement; selectJob(job); }
+  async function close() { jobsWorkspace.update(state => ({ ...state, selection: null })); await tick(); focusedRow?.focus(); }
+  function setTab(view: JobView) { jobsWorkspace.update(state => ({ ...state, view, selection: null, scrollTop: 0 })); }
+  function clearFilters() { jobsWorkspace.update(state => ({ ...state, query: '', host: '', user: '', view: 'all' })); }
+  onMount(() => {
+    const media = matchMedia('(max-width: 1050px)');
+    const resize = () => narrow = media.matches;
+    resize();
+    media.addEventListener('change', resize);
+    scrollElement.scrollTop = $jobsWorkspace.scrollTop;
+    void refresh();
+    void api.get<HostInfo[]>('/api/hosts').then(response => hosts = response.data).catch(() => { });
+    void fetchAllWatchers().catch(() => { });
+    return () => { media.removeEventListener('change', resize); };
   });
-
-  onDestroy(() => {
-    if (filterChangeTimeout) clearTimeout(filterChangeTimeout);
-    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-    window.removeEventListener("resize", checkMobile);
-    window.removeEventListener("jobsPerPageChanged", handleJobsPerPageChanged);
-  });
+  function keydown(event: KeyboardEvent) { if (event.key === 'Escape' && selected && !(event.target as Element)?.closest('[aria-modal="true"]')) {
+    void close();
+  } }
 </script>
 
-<div class="h-full flex flex-col bg-background">
-  {#if !isMobile}
-    <NavigationHeader
-      showRefresh={true}
-      refreshing={loading || progressiveLoading}
-      bind:autoRefreshEnabled
-      bind:autoRefreshInterval
-      on:refresh={handleManualRefresh}
-      on:refreshSettingsChanged={handleRefreshSettingsChanged}
-    >
-      {#snippet left()}
-        <div class="flex items-center gap-4">
-          <div class="flex gap-4 flex-shrink-0 items-center">
-            <div class="flex items-center gap-1 whitespace-nowrap">
-              <span
-                class="text-base font-semibold text-slate-900 dark:text-slate-100"
-                >{hosts.length}</span
-              >
-              <span class="text-xs text-slate-500 dark:text-slate-400"
-                >hosts</span
-              >
-            </div>
-            <div class="flex items-center gap-1 whitespace-nowrap">
-              <span
-                class="text-base font-semibold text-slate-900 dark:text-slate-100"
-                >{totalJobs}</span
-              >
-              <span class="text-xs text-slate-500 dark:text-slate-400"
-                >jobs</span
-              >
-            </div>
-            {#if dataFromCache}
-              <div
-                class="flex items-center gap-1 whitespace-nowrap pl-4 border-l border-border ml-4"
-              >
-                <Clock class="h-4 w-4 text-muted-foreground" />
-                <Badge variant="secondary">Cached</Badge>
-              </div>
-            {/if}
-          </div>
+<svelte:window onkeydown={keydown}/>
 
-          <!-- Search Bar -->
-          <div class="flex-1 max-w-md">
-            <div class="relative w-full">
-              <div
-                class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center"
-              >
-                <Search size={16} />
-              </div>
-              <input
-                type="text"
-                class="w-full pl-10 pr-10 py-2 border border-border rounded-lg text-sm transition-all bg-input focus:outline-none focus:border-accent focus:bg-background focus:shadow-sm focus:ring-2 focus:ring-accent/20 placeholder-muted-foreground"
-                placeholder="Search jobs..."
-                bind:value={search}
-                oninput={handleFilterChange}
-              />
-              {#if search}
-                <button
-                  class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all"
-                  onclick={() => {
-                    search = "";
-                    handleFilterChange();
-                  }}
-                >
-                  <X size={14} />
-                </button>
-              {/if}
-            </div>
-          </div>
-        </div>
-      {/snippet}
-    </NavigationHeader>
-  {:else}
-    <!-- Mobile header -->
-    <div
-      class="flex justify-between items-center p-3 bg-secondary border-b border-border relative z-50 shadow-sm"
-    >
-      <div class="flex items-center min-h-[40px] whitespace-nowrap">
-        <!-- Stats on the left -->
-        <div class="flex gap-4 flex-shrink-0 items-center">
-          <div class="flex items-center gap-1 whitespace-nowrap">
-            <span
-              class="text-base font-semibold text-slate-900 dark:text-slate-100"
-              >{hosts.length}</span
-            >
-            <span class="text-xs text-slate-500 dark:text-slate-400">hosts</span
-            >
-          </div>
-          <div class="flex items-center gap-1 whitespace-nowrap">
-            <span
-              class="text-base font-semibold text-slate-900 dark:text-slate-100"
-              >{totalJobs}</span
-            >
-            <span class="text-xs text-slate-500 dark:text-slate-400">jobs</span>
-          </div>
-        </div>
-
-        <!-- Flexible spacer to push search and refresh to the right -->
-        <div class="flex-1 min-w-8"></div>
-
-        <!-- Expandable search -->
-        <div
-          class="flex items-center justify-center transition-all duration-300 ease-out overflow-hidden flex-shrink-0 {searchExpanded
-            ? 'w-[180px] max-w-[180px]'
-            : 'w-8'}"
-        >
-          {#if searchExpanded}
-            <div
-              class="relative w-full animate-in slide-in-from-right-2 duration-300"
-            >
-              <div
-                class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none flex items-center justify-center"
-              >
-                <Search size={16} />
-              </div>
-              <input
-                type="text"
-                class="w-full pl-10 pr-10 py-2 border border-border rounded-lg text-sm transition-all bg-input focus:outline-none focus:border-accent focus:bg-background focus:shadow-sm focus:ring-2 focus:ring-accent/20 placeholder-muted-foreground"
-                placeholder="Search jobs..."
-                bind:value={search}
-                oninput={handleFilterChange}
-                onblur={() => {
-                  if (!search) searchExpanded = false;
-                }}
-                bind:this={searchInput}
-              />
-              {#if search}
-                <button
-                  class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 bg-transparent border-0 text-muted-foreground cursor-pointer rounded hover:bg-secondary hover:text-destructive flex items-center justify-center transition-all"
-                  onclick={() => {
-                    search = "";
-                    handleFilterChange();
-                  }}
-                >
-                  <X size={14} />
-                </button>
-              {/if}
-            </div>
-          {:else}
-            <button
-              class="flex items-center justify-center w-8 h-8 border-0 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-all hover:bg-secondary hover:text-foreground"
-              onclick={() => {
-                searchExpanded = true;
-                setTimeout(() => searchInput?.focus(), 100);
-              }}
-            >
-              <Search size={16} />
-            </button>
+<div class="relay-page jobs-page" bind:this={scrollElement} onscroll={()=>jobsWorkspace.update(state=>({...state,scrollTop:scrollElement.scrollTop}))}>
+  <div class="relay-heading">
+    <div>
+      <h1>Jobs</h1>
+      <p>{running} running · {pending} pending</p>
+    </div>
+    <div class="relay-heading-actions">
+      <IconButton label="Refresh jobs" disabled={loading} onclick={()=>void refresh(true)}>
+        <RefreshCw size={18} class={loading?'animate-spin':''}/>
+      </IconButton>
+      <a class="relay-button primary" href="#/launch">
+        <Plus size={17}/>
+        New job
+      </a>
+    </div>
+  </div>
+  {#if error}
+    <div class="relay-banner error" role="alert">
+      <TriangleAlert size={17}/>
+      <span>{error}</span>
+      <button class="relay-text-button" onclick={()=>void refresh(true)}>Retry</button>
+    </div>
+  {/if}
+  {#if hostErrors.length}
+    <div class="jobs-host-warning" role="status">
+      <TriangleAlert size={15}/>
+      {hostErrors.map(host=>host.hostname).join(', ')}
+      unavailable. Showing the last received jobs.
+    </div>
+  {/if}
+  <div class="jobs-workspace" class:has-inspector={selected!==null}>
+    <section class="jobs-list" aria-label="Jobs">
+      <div class="relay-tabs">
+        {#each tabs as tab}
+          <button class:active={$jobsWorkspace.view===tab.id} aria-pressed={$jobsWorkspace.view===tab.id} onclick={()=>setTab(tab.id)}>
+            {tab.label}
+            <span>{historyJobs.filter(job=>matchesJobView(job,tab.id)).length}</span>
+          </button>
+        {/each}
+      </div>
+      <div class="jobs-filters">
+        <label class="relay-search">
+          <Search size={17}/>
+          <input placeholder="Search jobs…" aria-label="Search jobs" bind:value={$jobsWorkspace.query}/>
+          {#if $jobsWorkspace.query}
+            <IconButton label="Clear search" onclick={()=>jobsWorkspace.update(state=>({...state,query:''}))}>
+              <X size={14}/>
+            </IconButton>
           {/if}
-        </div>
-
-        <!-- Refresh button -->
-        <button
-          onclick={handleManualRefresh}
-          disabled={loading}
-          class="flex items-center justify-center w-8 h-8 bg-background border border-border rounded-lg text-sm font-medium text-muted cursor-pointer transition-all flex-shrink-0 hover:bg-secondary hover:border-border disabled:opacity-50 disabled:cursor-not-allowed"
-          title={loading || progressiveLoading
-            ? "Loading from hosts..."
-            : "Refresh"}
-        >
-          <RefreshCw
-            class="w-4 h-4 {loading || progressiveLoading
-              ? 'animate-spin'
-              : ''}"
-          />
+        </label>
+        <select class="relay-select" aria-label="Filter by host" bind:value={$jobsWorkspace.host}>
+          <option value="">All hosts</option>
+          {#each hostNames as host}
+            <option value={host}>{host}</option>
+          {/each}
+        </select>
+        <IconButton label={$jobsWorkspace.newestFirst?'Sort oldest first':'Sort newest first'} class="bordered" onclick={()=>jobsWorkspace.update(state=>({...state,newestFirst:!state.newestFirst}))}>
+          <ArrowDownWideNarrow size={17}/>
+        </IconButton>
+        <button class="relay-icon-button bordered" aria-label="More filters" aria-expanded={extraFilters} title="More filters" onclick={()=>extraFilters=!extraFilters}>
+          <SlidersHorizontal size={17}/>
         </button>
       </div>
-    </div>
-  {/if}
-
-  {#if error}
-    <div class="bg-destructive/10 border-b border-destructive/20 p-3">
-      <p class="text-sm font-medium text-destructive">{error}</p>
-    </div>
-  {/if}
-
-  <!-- Host connection warnings -->
-  {#if hostsWithTimeouts.length > 0}
-    <div
-      class="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 p-3"
-    >
-      <div class="flex items-center gap-2">
-        <svg
-          class="h-5 w-5 text-yellow-600 dark:text-yellow-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-          />
-        </svg>
-        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200">
-          Connection timeout: {hostsWithTimeouts
-            .map((h) => h.hostname)
-            .join(", ")}
-          {#if hostsWithTimeouts.length === 1}
-            - Some jobs may not be visible
-          {:else}
-            - Some jobs may not be visible from these hosts
-          {/if}
-        </p>
-      </div>
-    </div>
-  {:else if hostsWithErrors.length > 0}
-    <div
-      class="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 p-3"
-    >
-      <div class="flex items-center gap-2">
-        <svg
-          class="h-5 w-5 text-red-600 dark:text-red-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
-        <p class="text-sm font-medium text-red-800 dark:text-red-200">
-          Connection error: {hostsWithErrors.map((h) => h.hostname).join(", ")}
-        </p>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Filters removed since search is now in header -->
-
-  <div class="flex-1 overflow-auto px-4 py-4">
-    {#if progressiveLoading && filteredJobs.length === 0 && filteredArrayGroups.length === 0}
-      <div class="flex items-center justify-center h-full">
-        <div class="text-center text-muted-foreground">Loading jobs...</div>
-      </div>
-    {:else}
-      {#if totalPartitions > 0 || partitionsLoading || partitionsError}
-        <div class="mb-4">
-          <CollapsibleSection
-            title="Partition Resources"
-            badge="{totalPartitions} partitions"
-            subtitle={partitionsSubtitle}
-            defaultExpanded={partitionsSectionExpanded}
-            storageKey="jobspage-partitions-expanded"
-          >
-            {#if partitionsLoading}
-              <div class="text-sm text-muted-foreground">
-                Loading partition resources...
-              </div>
-            {:else if partitionsError}
-              <div class="text-sm text-destructive">{partitionsError}</div>
-            {:else if totalPartitions === 0}
-              <div class="text-sm text-muted-foreground">
-                No partition data available
-              </div>
-            {:else}
-              <div class="space-y-3">
-                {#each partitionStates as hostState (hostState.hostname)}
-                  <div class="rounded-lg border border-border bg-background p-3">
-                    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-                      <div class="flex items-center gap-2 flex-wrap">
-                        <span class="text-sm font-semibold text-foreground"
-                          >{hostState.hostname}</span
-                        >
-                        {#if hostState.cached}
-                          <Badge variant="secondary">Cached</Badge>
-                        {/if}
-                        {#if hostState.stale}
-                          <Badge variant="warning">Stale</Badge>
-                        {/if}
-                      </div>
-                      {#if hostState.updated_at}
-                        <span class="text-xs text-muted-foreground"
-                          >Updated {formatTimeAgo(hostState.updated_at)}</span
-                        >
-                      {/if}
-                    </div>
-
-                    {#if hostState.error}
-                      <div class="text-sm text-destructive">
-                        {hostState.error}
-                      </div>
-                    {:else}
-                      <div class="overflow-x-auto">
-                        <table class="min-w-[720px] w-full text-sm">
-                          <thead>
-                            <tr class="text-xs text-muted-foreground uppercase tracking-wide">
-                              <th class="text-left font-medium py-2 pr-4">Partition</th>
-                              <th class="text-left font-medium py-2 pr-4">Avail</th>
-                              <th class="text-left font-medium py-2 pr-4">CPUs a/i/t</th>
-                              <th class="text-left font-medium py-2 pr-4">GPUs u/t</th>
-                              <th class="text-left font-medium py-2 pr-4">Nodes</th>
-                              <th class="text-left font-medium py-2">State</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {#each hostState.partitions as partition (partition.partition)}
-                              <tr class="border-t border-border/60">
-                                <td class="py-2 pr-4 font-medium text-foreground">
-                                  {partition.partition}
-                                </td>
-                                <td class="py-2 pr-4 text-muted-foreground">
-                                  {partition.availability || "-"}
-                                </td>
-                                <td class="py-2 pr-4">
-                                  <span class="text-foreground font-medium">
-                                    {partition.cpus_alloc}/{partition.cpus_idle}/{partition.cpus_total}
-                                  </span>
-                                </td>
-                                <td class="py-2 pr-4">
-                                  {#if partition.gpus_total === null}
-                                    <span class="text-muted-foreground">-</span>
-                                  {:else if partition.gpus_total === 0}
-                                    <span class="text-muted-foreground">0</span>
-                                  {:else if partition.gpus_used === null}
-                                    <span class="text-muted-foreground"
-                                      >?/{partition.gpus_total}</span
-                                    >
-                                  {:else}
-                                    <span class="text-foreground font-medium"
-                                      >{partition.gpus_used}/{partition.gpus_total}</span
-                                    >
-                                  {/if}
-                                </td>
-                                <td class="py-2 pr-4 text-muted-foreground">
-                                  {partition.nodes_total}
-                                </td>
-                                <td class="py-2 text-muted-foreground">
-                                  {(partition.states || []).join(", ") || "-"}
-                                </td>
-                              </tr>
-                            {/each}
-                          </tbody>
-                        </table>
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </CollapsibleSection>
+      {#if extraFilters}
+        <div class="jobs-extra-filters">
+          <label>
+            User
+            <input class="relay-select" placeholder="All users" bind:value={$jobsWorkspace.user}/>
+          </label>
+          <label>
+            History
+            <select class="relay-select" value={$preferences.defaultSince} onchange={event=>{preferencesActions.setDefaultSince(event.currentTarget.value);void refresh();}}>
+              {#each ['1d','7d','14d','30d','90d'] as period}
+                <option value={period}>{period.replace('d',' days')}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="jobs-checkbox">
+            <input type="checkbox" checked={$preferences.groupArrayJobs} onchange={event=>{preferencesActions.setArrayGrouping(event.currentTarget.checked);void refresh();}}/>
+            Group array jobs
+          </label>
         </div>
       {/if}
-
-      <!-- Array job groups - Collapsible Section -->
-      {#if filteredArrayGroups.length > 0}
-        <div class="mb-4">
-          <CollapsibleSection
-            title="Array Jobs"
-            badge="{filteredArrayGroups.length} total"
-            subtitle="{activeArrayCount} active"
-            defaultExpanded={arraysSectionExpanded}
-            storageKey="jobspage-arrays-expanded"
-          >
-            <div class="space-y-2">
-              {#each filteredArrayGroups as group (group.array_job_id + group.hostname)}
-                <ArrayJobCard {group} />
+      {#if $jobsWorkspace.query||$jobsWorkspace.host||$jobsWorkspace.user}
+        <div class="jobs-active-filters">
+          <span>{filtered.length} matching jobs</span>
+          <button class="relay-text-button" onclick={clearFilters}>
+            Clear filters
+            <X size={13}/>
+          </button>
+        </div>
+      {/if}
+      {#each visibleHosts as hostname}
+        {@const host=$hostStates.get(hostname)}
+        <section class="jobs-host-group" aria-label={`${hostname} jobs`}>
+          <div class="jobs-host-heading">
+            <div>
+              <Server size={16}/>
+              <strong>{hostname}</strong>
+              <span>{rows.filter(job=>job.hostname===hostname).length+arrayGroups.filter(group=>group.hostname===hostname).length}</span>
+            </div>
+            <span class:host-error={host?.status==='error'} title={host?.lastError||'Last successful job update'}>
+              <span class="relay-dot" class:connected={host?.status==='connected'}></span>
+              {host?.status==='loading'?'Updating':host?.status==='error'?'Cached':relativeTime(host?.lastSync)}
+            </span>
+          </div>
+          {#if rows.some(job=>job.hostname===hostname)}
+            <div class="jobs-table">
+              <div class="jobs-table-head" aria-hidden="true">
+                <span>Job</span>
+                <span>State</span>
+                <span>Resources</span>
+                <span>Runtime</span>
+                <span></span>
+              </div>
+              {#each rows.filter(job=>job.hostname===hostname) as job (`${job.hostname}:${job.job_id}`)}
+                {@const gpus=gpuCount(job)}
+                <button class="jobs-row" class:selected={selected?.id===job.job_id&&selected?.host===job.hostname} aria-pressed={selected?.id===job.job_id&&selected?.host===job.hostname} aria-label={`Inspect ${job.name||job.job_id}, job ${job.job_id} on ${job.hostname}`} onclick={event=>open(job,event)}>
+                  <span class="jobs-identity">
+                    <strong title={job.name}>{job.name||job.job_id}</strong>
+                    <small>
+                      <span class="mono">#{job.job_id}</span>
+                      <span>{job.user||job.partition||''}</span>
+                      {#if job.array_job_id}
+                        <Layers size={12}/>
+                      {/if}
+                    </small>
+                  </span>
+                  <JobStatus state={job.state}/>
+                  <span class="jobs-resources">
+                    {gpus!==null?`${gpus} GPU`:`${job.cpus||'—'} CPU`}
+                    <small>{job.memory||job.partition||'—'}</small>
+                  </span>
+                  <span class="jobs-runtime">
+                    {job.runtime?jobUtils.formatDuration(job.runtime):'—'}
+                    <small>{job.priority_rank?`#${job.priority_rank} in queue`:relativeTime(job.submit_time)}</small>
+                  </span>
+                  <ChevronRight size={15}/>
+                </button>
               {/each}
             </div>
-          </CollapsibleSection>
+          {/if}
+          {#each arrayGroups.filter(group=>group.hostname===hostname) as group (`${group.hostname}:${group.array_job_id}`)}
+            <div class="jobs-array">
+              <ArrayJobCard {group}/>
+            </div>
+          {/each}
+        </section>
+      {/each}
+      {#if !visibleHosts.length}
+        <div class="relay-empty">
+          {#if loading}
+            <RefreshCw size={24} class="animate-spin"/>
+            <h2>Loading jobs</h2>
+            {:else if !$apiConfig.authenticated}
+              <Server size={24}/>
+              <h2>Connect your workspace</h2>
+              <a href="#/settings" class="relay-button">Connection settings</a>
+            {:else}
+              <Search size={24}/>
+              <h2>{$jobs.length?'No matching jobs':'No jobs yet'}</h2>
+              {#if $jobs.length}
+                <button class="relay-button" onclick={clearFilters}>Clear filters</button>
+              {:else}
+                <button class="relay-button" onclick={()=>void refresh(true)}>Refresh jobs</button>
+              {/if}
+            {/if}
         </div>
       {/if}
-
-      <!-- Regular jobs table -->
-      {#if filteredJobs.length > 0}
-        <JobTable
-          jobs={filteredJobs}
-          loading={false}
-          on:jobSelect={(e) => handleJobSelect(e.detail)}
-        />
-      {:else if filteredArrayGroups.length === 0}
-        <div class="flex items-center justify-center h-full">
-          <div class="text-center text-muted-foreground">No jobs found</div>
-        </div>
+      <div class="jobs-footer">
+        <span>{filtered.length} jobs · {$preferences.defaultSince} history</span>
+        {#if filtered.length>=visibleLimit||$jobs.length>=$preferences.jobsPerPage}
+          <button class="relay-text-button" disabled={refreshing} onclick={()=>void more()}>Load more</button>
+        {/if}
+        <span>{$manager.dataSource==='cache'?'Cached data':''}</span>
+      </div>
+    </section>
+    {#if selected}
+      {#if narrow}
+        <button class="inspector-backdrop" aria-label="Close job inspector" onclick={()=>void close()}></button>
       {/if}
+      <aside class="jobs-inspector" class:mobile-inspector={narrow} aria-label="Selected job" use:focusTrap={{enabled:narrow}}>
+        <JobPage embedded params={selected} onclose={()=>void close()} onexpand={()=>void push(jobRoute(selected.id,selected.host,$jobsWorkspace.tab))}/>
+      </aside>
     {/if}
   </div>
 </div>
 
 <style>
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
+  .jobs-page {
+    container-type: inline-size;
+  }
+
+  .inspector-backdrop {
+    position: fixed;
+    inset: 0;
+    background: #080e1c60;
+    z-index: 34;
+    border: 0;
+  }
+
+  .jobs-workspace {
+    display: grid;
+    grid-template-columns: minmax(0,1fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  .jobs-workspace.has-inspector {
+    grid-template-columns: minmax(0,1fr) 390px;
+  }
+
+  .jobs-list {
+    min-width: 0;
+  }
+
+  .jobs-filters {
+    display: flex;
+    gap: 8px;
+    padding: 18px 0 22px;
+    align-items: center;
+  }
+
+  .jobs-filters .relay-search {
+    flex: 1;
+  }
+
+  .jobs-filters>.relay-select {
+    max-width: 155px;
+  }
+
+  .jobs-extra-filters {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .jobs-extra-filters label {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    font-size: .8125rem;
+    color: var(--muted-foreground);
+    flex: 1;
+  }
+
+  .jobs-extra-filters label.jobs-checkbox {
+    flex-direction: row;
+    align-items: center;
+    align-self: end;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  .jobs-active-filters {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    color: var(--muted-foreground);
+    font-size: .8125rem;
+  }
+
+  .jobs-host-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--warning);
+    font-size: .8125rem;
+    margin-bottom: 20px;
+  }
+
+  .jobs-host-group {
+    margin-bottom: 26px;
+  }
+
+  .jobs-host-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    font-size: .8125rem;
+    color: var(--muted-foreground);
+  }
+
+  .jobs-host-heading>div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .jobs-host-heading strong {
+    font-size: .9375rem;
+    font-weight: 550;
+    color: var(--foreground);
+  }
+
+  .jobs-host-heading>span {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: .75rem;
+  }
+
+  .jobs-host-heading .host-error {
+    color: var(--warning);
+  }
+
+  .jobs-table {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .jobs-table-head,.jobs-row {
+    display: grid;
+    grid-template-columns: minmax(150px,1fr) 110px 76px 76px 12px;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    text-align: left;
+  }
+
+  .jobs-table-head {
+    background: var(--secondary);
+    color: var(--muted-foreground);
+    font-size: .75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .jobs-row {
+    min-height: 78px;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border-soft);
+    position: relative;
+    transition: background var(--motion-state);
+  }
+
+  .jobs-row:last-child {
+    border-bottom: 0;
+  }
+
+  .jobs-row:hover {
+    background: var(--hover);
+  }
+
+  .jobs-row.selected {
+    background: var(--accent-soft);
+  }
+
+  .jobs-row.selected::before {
+    content: '';
+    position: absolute;
+    top: 18px;
+    bottom: 18px;
+    left: 0;
+    width: 3px;
+    background: var(--accent);
+    border-radius: 0 4px 4px 0;
+  }
+
+  .jobs-row:focus-visible {
+    outline-offset: -3px;
+  }
+
+  .jobs-identity {
+    min-width: 0;
+  }
+
+  .jobs-identity>strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: .9375rem;
+    font-weight: 550;
+  }
+
+  .jobs-identity small {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 6px;
+    color: var(--muted-foreground);
+    font-size: .75rem;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .jobs-identity small>span:nth-child(2) {
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+
+  .jobs-resources,.jobs-runtime {
+    font-size: .8125rem;
+    color: var(--foreground);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .jobs-resources small,.jobs-runtime small {
+    display: block;
+    color: var(--muted-foreground);
+    font-size: .75rem;
+    margin-top: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .jobs-row>:global(svg) {
+    color: var(--muted-foreground);
+    opacity: .5;
+    transition: transform var(--motion-state),opacity var(--motion-state);
+  }
+
+  .jobs-row:hover>:global(svg) {
+    color: var(--accent);
+    opacity: 1;
+    transform: translateX(2px);
+  }
+
+  .jobs-array {
+    margin-top: 12px;
+  }
+
+  .jobs-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 15px;
+    font-size: .75rem;
+    color: var(--muted-foreground);
+    padding: 0 2px 20px;
+  }
+
+  .jobs-inspector {
+    position: sticky;
+    top: 0;
+    min-width: 0;
+    height: calc(100dvh - 210px);
+    min-height: 420px;
+  }
+
+  .jobs-inspector.mobile-inspector {
+    position: fixed;
+    inset: 72px 12px 12px auto;
+    width: min(480px,calc(100vw - 24px));
+    height: auto;
+    min-height: 0;
+    z-index: 35;
+    box-shadow: 0 20px 80px #080e1c40;
+    border-radius: 20px;
+  }
+
+  :global(.compact-mode) .jobs-row {
+    min-height: 58px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  @container (min-width:1450px) {
+    .jobs-workspace.has-inspector {
+      grid-template-columns: minmax(0,1fr) 440px;
     }
-    to {
-      transform: rotate(360deg);
+  }
+
+  @container (max-width:1050px) {
+    .jobs-workspace.has-inspector {
+      grid-template-columns: minmax(0,1fr) 350px;
+    }
+    .has-inspector .jobs-table-head,.has-inspector .jobs-row {
+      grid-template-columns: minmax(115px,1fr) 108px 66px 12px;
+      gap: 8px;
+      padding-left: 11px;
+      padding-right: 11px;
+    }
+    .has-inspector .jobs-resources,.has-inspector .jobs-table-head>span:nth-child(3) {
+      display: none;
+    }
+    .jobs-filters>.relay-select {
+      max-width: 125px;
+    }
+  }
+
+  @media (max-width:1050px) {
+    .jobs-workspace.has-inspector {
+      grid-template-columns: minmax(0,1fr);
+    }
+  }
+
+  @media (max-width:760px) {
+    .jobs-table-head,.jobs-row,.has-inspector .jobs-table-head,.has-inspector .jobs-row {
+      grid-template-columns: minmax(100px,1fr) 108px 12px;
+      gap: 8px;
+      padding: 13px 11px;
+    }
+    .jobs-resources,.jobs-runtime,.jobs-table-head>span:nth-child(3),.jobs-table-head>span:nth-child(4) {
+      display: none;
+    }
+    .jobs-filters {
+      flex-wrap: wrap;
+    }
+    .jobs-filters .relay-search {
+      flex-basis: 100%;
+      margin-bottom: 2px;
+    }
+    .jobs-filters>.relay-select {
+      max-width: none;
+      flex: 1;
+    }
+    .jobs-inspector.mobile-inspector {
+      inset: 64px 8px 8px;
+      width: auto;
+    }
+    .jobs-footer {
+      flex-wrap: wrap;
+    }
+    .jobs-host-heading>span {
+      font-size: .75rem;
+    }
+    .jobs-extra-filters label {
+      min-width: 110px;
     }
   }
 </style>

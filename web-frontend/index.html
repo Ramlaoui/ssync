@@ -3,13 +3,13 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="X-UA-Compatible" content="ie=edge" />
   <meta name="description" content="ssync - Cluster job management and synchronization interface" />
-  <meta name="theme-color" content="#6366f1" />
+  <meta name="theme-color" content="#F4F3EE" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#10141D" media="(prefers-color-scheme: dark)" />
   
   <!-- Favicon -->
-  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/favicon.svg" />
   
@@ -89,20 +89,20 @@
       position: fixed;
       top: 0;
       left: 0;
-      background: #ffffff;
+      background: #F4F3EE;
       z-index: 999;
       flex-direction: column;
     }
 
     /* Dark mode for loading fallback */
     .dark .loading-fallback {
-      background: #0a0a0a;
+      background: #10141D;
     }
 
     .loading-spinner {
       width: 32px;
       height: 32px;
-      border: 2px solid #d1d5db;
+      border: 2px solid #3155D9;
       border-bottom-color: transparent;
       border-radius: 50%;
       animation: spin 1s linear infinite;
@@ -110,19 +110,19 @@
     }
 
     .dark .loading-spinner {
-      border-color: #6b7280;
+      border-color: #9BADFF;
       border-bottom-color: transparent;
     }
 
     .loading-text {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      color: #4b5563;
+      color: #59657B;
       font-weight: 400;
       font-size: 16px;
     }
 
     .dark .loading-text {
-      color: #9ca3af;
+      color: #AAB6CC;
     }
 
     @keyframes spin {

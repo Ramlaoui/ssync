@@ -26,7 +26,7 @@ function createResubmitStore() {
   return {
     subscribe,
     setResubmitData: (data: ResubmitData) => {
-      console.log('Setting resubmit data in store:', data);
+
       set(data);
     },
     clear: () => {
@@ -34,7 +34,7 @@ function createResubmitStore() {
     },
     consumeResubmitData: () => {
       const data = get(store);
-      console.log('Consuming resubmit data from store:', data);
+
       if (data) {
         set(null); // Clear after consuming
       }
