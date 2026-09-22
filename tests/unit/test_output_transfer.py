@@ -380,3 +380,40 @@ async def test_full_output_line_limit_streams_giant_line_with_exact_delimiters(
     assert payload["content_truncated"] is True
     assert payload["content_limit_bytes"] is None
     assert max(map(len, chunks)) < 6 * 64 * 1024
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("force_refresh", [False, True])
+async def test_download_refresh_preserves_streamed_cache_behavior(
+    monkeypatch, test_cache, sample_job_info, force_refresh
+):
+    test_cache.cache_job(sample_job_info)
+    test_cache.update_job_outputs(
+        sample_job_info.job_id, sample_job_info.hostname, stdout_content="old output"
+    )
+    refreshed = []
+
+    async def fetch(**kwargs):
+        refreshed.append(kwargs["output_type"])
+        test_cache.update_job_outputs(
+            sample_job_info.job_id,
+            sample_job_info.hostname,
+            stdout_content="fresh output",
+        )
+        return test_cache.get_cached_job(
+            sample_job_info.job_id, sample_job_info.hostname, include_outputs=False
+        )
+
+    monkeypatch.setattr(jobs, "get_cache", lambda: test_cache)
+    monkeypatch.setattr(jobs, "fetch_and_cache_compressed_output", fetch)
+    response = await jobs.build_download_job_output_response(
+        job_id=sample_job_info.job_id,
+        host=sample_job_info.hostname,
+        output_type="stdout",
+        compressed=False,
+        force_refresh=force_refresh,
+        get_slurm_manager=lambda: None,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    assert body == (b"fresh output" if force_refresh else b"old output")
+    assert refreshed == (["stdout"] if force_refresh else [])

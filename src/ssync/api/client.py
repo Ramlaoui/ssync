@@ -185,6 +185,8 @@ class APIClient:
         output_type: str = "stdout",
         compressed: bool = False,
         timeout: int = 60,
+        *,
+        force_refresh: bool = False,
     ) -> tuple[str, bytes]:
         """Download a job output file from the API.
 
@@ -197,6 +199,7 @@ class APIClient:
                 "host": host,
                 "output_type": output_type,
                 "compressed": "true" if compressed else "false",
+                "force_refresh": "true" if force_refresh else "false",
             },
             headers=self._get_headers(),
             timeout=timeout,

@@ -40,6 +40,7 @@ from .api import (
     register_system_routes,
     register_watcher_routes,
 )
+from .api.host_settings import register_host_settings_routes
 from .cache import cache_job_state_transition, get_cache_middleware
 from .frontend import register_frontend_routes
 from .lifecycle import (
@@ -182,6 +183,8 @@ register_watcher_routes(
     verify_api_key_dependency=verify_api_key,
     get_slurm_manager=get_slurm_manager,
 )
+
+register_host_settings_routes(app, verify_api_key_dependency=verify_api_key, config=config)
 
 register_cluster_routes(
     app,
