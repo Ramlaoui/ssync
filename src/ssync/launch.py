@@ -831,6 +831,7 @@ class LaunchManager:
                                         job_id,
                                         slurm_host.host.hostname,
                                         watchers,
+                                        start_monitoring=False,
                                     )
                                 )
                                 logger.info(

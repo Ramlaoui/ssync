@@ -81,8 +81,8 @@ class SlurmSubmit:
     def cancel_job(self, conn: SSHConnection, job_id: str) -> bool:
         """Cancel a Slurm job."""
         try:
-            conn.run(f"scancel {job_id}", hide=False)
-            return True
+            result = conn.run(f"scancel {job_id}", hide=False, warn=True)
+            return bool(result.ok)
         except Exception as e:
             logger.debug(f"Failed to cancel job {job_id}: {e}")
             return False

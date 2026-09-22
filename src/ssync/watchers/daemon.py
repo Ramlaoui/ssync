@@ -3,6 +3,7 @@ Watcher daemon that runs in the background to monitor all active watchers.
 Can be started automatically when jobs are submitted.
 """
 
+import fcntl
 import logging
 import os
 import signal
@@ -20,6 +21,23 @@ class WatcherDaemon:
 
     PID_FILE = Path.home() / ".config" / "ssync" / "watcher-daemon.pid"
     LOG_FILE = Path.home() / ".config" / "ssync" / "watcher-daemon.log"
+    SERVICE_LOCK_FILE = Path.home() / ".config" / "ssync" / "watcher-service.lock"
+
+    @classmethod
+    def integrated_service_is_running(cls) -> bool:
+        """Return whether the API-integrated watcher service owns monitoring."""
+        cls.SERVICE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(cls.SERVICE_LOCK_FILE, "a+") as lock_handle:
+            try:
+                fcntl.flock(
+                    lock_handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+            except BlockingIOError:
+                return True
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            return False
 
     @classmethod
     def _list_run_watcher_processes(cls) -> List[Tuple[int, str]]:
@@ -170,6 +188,14 @@ class WatcherDaemon:
     @classmethod
     def ensure_running(cls) -> bool:
         """Ensure daemon is running, start if needed."""
+        if cls.integrated_service_is_running():
+            cls.stop_all()
+            logger.info(
+                "API-integrated watcher service owns monitoring; "
+                "not starting a standalone runner"
+            )
+            return True
+
         if not cls.is_running():
             return cls.start()
         return True
