@@ -210,6 +210,7 @@ class SlurmManager:
                                     if isinstance(slurm_host, SlurmHost)
                                     else slurm_host,
                                     watchers,
+                                    start_monitoring=False,
                                 )
                             )
                             if watcher_ids:

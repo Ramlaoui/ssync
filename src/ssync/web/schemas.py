@@ -69,6 +69,12 @@ class JobInfoWeb(BaseModel):
     account: Optional[str] = None
     qos: Optional[str] = None
     priority: Optional[str] = None
+    priority_rank: Optional[int] = None
+    priority_jobs_ahead: Optional[int] = None
+    priority_queue_size: Optional[int] = None
+    priority_percentile: Optional[float] = None
+    priority_scope: Optional[str] = None
+    priority_snapshot_at: Optional[str] = None
     array_job_id: Optional[str] = None
     array_task_id: Optional[str] = None
     alloc_tres: Optional[str] = None
@@ -393,6 +399,7 @@ class LaunchJobRequest(BaseModel):
     output: Optional[str] = None
     error: Optional[str] = None
     constraint: Optional[str] = None
+    slurm_exclude: Optional[str] = None
     account: Optional[str] = None
     qos: Optional[str] = None
     dependency: Optional[str] = None

@@ -1,5 +1,9 @@
 """Unit tests for SlurmQuery array-task accounting fallbacks."""
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from ssync.models.job import JobState
@@ -25,6 +29,40 @@ class _FakeConn:
             if match_text in command:
                 return result
         return _FakeResult(stdout="", ok=False, exited=1)
+
+
+@pytest.mark.unit
+def test_concurrent_username_lookups_are_coalesced():
+    query = SlurmQuery()
+    started = threading.Event()
+    release = threading.Event()
+    state_lock = threading.Lock()
+    call_count = 0
+
+    class ConcurrentConn:
+        user = None
+
+        def run(self, command: str, **kwargs):
+            nonlocal call_count
+            with state_lock:
+                call_count += 1
+            started.set()
+            release.wait(timeout=2)
+            return _FakeResult(stdout="testuser\n")
+
+    conn = ConcurrentConn()
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = [
+            pool.submit(query.get_username, conn, hostname="cluster.example.com")
+            for _ in range(16)
+        ]
+        assert started.wait(timeout=1)
+        time.sleep(0.05)
+        release.set()
+        usernames = [future.result(timeout=2) for future in futures]
+
+    assert usernames == ["testuser"] * 16
+    assert call_count == 1
 
 
 @pytest.mark.unit
@@ -201,3 +239,142 @@ def test_get_active_jobs_uses_scontrol_paths_instead_of_squeue_command_field(cap
     assert jobs[0].stdout_file == "/workdir/logs/clean_tmp-139439.out"
     assert jobs[0].stderr_file == "/workdir/logs/clean_tmp-139439.err"
     assert "suspicious stdout path" not in caplog.text
+
+
+def _active_squeue_line(
+    job_id: str,
+    *,
+    partition: str,
+    qos: str,
+    priority: str,
+) -> str:
+    return "|".join(
+        [
+            job_id,
+            f"job-{job_id}",
+            "PENDING",
+            "testuser",
+            partition,
+            "1",
+            "4",
+            "8G",
+            "01:00:00",
+            "0:00",
+            "Priority",
+            "/workdir",
+            "/workdir/job.sh",
+            "N/A",
+            "2026-09-18T12:00:00",
+            "N/A",
+            "project",
+            qos,
+            priority,
+            "Priority",
+        ]
+    )
+
+
+@pytest.mark.unit
+def test_get_active_jobs_adds_cached_partition_scoped_priority_positions():
+    query = SlurmQuery()
+    conn = _FakeConn(
+        [
+            (
+                "squeue -r --format=",
+                _FakeResult(
+                    stdout="\n".join(
+                        [
+                            _active_squeue_line(
+                                "200", partition="gpu", qos="normal", priority="900"
+                            ),
+                            _active_squeue_line(
+                                "201", partition="cpu", qos="high", priority="1000"
+                            ),
+                        ]
+                    )
+                ),
+            ),
+            (
+                "squeue --local --all --states=PENDING",
+                _FakeResult(
+                    stdout=(
+                        "100|gpu|1200\n"
+                        "300|cpu|2000\n"
+                        "200|gpu|900\n"
+                        "101|gpu|800\n"
+                        "201|cpu|1000"
+                    )
+                ),
+            ),
+        ]
+    )
+
+    jobs = query.get_active_jobs(conn, "cluster.example.com", user="testuser")
+    query.get_active_jobs(conn, "cluster.example.com", user="testuser")
+
+    gpu_job, cpu_job = jobs
+    assert gpu_job.priority == "900"
+    assert gpu_job.priority_rank == 2
+    assert gpu_job.priority_jobs_ahead == 1
+    assert gpu_job.priority_queue_size == 3
+    assert gpu_job.priority_percentile == 50.0
+    assert gpu_job.priority_scope == "visible_pending_records:partition=gpu"
+
+    assert cpu_job.priority_rank == 2
+    assert cpu_job.priority_jobs_ahead == 1
+    assert cpu_job.priority_queue_size == 2
+    assert cpu_job.priority_percentile == 0.0
+    assert (
+        sum(
+            command.startswith("squeue --local --all --states=PENDING")
+            for command in conn.commands
+        )
+        == 1
+    )
+
+
+@pytest.mark.unit
+def test_priority_positions_match_compact_array_records():
+    query = SlurmQuery()
+    job = query.parser.from_squeue_fields(
+        _active_squeue_line(
+            "500_4", partition="gpu", qos="normal", priority="700"
+        ).split("|"),
+        "cluster.example.com",
+    )
+
+    query._annotate_priority_positions(
+        [job],
+        {"gpu": [("400", "900"), ("500_[4-9]", "700")]},
+        0.0,
+    )
+
+    assert job.priority_rank == 2
+    assert job.priority_jobs_ahead == 1
+    assert job.priority_queue_size == 2
+    assert job.priority_percentile == 0.0
+    assert job.priority_snapshot_at == "1970-01-01T00:00:00+00:00"
+
+
+@pytest.mark.unit
+def test_failed_priority_snapshot_is_negative_cached():
+    query = SlurmQuery()
+    conn = _FakeConn(
+        [
+            (
+                "squeue --local --all --states=PENDING",
+                _FakeResult(stdout="", ok=False, exited=1, stderr="controller busy"),
+            )
+        ]
+    )
+
+    first_snapshot, first_timestamp = query._get_priority_snapshot(
+        conn, "cluster.example.com"
+    )
+    second_snapshot, second_timestamp = query._get_priority_snapshot(
+        conn, "cluster.example.com"
+    )
+
+    assert first_snapshot == second_snapshot == {}
+    assert first_timestamp == second_timestamp
+    assert len(conn.commands) == 1

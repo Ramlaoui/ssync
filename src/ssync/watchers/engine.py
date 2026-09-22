@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -100,16 +101,35 @@ class HostCommandThrottler:
         return stats
 
 
-# Global throttler instance - shared across all watchers and action executors
+# Global throttlers partition routine polling from terminal job control.  The
+# native SSH command-slot cap remains the final per-host limit across both lanes.
 _host_throttler: Optional[HostCommandThrottler] = None
+_control_host_throttler: Optional[HostCommandThrottler] = None
+_background_host_throttler: Optional[HostCommandThrottler] = None
 
 
 def get_host_throttler() -> HostCommandThrottler:
-    """Get or create the global host command throttler."""
+    """Get the throttler for routine watcher polling."""
     global _host_throttler
     if _host_throttler is None:
-        _host_throttler = HostCommandThrottler(max_concurrent_per_host=3)
+        _host_throttler = HostCommandThrottler(max_concurrent_per_host=1)
     return _host_throttler
+
+
+def get_control_host_throttler() -> HostCommandThrottler:
+    """Get the lane reserved for scheduler-changing terminal actions."""
+    global _control_host_throttler
+    if _control_host_throttler is None:
+        _control_host_throttler = HostCommandThrottler(max_concurrent_per_host=1)
+    return _control_host_throttler
+
+
+def get_background_host_throttler() -> HostCommandThrottler:
+    """Get the separate throttle for long-running telemetry commands."""
+    global _background_host_throttler
+    if _background_host_throttler is None:
+        _background_host_throttler = HostCommandThrottler(max_concurrent_per_host=1)
+    return _background_host_throttler
 
 
 class JobEndHandlingResult(Enum):
@@ -117,6 +137,14 @@ class JobEndHandlingResult(Enum):
 
     COMPLETE = "complete"
     RETRY_PENDING = "retry_pending"
+
+
+class JobEndActionClaimResult(Enum):
+    """Outcome of trying to claim a terminal-state watcher action."""
+
+    CLAIMED = "claimed"
+    ALREADY_DONE = "already_done"
+    CLAIMED_BY_OTHER = "claimed_by_other"
 
 
 @dataclass
@@ -232,6 +260,8 @@ class WatcherEngine:
         hostname: str,
         watchers: List[WatcherDefinition],
         parent_watcher_id: Optional[int] = None,
+        *,
+        start_monitoring: bool = True,
     ) -> List[int]:
         """
         Start watchers for a newly submitted job.
@@ -241,6 +271,9 @@ class WatcherEngine:
             hostname: Hostname of the Slurm cluster
             watchers: List of watcher definitions
             parent_watcher_id: Optional parent watcher ID for array task watchers
+            start_monitoring: Start monitor tasks on the current event loop. Set
+                this to False when registering from a temporary loop; the
+                long-lived watcher service will start the monitors.
 
         Returns:
             List of watcher IDs
@@ -269,16 +302,22 @@ class WatcherEngine:
 
                 # Only start monitoring for non-template watchers
                 # Templates will spawn child watchers for discovered tasks
-                if not definition.is_array_template:
+                if not definition.is_array_template and start_monitoring:
                     # Start monitoring task
                     task = create_task(
                         self._monitor_watcher(watcher_id, job_id, hostname)
                     )
-                    self.active_tasks[watcher_id] = task
+                    if task is not None:
+                        self.active_tasks[watcher_id] = task
 
                     logger.info(
                         f"Started watcher {watcher_id} for job {job_id}: "
                         f"pattern='{definition.pattern}', interval={definition.interval_seconds}s"
+                    )
+                elif not definition.is_array_template:
+                    logger.info(
+                        f"Registered watcher {watcher_id} for job {job_id}; "
+                        "the long-lived watcher service will start monitoring"
                     )
                 else:
                     logger.info(
@@ -344,12 +383,12 @@ class WatcherEngine:
                             **watcher.variables,
                             "job_end_state": self._job_end_state_name(job_info.state),
                         }
-                        if self._has_pending_job_end_resubmit(
+                        if self._has_pending_job_end_action(
                             watcher, terminal_variables
                         ):
                             logger.info(
                                 f"Job {job_id} is {job_info.state}, keeping watcher "
-                                f"{watcher_id} active until resubmit succeeds"
+                                f"{watcher_id} active until terminal actions finish"
                             )
                             continue
 
@@ -993,6 +1032,11 @@ class WatcherEngine:
         return f"__ssync_job_end_action_success_{action_index}"
 
     @staticmethod
+    def _job_end_action_claim_key(action_index: int) -> str:
+        """Internal watcher variable used to claim in-flight job-end actions."""
+        return f"__ssync_job_end_action_claim_{action_index}"
+
+    @staticmethod
     def _job_end_completion_key() -> str:
         """Internal watcher variable used to mark terminal handling completion."""
         return "__ssync_job_end_completed"
@@ -1016,10 +1060,157 @@ class WatcherEngine:
             variables.get(self._job_end_completion_key())
         )
 
-    def _has_pending_job_end_resubmit(
+    @staticmethod
+    def _job_end_claim_ttl_seconds() -> float:
+        """Return the stale-claim TTL for job-end action leases."""
+        raw_value = os.getenv("SSYNC_WATCHER_JOB_END_CLAIM_TTL_SECONDS", "3600")
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid SSYNC_WATCHER_JOB_END_CLAIM_TTL_SECONDS=%r; using 3600",
+                raw_value,
+            )
+            return 3600.0
+
+    def _job_end_claim_is_stale(
+        self, updated_at: Optional[str], now: datetime
+    ) -> bool:
+        """Return True when an in-flight terminal-action claim can be reused."""
+        ttl_seconds = self._job_end_claim_ttl_seconds()
+        if ttl_seconds <= 0:
+            return False
+        if not updated_at:
+            return True
+
+        try:
+            claimed_at = datetime.fromisoformat(updated_at)
+        except ValueError:
+            return True
+
+        return (now - claimed_at).total_seconds() > ttl_seconds
+
+    def _claim_job_end_action(
+        self,
+        watcher_id: int,
+        action_index: int,
+        variables: Dict[str, Any],
+    ) -> JobEndActionClaimResult:
+        """Atomically claim a terminal-state action before executing side effects."""
+        completion_key = self._job_end_completion_key()
+        success_key = self._job_end_action_success_key(action_index)
+        claim_key = self._job_end_action_claim_key(action_index)
+
+        if self._job_end_trigger_completed(variables) or self._job_end_action_succeeded(
+            variables, action_index
+        ):
+            return JobEndActionClaimResult.ALREADY_DONE
+
+        now = datetime.now()
+        claim_value = json.dumps(
+            {
+                "pid": os.getpid(),
+                "claimed_at": now.isoformat(),
+            }
+        )
+
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.execute(
+                    """
+                    SELECT variable_name, variable_value, updated_at
+                    FROM watcher_variables
+                    WHERE watcher_id = ?
+                      AND variable_name IN (?, ?, ?)
+                    """,
+                    (watcher_id, completion_key, success_key, claim_key),
+                )
+                rows = {row["variable_name"]: row for row in cursor.fetchall()}
+
+                completion_row = rows.get(completion_key)
+                success_row = rows.get(success_key)
+                completion_value = (
+                    completion_row["variable_value"] if completion_row else None
+                )
+                success_value = success_row["variable_value"] if success_row else None
+
+                if self._job_end_marker_is_set(
+                    completion_value
+                ) or self._job_end_marker_is_set(success_value):
+                    conn.commit()
+                    return JobEndActionClaimResult.ALREADY_DONE
+
+                existing_claim = rows.get(claim_key)
+                if existing_claim is not None:
+                    if not self._job_end_claim_is_stale(
+                        existing_claim["updated_at"], now
+                    ):
+                        conn.commit()
+                        return JobEndActionClaimResult.CLAIMED_BY_OTHER
+
+                    logger.warning(
+                        "Reclaiming stale job-end action claim for watcher %s "
+                        "action %s from %s",
+                        watcher_id,
+                        action_index,
+                        existing_claim["updated_at"],
+                    )
+                    conn.execute(
+                        """
+                        DELETE FROM watcher_variables
+                        WHERE watcher_id = ? AND variable_name = ?
+                        """,
+                        (watcher_id, claim_key),
+                    )
+
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO watcher_variables
+                    (watcher_id, variable_name, variable_value, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (watcher_id, claim_key, claim_value, now.isoformat()),
+                )
+                conn.commit()
+
+                if cursor.rowcount == 1:
+                    return JobEndActionClaimResult.CLAIMED
+                return JobEndActionClaimResult.CLAIMED_BY_OTHER
+        except Exception as e:
+            logger.error(
+                "Failed to claim job-end action %s for watcher %s: %s",
+                action_index,
+                watcher_id,
+                e,
+            )
+            return JobEndActionClaimResult.CLAIMED_BY_OTHER
+
+    def _release_job_end_action_claim(self, watcher_id: int, action_index: int) -> None:
+        """Release a terminal-state action claim after a retryable failure."""
+        claim_key = self._job_end_action_claim_key(action_index)
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM watcher_variables
+                    WHERE watcher_id = ? AND variable_name = ?
+                    """,
+                    (watcher_id, claim_key),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(
+                "Failed to release job-end action claim %s for watcher %s: %s",
+                action_index,
+                watcher_id,
+                e,
+            )
+
+    def _has_pending_job_end_action(
         self, watcher: WatcherInstance, variables: Dict[str, Any]
     ) -> bool:
-        """Return True when a job-end resubmit action has not succeeded yet."""
+        """Return True when an eligible job-end action still needs handling."""
         if (
             not watcher.definition.trigger_on_job_end
             or self._job_end_trigger_completed(variables)
@@ -1040,8 +1231,6 @@ class WatcherEngine:
             return False
 
         for action_index, action in enumerate(watcher.definition.actions):
-            if action.type != ActionType.RESUBMIT:
-                continue
             if action.condition and not self._evaluate_condition(
                 action.condition, variables
             ):
@@ -1106,6 +1295,15 @@ class WatcherEngine:
             ):
                 continue
 
+            claim_result = self._claim_job_end_action(
+                watcher.id, action_index, fresh_variables
+            )
+            if claim_result == JobEndActionClaimResult.ALREADY_DONE:
+                any_action_succeeded = True
+                continue
+            if claim_result == JobEndActionClaimResult.CLAIMED_BY_OTHER:
+                return JobEndHandlingResult.RETRY_PENDING
+
             try:
                 success, result = await self._execute_action(
                     watcher,
@@ -1121,12 +1319,14 @@ class WatcherEngine:
                 elif watcher.state == WatcherState.DISABLED:
                     retry_pending = False
                 elif self._should_retry_failed_job_end_action(action, result):
+                    self._release_job_end_action_claim(watcher.id, action_index)
                     retry_pending = True
             except Exception as e:
                 logger.error(
                     f"Failed to execute job-end action for watcher {watcher.id}: {e}"
                 )
                 if self._should_retry_failed_job_end_action(action, f"Error: {e}"):
+                    self._release_job_end_action_claim(watcher.id, action_index)
                     retry_pending = True
 
         if retry_pending:
@@ -1309,9 +1509,11 @@ class WatcherEngine:
 
             slurm_manager = get_slurm_manager()
             if slurm_manager:
-                live_job_info = await asyncio.to_thread(
-                    slurm_manager.get_job_info, hostname, job_id
-                )
+                throttler = get_host_throttler()
+                async with throttler.throttle(hostname):
+                    live_job_info = await asyncio.to_thread(
+                        slurm_manager.get_job_info, hostname, job_id
+                    )
                 if live_job_info:
                     try:
                         # Keep cache warm with corrected paths.
@@ -1540,7 +1742,9 @@ class WatcherEngine:
                     file_path=file_path,
                 )
 
-            return await asyncio.to_thread(read_new_output)
+            throttler = get_host_throttler()
+            async with throttler.throttle(job_info.hostname):
+                return await asyncio.to_thread(read_new_output)
 
         except Exception as e:
             logger.error(f"Failed to get output for job {job_info.job_id}: {e}")

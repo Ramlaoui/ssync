@@ -91,6 +91,7 @@ class ActionExecutor:
             gres=sbatch.get("gres"),
             nodes=sbatch.get("nodes"),
             constraint=sbatch.get("constraint"),
+            exclude=sbatch.get("exclude"),
             account=sbatch.get("account"),
             qos=sbatch.get("qos"),
             dependency=sbatch.get("dependency"),
@@ -249,10 +250,11 @@ class ActionExecutor:
             slurm_host = manager.get_host_by_name(hostname)
             conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
-            # Import throttler for rate limiting SSH commands per host
-            from .engine import get_host_throttler
+            # Reserve a lane for scheduler-changing actions so routine watcher
+            # polling cannot delay a cancellation.
+            from .engine import get_control_host_throttler
 
-            throttler = get_host_throttler()
+            throttler = get_control_host_throttler()
 
             # Cancel the job with throttling
             def do_cancel():
@@ -394,17 +396,21 @@ class ActionExecutor:
                 manifest,
                 script_content,
             )
-            new_job = await launch_manager.launch_job(
-                script_path=None,
-                script_content=script_content,
-                script_variables=all_vars,
-                source_dir=source_dir,
-                host=hostname,
-                slurm_params=self._slurm_params_from_manifest(manifest),
-                sync_enabled=False,
-                work_dir_override=work_dir,
-                launch_manifest=launch_manifest,
-            )
+            from .engine import get_control_host_throttler
+
+            throttler = get_control_host_throttler()
+            async with throttler.throttle(hostname):
+                new_job = await launch_manager.launch_job(
+                    script_path=None,
+                    script_content=script_content,
+                    script_variables=all_vars,
+                    source_dir=source_dir,
+                    host=hostname,
+                    slurm_params=self._slurm_params_from_manifest(manifest),
+                    sync_enabled=False,
+                    work_dir_override=work_dir,
+                    launch_manifest=launch_manifest,
+                )
             if not new_job:
                 return False, "Launch manager did not return a resubmitted job"
 
@@ -599,10 +605,10 @@ class ActionExecutor:
             slurm_host = manager.get_host_by_name(hostname)
             conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
 
-            # Import throttler for rate limiting SSH commands per host
-            from .engine import get_host_throttler
+            # Telemetry commands use a separate lane so they cannot delay resubmits.
+            from .engine import get_background_host_throttler
 
-            throttler = get_host_throttler()
+            throttler = get_background_host_throttler()
 
             # Try to get job's working directory for better context
             # This is also throttled to prevent resource exhaustion

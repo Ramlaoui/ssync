@@ -90,8 +90,14 @@ environment setup, preparation fragments, and a project-owned run fragment from
 
 ### Output Retrieval
 ```bash
-# View job output
-ssync status --job-id 12345 --cat-output
+# Print job output
+ssync output 12345
+ssync output 12345 --stderr
+ssync output 12345 --lines 200
+ssync output 12345 --all
+
+# Copy output files locally
+ssync copy-output 12345 ./outputs
 ```
 
 ## Web Interface
@@ -173,6 +179,26 @@ pattern for checkpoint-based continuation.
 ### Persistent Job Information
 
 Job scripts and metadata are cached locally, allowing retrieval of job information even after SLURM's job history expiration.
+
+### Pending-job priority position
+
+For pending jobs, status responses include Slurm's numeric priority plus a
+partition-scoped priority rank, the number of visible pending records ahead, the
+visible queue size, and a percentile where 100% is the highest-priority record.
+Each ranked job also carries the UTC snapshot timestamp.
+The rank follows Slurm's documented pending-job priority ordering; it is not a
+start-time prediction because reservations, dependencies, limits, resource fit,
+preemption, and backfill can change which job starts next. QOS is reported as
+metadata and contributes to the composite priority only when the cluster enables
+the corresponding Slurm priority configuration.
+
+ssync obtains these values from one compact pending-queue snapshot per host and
+caches it for 60 seconds, rather than querying once per job. Set
+`SSYNC_PRIORITY_SNAPSHOT_TTL_SECONDS` to change that interval. The scope is
+reported as `visible_pending_records:partition=<name>` because Slurm privacy
+settings may prevent the current SSH identity from seeing every cluster job, and
+compact job-array ranges count as queue records rather than expanded tasks. The
+minimum accepted snapshot interval is five seconds to protect the controller.
 
 ## API Usage
 

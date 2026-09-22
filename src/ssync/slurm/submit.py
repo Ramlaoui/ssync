@@ -40,6 +40,8 @@ class SlurmSubmit:
             cmd.append(f"--error={slurm_params.error}")
         if slurm_params.constraint:
             cmd.append(f"--constraint={slurm_params.constraint}")
+        if slurm_params.exclude:
+            cmd.append(f"--exclude={slurm_params.exclude}")
         if slurm_params.account:
             cmd.append(f"--account={slurm_params.account}")
         if slurm_params.qos:
@@ -79,8 +81,8 @@ class SlurmSubmit:
     def cancel_job(self, conn: SSHConnection, job_id: str) -> bool:
         """Cancel a Slurm job."""
         try:
-            conn.run(f"scancel {job_id}", hide=False)
-            return True
+            result = conn.run(f"scancel {job_id}", hide=False, warn=True)
+            return bool(result.ok)
         except Exception as e:
             logger.debug(f"Failed to cancel job {job_id}: {e}")
             return False

@@ -176,6 +176,111 @@ async def test_launch_job_uses_unique_temp_directory(monkeypatch, temp_dir):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_launch_job_uses_unique_remote_script_path_for_each_submission(
+    monkeypatch,
+    temp_dir,
+):
+    hostname = "cluster-launch.example.com"
+    slurm_host = _make_slurm_host(hostname)
+    uploaded_remote_paths = []
+    submitted_paths = []
+    executor = ThreadPoolExecutor(max_workers=2)
+
+    class _FakeConn:
+        def run(self, _command, **_kwargs):
+            return types.SimpleNamespace(
+                return_code=0,
+                stdout="",
+                stderr="",
+                ok=True,
+            )
+
+        def cd(self, _path):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeManager:
+        def get_host_by_name(self, host: str):
+            assert host == hostname
+            return slurm_host
+
+        def _get_connection(self, host):
+            assert host.hostname == hostname
+            return _FakeConn()
+
+    def fake_send_file(_conn, _local_path, remote_path, _is_remote_dir):
+        uploaded_remote_paths.append(remote_path)
+        return remote_path
+
+    def fake_submit(
+        _self,
+        _conn,
+        _slurm_host,
+        _slurm_params,
+        remote_script_path,
+        _work_dir,
+        _template_script_content,
+        _watchers,
+        _launch_event_emitter=None,
+    ):
+        submitted_paths.append(remote_script_path)
+        return types.SimpleNamespace(job_id=str(12345 + len(submitted_paths)))
+
+    async def fake_capture_submission(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("ssync.launch.send_file", fake_send_file)
+    monkeypatch.setattr(LaunchManager, "_submit_script_in_workdir", fake_submit)
+    monkeypatch.setattr(
+        LaunchManager, "_capture_submission_in_background", fake_capture_submission
+    )
+
+    script_content = "#!/bin/bash\necho hello\n"
+    script_path = temp_dir / "job.sh"
+    script_path.write_text(script_content)
+    launch_manager = LaunchManager(_FakeManager(), executor=executor)
+    try:
+        for _ in range(2):
+            await launch_manager.launch_job(
+                script_path=None,
+                script_content=script_content,
+                source_dir=None,
+                host=hostname,
+                slurm_params=SlurmParams(),
+                sync_enabled=False,
+            )
+        for _ in range(2):
+            await launch_manager.launch_job(
+                script_path=script_path,
+                source_dir=None,
+                host=hostname,
+                slurm_params=SlurmParams(),
+                sync_enabled=False,
+            )
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    assert uploaded_remote_paths == submitted_paths
+    assert len(set(submitted_paths)) == 4
+    for remote_path in submitted_paths[:2]:
+        remote_name = Path(remote_path).name
+        assert remote_name.startswith("clean_inline_script_")
+        assert remote_name.endswith(".slurm")
+        assert remote_name != "clean_inline_script.slurm"
+    for remote_path in submitted_paths[2:]:
+        remote_name = Path(remote_path).name
+        assert remote_name.startswith("clean_job_")
+        assert remote_name.endswith(".slurm")
+        assert remote_name != "clean_job.slurm"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_launch_job_caches_prepared_template_and_uploads_rendered_script(
     monkeypatch, test_cache
 ):

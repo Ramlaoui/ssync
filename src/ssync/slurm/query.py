@@ -1,6 +1,7 @@
 """Slurm query operations (squeue/sacct/scontrol)."""
 
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Protocol
@@ -30,8 +31,15 @@ class SlurmQuery:
         self.parser = SlurmParser()
         self._available_fields_cache = {}
         self._username_cache = {}
+        self._username_cache_lock = threading.Lock()
         self._partition_cache: dict[str, tuple[float, List[PartitionResources]]] = {}
         self._partition_cache_ttl = 20.0
+        self._priority_snapshot_cache: dict[
+            str, tuple[float, dict[str, list[tuple[str, str]]]]
+        ] = {}
+        self._priority_snapshot_cache_ttl = max(
+            5.0, float(os.getenv("SSYNC_PRIORITY_SNAPSHOT_TTL_SECONDS", "60"))
+        )
         self.output = output or SlurmOutput()
         self._completed_job_scontrol_fallback_cap = int(
             os.getenv("SSYNC_SCONTROL_FALLBACK_MAX_JOBS", "5")
@@ -133,6 +141,9 @@ class SlurmQuery:
                 "StdErr",
                 "NodeList",
                 "Reason",
+                "Account",
+                "QOS",
+                "Priority",
                 "AllocTRES",
                 "ReqTRES",
                 "CPUTime",
@@ -257,6 +268,100 @@ class SlurmQuery:
                 f"Failed to fetch partition state for {hostname}: {last_error}"
             )
         return [], False, 0.0, False
+
+    @staticmethod
+    def _priority_job_key(job_id: str) -> str:
+        """Return the array submission ID used by compact squeue output."""
+        if "_" not in job_id:
+            return job_id
+        array_job_id, task_id = job_id.split("_", 1)
+        if task_id.isdigit() or task_id.startswith("["):
+            return array_job_id
+        return job_id
+
+    def _get_priority_snapshot(
+        self, conn: SSHConnection, hostname: str
+    ) -> tuple[dict[str, list[tuple[str, str]]], float]:
+        """Fetch one compact, cluster-wide pending queue snapshot per TTL."""
+        now = time.time()
+        cache_entry = self._priority_snapshot_cache.get(hostname)
+        if cache_entry:
+            cached_at, snapshot = cache_entry
+            if now - cached_at < self._priority_snapshot_cache_ttl:
+                return snapshot, cached_at
+
+        cmd = (
+            "squeue --local --all --states=PENDING --priority --sort=-p,i "
+            "--noheader --format='%i|%P|%Q'"
+        )
+        try:
+            logger.debug(f"Fetching priority snapshot on {hostname}: {cmd}")
+            result = conn.run(cmd, hide=True, timeout=30, warn=True, pty=True)
+            if not result.ok:
+                logger.debug(f"Priority snapshot failed on {hostname}: {result.stderr}")
+                self._priority_snapshot_cache[hostname] = (now, {})
+                return {}, now
+
+            snapshot: dict[str, list[tuple[str, str]]] = {}
+            for line in result.stdout.replace("\r\n", "\n").splitlines():
+                fields = [field.strip() for field in line.strip().split("|")]
+                if len(fields) < 3:
+                    continue
+                job_id, partition, priority = fields[:3]
+                partition = partition.rstrip("*")
+                if not job_id or not partition:
+                    continue
+                snapshot.setdefault(partition, []).append((job_id, priority))
+
+            self._priority_snapshot_cache[hostname] = (now, snapshot)
+            return snapshot, now
+        except Exception as e:
+            logger.debug(f"Error fetching priority snapshot on {hostname}: {e}")
+            self._priority_snapshot_cache[hostname] = (now, {})
+            return {}, now
+
+    def _annotate_priority_positions(
+        self,
+        jobs: list[JobInfo],
+        snapshot: dict[str, list[tuple[str, str]]],
+        snapshot_at: float,
+    ) -> None:
+        """Attach partition-scoped priority ranks to pending jobs in place."""
+        for job in jobs:
+            if job.state != JobState.PENDING or not job.partition:
+                continue
+
+            partition = job.partition.rstrip("*")
+            queue = snapshot.get(partition, [])
+            job_key = self._priority_job_key(job.job_id)
+            rank = next(
+                (
+                    index
+                    for index, (queued_job_id, _priority) in enumerate(queue, start=1)
+                    if self._priority_job_key(queued_job_id) == job_key
+                ),
+                None,
+            )
+            if rank is None:
+                continue
+
+            queue_size = len(queue)
+            job.priority_rank = rank
+            job.priority_jobs_ahead = rank - 1
+            job.priority_queue_size = queue_size
+            job.priority_percentile = (
+                100.0
+                if queue_size == 1
+                else round(100 * (queue_size - rank) / (queue_size - 1), 1)
+            )
+            job.priority_scope = f"visible_pending_records:partition={partition}"
+            job.priority_snapshot_at = datetime.fromtimestamp(
+                snapshot_at, tz=timezone.utc
+            ).isoformat()
+
+            snapshot_priority = queue[rank - 1][1]
+            if snapshot_priority:
+                job.priority = snapshot_priority
 
     def get_active_jobs(
         self,
@@ -384,6 +489,11 @@ class SlurmQuery:
                             self._expand_job_output_placeholders(job)
             except Exception as e:
                 logger.debug(f"Batch scontrol failed for active jobs: {e}")
+
+        pending_jobs = [job for job in jobs if job.state == JobState.PENDING]
+        if pending_jobs:
+            snapshot, snapshot_at = self._get_priority_snapshot(conn, hostname)
+            self._annotate_priority_positions(pending_jobs, snapshot, snapshot_at)
 
         return jobs
 
@@ -1039,6 +1149,13 @@ class SlurmQuery:
         if user:
             return user
 
+        with self._username_cache_lock:
+            return self._resolve_username(conn, hostname)
+
+    def _resolve_username(
+        self, conn: SSHConnection, hostname: str
+    ) -> Optional[str]:
+        """Resolve and cache one username while concurrent callers wait."""
         if hostname in self._username_cache:
             cached_username = self._username_cache[hostname]
             logger.debug(f"Using cached username for {hostname}: {cached_username}")

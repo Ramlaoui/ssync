@@ -383,6 +383,12 @@ class APIClient:
                     account=job_data.get("account"),
                     qos=job_data.get("qos"),
                     priority=job_data.get("priority"),
+                    priority_rank=job_data.get("priority_rank"),
+                    priority_jobs_ahead=job_data.get("priority_jobs_ahead"),
+                    priority_queue_size=job_data.get("priority_queue_size"),
+                    priority_percentile=job_data.get("priority_percentile"),
+                    priority_scope=job_data.get("priority_scope"),
+                    priority_snapshot_at=job_data.get("priority_snapshot_at"),
                     array_job_id=job_data.get("array_job_id"),
                     array_task_id=job_data.get("array_task_id"),
                     alloc_tres=job_data.get("alloc_tres"),
@@ -446,6 +452,7 @@ class APIClient:
         output: Optional[str] = None,
         error: Optional[str] = None,
         constraint: Optional[str] = None,
+        slurm_exclude: Optional[str] = None,
         account: Optional[str] = None,
         qos: Optional[str] = None,
         dependency: Optional[str] = None,
@@ -489,6 +496,8 @@ class APIClient:
             request_data["error"] = error
         if constraint:
             request_data["constraint"] = constraint
+        if slurm_exclude:
+            request_data["slurm_exclude"] = slurm_exclude
         if account:
             request_data["account"] = account
         if qos:

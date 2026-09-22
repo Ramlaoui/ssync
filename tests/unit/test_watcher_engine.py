@@ -1,8 +1,9 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
-from ssync.models.job import JobState
+from ssync.models.job import JobInfo, JobState
 from ssync.models.watcher import (
     ActionType,
     WatcherAction,
@@ -14,6 +15,51 @@ from ssync.watchers import actions as actions_module
 from ssync.watchers import engine as engine_module
 from ssync.watchers.engine import JobEndHandlingResult, OutputReadResult
 from ssync.web import app as app_module
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_start_watchers_can_register_without_temporary_loop_monitors(
+    monkeypatch, test_cache
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_ids = await engine.start_watchers_for_job(
+        "12344",
+        "cluster",
+        [
+            WatcherDefinition(
+                name="resume",
+                pattern=r"HYDRA_OUTPUT_DIR=(.+)",
+                captures=["resume_run_dir"],
+                actions=[WatcherAction(type=ActionType.RESUBMIT, params={})],
+            )
+        ],
+        start_monitoring=False,
+    )
+
+    assert len(watcher_ids) == 1
+    assert engine._get_watcher(watcher_ids[0]) is not None
+    assert watcher_ids[0] not in engine.active_tasks
+
+
+@pytest.mark.unit
+def test_background_commands_do_not_block_scheduler_control_lane(monkeypatch):
+    monkeypatch.setattr(engine_module, "_host_throttler", None)
+    monkeypatch.setattr(engine_module, "_control_host_throttler", None)
+    monkeypatch.setattr(engine_module, "_background_host_throttler", None)
+
+    polling = engine_module.get_host_throttler()
+    control = engine_module.get_control_host_throttler()
+    background = engine_module.get_background_host_throttler()
+
+    assert polling is not control
+    assert polling is not background
+    assert control is not background
+    assert polling.max_concurrent == 1
+    assert control.max_concurrent == 1
+    assert background.max_concurrent == 1
 
 
 @pytest.mark.unit
@@ -175,6 +221,52 @@ async def test_job_end_resubmit_passes_job_end_state_to_action(
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_job_end_action_claim_prevents_concurrent_resubmit(
+    monkeypatch, test_cache
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_id = engine._store_watcher(
+        "12347",
+        "cluster",
+        WatcherDefinition(
+            name="auto resubmit",
+            actions=[WatcherAction(type=ActionType.RESUBMIT, params={})],
+            trigger_on_job_end=True,
+            trigger_job_states=["timeout"],
+        ),
+    )
+    watcher = engine._get_watcher(watcher_id)
+
+    executed_actions = []
+
+    async def fake_execute_action(_watcher_arg, action, matched_text, captured_vars):
+        executed_actions.append((action.type.value, matched_text, dict(captured_vars)))
+        await asyncio.sleep(0.05)
+        return True, "Resubmitted as job 12348"
+
+    monkeypatch.setattr(engine, "_execute_action", fake_execute_action)
+
+    first, second = await asyncio.gather(
+        engine._handle_job_end_trigger(watcher, JobState.TIMEOUT),
+        engine._handle_job_end_trigger(watcher, JobState.TIMEOUT),
+    )
+
+    assert {first, second} == {
+        JobEndHandlingResult.COMPLETE,
+        JobEndHandlingResult.RETRY_PENDING,
+    }
+    assert len(executed_actions) == 1
+
+    variables = engine._get_watcher_variables(watcher_id)
+    assert variables["__ssync_job_end_action_success_0"] == "1"
+    assert variables["__ssync_job_end_completed"] == "1"
+    assert "__ssync_job_end_action_claim_0" in variables
+
+
+@pytest.mark.unit
 def test_placeholder_capture_does_not_overwrite_valid_value(monkeypatch, test_cache):
     monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
     engine = engine_module.WatcherEngine()
@@ -269,6 +361,125 @@ async def test_job_end_resubmit_retries_until_success(monkeypatch, test_cache):
     assert persisted_variables["__ssync_job_end_action_success_0"] == "1"
     assert persisted_variables["__ssync_job_end_action_success_1"] == "1"
     assert persisted_variables["__ssync_job_end_completed"] == "1"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cleanup_orphaned_watchers_keeps_pending_terminal_run_command(
+    monkeypatch, test_cache
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_id = engine._store_watcher(
+        "10003",
+        "cluster",
+        WatcherDefinition(
+            name="wandb upload",
+            pattern=r"HYDRA_OUTPUT_DIR=(.+)",
+            captures=["HYDRA_OUTPUT_DIR"],
+            actions=[
+                WatcherAction(
+                    type=ActionType.RUN_COMMAND,
+                    params={"command": "wandb sync --yes $HYDRA_OUTPUT_DIR"},
+                )
+            ],
+            trigger_on_job_end=True,
+        ),
+    )
+    watcher = engine._get_watcher(watcher_id)
+    assert watcher is not None
+    engine._check_patterns(watcher, "HYDRA_OUTPUT_DIR=/scratch/run-123\n")
+
+    task = asyncio.get_running_loop().create_future()
+    engine.active_tasks[watcher_id] = task
+
+    async def fake_get_job_info(_job_id, _hostname):
+        return JobInfo(
+            job_id="10003",
+            name="train",
+            state=JobState.COMPLETED,
+            hostname="cluster",
+        )
+
+    monkeypatch.setattr(engine, "_get_job_info", fake_get_job_info)
+
+    await engine.cleanup_orphaned_watchers()
+
+    assert task.cancelled() is False
+    current = engine._get_watcher(watcher_id)
+    assert current is not None
+    assert current.state == WatcherState.ACTIVE
+    assert current.variables["HYDRA_OUTPUT_DIR"] == "/scratch/run-123"
+
+    executed_actions = []
+
+    async def fake_execute_action(_watcher, action, _matched_text, captured_vars):
+        executed_actions.append((action.type, dict(captured_vars)))
+        return True, "uploaded"
+
+    monkeypatch.setattr(engine, "_execute_action", fake_execute_action)
+
+    terminal_result = await engine._handle_job_end_trigger(
+        current, JobState.COMPLETED
+    )
+    assert terminal_result == JobEndHandlingResult.COMPLETE
+    assert [action_type for action_type, _ in executed_actions] == [
+        ActionType.RUN_COMMAND
+    ]
+    assert executed_actions[0][1]["HYDRA_OUTPUT_DIR"] == "/scratch/run-123"
+    task.cancel()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trigger_job_states, terminal_variables",
+    [
+        (["completed"], {"__ssync_job_end_completed": "1"}),
+        (["failed"], {}),
+    ],
+    ids=["already-handled", "state-not-selected"],
+)
+async def test_cleanup_orphaned_watchers_stops_non_pending_terminal_hooks(
+    monkeypatch, test_cache, trigger_job_states, terminal_variables
+):
+    monkeypatch.setattr(engine_module, "get_cache", lambda: test_cache)
+    engine = engine_module.WatcherEngine()
+
+    watcher_id = engine._store_watcher(
+        "10004",
+        "cluster",
+        WatcherDefinition(
+            name="terminal command",
+            actions=[
+                WatcherAction(
+                    type=ActionType.RUN_COMMAND,
+                    params={"command": "echo terminal"},
+                )
+            ],
+            trigger_on_job_end=True,
+            trigger_job_states=trigger_job_states,
+        ),
+    )
+    if terminal_variables:
+        engine._update_watcher_variables(watcher_id, terminal_variables)
+
+    async def fake_get_job_info(_job_id, _hostname):
+        return JobInfo(
+            job_id="10004",
+            name="train",
+            state=JobState.COMPLETED,
+            hostname="cluster",
+        )
+
+    monkeypatch.setattr(engine, "_get_job_info", fake_get_job_info)
+
+    await engine.cleanup_orphaned_watchers()
+
+    current = engine._get_watcher(watcher_id)
+    assert current is not None
+    assert current.state == WatcherState.COMPLETED
 
 
 @pytest.mark.unit
