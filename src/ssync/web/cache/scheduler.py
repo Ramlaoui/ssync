@@ -10,6 +10,7 @@ from typing import Optional
 
 from ...utils.async_helpers import create_task
 from ...utils.config import config as app_config
+from ...utils.executors import run_local
 from ...utils.logging import setup_logger
 from .middleware import get_cache_middleware
 
@@ -113,9 +114,9 @@ class CacheScheduler:
 
             # Size-based cleanup first (if configured)
             if self.cache_settings.max_size_mb > 0:
-                size_cleaned = await asyncio.to_thread(
+                size_cleaned = await run_local(
                     self.cache_middleware.cache.cleanup_by_size,
-                    self.cache_settings.max_size_mb
+                    self.cache_settings.max_size_mb,
                 )
                 if size_cleaned > 0:
                     logger.info(f"Size-based cleanup: removed {size_cleaned} entries")
@@ -132,11 +133,11 @@ class CacheScheduler:
             # Zombie cleanup - mark stale PD/UNKNOWN jobs as completed
             zombie_days = self.cache_settings.zombie_cleanup_days
             if zombie_days > 0:
-                zombies = await asyncio.to_thread(
+                zombies = await run_local(
                     self.cache_middleware.cache.find_zombie_jobs, zombie_days
                 )
                 for job_id, hostname, state in zombies:
-                    await asyncio.to_thread(
+                    await run_local(
                         self.cache_middleware.cache.mark_job_completed, job_id, hostname
                     )
                 if zombies:
@@ -161,16 +162,17 @@ class CacheScheduler:
 
             # Age-based cleanup
             if max_age_days is not None and max_age_days >= 0:
-                cleaned_count = await asyncio.to_thread(
+                cleaned_count = await run_local(
                     self.cache_middleware.cache.cleanup_old_entries,
-                    max_age_days=max_age_days, preserve_scripts=preserve_scripts
+                    max_age_days=max_age_days,
+                    preserve_scripts=preserve_scripts,
                 )
 
             # Size-based cleanup
             if self.cache_settings.max_size_mb > 0:
-                size_cleaned = await asyncio.to_thread(
+                size_cleaned = await run_local(
                     self.cache_middleware.cache.cleanup_by_size,
-                    self.cache_settings.max_size_mb
+                    self.cache_settings.max_size_mb,
                 )
                 cleaned_count += size_cleaned
 

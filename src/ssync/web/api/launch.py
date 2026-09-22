@@ -15,12 +15,50 @@ from ...launch import LaunchManager
 from ...models.job import JobState
 from ...slurm.params import SlurmParams
 from ...utils.async_helpers import create_task
+from ...utils.executors import WorkQueueFull, run_local, run_remote
 from ...utils.logging import setup_logger
 from ...utils.slurm_arrays import looks_like_array_submission
 from ..models import LaunchJobRequest, LaunchJobResponse, LaunchStatusResponse
 from ..security import InputSanitizer, PathValidator, ScriptValidator
 
 logger = setup_logger(__name__)
+
+
+_ACTIVE_LAUNCH_TASKS: set[asyncio.Task] = set()
+
+
+def _forget_launch_task(task: asyncio.Task) -> None:
+    _ACTIVE_LAUNCH_TASKS.discard(task)
+
+
+async def wait_for_active_launch_tasks() -> None:
+    """Wait for detached launch workflows before their worker pools close."""
+    while _ACTIVE_LAUNCH_TASKS:
+        tasks = tuple(_ACTIVE_LAUNCH_TASKS)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _cleanup_temp_script(script_path: Optional[Path]) -> None:
+    """Remove a launch script even when the bounded local queue is saturated."""
+    if script_path is None:
+        return
+    try:
+        await asyncio.shield(run_local(os.unlink, script_path))
+    except FileNotFoundError:
+        return
+    except WorkQueueFull:
+        # A single unlink is bounded enough for the direct fallback and must not
+        # leak a script just because local admission is full.
+        try:
+            os.unlink(script_path)
+        except FileNotFoundError:
+            pass
+    except asyncio.CancelledError:
+        try:
+            os.unlink(script_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def register_launch_routes(
@@ -37,19 +75,28 @@ def register_launch_routes(
 ) -> None:
     """Register launch and cancel routes."""
 
+    active_launches = set()
+
     @app.post("/api/jobs/launch", response_model=LaunchJobResponse)
     async def launch_job(
         request: LaunchJobRequest,
         _authenticated: bool = Depends(verify_api_key_dependency),
     ):
         """Launch a job by syncing source directory and submitting script."""
+        if len(active_launches) >= 6:
+            raise WorkQueueFull("Launch queue is full")
+        launch_reservation = object()
+        active_launches.add(launch_reservation)
+        script_path = None
+        script_creation_task = None
+        background_started = False
         try:
             request.script_content = ScriptValidator.validate_script(
                 request.script_content
             )
             request.host = InputSanitizer.sanitize_hostname(request.host)
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             try:
                 manager.get_host_by_name(request.host)
             except ValueError:
@@ -57,23 +104,31 @@ def register_launch_routes(
 
             source_dir = None
             if request.source_dir:
-                source_dir = PathValidator.validate_path(
-                    request.source_dir, user_home=Path.home()
+                source_dir = await run_local(
+                    PathValidator.validate_path,
+                    request.source_dir,
+                    user_home=Path.home(),
                 )
-                if not source_dir.exists():
+                if not await run_local(source_dir.exists):
                     raise HTTPException(
                         status_code=400, detail="Source directory not found"
                     )
-                if not source_dir.is_dir():
+                if not await run_local(source_dir.is_dir):
                     raise HTTPException(
                         status_code=400, detail="Source path is not a directory"
                     )
 
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".sh", delete=False
-            ) as tmp_script:
-                tmp_script.write(request.script_content)
-                script_path = Path(tmp_script.name)
+            def write_script():
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".sh", delete=False
+                ) as tmp_script:
+                    tmp_script.write(request.script_content)
+                    return Path(tmp_script.name)
+
+            # Keep the local write alive if the request is cancelled while the
+            # bounded worker is creating the temporary submission script.
+            script_creation_task = asyncio.create_task(run_local(write_script))
+            script_path = await asyncio.shield(script_creation_task)
 
             slurm_params = SlurmParams(
                 job_name=request.job_name[:64] if request.job_name else None,
@@ -134,18 +189,19 @@ def register_launch_routes(
 
                     if job:
                         try:
-                            pending_job_info, previous_state = (
-                                cache_job_state_transition(
-                                    job.job_id,
-                                    host,
-                                    JobState.PENDING,
-                                    job_name=job_name,
-                                    array_submission=looks_like_array_submission(
-                                        script_content
-                                    ),
-                                )
+                            pending_job_info, previous_state = await run_local(
+                                cache_job_state_transition,
+                                job.job_id,
+                                host,
+                                JobState.PENDING,
+                                job_name=job_name,
+                                array_submission=looks_like_array_submission(
+                                    script_content
+                                ),
                             )
                             await broadcast_job_state(pending_job_info, previous_state)
+                        except WorkQueueFull:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"Failed to broadcast launched job {job.job_id}: {e}"
@@ -161,16 +217,24 @@ def register_launch_routes(
                             success=False,
                             message="Failed to launch job",
                         )
+                except WorkQueueFull as e:
+                    logger.warning(f"Background launch {launch_id} rejected: {e}")
+                    launch_emitter.result(success=False, message=str(e))
                 except Exception as e:
                     logger.error(f"Background launch {launch_id} failed: {e}")
                     launch_emitter.result(success=False, message=str(e))
                 finally:
-                    try:
-                        os.unlink(script_path)
-                    except Exception:
-                        pass
+                    active_launches.discard(launch_reservation)
+                    await _cleanup_temp_script(script_path)
 
-            create_task(_run_launch_in_background(), name=f"launch-{launch_id}")
+            task = create_task(_run_launch_in_background(), name=f"launch-{launch_id}")
+            if task is None:
+                raise HTTPException(
+                    status_code=503, detail="Background launches are disabled"
+                )
+            _ACTIVE_LAUNCH_TASKS.add(task)
+            task.add_done_callback(_forget_launch_task)
+            background_started = True
 
             return LaunchJobResponse(
                 success=True,
@@ -178,6 +242,8 @@ def register_launch_routes(
                 message="Launch started" if sync_enabled else "Submitting job...",
                 hostname=request.host,
             )
+        except WorkQueueFull:
+            raise
         except HTTPException:
             raise
         except Exception as e:
@@ -239,6 +305,16 @@ def register_launch_routes(
             raise HTTPException(
                 status_code=500, detail=f"Job launch failed: {error_message}"
             )
+
+        finally:
+            if not background_started:
+                active_launches.discard(launch_reservation)
+                if script_creation_task is not None and script_path is None:
+                    try:
+                        script_path = await asyncio.shield(script_creation_task)
+                    except (WorkQueueFull, FileNotFoundError):
+                        script_path = None
+                await _cleanup_temp_script(script_path)
 
     @app.get("/api/launches/{launch_id}", response_model=LaunchStatusResponse)
     async def get_launch_status(
@@ -310,33 +386,31 @@ def register_launch_routes(
             if host:
                 host = InputSanitizer.sanitize_hostname(host)
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             slurm_hosts = manager.slurm_hosts
             if host:
                 slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
 
-            loop = asyncio.get_running_loop()
             for slurm_host in slurm_hosts:
                 try:
-                    success = await loop.run_in_executor(
-                        executor, manager.cancel_job, slurm_host, job_id
-                    )
+                    success = await run_remote(manager.cancel_job, slurm_host, job_id)
                     if success:
                         logger.info(
                             f"Cancelled job {job_id} on {slurm_host.host.hostname}"
                         )
                         try:
-                            cancelled_job_info, previous_state = (
-                                cache_job_state_transition(
-                                    job_id,
-                                    slurm_host.host.hostname,
-                                    JobState.CANCELLED,
-                                    reason="Cancelled via API",
-                                )
+                            cancelled_job_info, previous_state = await run_local(
+                                cache_job_state_transition,
+                                job_id,
+                                slurm_host.host.hostname,
+                                JobState.CANCELLED,
+                                reason="Cancelled via API",
                             )
                             await broadcast_job_state(
                                 cancelled_job_info, previous_state
                             )
+                        except WorkQueueFull:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"Failed to cache/broadcast cancelled job {job_id}: {e}"
@@ -350,6 +424,8 @@ def register_launch_routes(
                                 job_id, slurm_host.host.hostname
                             )
                             logger.info(f"Stopped watchers for job {job_id}")
+                        except WorkQueueFull:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"Failed to stop watchers for job {job_id}: {e}"
@@ -359,6 +435,8 @@ def register_launch_routes(
                     logger.warning(
                         f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: scancel returned false"
                     )
+                except WorkQueueFull:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Failed to cancel job {job_id} on {slurm_host.host.hostname}: {e}"
@@ -368,6 +446,8 @@ def register_launch_routes(
             raise HTTPException(
                 status_code=500, detail="Failed to cancel job on any host"
             )
+        except WorkQueueFull:
+            raise
         except HTTPException:
             raise
         except Exception as e:

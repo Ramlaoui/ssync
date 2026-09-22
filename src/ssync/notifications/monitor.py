@@ -9,6 +9,7 @@ from ..cache import get_cache
 from ..job_data_manager import get_job_data_manager
 from ..models.job import JobState
 from ..utils.async_helpers import create_task
+from ..utils.executors import run_local
 from ..utils.logging import setup_logger
 from .service import JobNotificationEvent, get_notification_service
 
@@ -113,10 +114,12 @@ async def notification_monitor_loop():
                     job.state.value if hasattr(job.state, "value") else job.state
                 )
 
-                old_state_value, _, is_new = cache.record_notification_job_state(
-                    job_info=job
+                old_state_value, _, is_new = await run_local(
+                    cache.record_notification_job_state, job_info=job
                 )
-                state_changed = old_state_value is not None and old_state_value != state_value
+                state_changed = (
+                    old_state_value is not None and old_state_value != state_value
+                )
                 first_seen_recent = is_new and (
                     _is_recent_terminal(job, recent_window)
                     or _is_recent_transition(job, state_value, recent_window)
@@ -136,7 +139,7 @@ async def notification_monitor_loop():
                     )
 
             if pending_notifications:
-                service.enqueue_job_notifications(pending_notifications)
+                await service.enqueue_job_notifications(pending_notifications)
 
     except asyncio.CancelledError:
         logger.info("Notification monitor cancelled")

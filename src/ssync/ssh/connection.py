@@ -158,27 +158,101 @@ class SSHConnection:
         out_stream: Any = None,
         err_stream: Any = None,
     ):
+        import codecs
+        import os
+        import select
+        import signal
         import subprocess
         import threading
 
-        stdout_chunks: list[bytes] = []
-        stderr_chunks: list[bytes] = []
+        capture_limit = 1024 * 1024
         effective_timeout = timeout if timeout is not None else 120
+
+        def new_capture() -> dict[str, Any]:
+            return {"tail": bytearray(), "total": 0, "lock": threading.Lock()}
+
+        stdout_capture = new_capture()
+        stderr_capture = new_capture()
 
         process = subprocess.Popen(
             ssh_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
         )
 
-        def pump(pipe, chunks: list[bytes], stream, stream_name: str):
+        def retain(capture: dict[str, Any], chunk: bytes) -> None:
+            if not chunk:
+                return
+            with capture["lock"]:
+                capture["total"] += len(chunk)
+                capture["tail"].extend(chunk)
+                if len(capture["tail"]) > capture_limit:
+                    del capture["tail"][:-capture_limit]
+
+        def finalize(
+            capture: dict[str, Any], stream_name: str, suffix: bytes = b""
+        ) -> bytes:
+            with capture["lock"]:
+                total = capture["total"]
+                tail = bytes(capture["tail"])
+            if total + len(suffix) <= capture_limit:
+                return tail + suffix
+
+            marker = (
+                f"\n[... {stream_name} truncated; showing the latest output "
+                f"({capture_limit:,} bytes) ...]\n"
+            ).encode("utf-8")
+            tail_limit = max(0, capture_limit - len(marker) - len(suffix))
+            return marker + tail[-tail_limit:] + suffix[-capture_limit:]
+
+        def terminate_group(sig: signal.Signals) -> None:
+            try:
+                os.killpg(process.pid, sig)
+            except (OSError, ProcessLookupError):
+                try:
+                    process.send_signal(sig)
+                except (OSError, ProcessLookupError):
+                    pass
+
+        def close_pipe(pipe) -> None:
             if pipe is None:
                 return
             try:
-                for chunk in iter(pipe.readline, b""):
-                    chunks.append(chunk)
+                pipe.close()
+            except (OSError, ValueError):
+                pass
+
+        def pump(pipe, capture: dict[str, Any], stream, stream_name: str):
+            if pipe is None:
+                return
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            pipe_fd = pipe.fileno()
+            os.set_blocking(pipe_fd, False)
+            try:
+                while True:
+                    readable, _, _ = select.select([pipe_fd], [], [], 0.1)
+                    if not readable:
+                        continue
+                    try:
+                        chunk = os.read(pipe_fd, 64 * 1024)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        break
+                    retain(capture, chunk)
                     if stream is not None:
-                        stream.write(cls._decode_output_chunk(chunk, stream_name))
+                        decoded = decoder.decode(chunk)
+                        if decoded:
+                            stream.write(decoded)
+                if stream is not None:
+                    decoded = decoder.decode(b"", final=True)
+                    if decoded:
+                        stream.write(decoded)
+            except (OSError, ValueError):
+                # The timeout path may close a pipe to unblock a reader that
+                # inherited it from a descendant process.
+                pass
             finally:
                 if stream is not None:
                     if hasattr(stream, "finish"):
@@ -189,40 +263,70 @@ class SSHConnection:
 
         stdout_thread = threading.Thread(
             target=pump,
-            args=(process.stdout, stdout_chunks, out_stream, "stdout"),
+            args=(process.stdout, stdout_capture, out_stream, "stdout"),
             daemon=True,
         )
         stderr_thread = threading.Thread(
             target=pump,
-            args=(process.stderr, stderr_chunks, err_stream, "stderr"),
+            args=(process.stderr, stderr_capture, err_stream, "stderr"),
             daemon=True,
         )
         stdout_thread.start()
         stderr_thread.start()
 
+        timed_out = False
         try:
             return_code = process.wait(timeout=effective_timeout)
         except subprocess.TimeoutExpired:
-            logger.exception("Command timed out after %s seconds", effective_timeout)
-            process.kill()
+            logger.warning("Command timed out after %s seconds", effective_timeout)
+            timed_out = True
+            terminate_group(signal.SIGTERM)
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                terminate_group(signal.SIGKILL)
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
             return_code = 124
-            stderr_chunks.append(
-                f"Command timed out after {effective_timeout} seconds".encode()
-            )
 
-        stdout_thread.join()
-        stderr_thread.join()
+        # A child can inherit stdout/stderr and keep a pipe open after the
+        # parent exits. Never let cleanup turn a command timeout into a second
+        # unbounded wait; closing the descriptors unblocks the daemon pumps.
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            terminate_group(signal.SIGTERM)
+            stdout_thread.join(timeout=0.5)
+            stderr_thread.join(timeout=0.5)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            terminate_group(signal.SIGKILL)
+            stdout_thread.join(timeout=0.5)
+            stderr_thread.join(timeout=0.5)
+        if stdout_thread.is_alive():
+            close_pipe(process.stdout)
+        if stderr_thread.is_alive():
+            close_pipe(process.stderr)
+        stdout_thread.join(timeout=0.25)
+        stderr_thread.join(timeout=0.25)
 
-        stdout = cls._decode_output_chunk(b"".join(stdout_chunks), "stdout")
-        stderr = cls._decode_output_chunk(b"".join(stderr_chunks), "stderr")
-        if return_code == 124 and not stderr:
-            stderr = f"Command timed out after {effective_timeout} seconds"
+        stdout = finalize(stdout_capture, "stdout")
+        if timed_out:
+            with stderr_capture["lock"]:
+                stderr_has_output = stderr_capture["total"] > 0
+            timeout_message = (
+                b"\n" if stderr_has_output else b""
+            ) + f"Command timed out after {effective_timeout} seconds".encode("utf-8")
+        else:
+            timeout_message = b""
+        stderr = finalize(stderr_capture, "stderr", suffix=timeout_message)
 
         return subprocess.CompletedProcess(
             ssh_cmd,
             return_code,
-            stdout=stdout.encode("utf-8", errors="replace"),
-            stderr=stderr.encode("utf-8", errors="replace"),
+            stdout=stdout,
+            stderr=stderr,
         )
 
     def run(
@@ -511,7 +615,20 @@ class SSHConnection:
                 f"SCP {direction} failed for {self.host_id} "
                 f"(attempt {attempt + 1}/2): {last_error}"
             )
-            if attempt == 0:
+            # Missing log files and file permissions are not broken transports.
+            # Retrying them after closing ControlMaster would create needless
+            # authentication attempts on every background output refresh.
+            permanent_error = any(
+                message in last_error.lower()
+                for message in (
+                    "no such file",
+                    "permission denied",
+                    "not a regular file",
+                    "no space left on device",
+                    "read-only file system",
+                )
+            )
+            if attempt == 0 and not permanent_error:
                 NativeSSH.cleanup_control_master(self.host_id)
                 continue
             raise Exception(f"Failed to {direction} file: {last_error}")

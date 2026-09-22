@@ -1,12 +1,11 @@
 """Cache-backed response helpers for the web API."""
 
-import asyncio
-import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from ...models.job import JobInfo, JobState
+from ...utils.executors import run_local, run_output
 from ...utils.logging import setup_logger
 from ..models import JobInfoWeb, JobOutputResponse, JobStatusResponse
 
@@ -22,13 +21,7 @@ class CacheResponseService:
 
     async def _run_cache_call(self, func, *args, **kwargs):
         """Run cache work away from the event loop."""
-        web_app = sys.modules.get("ssync.web.app")
-        pool = getattr(web_app, "background_executor", None) or getattr(
-            web_app, "executor", None
-        )
-
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(pool, lambda: func(*args, **kwargs))
+        return await run_local(func, *args, **kwargs)
 
     def _cache_job_infos_sync(self, job_infos: List[JobInfo]) -> None:
         if not job_infos:
@@ -112,14 +105,16 @@ class CacheResponseService:
         filters: Optional[Dict[str, Any]] = None,
         since: Optional[str] = None,
     ) -> List[JobStatusResponse]:
-        enhanced_responses, jobs_to_cache, range_cache_entries = (
-            await self._run_cache_call(
-                self._prepare_job_status_cache_work,
-                responses,
-                hostname,
-                filters,
-                since,
-            )
+        (
+            enhanced_responses,
+            jobs_to_cache,
+            range_cache_entries,
+        ) = await self._run_cache_call(
+            self._prepare_job_status_cache_work,
+            responses,
+            hostname,
+            filters,
+            since,
         )
 
         if jobs_to_cache:
@@ -142,7 +137,10 @@ class CacheResponseService:
             return None
 
         cached_map = await self._run_cache_call(
-            self.cache.get_cached_jobs_by_ids, cached_job_ids, hostname
+            self.cache.get_cached_jobs_by_ids,
+            cached_job_ids,
+            hostname,
+            include_outputs=False,
         )
         cached_jobs = [
             JobInfoWeb.from_job_info(cached.job_info)
@@ -166,7 +164,7 @@ class CacheResponseService:
         allow_stale_active: bool = False,
     ) -> Optional[JobInfoWeb]:
         cached_map = await self._run_cache_call(
-            self.cache.get_cached_jobs_by_ids, [job_id], hostname
+            self.cache.get_cached_jobs_by_ids, [job_id], hostname, include_outputs=False
         )
         cached_job = cached_map.get(job_id)
         if cached_job and self._can_return_cached_job(
@@ -206,51 +204,30 @@ class CacheResponseService:
     async def get_cached_job_output(
         self, job_id: str, hostname: Optional[str] = None
     ) -> Optional[JobOutputResponse]:
+        from ..services.jobs import DEFAULT_OUTPUT_MAX_BYTES, read_cached_output_window
+
         cached_map = await self._run_cache_call(
-            self.cache.get_cached_jobs_by_ids, [job_id], hostname
+            self.cache.get_cached_jobs_by_ids, [job_id], hostname, include_outputs=False
         )
         cached_job = cached_map.get(job_id)
-        if not cached_job or not (
-            cached_job.stdout_compressed or cached_job.stderr_compressed
-        ):
+        if not cached_job or not (cached_job.stdout_size or cached_job.stderr_size):
             return None
-
-        stdout = self._decode_cached_output(
-            cached_job.stdout_compressed,
-            cached_job.stdout_compression,
-            "stdout",
+        stdout, stdout_truncated = await run_output(
+            read_cached_output_window, self.cache, job_id, cached_job.hostname, "stdout"
         )
-        stderr = self._decode_cached_output(
-            cached_job.stderr_compressed,
-            cached_job.stderr_compression,
-            "stderr",
+        stderr, stderr_truncated = await run_output(
+            read_cached_output_window, self.cache, job_id, cached_job.hostname, "stderr"
         )
-
         return JobOutputResponse(
             job_id=job_id,
             hostname=cached_job.hostname,
             stdout=stdout,
             stderr=stderr,
-            stdout_metadata=None,
-            stderr_metadata=None,
+            content_truncated=stdout_truncated or stderr_truncated,
+            content_limit_bytes=DEFAULT_OUTPUT_MAX_BYTES,
+            cached=True,
+            stale=True,
         )
-
-    @staticmethod
-    def _decode_cached_output(
-        compressed_data: Optional[bytes], compression: str, output_type: str
-    ) -> Optional[str]:
-        if not compressed_data:
-            return None
-
-        import gzip
-
-        try:
-            if compression == "gzip":
-                return gzip.decompress(compressed_data).decode("utf-8")
-            return compressed_data.decode("utf-8")
-        except Exception as e:
-            logger.error(f"Failed to decompress {output_type}: {e}")
-            return None
 
     async def cache_job_script(
         self,
@@ -265,7 +242,10 @@ class CacheResponseService:
 
         if local_source_dir:
             cached_map = await self._run_cache_call(
-                self.cache.get_cached_jobs_by_ids, [job_id], hostname
+                self.cache.get_cached_jobs_by_ids,
+                [job_id],
+                hostname,
+                include_outputs=False,
             )
             cached = cached_map.get(job_id)
             if cached:
@@ -282,7 +262,7 @@ class CacheResponseService:
         self, job_id: str, hostname: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         cached_map = await self._run_cache_call(
-            self.cache.get_cached_jobs_by_ids, [job_id], hostname
+            self.cache.get_cached_jobs_by_ids, [job_id], hostname, include_outputs=False
         )
         cached_job = cached_map.get(job_id)
         if cached_job and cached_job.script_content:

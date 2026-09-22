@@ -38,12 +38,22 @@ class _LaunchEventStream:
         if not data:
             return 0
 
-        self._buffer += str(data)
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            line = line.rstrip("\r")
-            if line:
-                self.emitter.log(self.source, line, stream=self.stream)
+        # A command can emit an arbitrarily long line. Split it into bounded
+        # event fragments instead of accumulating it until a newline arrives.
+        for offset in range(0, len(data), 1000):
+            self._buffer += str(data[offset : offset + 1000])
+            while "\n" in self._buffer or len(self._buffer) >= 1000:
+                newline = self._buffer.find("\n")
+                if 0 <= newline < 1000:
+                    line, self._buffer = (
+                        self._buffer[:newline],
+                        self._buffer[newline + 1 :],
+                    )
+                else:
+                    line, self._buffer = self._buffer[:1000], self._buffer[1000:]
+                line = line.rstrip("\r")
+                if line:
+                    self.emitter.log(self.source, line, stream=self.stream)
         return len(data)
 
     def flush(self) -> None:

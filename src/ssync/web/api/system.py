@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import Depends, FastAPI, HTTPException, Query
 
 from ...utils.async_helpers import create_task
+from ...utils.executors import WorkQueueFull, run_local, run_remote
 from ...utils.logging import get_memory_handler, setup_logger
 
 logger = setup_logger(__name__)
@@ -36,7 +37,6 @@ def register_system_routes(
 
         async def delayed_shutdown():
             """Shutdown after a brief delay to allow response to be sent."""
-            import asyncio
 
             await asyncio.sleep(0.5)
             os.kill(os.getpid(), signal.SIGTERM)
@@ -70,16 +70,16 @@ def register_system_routes(
     ):
         """Get current SSH connection statistics."""
         try:
-            manager = get_slurm_manager()
-            stats = await asyncio.to_thread(manager.get_connection_stats)
-            health_check_count = await asyncio.to_thread(
-                manager.check_connection_health
-            )
+            manager = await run_local(get_slurm_manager)
+            stats = await run_local(manager.get_connection_stats)
+            health_check_count = await run_remote(manager.check_connection_health)
             return {
                 "stats": stats,
                 "unhealthy_removed": health_check_count,
                 "timestamp": datetime.now().isoformat(),
             }
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting connection stats: {e}")
             raise HTTPException(
@@ -92,14 +92,16 @@ def register_system_routes(
     ):
         """Refresh all SSH connections by closing and recreating them."""
         try:
-            manager = get_slurm_manager()
-            refreshed_count = await asyncio.to_thread(manager.refresh_connections)
+            manager = await run_local(get_slurm_manager)
+            refreshed_count = await run_remote(manager.refresh_connections)
             logger.info(f"Manually refreshed {refreshed_count} SSH connections")
             return {
                 "message": f"Refreshed {refreshed_count} connections",
                 "refreshed_count": refreshed_count,
                 "timestamp": datetime.now().isoformat(),
             }
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error refreshing connections: {e}")
             raise HTTPException(status_code=500, detail="Failed to refresh connections")

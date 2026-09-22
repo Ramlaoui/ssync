@@ -25,6 +25,18 @@ def _make_slurm_host(hostname: str) -> SlurmHost:
     )
 
 
+@pytest.fixture(autouse=True)
+def _restore_ssync_log_propagation():
+    """Keep pytest's root capture active after CLI logging configuration tests."""
+    ssync_logger = logging.getLogger("ssync")
+    previous_propagate = ssync_logger.propagate
+    ssync_logger.propagate = True
+    try:
+        yield
+    finally:
+        ssync_logger.propagate = previous_propagate
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_launch_job_offloads_connection_acquisition(monkeypatch, temp_dir):

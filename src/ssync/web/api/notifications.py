@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException
 
 from ...cache import get_cache
 from ...notifications import get_notification_service
+from ...utils.executors import WorkQueueFull, run_local
 from ...utils.logging import setup_logger
 from ..models import (
     NotificationDeviceRegistration,
@@ -31,6 +32,22 @@ def _api_key_hash(api_key: Optional[str]) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest() if api_key else "public"
 
 
+def _update_notification_preferences(*, api_key_hash: str, updates: dict) -> dict:
+    """Read, merge, and persist preferences in one local-pool operation."""
+    cache = get_cache()
+    current = cache.get_notification_preferences(api_key_hash=api_key_hash)
+    sanitized_updates = sanitize_notification_preferences(updates)
+    merged = {
+        **current,
+        **{key: value for key, value in sanitized_updates.items() if value is not None},
+    }
+    cache.upsert_notification_preferences(
+        api_key_hash=api_key_hash,
+        preferences=merged,
+    )
+    return merged
+
+
 def register_notification_routes(
     app: FastAPI,
     *,
@@ -53,9 +70,10 @@ def register_notification_routes(
             if platform not in {"ios", "android", "expo"}:
                 raise HTTPException(status_code=400, detail="Unsupported platform")
 
-            client_type = InputSanitizer.sanitize_text(
-                payload.client_type.lower(), max_length=32
-            ) or "native"
+            client_type = (
+                InputSanitizer.sanitize_text(payload.client_type.lower(), max_length=32)
+                or "native"
+            )
             if client_type not in {"native", "expo"}:
                 raise HTTPException(status_code=400, detail="Unsupported client type")
 
@@ -63,27 +81,30 @@ def register_notification_routes(
                 payload.payload_format or ("expo" if token_type == "expo" else "apns")
             ).lower()
             if payload_format not in {"apns", "expo"}:
-                raise HTTPException(status_code=400, detail="Unsupported payload format")
+                raise HTTPException(
+                    status_code=400, detail="Unsupported payload format"
+                )
 
             environment = (
                 normalize_environment(payload.environment)
                 if token_type == "apns"
                 else payload.environment
             )
-            cache = get_cache()
-            cache.upsert_notification_device(
-                api_key_hash=_api_key_hash(api_key),
-                device_token=token,
-                platform=platform,
-                token_type=token_type,
-                client_type=client_type,
-                payload_format=payload_format,
-                bundle_id=payload.bundle_id
-                or notification_settings.apns_bundle_id
-                or None,
-                environment=environment,
-                device_id=payload.device_id,
-                enabled=payload.enabled,
+            await run_local(
+                lambda: get_cache().upsert_notification_device(
+                    api_key_hash=_api_key_hash(api_key),
+                    device_token=token,
+                    platform=platform,
+                    token_type=token_type,
+                    client_type=client_type,
+                    payload_format=payload_format,
+                    bundle_id=payload.bundle_id
+                    or notification_settings.apns_bundle_id
+                    or None,
+                    environment=environment,
+                    device_id=payload.device_id,
+                    enabled=payload.enabled,
+                )
             )
 
             return {
@@ -94,6 +115,8 @@ def register_notification_routes(
                 "client_type": client_type,
                 "payload_format": payload_format,
             }
+        except WorkQueueFull:
+            raise
         except HTTPException:
             raise
         except Exception as e:
@@ -108,12 +131,15 @@ def register_notification_routes(
         """Unregister a device token."""
         try:
             normalized_token = normalize_device_token(token)
-            cache = get_cache()
-            deleted = cache.remove_notification_device(
-                api_key_hash=_api_key_hash(api_key),
-                device_token=normalized_token,
+            deleted = await run_local(
+                lambda: get_cache().remove_notification_device(
+                    api_key_hash=_api_key_hash(api_key),
+                    device_token=normalized_token,
+                )
             )
             return {"success": True, "deleted": deleted}
+        except WorkQueueFull:
+            raise
         except HTTPException:
             raise
         except Exception as e:
@@ -126,12 +152,14 @@ def register_notification_routes(
         _authenticated: bool = Depends(verify_api_key_dependency),
     ):
         """Send a test notification to registered devices or a specific token."""
-        service = get_notification_service()
+        service = await run_local(get_notification_service)
         if not service.enabled:
             raise HTTPException(status_code=400, detail="Notifications not configured")
 
         token_type = payload.token_type.lower()
-        token = normalize_push_token(payload.token, token_type) if payload.token else None
+        token = (
+            normalize_push_token(payload.token, token_type) if payload.token else None
+        )
         sent = await service.send_test_notification(
             title=payload.title,
             body=payload.body,
@@ -145,9 +173,11 @@ def register_notification_routes(
         _authenticated: bool = Depends(verify_api_key_dependency),
     ):
         """Return backend notification provider status and supported contracts."""
-        service = get_notification_service()
+        provider_status = await run_local(
+            lambda: get_notification_service().provider_status()
+        )
         return {
-            "providers": service.provider_status(),
+            "providers": provider_status,
             "device_registration": {
                 "platforms": ["ios", "android", "expo"],
                 "token_types": ["apns", "expo"],
@@ -174,9 +204,10 @@ def register_notification_routes(
         api_key: str = Depends(get_api_key_dependency),
     ):
         """Get notification preferences for the current API key."""
-        cache = get_cache()
-        preferences = cache.get_notification_preferences(
-            api_key_hash=_api_key_hash(api_key)
+        preferences = await run_local(
+            lambda: get_cache().get_notification_preferences(
+                api_key_hash=_api_key_hash(api_key)
+            )
         )
         return NotificationPreferences(**preferences)
 
@@ -186,18 +217,11 @@ def register_notification_routes(
         api_key: str = Depends(get_api_key_dependency),
     ):
         """Update notification preferences for the current API key."""
-        cache = get_cache()
-        current = cache.get_notification_preferences(
-            api_key_hash=_api_key_hash(api_key)
-        )
-        updates = sanitize_notification_preferences(
-            payload.model_dump(exclude_unset=True)
-        )
-
-        merged = {**current, **updates}
-        cache.upsert_notification_preferences(
-            api_key_hash=_api_key_hash(api_key),
-            preferences=merged,
+        merged = await run_local(
+            lambda: _update_notification_preferences(
+                api_key_hash=_api_key_hash(api_key),
+                updates=payload.model_dump(exclude_unset=True),
+            )
         )
         return NotificationPreferences(**merged)
 
@@ -221,14 +245,17 @@ def register_notification_routes(
         if not endpoint.startswith("https://"):
             raise HTTPException(status_code=400, detail="Invalid endpoint")
 
-        cache = get_cache()
-        cache.upsert_webpush_subscription(
-            api_key_hash=_api_key_hash(api_key),
-            endpoint=endpoint,
-            p256dh=InputSanitizer.sanitize_text(payload.keys.p256dh, max_length=512),
-            auth=InputSanitizer.sanitize_text(payload.keys.auth, max_length=512),
-            user_agent=payload.user_agent,
-            enabled=payload.enabled,
+        await run_local(
+            lambda: get_cache().upsert_webpush_subscription(
+                api_key_hash=_api_key_hash(api_key),
+                endpoint=endpoint,
+                p256dh=InputSanitizer.sanitize_text(
+                    payload.keys.p256dh, max_length=512
+                ),
+                auth=InputSanitizer.sanitize_text(payload.keys.auth, max_length=512),
+                user_agent=payload.user_agent,
+                enabled=payload.enabled,
+            )
         )
         return {"success": True, "endpoint": endpoint}
 
@@ -239,9 +266,10 @@ def register_notification_routes(
     ):
         """Unregister a Web Push subscription."""
         endpoint = InputSanitizer.sanitize_text(payload.endpoint, max_length=2048)
-        cache = get_cache()
-        deleted = cache.remove_webpush_subscription(
-            api_key_hash=_api_key_hash(api_key),
-            endpoint=endpoint,
+        deleted = await run_local(
+            lambda: get_cache().remove_webpush_subscription(
+                api_key_hash=_api_key_hash(api_key),
+                endpoint=endpoint,
+            )
         )
         return {"success": True, "deleted": deleted}
