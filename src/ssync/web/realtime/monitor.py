@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional, Set
 from ...cache import get_cache
 from ...models.job import JobInfo, JobState
 from ...notifications import get_notification_service
+from ...utils.executors import run_local
 from ...utils.logging import setup_logger
 from ..models import JobInfoWeb
 from .state import (
@@ -138,7 +139,7 @@ async def broadcast_job_state(
 ) -> None:
     """Broadcast a single realtime job update to websocket clients."""
     old_state = previous_state.value if previous_state else None
-    get_notification_service().enqueue_job_info_transition(job_info, old_state)
+    await get_notification_service().enqueue_job_info_transition(job_info, old_state)
     await job_manager.broadcast_job_update(
         job_info.job_id,
         job_info.hostname,
@@ -227,7 +228,7 @@ async def monitor_all_jobs_singleton(
     try:
         from ...job_data_manager import get_job_data_manager
 
-        manager = get_slurm_manager()
+        manager = await run_local(get_slurm_manager)
         job_data_manager = get_job_data_manager()
         job_states = {}
         last_full_update = 0
@@ -257,13 +258,14 @@ async def monitor_all_jobs_singleton(
                 if last_full_update == 0:
                     logger.debug("Performing initial cache-only websocket update")
                     since_dt = datetime.now() - timedelta(days=1)
-                    cached_job_data = await asyncio.to_thread(
+                    cached_job_data = await run_local(
                         cache.get_cached_jobs,
+                        include_outputs=False,
                         hostname=None,
                         limit=active_fetch_limit,
                         since=since_dt,
                     )
-                    all_jobs = await asyncio.to_thread(
+                    all_jobs = await run_local(
                         filter_ws_initial_cached_jobs,
                         job_data_manager,
                         cached_job_data,
@@ -366,9 +368,11 @@ async def monitor_all_jobs_singleton(
                             }
                         )
                         if state_changed:
-                            get_notification_service().enqueue_job_info_transition(
-                                job,
-                                old_state_value,
+                            await (
+                                get_notification_service().enqueue_job_info_transition(
+                                    job,
+                                    old_state_value,
+                                )
                             )
 
                 completed_jobs = set(job_states.keys()) - current_job_ids

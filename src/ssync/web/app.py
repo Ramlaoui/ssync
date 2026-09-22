@@ -2,7 +2,6 @@
 
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import (
@@ -10,12 +9,26 @@ from fastapi import (
     FastAPI,
     WebSocket,
 )
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 
 from .. import config
 from ..launch_events import LaunchEventManager
 from ..manager import SlurmManager
+from ..utils.executors import (
+    BACKGROUND_THREAD_POOL_SIZE,
+    LAUNCH_THREAD_POOL_SIZE,
+    THREAD_POOL_SIZE,
+    WorkQueueFull,
+    background_executor,
+    interactive_executor,
+    launch_executor,
+    local_executor,
+    output_executor,
+    transfer_executor,
+)
 from ..utils.logging import setup_logger
+from .admission import RequestAdmissionMiddleware
 from .api import (
     register_catalog_routes,
     register_cluster_routes,
@@ -72,23 +85,6 @@ app = FastAPI(
     redoc_url="/redoc" if ENABLE_DOCS else None,
 )
 
-THREAD_POOL_SIZE = int(os.getenv("SSYNC_THREAD_POOL_SIZE", str(os.cpu_count() + 4)))
-BACKGROUND_THREAD_POOL_SIZE = int(
-    os.getenv("SSYNC_BACKGROUND_THREAD_POOL_SIZE", str(THREAD_POOL_SIZE))
-)
-DEFAULT_LAUNCH_THREAD_POOL_SIZE = max(2, min(4, THREAD_POOL_SIZE))
-LAUNCH_THREAD_POOL_SIZE = int(
-    os.getenv("SSYNC_LAUNCH_THREAD_POOL_SIZE", str(DEFAULT_LAUNCH_THREAD_POOL_SIZE))
-)
-interactive_executor = ThreadPoolExecutor(
-    max_workers=THREAD_POOL_SIZE, thread_name_prefix="ssh-interactive"
-)
-background_executor = ThreadPoolExecutor(
-    max_workers=BACKGROUND_THREAD_POOL_SIZE, thread_name_prefix="ssh-background"
-)
-launch_executor = ThreadPoolExecutor(
-    max_workers=LAUNCH_THREAD_POOL_SIZE, thread_name_prefix="ssh-launch"
-)
 # Backwards-compatible alias for code paths that still expect a single executor.
 executor = interactive_executor
 logger.info(
@@ -121,6 +117,18 @@ verify_api_key, get_api_key, verify_api_key_flexible, verify_websocket_api_key =
     )
 )
 configure_security_middleware(app, logger)
+app.add_middleware(RequestAdmissionMiddleware)
+
+
+@app.exception_handler(WorkQueueFull)
+async def worker_queue_full(_request, _exc):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Server busy. Please retry shortly."},
+        headers={"Retry-After": "1"},
+    )
+
+
 register_auth_routes(
     app,
     api_key_manager=api_key_manager,
@@ -135,7 +143,14 @@ register_lifecycle_events(
     get_slurm_manager=get_slurm_manager,
     cache_middleware=_cache_middleware,
     api_key_manager=api_key_manager,
-    executors=[interactive_executor, background_executor, launch_executor],
+    executors=[
+        interactive_executor,
+        background_executor,
+        launch_executor,
+        output_executor,
+        transfer_executor,
+        local_executor,
+    ],
     shutdown_event=_shutdown_event,
     periodic_connection_health_check=periodic_connection_health_check,
 )

@@ -1,6 +1,5 @@
 """Authenticated, narrowly scoped editing of host submission defaults."""
 
-import asyncio
 import copy
 import hashlib
 import threading
@@ -12,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from ...config_hosts import _atomic_write_config
+from ...utils.executors import run_local
 
 _EDIT_LOCK = threading.RLock()
 
@@ -204,7 +204,7 @@ def register_host_settings_routes(app: FastAPI, *, verify_api_key_dependency, co
     async def get_settings(
         hostname: str, _authenticated=Depends(verify_api_key_dependency)
     ):
-        return await asyncio.to_thread(read_host_settings, config, hostname)
+        return await run_local(read_host_settings, config, hostname)
 
     @app.put("/api/hosts/{hostname}/settings")
     async def put_settings(
@@ -212,4 +212,4 @@ def register_host_settings_routes(app: FastAPI, *, verify_api_key_dependency, co
         request: UpdateHostSettings,
         _authenticated=Depends(verify_api_key_dependency),
     ):
-        return await asyncio.to_thread(update_host_settings, config, hostname, request)
+        return await run_local(update_host_settings, config, hostname, request)

@@ -72,3 +72,25 @@ def test_download_job_output_sends_force_refresh_query_param(monkeypatch):
         "compressed": "false",
         "force_refresh": "true",
     }
+
+
+@pytest.mark.unit
+def test_download_job_output_preserves_positional_timeout(monkeypatch):
+    calls = {}
+
+    class Response:
+        headers = {}
+        content = b"output"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, **kwargs):
+        calls.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr("ssync.api.client.requests.get", fake_get)
+    client = APIClient(base_url="https://ssync.test", api_key="test-key")
+    client.download_job_output("1234", "atlas", "stdout", False, 17)
+    assert calls["timeout"] == 17
+    assert calls["params"]["force_refresh"] == "false"

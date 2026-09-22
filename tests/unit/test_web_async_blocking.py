@@ -148,16 +148,14 @@ def test_launch_route_uses_dedicated_executor():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_job_output_route_all_disables_default_byte_limit(monkeypatch):
+async def test_job_output_route_all_streams_full_response(monkeypatch):
     calls = {}
 
     async def fake_get_job_output_response(**kwargs):
         calls.update(kwargs)
         return {"job_id": kwargs["job_id"], "hostname": kwargs["host"]}
 
-    monkeypatch.setattr(
-        job_api, "get_job_output_response", fake_get_job_output_response
-    )
+    monkeypatch.setattr(job_api, "full_output_response", fake_get_job_output_response)
 
     get_job_output = _get_route_endpoint("/api/jobs/{job_id}/output", "GET")
     result = await get_job_output(
@@ -174,7 +172,8 @@ async def test_job_output_route_all_disables_default_byte_limit(monkeypatch):
     )
 
     assert result == {"job_id": "8001", "hostname": "entalpic"}
-    assert calls["max_bytes"] is None
+    assert "max_bytes" not in calls
+    assert calls["output_type"] == "stdout"
 
 
 @pytest.mark.unit

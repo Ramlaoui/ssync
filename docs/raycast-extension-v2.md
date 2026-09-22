@@ -41,8 +41,8 @@ UV_CACHE_DIR=/tmp/ssync-uv-cache uv run --no-sync pytest --no-cov \
 
 Backend tests use temporary YAML and mocked manager instances. Raycast tests mock native components and the transport; they do not submit jobs, change live hosts, or execute watcher actions.
 
-Validation: 56 Raycast tests, 35 host/config tests, and the isolated API route-order check pass. Type checking, source lint, formatting, and the six-command build pass; npm audit reports no vulnerabilities. Full publishing validation still needs a valid Raycast author account.
+Validation: 56 Raycast tests and the host/config, API routing, output-transfer, and backend capacity checks pass. Type checking, source lint, formatting, and the six-command build pass; npm audit reports no vulnerabilities. Full publishing validation still needs a valid Raycast author account.
 
 The development extension was loaded into Raycast and the Jobs list/inspector rendered against the configured API. Live host edits and submissions were not exercised.
 
-A broader pre-existing frontend-route suite references a removed private `app._resolve_frontend_request_path` helper. It is unrelated to this change; targeted host/config checks are kept separate from that suite.
+Integration with current main preserves the bounded worker pools, thread-safe manager initialization, and file-streamed output downloads. Host settings use the bounded local worker pool. Forced output downloads refresh the selected stream before opening its cached file.

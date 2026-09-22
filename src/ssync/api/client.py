@@ -184,8 +184,9 @@ class APIClient:
         host: str,
         output_type: str = "stdout",
         compressed: bool = False,
-        force_refresh: bool = False,
         timeout: int = 60,
+        *,
+        force_refresh: bool = False,
     ) -> tuple[str, bytes]:
         """Download a job output file from the API.
 

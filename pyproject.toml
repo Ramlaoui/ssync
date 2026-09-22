@@ -15,6 +15,7 @@ dependencies = [
     "pyjwt>=2.8.0",
     "pywebpush>=2.0.0",
     "requests>=2.32.3",
+    "regex>=2024.11.6",
 ]
 
 [project.scripts]

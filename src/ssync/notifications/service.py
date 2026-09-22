@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Iterable, List, Optional
 
 from ..cache import get_cache
 from ..models.job import JobState
-from ..utils.async_helpers import create_task
+from ..utils.async_helpers import background_tasks_disabled, queue_task_once
 from ..utils.config import config
+from ..utils.executors import WorkQueueFull, run_local
 from ..utils.logging import setup_logger
 
 if TYPE_CHECKING:
@@ -18,6 +19,15 @@ if TYPE_CHECKING:
     from .webpush import WebPushClient
 
 logger = setup_logger(__name__)
+
+
+async def _cache_call(func, /, *args, **kwargs):
+    """Wait for local capacity instead of losing an admitted notification."""
+    while True:
+        try:
+            return await run_local(func, *args, **kwargs)
+        except WorkQueueFull:
+            await asyncio.sleep(0.05)
 
 
 TERMINAL_STATES = {
@@ -49,6 +59,8 @@ class NotificationService:
         self._expo_client: Optional[ExpoPushClient] = None
         self._webpush_client: Optional[WebPushClient] = None
         self._send_semaphore = asyncio.Semaphore(10)
+        self._notification_batch_tasks: dict[tuple, asyncio.Task] = {}
+        self._closing = False
 
         if self.settings.enabled and self.settings.is_apns_configured():
             try:
@@ -122,26 +134,31 @@ class NotificationService:
         if not events:
             return 0
 
-        cache = get_cache()
+        cache = await _cache_call(get_cache)
+        apns_devices = await _cache_call(
+            cache.list_notification_devices,
+            platform="ios",
+            environment="sandbox" if self.settings.apns_use_sandbox else "production",
+            bundle_id=self.settings.apns_bundle_id,
+            enabled_only=True,
+        )
         devices = [
             device
-            for device in cache.list_notification_devices(
-                platform="ios",
-                environment="sandbox"
-                if self.settings.apns_use_sandbox
-                else "production",
-                bundle_id=self.settings.apns_bundle_id,
-                enabled_only=True,
-            )
+            for device in apns_devices
             if device.get("token_type", "apns") == "apns"
         ]
+        all_devices = await _cache_call(
+            cache.list_notification_devices, enabled_only=True
+        )
         expo_devices = [
             device
-            for device in cache.list_notification_devices(enabled_only=True)
+            for device in all_devices
             if device.get("token_type") == "expo"
             or device.get("payload_format") == "expo"
         ]
-        subscriptions = cache.list_webpush_subscriptions(enabled_only=True)
+        subscriptions = await _cache_call(
+            cache.list_webpush_subscriptions, enabled_only=True
+        )
 
         devices_by_key: dict[str, list[dict]] = {}
         for device in devices:
@@ -163,7 +180,9 @@ class NotificationService:
         total_sent = 0
 
         for api_key_hash in all_keys:
-            preferences = cache.get_notification_preferences(api_key_hash=api_key_hash)
+            preferences = await _cache_call(
+                cache.get_notification_preferences, api_key_hash=api_key_hash
+            )
             filtered_events = self._filter_events(events, preferences)
             if not filtered_events:
                 continue
@@ -184,21 +203,46 @@ class NotificationService:
 
         return total_sent
 
-    def enqueue_job_notifications(self, events: Iterable[JobNotificationEvent]) -> None:
-        """Claim and dispatch events in the background without blocking callers."""
-        if not self.enabled:
+    async def enqueue_job_notifications(
+        self, events: Iterable[JobNotificationEvent]
+    ) -> None:
+        """Admit a bounded background batch, waiting when dispatch is busy."""
+        if not self.enabled or background_tasks_disabled():
             return
 
-        events = [event for event in events if self._claim_event(event)]
+        events = list(events)
         if not events:
             return
 
-        create_task(
-            self._dispatch_claimed_events(events),
-            name="send_job_notifications",
+        batch_key = tuple(
+            event.notification_id or ("event", id(event)) for event in events
         )
+        while not self._closing:
+            if queue_task_once(
+                registry=self._notification_batch_tasks,
+                key=batch_key,
+                coro_factory=lambda: self._claim_and_dispatch(events),
+                name="send_job_notifications",
+                limit=64,
+            ):
+                return
+            # The producer waits; do not create detached tasks to wait for
+            # capacity or discard transitions that it has already observed.
+            await asyncio.wait(
+                tuple(self._notification_batch_tasks.values()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-    def enqueue_job_transition(
+    async def close(self) -> None:
+        """Drain accepted batches before cache workers or providers shut down."""
+        self._closing = True
+        while self._notification_batch_tasks:
+            await asyncio.gather(
+                *tuple(self._notification_batch_tasks.values()),
+                return_exceptions=True,
+            )
+
+    async def enqueue_job_transition(
         self,
         *,
         job_id: str,
@@ -209,7 +253,7 @@ class NotificationService:
         user: Optional[str] = None,
         changed_at: Optional[str] = None,
     ) -> None:
-        self.enqueue_job_notifications(
+        await self.enqueue_job_notifications(
             [
                 JobNotificationEvent(
                     job_id=job_id,
@@ -223,14 +267,14 @@ class NotificationService:
             ]
         )
 
-    def enqueue_job_info_transition(
+    async def enqueue_job_info_transition(
         self, job_info, old_state: Optional[str] = None
     ) -> None:
         new_state = _state_value(getattr(job_info, "state", None))
         if not new_state:
             return
 
-        self.enqueue_job_transition(
+        await self.enqueue_job_transition(
             job_id=job_info.job_id,
             job_name=job_info.name or f"Job {job_info.job_id}",
             hostname=job_info.hostname,
@@ -243,7 +287,7 @@ class NotificationService:
     async def _dispatch_claimed_events(
         self, events: list[JobNotificationEvent]
     ) -> None:
-        cache = get_cache()
+        cache = await _cache_call(get_cache)
         for event in events:
             try:
                 sent_count = await self.send_job_notifications([event])
@@ -254,11 +298,17 @@ class NotificationService:
                 logger.error(f"Notification dispatch failed: {exc}")
 
             if event.notification_id:
-                cache.mark_notification_event_sent(
+                await _cache_call(
+                    cache.mark_notification_event_sent,
                     notification_id=event.notification_id,
                     sent_count=sent_count,
                     last_error=last_error,
                 )
+
+    async def _claim_and_dispatch(self, events: list[JobNotificationEvent]) -> None:
+        for event in events:
+            if await _cache_call(self._claim_event, event):
+                await self._dispatch_claimed_events([event])
 
     def _claim_event(self, event: JobNotificationEvent) -> bool:
         event.notification_id = event.notification_id or self._notification_id(event)
@@ -323,8 +373,9 @@ class NotificationService:
             sent += await self._send_payload_to_devices(payload, [device])
             return sent
 
-        cache = get_cache()
-        devices = cache.list_notification_devices(
+        cache = await _cache_call(get_cache)
+        devices = await _cache_call(
+            cache.list_notification_devices,
             platform="ios",
             environment="sandbox" if self.settings.apns_use_sandbox else "production",
             bundle_id=self.settings.apns_bundle_id,
@@ -335,7 +386,9 @@ class NotificationService:
 
         expo_devices = [
             device
-            for device in cache.list_notification_devices(enabled_only=True)
+            for device in await _cache_call(
+                cache.list_notification_devices, enabled_only=True
+            )
             if device.get("token_type") == "expo"
             or device.get("payload_format") == "expo"
         ]
@@ -350,7 +403,9 @@ class NotificationService:
                 expo_devices,
             )
 
-        subscriptions = cache.list_webpush_subscriptions(enabled_only=True)
+        subscriptions = await _cache_call(
+            cache.list_webpush_subscriptions, enabled_only=True
+        )
         if subscriptions:
             sent += await self._send_payload_to_webpush(payload, subscriptions)
 
@@ -453,7 +508,7 @@ class NotificationService:
         if not self._apns_client or not devices:
             return 0
 
-        cache = get_cache()
+        cache = await _cache_call(get_cache)
 
         async def send_one(device: dict):
             async with self._send_semaphore:
@@ -477,7 +532,8 @@ class NotificationService:
                 sent += 1
                 continue
             if status in {400, 410} and reason in {"BadDeviceToken", "Unregistered"}:
-                cache.remove_notification_device(
+                await _cache_call(
+                    cache.remove_notification_device,
                     api_key_hash=device["api_key_hash"],
                     device_token=device["device_token"],
                 )
@@ -488,7 +544,7 @@ class NotificationService:
         if not self._expo_client or not devices:
             return 0
 
-        cache = get_cache()
+        cache = await _cache_call(get_cache)
 
         async def send_one(device: dict):
             async with self._send_semaphore:
@@ -511,8 +567,12 @@ class NotificationService:
             if success:
                 sent += 1
                 continue
-            if status == 400 and reason in {"DeviceNotRegistered", "InvalidCredentials"}:
-                cache.remove_notification_device(
+            if status == 400 and reason in {
+                "DeviceNotRegistered",
+                "InvalidCredentials",
+            }:
+                await _cache_call(
+                    cache.remove_notification_device,
                     api_key_hash=device["api_key_hash"],
                     device_token=device["device_token"],
                 )
@@ -525,7 +585,7 @@ class NotificationService:
         if not self._webpush_client or not subscriptions:
             return 0
 
-        cache = get_cache()
+        cache = await _cache_call(get_cache)
 
         async def send_one(subscription: dict):
             async with self._send_semaphore:
@@ -551,7 +611,8 @@ class NotificationService:
                 sent += 1
                 continue
             if status in {404, 410}:
-                cache.remove_webpush_subscription(
+                await _cache_call(
+                    cache.remove_webpush_subscription,
                     api_key_hash=subscription["api_key_hash"],
                     endpoint=subscription["endpoint"],
                 )

@@ -13,6 +13,7 @@ from ...models.job import JobState
 from ...notifications import get_notification_service
 from ...request_coalescer import get_request_coalescer
 from ...utils.async_helpers import create_task
+from ...utils.executors import run_local, run_remote
 from ...utils.logging import setup_logger
 from ..models import JobInfoWeb
 from ..status_helpers import group_array_job_tasks
@@ -49,7 +50,7 @@ async def monitor_job_updates(
     try:
         from ...job_data_manager import get_job_data_manager
 
-        get_slurm_manager()
+        await run_local(get_slurm_manager)
         job_data_manager = get_job_data_manager()
         last_state = None
         last_output_size = 0
@@ -78,7 +79,7 @@ async def monitor_job_updates(
                 if job_info.state != previous_state:
                     old_state_value = previous_state.value if previous_state else None
                     if previous_state is not None:
-                        get_notification_service().enqueue_job_info_transition(
+                        await get_notification_service().enqueue_job_info_transition(
                             job_info,
                             old_state_value,
                         )
@@ -163,12 +164,10 @@ async def send_job_output(
 ):
     """Send current job output to the WebSocket."""
     try:
-        manager = get_slurm_manager()
+        manager = await run_local(get_slurm_manager)
         slurm_host = manager.get_host_by_name(hostname)
 
-        output_result = await asyncio.to_thread(
-            slurm_host.slurm_client.get_job_output, job_id
-        )
+        output_result = await run_remote(slurm_host.slurm_client.get_job_output, job_id)
 
         if output_result.success:
             await websocket.send_json(
@@ -226,7 +225,7 @@ async def websocket_job_handler(
         try:
             from ...job_data_manager import get_job_data_manager
 
-            get_slurm_manager()
+            await run_local(get_slurm_manager)
             job_data_manager = get_job_data_manager()
             coalescer = get_request_coalescer()
 
@@ -328,13 +327,17 @@ async def websocket_all_jobs_handler(
         try:
             from ...job_data_manager import get_job_data_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             job_data_manager = get_job_data_manager()
             cache = get_cache()
             all_jobs = []
             since_dt = datetime.now() - timedelta(days=1)
-            cached_job_data = cache.get_cached_jobs(
-                hostname=None, limit=500, since=since_dt
+            cached_job_data = await run_local(
+                cache.get_cached_jobs,
+                include_outputs=False,
+                hostname=None,
+                limit=500,
+                since=since_dt,
             )
 
             if cached_job_data and len(cached_job_data) > 0:
@@ -379,7 +382,7 @@ async def websocket_all_jobs_handler(
             array_groups_by_host = {}
             for hostname, host_jobs in jobs_by_host_objects.items():
                 if host_jobs:
-                    _, array_groups = group_array_job_tasks(host_jobs)
+                    _, array_groups = await run_local(group_array_job_tasks, host_jobs)
                     if array_groups:
                         array_groups_by_host[hostname] = [
                             group.model_dump(mode="json") for group in array_groups
@@ -484,7 +487,7 @@ async def websocket_watchers_handler(
                 )["watchers"],
             }
 
-        initial_payload = await asyncio.to_thread(load_initial_payload)
+        initial_payload = await run_local(load_initial_payload)
         await websocket.send_json({"type": "initial", **initial_payload})
 
         while True:

@@ -1,0 +1,87 @@
+name: Ssync
+options:
+  bundleIdPrefix: com.ssync
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: Accent
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Configuration/Signing.xcconfig
+  Release: Configuration/Signing.xcconfig
+targets:
+  Ssync:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Core
+      - DesignSystem
+      - Features
+      - SystemIntegration
+      - Shared
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ssync.mobile
+        INFOPLIST_FILE: Configuration/App-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/App.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        APNS_ENVIRONMENT: production
+      configs:
+        Debug:
+          APNS_ENVIRONMENT: development
+    dependencies:
+      - target: SsyncWidgets
+  SsyncWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widgets
+      - Shared
+      - path: Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ssync.mobile.widgets
+        INFOPLIST_FILE: Configuration/Widgets-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/Widgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  SsyncTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests/Unit]
+    dependencies:
+      - target: Ssync
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.ssync.mobile.tests
+  SsyncUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests/UI]
+    dependencies:
+      - target: Ssync
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.ssync.mobile.uitests
+schemes:
+  Ssync:
+    build:
+      targets:
+        Ssync: all
+    test:
+      targets: [SsyncTests, SsyncUITests]

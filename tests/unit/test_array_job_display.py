@@ -5,8 +5,8 @@ import pytest
 from ssync.cli.display import JobDisplay
 from ssync.models.job import JobInfo, JobState
 from ssync.utils.slurm_arrays import looks_like_array_submission
-from ssync.web import app as web_app
 from ssync.web.models import JobInfoWeb
+from ssync.web.status_helpers import deduplicate_array_jobs
 
 
 def _make_job(
@@ -48,7 +48,7 @@ def test_web_deduplicate_array_jobs_hides_synthetic_parent_when_tasks_exist():
         ),
     ]
 
-    filtered = web_app.deduplicate_array_jobs(jobs)
+    filtered = deduplicate_array_jobs(jobs)
 
     assert [job.job_id for job in filtered] == ["9002_0"]
 

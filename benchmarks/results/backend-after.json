@@ -1,0 +1,22 @@
+{
+  "source": "/home/aliramlaoui/projects/ssync-workspace/ssync-backend-request-isolation/src/ssync/__init__.py",
+  "catalog_contention": {
+    "samples": 5,
+    "slow_catalog_ms": 250,
+    "health_scheduling_delay_max_ms": 1.144,
+    "health_scheduling_delay_median_ms": 1.097
+  },
+  "cached_log_preview": {
+    "seconds": 0.073489,
+    "python_peak_mib": 1.87,
+    "uncompressed_mib": 64,
+    "response_limit_kib": 512,
+    "returned_bytes": 524288
+  },
+  "status_cache_read": {
+    "seconds": 0.005272,
+    "python_peak_mib": 0.089,
+    "jobs": 32,
+    "stored_log_mib": 32
+  }
+}
