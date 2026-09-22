@@ -74,6 +74,7 @@
     role="dialog"
     tabindex="-1"
     aria-modal="true"
+    aria-label={title || undefined}
     transition:fly={{ y: 20, duration: 200 }}
   >
     {#if header || title || showCloseButton}
@@ -122,7 +123,7 @@
     background: var(--popover);
     color: var(--popover-foreground);
     border: 1px solid var(--border);
-    border-radius: 0.75rem;
+    border-radius: var(--radius-card);
     box-shadow: 0 20px 25px -5px color-mix(in srgb, var(--foreground) 10%, transparent),
                 0 10px 10px -5px color-mix(in srgb, var(--foreground) 4%, transparent);
     max-height: 90vh;

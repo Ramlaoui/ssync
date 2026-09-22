@@ -44,12 +44,22 @@ function loadPreferences(): UIPreferences {
   const stored = safeGetItem('ui-preferences');
   if (stored) {
     try {
-      return { ...defaultPreferences, ...JSON.parse(stored) };
+      const saved = JSON.parse(stored);
+      return { ...defaultPreferences, ...saved, websocket: { ...defaultPreferences.websocket, ...saved.websocket } };
     } catch {
       return defaultPreferences;
     }
   }
-  return defaultPreferences;
+  // Migrate display settings from the original settings page on first use.
+  try {
+    const legacy = JSON.parse(safeGetItem('ssync_preferences') || '{}');
+    return {
+      ...defaultPreferences,
+      ...(typeof legacy.autoRefresh === 'boolean' ? { autoRefresh: legacy.autoRefresh } : {}),
+      ...(Number.isFinite(legacy.refreshInterval) ? { refreshInterval: Math.max(10, legacy.refreshInterval) * 1000 } : {}),
+      ...(Number.isFinite(legacy.jobsPerPage) ? { jobsPerPage: Math.max(25, legacy.jobsPerPage) } : {}),
+    };
+  } catch { return defaultPreferences; }
 }
 
 // Create the store

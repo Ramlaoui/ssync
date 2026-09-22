@@ -1,42 +1,6 @@
 <script lang="ts">
-  import { cn } from "../../utils";
-  import Badge from "./Badge.svelte";
-
-  interface Props {
-    status: string;
-    class?: string;
-  }
-
-  let { status, class: className = "" }: Props = $props();
-  
-
-  type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "success" | "warning";
-
-  const statusConfig: Record<string, { label: string; variant: BadgeVariant; icon: string; pulse: boolean }> = {
-    'R': { label: 'Running', variant: 'success', icon: '●', pulse: true },
-    'PD': { label: 'Pending', variant: 'warning', icon: '◐', pulse: false },
-    'CD': { label: 'Completed', variant: 'default', icon: '✓', pulse: false },
-    'F': { label: 'Failed', variant: 'destructive', icon: '✕', pulse: false },
-    'CA': { label: 'Cancelled', variant: 'secondary', icon: '⊘', pulse: false },
-    'TO': { label: 'Timeout', variant: 'destructive', icon: '⏱', pulse: false },
-  };
-
-  let config = $derived(statusConfig[status] || { label: status, variant: 'default' as BadgeVariant, icon: '?', pulse: false });
+  import JobStatus from '../../../components/workspace/JobStatus.svelte';
+  let { status, class: className = '' }: { status: string; class?: string } = $props();
 </script>
 
-<Badge 
-  variant={config.variant}
-  class={cn(
-    "inline-flex items-center gap-1.5 font-medium",
-    config.pulse && "animate-pulse",
-    className
-  )}
->
-  <span class={cn(
-    "text-xs",
-    config.pulse && "animate-pulse"
-  )}>
-    {config.icon}
-  </span>
-  {config.label}
-</Badge>
+<span class={className}><JobStatus state={status}/></span>

@@ -80,10 +80,10 @@
 
   function getStateColor(state: string): string {
     switch (state) {
-      case 'active': return 'var(--success)';
+      case 'active': return 'var(--accent)';
       case 'paused': return 'var(--warning)';
       case 'static': return 'var(--accent)';  // Purple for static watchers
-      case 'completed': return 'var(--accent)';
+      case 'completed': return 'var(--success)';
       case 'failed': return 'var(--destructive)';
       default: return 'var(--muted-foreground)';
     }
@@ -91,11 +91,11 @@
 
   function getStateColorClass(state: string): string {
     switch (state) {
-      case 'active': return 'text-emerald-500';
-      case 'paused': return 'text-amber-500';
-      case 'static': return 'text-blue-500';
-      case 'completed': return 'text-blue-500';
-      case 'failed': return 'text-red-500';
+      case 'active': return 'text-[var(--accent)]';
+      case 'paused': return 'text-[var(--warning)]';
+      case 'static': return 'text-[var(--muted-foreground)]';
+      case 'completed': return 'text-[var(--success)]';
+      case 'failed': return 'text-[var(--error)]';
       default: return 'text-gray-400';
     }
   }
@@ -342,7 +342,7 @@
   }
 </script>
 
-<div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:-translate-y-0.5 w-full {pulseClass} {isExpanded ? 'expanded' : ''} {className}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
+<div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-150 relative overflow-hidden cursor-pointer hover:border-[var(--accent)] w-full {pulseClass} {isExpanded ? 'expanded' : ''} {className}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
   {#if triggerMessage}
     <div 
       class="trigger-message" 
