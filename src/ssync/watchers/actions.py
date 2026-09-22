@@ -91,6 +91,7 @@ class ActionExecutor:
             gres=sbatch.get("gres"),
             nodes=sbatch.get("nodes"),
             constraint=sbatch.get("constraint"),
+            exclude=sbatch.get("exclude"),
             account=sbatch.get("account"),
             qos=sbatch.get("qos"),
             dependency=sbatch.get("dependency"),

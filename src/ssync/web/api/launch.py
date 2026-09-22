@@ -84,6 +84,7 @@ def register_launch_routes(
                 output=request.output,
                 error=request.error,
                 constraint=request.constraint,
+                exclude=request.slurm_exclude,
                 account=request.account,
                 qos=request.qos,
                 dependency=request.dependency,

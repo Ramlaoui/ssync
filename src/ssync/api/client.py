@@ -450,6 +450,7 @@ class APIClient:
         output: Optional[str] = None,
         error: Optional[str] = None,
         constraint: Optional[str] = None,
+        slurm_exclude: Optional[str] = None,
         account: Optional[str] = None,
         qos: Optional[str] = None,
         dependency: Optional[str] = None,
@@ -493,6 +494,8 @@ class APIClient:
             request_data["error"] = error
         if constraint:
             request_data["constraint"] = constraint
+        if slurm_exclude:
+            request_data["slurm_exclude"] = slurm_exclude
         if account:
             request_data["account"] = account
         if qos:

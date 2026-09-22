@@ -46,6 +46,7 @@ _SBATCH_FIELDS = (
     "gpus_per_node",
     "gres",
     "constraint",
+    "exclude",
     "account",
     "qos",
     "dependency",
@@ -499,4 +500,3 @@ def _metadata_for_profile(data: dict[str, Any], public_kind: str) -> dict[str, A
 
 def _unique_sorted(values: list[str]) -> list[str]:
     return sorted(dict.fromkeys(values))
-
