@@ -51,6 +51,7 @@ sbatch:
   mem: 64
   time: 60
   gpus_per_node: 1
+  exclude: bad-node
   qos: qos_gpu-t4
   dependency: afterok:12345
 """,
@@ -67,9 +68,11 @@ sbatch:
     assert rendered.mem == 64
     assert rendered.time == 60
     assert rendered.gpus_per_node == 1
+    assert rendered.exclude == "bad-node"
     assert rendered.qos == "qos_gpu-t4"
     assert rendered.dependency == "afterok:12345"
     assert rendered.manifest["sbatch"]["qos"] == "qos_gpu-t4"
+    assert rendered.manifest["sbatch"]["exclude"] == "bad-node"
     assert rendered.manifest["sbatch"]["dependency"] == "afterok:12345"
     assert "export CONFIG=experiments/demo/train" in rendered.script_content
     assert "#LOGIN_SETUP_BEGIN" in rendered.script_content

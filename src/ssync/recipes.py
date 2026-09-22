@@ -37,6 +37,7 @@ class RenderedRecipe:
     gpus_per_node: int | None = None
     gres: str | None = None
     constraint: str | None = None
+    exclude: str | None = None
     account: str | None = None
     qos: str | None = None
     dependency: str | None = None
@@ -683,6 +684,7 @@ def render_launch_recipe(
             "gpus_per_node": sbatch.get("gpus_per_node"),
             "gres": sbatch.get("gres"),
             "constraint": sbatch.get("constraint"),
+            "exclude": sbatch.get("exclude"),
             "account": sbatch.get("account"),
             "qos": sbatch.get("qos"),
             "dependency": sbatch.get("dependency"),
@@ -726,6 +728,7 @@ def render_launch_recipe(
         gpus_per_node=sbatch.get("gpus_per_node"),
         gres=sbatch.get("gres"),
         constraint=sbatch.get("constraint"),
+        exclude=sbatch.get("exclude"),
         account=sbatch.get("account"),
         qos=sbatch.get("qos"),
         dependency=sbatch.get("dependency"),

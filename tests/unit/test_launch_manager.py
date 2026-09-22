@@ -12,14 +12,20 @@ from ssync.slurm.submit import SlurmSubmit
 
 @pytest.mark.unit
 def test_sbatch_command_includes_qos_and_dependency():
-    params = SlurmParams(qos="qos_gpu-t4", dependency="afterok:12345")
+    params = SlurmParams(
+        qos="qos_gpu-t4",
+        dependency="afterok:12345",
+        exclude="bad-node",
+    )
 
     cmd, submit_line = SlurmSubmit().build_sbatch_command(params, "/tmp/job.slurm")
 
     assert "--qos=qos_gpu-t4" in cmd
     assert "--dependency=afterok:12345" in cmd
+    assert "--exclude=bad-node" in cmd
     assert submit_line == (
-        "sbatch --qos=qos_gpu-t4 --dependency=afterok:12345 /tmp/job.slurm"
+        "sbatch --exclude=bad-node --qos=qos_gpu-t4 "
+        "--dependency=afterok:12345 /tmp/job.slurm"
     )
 
 

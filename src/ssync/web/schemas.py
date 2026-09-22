@@ -399,6 +399,7 @@ class LaunchJobRequest(BaseModel):
     output: Optional[str] = None
     error: Optional[str] = None
     constraint: Optional[str] = None
+    slurm_exclude: Optional[str] = None
     account: Optional[str] = None
     qos: Optional[str] = None
     dependency: Optional[str] = None

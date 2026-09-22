@@ -28,6 +28,7 @@ class SlurmParams:
     gres: Optional[str] = None
     nodes: Optional[int] = None
     constraint: Optional[str] = None
+    exclude: Optional[str] = None
     account: Optional[str] = None
     qos: Optional[str] = None
     dependency: Optional[str] = None
@@ -43,6 +44,7 @@ class SlurmParams:
             "output": self.output,
             "error": self.error,
             "constraint": self.constraint,
+            "exclude": self.exclude,
             "account": self.account,
             "qos": self.qos,
             "dependency": self.dependency,
@@ -68,6 +70,7 @@ ALIAS_MAP = {
     "output": "output",
     "error": "error",
     "constraint": "constraint",
+    "exclude": "exclude",
     "account": "account",
     "qos": "qos",
     "dependency": "dependency",
@@ -163,6 +166,8 @@ def to_directives(kwargs: Dict[str, Any]) -> List[str]:
         directives.append(f"#SBATCH --error={params['error']}")
     if params.get("constraint"):
         directives.append(f"#SBATCH --constraint={params['constraint']}")
+    if params.get("exclude"):
+        directives.append(f"#SBATCH --exclude={params['exclude']}")
     if params.get("account"):
         directives.append(f"#SBATCH --account={params['account']}")
     if params.get("qos"):

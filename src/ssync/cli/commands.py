@@ -79,6 +79,7 @@ _SBATCH_OVERRIDE_FIELDS = _SBATCH_OVERRIDE_INT_FIELDS | {
     "constraint",
     "dependency",
     "error",
+    "exclude",
     "gres",
     "job_name",
     "output",
@@ -427,6 +428,7 @@ class LaunchCommand(BaseCommand):
         output: Optional[str] = None,
         error: Optional[str] = None,
         constraint: Optional[str] = None,
+        slurm_exclude: Optional[str] = None,
         account: Optional[str] = None,
         qos: Optional[str] = None,
         dependency: Optional[str] = None,
@@ -467,6 +469,7 @@ class LaunchCommand(BaseCommand):
                 output=output,
                 error=error,
                 constraint=constraint,
+                slurm_exclude=slurm_exclude,
                 account=account,
                 qos=qos,
                 dependency=dependency,
@@ -735,6 +738,7 @@ class LaunchRecipeCommand(LaunchCommand):
         resolved_constraint = (
             constraint if constraint is not None else rendered.constraint
         )
+        resolved_slurm_exclude = rendered.exclude
         resolved_account = account if account is not None else rendered.account
         resolved_qos = qos if qos is not None else rendered.qos
         resolved_dependency = (
@@ -755,6 +759,7 @@ class LaunchRecipeCommand(LaunchCommand):
             "gpus_per_node": resolved_gpus,
             "gres": resolved_gres,
             "constraint": resolved_constraint,
+            "exclude": resolved_slurm_exclude,
             "account": resolved_account,
             "qos": resolved_qos,
             "dependency": resolved_dependency,
@@ -796,6 +801,7 @@ class LaunchRecipeCommand(LaunchCommand):
             output=resolved_output,
             error=resolved_error,
             constraint=resolved_constraint,
+            slurm_exclude=resolved_slurm_exclude,
             account=resolved_account,
             qos=resolved_qos,
             dependency=resolved_dependency,

@@ -40,6 +40,8 @@ class SlurmSubmit:
             cmd.append(f"--error={slurm_params.error}")
         if slurm_params.constraint:
             cmd.append(f"--constraint={slurm_params.constraint}")
+        if slurm_params.exclude:
+            cmd.append(f"--exclude={slurm_params.exclude}")
         if slurm_params.account:
             cmd.append(f"--account={slurm_params.account}")
         if slurm_params.qos:
