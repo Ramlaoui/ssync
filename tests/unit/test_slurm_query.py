@@ -1,5 +1,9 @@
 """Unit tests for SlurmQuery array-task accounting fallbacks."""
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from ssync.models.job import JobState
@@ -25,6 +29,40 @@ class _FakeConn:
             if match_text in command:
                 return result
         return _FakeResult(stdout="", ok=False, exited=1)
+
+
+@pytest.mark.unit
+def test_concurrent_username_lookups_are_coalesced():
+    query = SlurmQuery()
+    started = threading.Event()
+    release = threading.Event()
+    state_lock = threading.Lock()
+    call_count = 0
+
+    class ConcurrentConn:
+        user = None
+
+        def run(self, command: str, **kwargs):
+            nonlocal call_count
+            with state_lock:
+                call_count += 1
+            started.set()
+            release.wait(timeout=2)
+            return _FakeResult(stdout="testuser\n")
+
+    conn = ConcurrentConn()
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = [
+            pool.submit(query.get_username, conn, hostname="cluster.example.com")
+            for _ in range(16)
+        ]
+        assert started.wait(timeout=1)
+        time.sleep(0.05)
+        release.set()
+        usernames = [future.result(timeout=2) for future in futures]
+
+    assert usernames == ["testuser"] * 16
+    assert call_count == 1
 
 
 @pytest.mark.unit

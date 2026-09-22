@@ -1,6 +1,11 @@
 """Unit tests for SSH backend (ConnectionManager, SSHConnection, NativeSSH)."""
 
 import io
+import logging
+import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 
 import pytest
@@ -75,6 +80,20 @@ class TestSSHCommandResult:
 
 class TestNativeSSH:
     """Tests for NativeSSH class."""
+
+    @pytest.fixture(autouse=True)
+    def reset_native_ssh_state(self):
+        NativeSSH._control_masters.clear()
+        NativeSSH._master_processes.clear()
+        NativeSSH._failed_hosts.clear()
+        NativeSSH._host_locks.clear()
+        NativeSSH._command_semaphores.clear()
+        yield
+        NativeSSH._control_masters.clear()
+        NativeSSH._master_processes.clear()
+        NativeSSH._failed_hosts.clear()
+        NativeSSH._host_locks.clear()
+        NativeSSH._command_semaphores.clear()
 
     @pytest.mark.unit
     def test_get_control_path(self):
@@ -158,6 +177,83 @@ class TestNativeSSH:
         assert "-p" in cmd
         assert "2222" in cmd
 
+    @pytest.mark.unit
+    @patch("ssync.ssh.native.shutil.which", return_value="/usr/bin/sshpass")
+    @patch("ssync.ssh.native.subprocess.Popen")
+    @patch.object(NativeSSH, "_check_control_master", return_value=True)
+    def test_password_master_is_supervised_and_keeps_secret_out_of_argv(
+        self, _mock_check, mock_popen, _mock_which, tmp_path
+    ):
+        control_path = tmp_path / "control.sock"
+        process = Mock()
+        process.poll.return_value = None
+        process.stdin = None
+
+        def start_master(*_args, **_kwargs):
+            control_path.touch()
+            return process
+
+        mock_popen.side_effect = start_master
+        config = {
+            "hostname": "example.com",
+            "user": "alice",
+            "connect_kwargs": {"password": "secret"},
+        }
+
+        with patch.object(
+            NativeSSH, "get_control_path", return_value=str(control_path)
+        ):
+            result = NativeSSH.ensure_control_master(config, "alice@example.com")
+
+        assert result == str(control_path)
+        command = mock_popen.call_args.args[0]
+        assert command[:2] == ["sshpass", "-e"]
+        assert "-f" not in command
+        assert "-N" not in command
+        assert command[-1] == "exec cat >/dev/null"
+        assert "secret" not in command
+        assert mock_popen.call_args.kwargs["env"]["SSHPASS"] == "secret"
+        assert mock_popen.call_args.kwargs["start_new_session"] is True
+        assert mock_popen.call_args.kwargs["stdin"] == subprocess.PIPE
+
+    @pytest.mark.unit
+    @patch("ssync.ssh.native.shutil.which", return_value="/usr/bin/sshpass")
+    @patch("ssync.ssh.native.subprocess.Popen")
+    @patch.object(NativeSSH, "_check_control_master", return_value=True)
+    def test_concurrent_callers_start_only_one_master(
+        self, _mock_check, mock_popen, _mock_which, tmp_path
+    ):
+        control_path = tmp_path / "control.sock"
+        process = Mock()
+        process.poll.return_value = None
+        process.stdin = None
+
+        def start_master(*_args, **_kwargs):
+            control_path.touch()
+            return process
+
+        mock_popen.side_effect = start_master
+        config = {
+            "hostname": "example.com",
+            "connect_kwargs": {"password": "secret"},
+        }
+
+        with patch.object(
+            NativeSSH, "get_control_path", return_value=str(control_path)
+        ):
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(
+                    pool.map(
+                        lambda _index: NativeSSH.ensure_control_master(
+                            config, "example.com"
+                        ),
+                        range(8),
+                    )
+                )
+
+        assert results == [str(control_path)] * 8
+        mock_popen.assert_called_once()
+
 
 class TestCDContext:
     """Tests for _CDContext (cd context manager)."""
@@ -193,6 +289,12 @@ class TestCDContext:
 
 class TestSSHConnection:
     """Tests for SSHConnection class."""
+
+    @pytest.fixture(autouse=True)
+    def reset_command_limits(self):
+        NativeSSH._command_semaphores.clear()
+        yield
+        NativeSSH._command_semaphores.clear()
 
     @pytest.mark.unit
     def test_init_with_ssh_alias(self):
@@ -308,10 +410,10 @@ class TestSSHConnection:
         return_value="/tmp/control.sock",
     )
     @patch("subprocess.run")
-    def test_run_reuses_control_master_for_password_auth(
+    def test_run_reuses_control_master_without_direct_fallback(
         self, mock_run, _mock_control_master
     ):
-        """Password-backed commands reuse the managed SSH control socket."""
+        """A vanished socket cannot turn a watcher command into a fresh login."""
         mock_run.return_value = Mock(returncode=0, stdout=b"", stderr=b"")
         conn = SSHConnection(
             {
@@ -332,35 +434,13 @@ class TestSSHConnection:
                 "/tmp/control.sock",
                 "-o",
                 "ControlMaster=no",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ProxyCommand=false",
                 "alice@example.com",
                 "echo ok",
             ],
-            capture_output=True,
-            timeout=120,
-        )
-
-    @pytest.mark.unit
-    @patch("ssync.ssh.connection.NativeSSH.ensure_control_master", return_value=None)
-    @patch("subprocess.run")
-    def test_run_falls_back_to_sshpass_for_password_auth(
-        self, mock_run, _mock_control_master
-    ):
-        """Password-backed commands keep a direct sshpass fallback."""
-        mock_run.return_value = Mock(returncode=0, stdout=b"", stderr=b"")
-        conn = SSHConnection(
-            {
-                "hostname": "example.com",
-                "user": "alice",
-                "connect_kwargs": {"password": "secret"},
-            },
-            "alice@example.com",
-        )
-
-        result = conn.run("echo ok")
-
-        assert result.ok is True
-        mock_run.assert_called_once_with(
-            ["sshpass", "-p", "secret", "ssh", "alice@example.com", "echo ok"],
             capture_output=True,
             timeout=120,
         )
@@ -370,7 +450,106 @@ class TestSSHConnection:
         "ssync.ssh.connection.NativeSSH.ensure_control_master",
         return_value="/tmp/control.sock",
     )
-    def test_scp_command_reuses_control_master_for_password_auth(
+    @patch("subprocess.run")
+    def test_commands_share_per_host_session_limit(
+        self, mock_run, _mock_control_master
+    ):
+        """A watcher startup burst stays below the SSH server session limit."""
+        active = 0
+        peak = 0
+        state_lock = threading.Lock()
+        eight_started = threading.Event()
+        release = threading.Event()
+
+        def run_command(*_args, **_kwargs):
+            nonlocal active, peak
+            with state_lock:
+                active += 1
+                peak = max(peak, active)
+                if active >= 8:
+                    eight_started.set()
+            release.wait(timeout=2)
+            with state_lock:
+                active -= 1
+            return Mock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = run_command
+        conn = SSHConnection("example.com", "example.com")
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            futures = [pool.submit(conn.run, "true") for _ in range(16)]
+            assert eight_started.wait(timeout=1)
+            time.sleep(0.05)
+            release.set()
+            results = [future.result(timeout=2) for future in futures]
+
+        assert all(result.ok for result in results)
+        assert peak == 8
+
+    @pytest.mark.unit
+    @patch(
+        "ssync.ssh.connection.NativeSSH.ensure_control_master",
+        return_value="/tmp/control.sock",
+    )
+    @patch("subprocess.run")
+    def test_host_specific_command_limit_can_be_configured(
+        self, mock_run, _mock_control_master, monkeypatch
+    ):
+        """A constrained host can lower its SSH session limit locally."""
+        monkeypatch.setenv("SSYNC_MAX_COMMANDS_PER_HOST_LIMITED_CLUSTER", "2")
+        active = 0
+        peak = 0
+        state_lock = threading.Lock()
+
+        def run_command(*_args, **_kwargs):
+            nonlocal active, peak
+            with state_lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.01)
+            with state_lock:
+                active -= 1
+            return Mock(returncode=0, stdout=b"", stderr=b"")
+
+        mock_run.side_effect = run_command
+        conn = SSHConnection("limited-cluster", "limited-cluster")
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _index: conn.run("true"), range(8)))
+
+        assert all(result.ok for result in results)
+        assert peak == 2
+
+    @pytest.mark.unit
+    @patch("ssync.ssh.connection.NativeSSH.ensure_control_master", return_value=None)
+    @patch("subprocess.run")
+    def test_run_does_not_fall_back_to_repeated_password_auth(
+        self, mock_run, _mock_control_master, caplog
+    ):
+        """Password-backed commands require the shared control socket."""
+        conn = SSHConnection(
+            {
+                "hostname": "example.com",
+                "user": "alice",
+                "connect_kwargs": {"password": "secret"},
+            },
+            "alice@example.com",
+        )
+
+        with caplog.at_level(logging.ERROR, logger="ssync.ssh.connection"):
+            result = conn.run("echo ok")
+
+        assert result.ok is False
+        assert "ControlMaster unavailable" in result.stderr
+        mock_run.assert_not_called()
+        assert not caplog.records
+
+    @pytest.mark.unit
+    @patch(
+        "ssync.ssh.connection.NativeSSH.ensure_control_master",
+        return_value="/tmp/control.sock",
+    )
+    def test_scp_reuses_control_master_without_direct_fallback(
         self, _mock_control_master
     ):
         conn = SSHConnection(
@@ -394,6 +573,10 @@ class TestSSHConnection:
             "ControlPath=/tmp/control.sock",
             "-o",
             "ControlMaster=no",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ProxyCommand=false",
             "/tmp/local.txt",
             "alice@example.com:/remote/local.txt",
         ]
