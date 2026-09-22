@@ -140,5 +140,14 @@ Final validation: **715 backend tests passed, 2 existing timing-related tests
 skipped**; **147 frontend tests passed, 1 skipped**. Changed Python files pass
 Ruff and formatting checks; Svelte checking reports no errors or warnings, and
 the production frontend build succeeds. The build still reports its existing
-bundle-size and stale browser-data advisories. The original checkout remains
-untouched; this branch has not been deployed or exercised against live SSH hosts.
+bundle-size and stale browser-data advisories. Automated tests and synthetic
+benchmarks above do not contact live SSH hosts.
+
+A subsequent read-only observation of the running backend on this branch on
+2026-09-22 returned **45/45 successful health checks over 45.79 seconds**, with
+**2.168 ms p95** and **5.620 ms maximum** latency. RSS ranged from **316.83 to
+317.84 MiB**, and sampled worker-pool rejection counters were all zero. This
+short observation does not establish long-term memory stability. Runtime logs
+also contained repeated watcher resubmission/dependency failures and host Slurm
+availability warnings; those failures remain unresolved by this performance
+change. The check queried only local health, cache statistics, and existing logs.
