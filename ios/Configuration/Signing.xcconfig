@@ -1,0 +1,3 @@
+// Personal signing settings stay in the ignored Local.xcconfig file.
+DEVELOPMENT_TEAM =
+#include? "Local.xcconfig"
