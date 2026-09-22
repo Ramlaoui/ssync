@@ -1,74 +1,34 @@
 import { Color, Icon } from "@raycast/api";
+import { relay } from "./design";
+import { jobStatus } from "./jobs";
 import type { JobInfo, JobState } from "../types/ssync";
 
 export function stateLabel(state: JobState): string {
-  switch (state) {
-    case "PD":
-      return "Pending";
-    case "R":
-      return "Running";
-    case "CD":
-      return "Completed";
-    case "F":
-      return "Failed";
-    case "CA":
-      return "Cancelled";
-    case "TO":
-      return "Timed out";
-    case "UNKNOWN":
-      return "Unknown";
-    default:
-      return String(state);
-  }
+  return jobStatus(state).label;
 }
-
 export function stateIcon(state: JobState): Icon {
-  switch (state) {
-    case "R":
-      return Icon.Play;
-    case "PD":
-      return Icon.Clock;
-    case "CD":
-      return Icon.CheckCircle;
-    case "F":
-      return Icon.XmarkCircle;
-    case "CA":
-      return Icon.Stop;
-    case "TO":
-      return Icon.Hourglass;
-    default:
-      return Icon.QuestionMark;
-  }
+  const status = jobStatus(state);
+  if (status.category === "running") return Icon.Play;
+  if (status.category === "pending") return Icon.Clock;
+  if (status.tone === "success") return Icon.CheckCircle;
+  if (status.tone === "danger") return Icon.XmarkCircle;
+  if (status.tone === "warning") return Icon.Hourglass;
+  return Icon.Stop;
 }
-
-export function stateColor(state: JobState): Color {
-  switch (state) {
-    case "R":
-      return Color.Green;
-    case "PD":
-      return Color.Yellow;
-    case "CD":
-      return Color.Blue;
-    case "F":
-    case "TO":
-      return Color.Red;
-    case "CA":
-      return Color.Orange;
-    default:
-      return Color.SecondaryText;
-  }
+export function stateColor(state: JobState): Color.ColorLike {
+  return relay[jobStatus(state).tone];
 }
-
 export function isRunning(job: JobInfo): boolean {
-  return job.state === "R";
+  return jobStatus(job.state).category === "running";
 }
-
 export function isPending(job: JobInfo): boolean {
-  return job.state === "PD";
+  return jobStatus(job.state).category === "pending";
 }
-
 export function isHistorical(job: JobInfo): boolean {
-  return !isRunning(job) && !isPending(job);
+  return jobStatus(job.state).category === "historical";
+}
+export function canCancelJob(job: JobInfo): boolean {
+  return !isHistorical(job);
 }
 
 export function jobSortTime(job: JobInfo): number {
@@ -81,11 +41,15 @@ export function sortJobs(jobs: JobInfo[]): JobInfo[] {
   return [...jobs].sort((left, right) => {
     const byTime = jobSortTime(right) - jobSortTime(left);
     if (byTime !== 0) return byTime;
-    return right.job_id.localeCompare(left.job_id);
+    return right.job_id.localeCompare(left.job_id, undefined, {
+      numeric: true,
+    });
   });
 }
 
-export function flattenJobs(responses: { hostname: string; jobs: JobInfo[] }[]): JobInfo[] {
+export function flattenJobs(
+  responses: { hostname: string; jobs: JobInfo[] }[],
+): JobInfo[] {
   return responses.flatMap((response) =>
     (response.jobs || []).map((job) => ({
       ...job,
@@ -144,10 +108,8 @@ export function webJobUrl(apiUrl: string, job: JobInfo): string {
 export function stateCountLabel(jobs: JobInfo[]): string {
   const running = jobs.filter(isRunning).length;
   const pending = jobs.filter(isPending).length;
-  const failed = jobs.filter((job) => job.state === "F" || job.state === "TO").length;
   const parts = [];
   if (running) parts.push(`${running}R`);
   if (pending) parts.push(`${pending}PD`);
-  if (failed) parts.push(`${failed}F`);
   return parts.join(" ");
 }

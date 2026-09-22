@@ -1,5 +1,7 @@
 # Raycast Extension Plan
 
+Historical v1 plan. See [Raycast v2 implementation](raycast-extension-v2.md) for the current extension.
+
 ## Scope
 
 The first Raycast extension release is a monitoring surface for ssync jobs. It should make running and pending work easy to inspect without adding background load to the ssync API server.

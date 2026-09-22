@@ -1,8 +1,13 @@
-export type JobState = "PD" | "R" | "CD" | "F" | "CA" | "TO" | "UNKNOWN" | string;
+export type JobState =
+  "PD" | "R" | "CD" | "F" | "CA" | "TO" | "UNKNOWN" | string;
 
 export interface ConnectionSettings {
+  id: string;
+  name: string;
   apiUrl: string;
   apiKey?: string;
+  allowSelfSigned?: boolean;
+  defaultHost?: string;
   historyWindow: string;
   jobLimit: number;
   updatedAt: number;
@@ -115,6 +120,19 @@ export interface WatcherAction {
   condition?: string;
 }
 
+export interface WatcherUpdate {
+  name?: string;
+  pattern?: string;
+  interval_seconds?: number;
+  capture_groups?: string[];
+  condition?: string | null;
+  actions?: WatcherAction[];
+  timer_mode_enabled?: boolean;
+  timer_interval_seconds?: number;
+  trigger_on_job_end?: boolean;
+  trigger_job_states?: string[];
+}
+
 export interface Watcher {
   id: number;
   job_id: string;
@@ -172,7 +190,109 @@ export interface WatcherEventsResponse {
   count: number;
 }
 
+export interface TriggerWatcherResponse {
+  success: boolean;
+  message?: string;
+  matches?: boolean;
+  match_count?: number;
+  timer_mode?: boolean;
+}
+
 export interface JobsLaunchContext {
+  connectionId?: string;
+  host?: string;
   job?: JobInfo;
   view?: "detail" | "output" | "script" | "watchers";
+}
+
+export type ConnectionInput = Omit<ConnectionSettings, "id" | "updatedAt"> & {
+  id?: string;
+};
+export type JobView =
+  "all" | "running" | "pending" | "attention" | "historical" | "pinned";
+export interface WorkspaceSettings {
+  host: string;
+  view: JobView;
+  showDetail: boolean;
+  pinnedJobs: string[];
+}
+export interface SlurmDefaults {
+  partition?: string | null;
+  account?: string | null;
+  constraint?: string | null;
+  cpus?: number | null;
+  mem?: number | null;
+  time?: string | null;
+  nodes?: number | null;
+  ntasks_per_node?: number | null;
+  gpus_per_node?: number | null;
+  gres?: string | null;
+  qos?: string | null;
+}
+export interface HostInfo {
+  hostname: string;
+  work_dir: string;
+  scratch_dir: string;
+  slurm_defaults?: SlurmDefaults | null;
+}
+export interface HostSettings {
+  hostname: string;
+  slurm_defaults: SlurmDefaults;
+  revision: string;
+}
+export interface PartitionStatus {
+  hostname: string;
+  cached: boolean;
+  stale: boolean;
+  updated_at?: string | null;
+  error?: string | null;
+  partitions: Array<{
+    partition: string;
+    availability?: string | null;
+    nodes_total: number;
+    cpus_alloc: number;
+    cpus_idle: number;
+    cpus_total: number;
+    gpus_total?: number | null;
+    gpus_used?: number | null;
+    gpus_idle?: number | null;
+  }>;
+}
+export interface LaunchRequest {
+  script_content: string;
+  source_dir?: string;
+  host: string;
+  job_name?: string;
+  partition?: string;
+  account?: string;
+  cpus?: number;
+  mem?: number;
+  time?: number;
+  nodes?: number;
+  gpus_per_node?: number;
+  exclude: string[];
+  include: string[];
+  no_gitignore: boolean;
+}
+export interface LaunchResponse {
+  success: boolean;
+  job_id?: string | null;
+  launch_id?: string | null;
+  hostname: string;
+  message: string;
+}
+export interface LaunchStatus {
+  launch_id: string;
+  hostname: string;
+  stage: string;
+  terminal: boolean;
+  success?: boolean | null;
+  job_id?: string | null;
+  message?: string | null;
+  events: Array<{
+    sequence: number;
+    timestamp: string;
+    stage?: string;
+    message?: string;
+  }>;
 }

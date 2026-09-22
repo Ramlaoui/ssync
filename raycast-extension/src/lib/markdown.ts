@@ -3,16 +3,28 @@ export function escapeMarkdown(value: string): string {
 }
 
 export function codeBlock(content?: string | null, language = ""): string {
-  const body = content && content.length > 0 ? content : "No content available.";
-  return `~~~${language}\n${body.replace(/\n?$/, "\n")}~~~`;
+  const body =
+    content && content.length > 0 ? content : "No content available.";
+  const fence = "~".repeat(
+    Math.max(
+      3,
+      ...Array.from(body.matchAll(/~+/g), (match) => match[0].length + 1),
+    ),
+  );
+  return fence + language + "\n" + body.replace(/\n?$/, "\n") + fence;
 }
 
-export function fieldLine(label: string, value?: string | number | null): string | null {
+export function fieldLine(
+  label: string,
+  value?: string | number | null,
+): string | null {
   if (value === undefined || value === null || value === "") return null;
   return `**${escapeMarkdown(label)}:** ${escapeMarkdown(String(value))}`;
 }
 
-export function bulletList(rows: [string, string | number | null | undefined][]): string {
+export function bulletList(
+  rows: [string, string | number | null | undefined][],
+): string {
   const lines = rows
     .map(([label, value]) => fieldLine(label, value))
     .filter((line): line is string => Boolean(line))

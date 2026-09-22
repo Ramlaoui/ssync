@@ -1,137 +1,311 @@
-import { Clipboard, Icon, LaunchType, MenuBarExtra, Toast, launchCommand, showToast } from "@raycast/api";
-import { useEffect, useMemo, useState } from "react";
-import { SsyncClient } from "./api/client";
-import { STALE_JOB_CACHE_MS, getConnection, getJobCache, saveJobCache } from "./api/storage";
 import {
-  compactJobSubtitle,
+  Clipboard,
+  Color,
+  Icon,
+  LaunchType,
+  MenuBarExtra,
+  Toast,
+  getPreferenceValues,
+  launchCommand,
+  showToast,
+} from "@raycast/api";
+import { useRef, useState } from "react";
+import {
+  getConnection,
+  getConnections,
+  getWorkspace,
+  setActiveConnection,
+} from "./api/storage";
+import { useJobs } from "./hooks/useJobs";
+import { useResource } from "./hooks/useResource";
+import { cancelJob } from "./lib/actions";
+import { connectionScope } from "./lib/connections";
+import { relay } from "./lib/design";
+import {
+  canCancelJob,
   flattenJobs,
+  formatRelativeAge,
   isPending,
   isRunning,
   jobTitle,
   sortJobs,
   stateColor,
-  stateCountLabel,
   stateIcon,
 } from "./lib/format";
-import type { ConnectionSettings, JobCache, JobInfo, JobsLaunchContext } from "./types/ssync";
+import { jobKey, jobStatus, jobSummary } from "./lib/jobs";
+import type {
+  ConnectionSettings,
+  JobInfo,
+  JobsLaunchContext,
+} from "./types/ssync";
 
 export default function Command() {
-  const [connection, setConnection] = useState<ConnectionSettings | undefined>();
-  const [cache, setCache] = useState<JobCache | undefined>();
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      const loadedConnection = await getConnection();
-      if (cancelled) return;
-      setConnection(loadedConnection);
-      if (!loadedConnection) {
-        setIsLoading(false);
-        return;
-      }
-
-      const storedCache = await getJobCache();
-      if (cancelled) return;
-      if (storedCache) {
-        setCache(storedCache);
-        setIsLoading(false);
-      }
-      if (!storedCache || Date.now() - storedCache.loadedAt > STALE_JOB_CACHE_MS) {
-        await refresh(loadedConnection, { silent: Boolean(storedCache) });
-      } else {
-        setIsLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function refresh(connectionOverride?: ConnectionSettings, options: { silent?: boolean } = {}) {
-    const activeConnection = connectionOverride || connection;
-    if (!activeConnection) {
-      await openJobsCommand();
-      return;
-    }
-    const activeClient = new SsyncClient(activeConnection);
-    if (!options.silent) setIsLoading(true);
-    setError(null);
-    try {
-      const responses = await activeClient.getStatus({
-        since: activeConnection.historyWindow,
-        limit: activeConnection.jobLimit,
-      });
-      const nextCache = { loadedAt: Date.now(), responses };
-      setCache(nextCache);
-      await saveJobCache(nextCache);
-    } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
-    } finally {
-      if (!options.silent) setIsLoading(false);
-    }
-  }
-
-  const jobs = sortJobs(flattenJobs(cache?.responses || []));
-  const runningJobs = jobs.filter(isRunning);
-  const pendingJobs = jobs.filter(isPending);
-  const label = stateCountLabel(jobs);
-
-  if (!connection) {
+  const [revision, setRevision] = useState(0);
+  const data = useResource("menu-connections:" + revision, async () => ({
+    connection: await getConnection(),
+    profiles: await getConnections(),
+  }));
+  if (!data.data?.connection)
     return (
-      <MenuBarExtra icon={Icon.Gear} title="ssync setup" isLoading={isLoading}>
-        <MenuBarExtra.Item title="Configure Connection" icon={Icon.Gear} onAction={() => openJobsCommand()} />
+      <MenuBarExtra
+        icon={Icon.Plug}
+        title="ssync"
+        isLoading={data.isLoading}
+        tooltip={data.error || "Connect to ssync"}
+      >
+        <MenuBarExtra.Item
+          title={data.error ? "Connection unavailable" : "Add Connection"}
+          icon={Icon.Plug}
+          onAction={() => openCommand("connections")}
+        />
+        {data.error ? (
+          <MenuBarExtra.Item
+            title="Retry"
+            icon={Icon.ArrowClockwise}
+            onAction={() => setRevision((value) => value + 1)}
+          />
+        ) : null}
       </MenuBarExtra>
     );
-  }
-
   return (
-    <MenuBarExtra icon={Icon.ComputerChip} title={label || "ssync"} isLoading={isLoading}>
-      {error ? <MenuBarExtra.Item title="ssync API offline" subtitle={error} icon={Icon.Warning} onAction={() => openJobsCommand()} /> : null}
-      <MenuBarExtra.Section title={`Running Jobs (${runningJobs.length})`}>
-        {runningJobs.length ? runningJobs.map((job) => <JobMenuItem key={`${job.hostname}:${job.job_id}`} job={job} />) : <MenuBarExtra.Item title="No running jobs" icon={Icon.Circle} />}
+    <Summary
+      key={connectionScope(data.data.connection)}
+      connection={data.data.connection}
+      profiles={data.data.profiles.profiles}
+      onSwitch={async (id) => {
+        await setActiveConnection(id);
+        setRevision((value) => value + 1);
+      }}
+    />
+  );
+}
+
+function Summary({
+  connection,
+  profiles,
+  onSwitch,
+}: {
+  connection: ConnectionSettings;
+  profiles: Array<Omit<ConnectionSettings, "apiKey">>;
+  onSwitch: (id: string) => Promise<void>;
+}) {
+  const resource = useJobs(connection);
+  const workspace = useResource("menu-workspace:" + connection.id, () =>
+    getWorkspace(connection),
+  );
+  const cancelling = useRef(false);
+  const jobs = sortJobs(flattenJobs(resource.cache?.responses || []));
+  const pins = jobs.filter((job) =>
+    workspace.data?.pinnedJobs.includes(jobKey(job)),
+  );
+  const unpinned = jobs.filter(
+    (job) => !pins.some((pin) => jobKey(pin) === jobKey(job)),
+  );
+  const running = unpinned.filter(isRunning),
+    pending = unpinned.filter(isPending);
+  const attention = unpinned.filter((job) => jobStatus(job.state).attention);
+  const preferences = getPreferenceValues<{
+    menuBarJobLimit?: string;
+    menuBarAttention?: boolean;
+  }>();
+  const limit = Math.min(
+    20,
+    Math.max(3, Number(preferences.menuBarJobLimit) || 8),
+  );
+  const allRunning = jobs.filter(isRunning).length,
+    allPending = jobs.filter(isPending).length;
+  const title =
+    allRunning || allPending ? allRunning + "R " + allPending + "P" : "ssync";
+  async function refresh() {
+    const selected = await getConnection();
+    if (selected && connectionScope(selected) !== connectionScope(connection)) {
+      await onSwitch(selected.id);
+      return;
+    }
+    await workspace.refresh();
+    const ok = await resource.refresh(true);
+    await showToast({
+      style: ok ? Toast.Style.Success : Toast.Style.Failure,
+      title: ok ? "Jobs refreshed" : "Could not refresh jobs",
+    });
+  }
+  async function cancel(job: JobInfo) {
+    if (cancelling.current) return;
+    cancelling.current = true;
+    try {
+      if (await cancelJob(connection, job)) await resource.refresh(true);
+    } finally {
+      cancelling.current = false;
+    }
+  }
+  function section(label: string, list: JobInfo[]) {
+    return list.length ? (
+      <MenuBarExtra.Section title={label + " · " + list.length}>
+        {list.slice(0, limit).map((job) => (
+          <JobMenuItem
+            key={jobKey(job)}
+            connection={connection}
+            job={job}
+            onCancel={cancel}
+          />
+        ))}
+        {list.length > limit ? (
+          <MenuBarExtra.Item
+            title={"Show All " + label + " Jobs"}
+            icon={Icon.List}
+            onAction={() =>
+              openCommand("jobs", { connectionId: connection.id })
+            }
+          />
+        ) : null}
       </MenuBarExtra.Section>
-      <MenuBarExtra.Section title={`Pending Jobs (${pendingJobs.length})`}>
-        {pendingJobs.length ? pendingJobs.map((job) => <JobMenuItem key={`${job.hostname}:${job.job_id}`} job={job} />) : <MenuBarExtra.Item title="No pending jobs" icon={Icon.Circle} />}
+    ) : null;
+  }
+  return (
+    <MenuBarExtra
+      icon={{ source: "relay-mark.svg", tintColor: Color.PrimaryText }}
+      title={title}
+      isLoading={resource.isLoading || workspace.isLoading}
+      tooltip={
+        connection.name +
+        " · " +
+        allRunning +
+        " running · " +
+        allPending +
+        " pending" +
+        (resource.error ? " · Refresh failed" : "")
+      }
+    >
+      <MenuBarExtra.Section
+        title={
+          connection.name +
+          (resource.cache
+            ? " · " + formatRelativeAge(resource.cache.loadedAt)
+            : "")
+        }
+      >
+        {resource.error ? (
+          <MenuBarExtra.Item
+            title="Refresh failed · showing saved jobs"
+            subtitle={resource.error}
+            icon={{ source: Icon.Warning, tintColor: relay.warning }}
+            onAction={() => openCommand("connections")}
+          />
+        ) : null}
+        {!jobs.length && !resource.isLoading ? (
+          <MenuBarExtra.Item
+            title="No jobs in this window"
+            icon={Icon.Tray}
+            onAction={() =>
+              openCommand("jobs", { connectionId: connection.id })
+            }
+          />
+        ) : null}
       </MenuBarExtra.Section>
+      {section("Pinned", pins)}
+      {section("Running", running)}
+      {section("Pending", pending)}
+      {preferences.menuBarAttention !== false
+        ? section("Needs Attention", attention)
+        : null}
       <MenuBarExtra.Section>
-        <MenuBarExtra.Item title="Open Jobs" icon={Icon.List} onAction={() => openJobsCommand()} />
         <MenuBarExtra.Item
-          title="Refresh"
-          icon={Icon.ArrowClockwise}
-          onAction={async () => {
-            await refresh();
-            await showToast({ style: Toast.Style.Success, title: "ssync jobs refreshed" });
-          }}
+          title="Open Jobs"
+          icon={Icon.List}
+          onAction={() => openCommand("jobs", { connectionId: connection.id })}
         />
-        <MenuBarExtra.Item title="Configure Connection" icon={Icon.Gear} onAction={() => openJobsCommand()} />
+        <MenuBarExtra.Item
+          title="Hosts & Defaults"
+          icon={Icon.Desktop}
+          onAction={() => openCommand("hosts")}
+        />
+        <MenuBarExtra.Item
+          title="Watchers"
+          icon={Icon.Eye}
+          onAction={() => openCommand("watchers")}
+        />
+        <MenuBarExtra.Item
+          title="Launch Job"
+          icon={Icon.Rocket}
+          onAction={() => openCommand("launch")}
+        />
+        <MenuBarExtra.Item
+          title="Refresh Jobs"
+          icon={Icon.ArrowClockwise}
+          onAction={refresh}
+        />
       </MenuBarExtra.Section>
+      <MenuBarExtra.Submenu title="Connections" icon={Icon.Plug}>
+        {profiles.map((profile) => (
+          <MenuBarExtra.Item
+            key={profile.id}
+            title={profile.name}
+            icon={profile.id === connection.id ? Icon.Checkmark : Icon.Plug}
+            onAction={() => onSwitch(profile.id)}
+          />
+        ))}
+        <MenuBarExtra.Item
+          title="Manage Connections"
+          icon={Icon.Gear}
+          onAction={() => openCommand("connections")}
+        />
+      </MenuBarExtra.Submenu>
     </MenuBarExtra>
   );
 }
 
-function JobMenuItem({ job }: { job: JobInfo }) {
+function JobMenuItem({
+  connection,
+  job,
+  onCancel,
+}: {
+  connection: ConnectionSettings;
+  job: JobInfo;
+  onCancel: (job: JobInfo) => Promise<void>;
+}) {
+  const openJob = (view: JobsLaunchContext["view"]) =>
+    openCommand("jobs", { connectionId: connection.id, job, view });
   return (
     <MenuBarExtra.Submenu
-      title={jobTitle(job)}
+      title={jobTitle(job) + " · " + job.hostname + " · #" + job.job_id}
       icon={{ source: stateIcon(job.state), tintColor: stateColor(job.state) }}
     >
-      <MenuBarExtra.Item title={compactJobSubtitle(job)} icon={Icon.Info} />
-      <MenuBarExtra.Item title="Open Job Detail" icon={Icon.Sidebar} onAction={() => openJobsCommand({ job, view: "detail" })} />
-      <MenuBarExtra.Item title="View Output" icon={Icon.Terminal} onAction={() => openJobsCommand({ job, view: "output" })} />
-      <MenuBarExtra.Item title="View Script" icon={Icon.Code} onAction={() => openJobsCommand({ job, view: "script" })} />
-      <MenuBarExtra.Item title="Copy Job ID" icon={Icon.Clipboard} onAction={() => Clipboard.copy(job.job_id)} />
+      <MenuBarExtra.Item title={jobSummary(job)} />
+      <MenuBarExtra.Item
+        title="Open Job"
+        icon={Icon.Sidebar}
+        onAction={() => openJob("detail")}
+      />
+      <MenuBarExtra.Item
+        title="View Output"
+        icon={Icon.Terminal}
+        onAction={() => openJob("output")}
+      />
+      <MenuBarExtra.Item
+        title="View Script"
+        icon={Icon.Code}
+        onAction={() => openJob("script")}
+      />
+      <MenuBarExtra.Item
+        title="View Watchers"
+        icon={Icon.Eye}
+        onAction={() => openJob("watchers")}
+      />
+      <MenuBarExtra.Item
+        title="Copy Job ID"
+        icon={Icon.Clipboard}
+        onAction={() => Clipboard.copy(job.job_id)}
+      />
+      {canCancelJob(job) ? (
+        <MenuBarExtra.Item
+          title="Cancel Job"
+          icon={Icon.Stop}
+          onAction={() => onCancel(job)}
+        />
+      ) : null}
     </MenuBarExtra.Submenu>
   );
 }
-
-async function openJobsCommand(context?: JobsLaunchContext) {
-  await launchCommand({
-    name: "jobs",
-    type: LaunchType.UserInitiated,
-    context,
-  });
+async function openCommand(name: string, context?: JobsLaunchContext) {
+  await launchCommand({ name, type: LaunchType.UserInitiated, context });
 }

@@ -23,10 +23,13 @@ def build_slurm_manager_getter(config_module, slurm_manager_cls):
         nonlocal slurm_manager, config_last_modified
 
         config_path = config_module.config_path
-        current_mtime = config_path.stat().st_mtime if config_path.exists() else 0
-        config_changed = (
-            config_last_modified is None or current_mtime > config_last_modified
+        paths = [config_path, *config_module.get_overlay_paths()]
+        current_mtime = tuple(
+            (str(path), path.stat().st_mtime_ns, path.stat().st_size)
+            for path in paths
+            if path.exists()
         )
+        config_changed = current_mtime != config_last_modified
 
         if slurm_manager is None or config_changed:
             if slurm_manager:

@@ -1,4 +1,10 @@
-import { type Application, Toast, getPreferenceValues, open, showToast } from "@raycast/api";
+import {
+  type Application,
+  Toast,
+  getPreferenceValues,
+  open,
+  showToast,
+} from "@raycast/api";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,7 +106,12 @@ async function openWithConfiguredEditor(filePath: string): Promise<void> {
 async function openInGhosttyNvim(filePath: string): Promise<void> {
   const initialCommand = `direct:nvim ${filePath}`;
   if (process.platform === "darwin") {
-    await execFileAsync("/usr/bin/open", ["-na", "Ghostty", "--args", `--initial-command=${initialCommand}`]);
+    await execFileAsync("/usr/bin/open", [
+      "-na",
+      "Ghostty",
+      "--args",
+      `--initial-command=${initialCommand}`,
+    ]);
     return;
   }
   await execFileAsync("ghostty", [`--initial-command=${initialCommand}`]);
