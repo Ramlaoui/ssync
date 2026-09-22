@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -117,6 +118,14 @@ class JobEndHandlingResult(Enum):
 
     COMPLETE = "complete"
     RETRY_PENDING = "retry_pending"
+
+
+class JobEndActionClaimResult(Enum):
+    """Outcome of trying to claim a terminal-state watcher action."""
+
+    CLAIMED = "claimed"
+    ALREADY_DONE = "already_done"
+    CLAIMED_BY_OTHER = "claimed_by_other"
 
 
 @dataclass
@@ -993,6 +1002,11 @@ class WatcherEngine:
         return f"__ssync_job_end_action_success_{action_index}"
 
     @staticmethod
+    def _job_end_action_claim_key(action_index: int) -> str:
+        """Internal watcher variable used to claim in-flight job-end actions."""
+        return f"__ssync_job_end_action_claim_{action_index}"
+
+    @staticmethod
     def _job_end_completion_key() -> str:
         """Internal watcher variable used to mark terminal handling completion."""
         return "__ssync_job_end_completed"
@@ -1015,6 +1029,153 @@ class WatcherEngine:
         return self._job_end_marker_is_set(
             variables.get(self._job_end_completion_key())
         )
+
+    @staticmethod
+    def _job_end_claim_ttl_seconds() -> float:
+        """Return the stale-claim TTL for job-end action leases."""
+        raw_value = os.getenv("SSYNC_WATCHER_JOB_END_CLAIM_TTL_SECONDS", "3600")
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid SSYNC_WATCHER_JOB_END_CLAIM_TTL_SECONDS=%r; using 3600",
+                raw_value,
+            )
+            return 3600.0
+
+    def _job_end_claim_is_stale(
+        self, updated_at: Optional[str], now: datetime
+    ) -> bool:
+        """Return True when an in-flight terminal-action claim can be reused."""
+        ttl_seconds = self._job_end_claim_ttl_seconds()
+        if ttl_seconds <= 0:
+            return False
+        if not updated_at:
+            return True
+
+        try:
+            claimed_at = datetime.fromisoformat(updated_at)
+        except ValueError:
+            return True
+
+        return (now - claimed_at).total_seconds() > ttl_seconds
+
+    def _claim_job_end_action(
+        self,
+        watcher_id: int,
+        action_index: int,
+        variables: Dict[str, Any],
+    ) -> JobEndActionClaimResult:
+        """Atomically claim a terminal-state action before executing side effects."""
+        completion_key = self._job_end_completion_key()
+        success_key = self._job_end_action_success_key(action_index)
+        claim_key = self._job_end_action_claim_key(action_index)
+
+        if self._job_end_trigger_completed(variables) or self._job_end_action_succeeded(
+            variables, action_index
+        ):
+            return JobEndActionClaimResult.ALREADY_DONE
+
+        now = datetime.now()
+        claim_value = json.dumps(
+            {
+                "pid": os.getpid(),
+                "claimed_at": now.isoformat(),
+            }
+        )
+
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.execute(
+                    """
+                    SELECT variable_name, variable_value, updated_at
+                    FROM watcher_variables
+                    WHERE watcher_id = ?
+                      AND variable_name IN (?, ?, ?)
+                    """,
+                    (watcher_id, completion_key, success_key, claim_key),
+                )
+                rows = {row["variable_name"]: row for row in cursor.fetchall()}
+
+                completion_row = rows.get(completion_key)
+                success_row = rows.get(success_key)
+                completion_value = (
+                    completion_row["variable_value"] if completion_row else None
+                )
+                success_value = success_row["variable_value"] if success_row else None
+
+                if self._job_end_marker_is_set(
+                    completion_value
+                ) or self._job_end_marker_is_set(success_value):
+                    conn.commit()
+                    return JobEndActionClaimResult.ALREADY_DONE
+
+                existing_claim = rows.get(claim_key)
+                if existing_claim is not None:
+                    if not self._job_end_claim_is_stale(
+                        existing_claim["updated_at"], now
+                    ):
+                        conn.commit()
+                        return JobEndActionClaimResult.CLAIMED_BY_OTHER
+
+                    logger.warning(
+                        "Reclaiming stale job-end action claim for watcher %s "
+                        "action %s from %s",
+                        watcher_id,
+                        action_index,
+                        existing_claim["updated_at"],
+                    )
+                    conn.execute(
+                        """
+                        DELETE FROM watcher_variables
+                        WHERE watcher_id = ? AND variable_name = ?
+                        """,
+                        (watcher_id, claim_key),
+                    )
+
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO watcher_variables
+                    (watcher_id, variable_name, variable_value, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (watcher_id, claim_key, claim_value, now.isoformat()),
+                )
+                conn.commit()
+
+                if cursor.rowcount == 1:
+                    return JobEndActionClaimResult.CLAIMED
+                return JobEndActionClaimResult.CLAIMED_BY_OTHER
+        except Exception as e:
+            logger.error(
+                "Failed to claim job-end action %s for watcher %s: %s",
+                action_index,
+                watcher_id,
+                e,
+            )
+            return JobEndActionClaimResult.CLAIMED_BY_OTHER
+
+    def _release_job_end_action_claim(self, watcher_id: int, action_index: int) -> None:
+        """Release a terminal-state action claim after a retryable failure."""
+        claim_key = self._job_end_action_claim_key(action_index)
+        try:
+            with self.cache._get_connection() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM watcher_variables
+                    WHERE watcher_id = ? AND variable_name = ?
+                    """,
+                    (watcher_id, claim_key),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(
+                "Failed to release job-end action claim %s for watcher %s: %s",
+                action_index,
+                watcher_id,
+                e,
+            )
 
     def _has_pending_job_end_resubmit(
         self, watcher: WatcherInstance, variables: Dict[str, Any]
@@ -1106,6 +1267,15 @@ class WatcherEngine:
             ):
                 continue
 
+            claim_result = self._claim_job_end_action(
+                watcher.id, action_index, fresh_variables
+            )
+            if claim_result == JobEndActionClaimResult.ALREADY_DONE:
+                any_action_succeeded = True
+                continue
+            if claim_result == JobEndActionClaimResult.CLAIMED_BY_OTHER:
+                return JobEndHandlingResult.RETRY_PENDING
+
             try:
                 success, result = await self._execute_action(
                     watcher,
@@ -1121,12 +1291,14 @@ class WatcherEngine:
                 elif watcher.state == WatcherState.DISABLED:
                     retry_pending = False
                 elif self._should_retry_failed_job_end_action(action, result):
+                    self._release_job_end_action_claim(watcher.id, action_index)
                     retry_pending = True
             except Exception as e:
                 logger.error(
                     f"Failed to execute job-end action for watcher {watcher.id}: {e}"
                 )
                 if self._should_retry_failed_job_end_action(action, f"Error: {e}"):
+                    self._release_job_end_action_claim(watcher.id, action_index)
                     retry_pending = True
 
         if retry_pending:
