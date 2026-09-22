@@ -1,6 +1,8 @@
 import App from './App.svelte';
 import './global.css';
 import './app.css';
+import './workspace.css';
+import { installRelayTheme } from './lib/design/theme';
 
 import axios, { type AxiosResponse, type AxiosError } from 'axios';
 import { mount } from "svelte";
@@ -12,6 +14,8 @@ axios.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+installRelayTheme();
 
 const app = mount(App, {
   target: document.getElementById('app')!,

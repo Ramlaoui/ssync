@@ -4,7 +4,7 @@
 
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
 import { writable, get } from 'svelte/store';
-import { safeGetItem, safeSetItem } from '../lib/safeStorage';
+import { safeGetItem, safeSetItem, safeRemoveItem } from '../lib/safeStorage';
 
 export const apiConfig = writable({
   baseURL: import.meta.env.VITE_API_URL || '',
@@ -49,10 +49,12 @@ function createApiInstance() {
 apiInstance = createApiInstance();
 
 apiConfig.subscribe(config => {
-  if (config.apiKey) {
-    safeSetItem('ssync_api_key', config.apiKey);
-    apiInstance = createApiInstance();
-  }
+  if (config.apiKey) safeSetItem('ssync_api_key', config.apiKey);
+  // Keep the client identity stable: the job manager retains this instance.
+  apiInstance.defaults.baseURL = config.baseURL;
+  delete apiInstance.defaults.headers['X-API-Key'];
+  if (config.apiKey) apiInstance.defaults.headers.common['X-API-Key'] = config.apiKey;
+  else delete apiInstance.defaults.headers.common['X-API-Key'];
 });
 
 /**
@@ -106,7 +108,7 @@ export function setApiKey(key: string) {
  */
 export function clearApiKey() {
   void apiInstance.delete('/api/auth/session').catch(() => undefined);
-  localStorage.removeItem('ssync_api_key');
+  safeRemoveItem('ssync_api_key');
   apiConfig.update(c => ({
     ...c,
     apiKey: '',

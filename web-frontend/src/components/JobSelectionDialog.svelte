@@ -382,7 +382,7 @@
                           <span class="job-id">#{job.job_id}</span>
                           <span 
                             class="job-state"
-                            style="background-color: {jobUtils.getStateColor(job.state)}20; color: {jobUtils.getStateColor(job.state)}"
+                            style="background-color: color-mix(in srgb, {jobUtils.getStateColor(job.state)} 12%, transparent); color: {jobUtils.getStateColor(job.state)}"
                           >
                             {formatJobState(job.state)}
                           </span>

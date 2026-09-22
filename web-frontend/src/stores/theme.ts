@@ -1,95 +1,25 @@
-import { writable, derived } from 'svelte/store';
+import { derived, get, writable } from 'svelte/store';
 import { safeGetItem, safeSetItem } from '../lib/safeStorage';
-
 type Theme = 'light' | 'dark' | 'system';
-
-// Check if we're in browser
 const browser = typeof window !== 'undefined';
-
-// Create the store with system preference as default
-function createThemeStore() {
-    // Get initial theme from localStorage or default to system
-    const storedTheme = browser ? safeGetItem('theme') as Theme : 'system';
-    const initialTheme: Theme = storedTheme || 'system';
-
-    const { subscribe, set, update } = writable<Theme>(initialTheme);
-
-    return {
-        subscribe,
-        set: (theme: Theme) => {
-            if (browser) {
-                safeSetItem('theme', theme);
-                applyTheme(theme);
-            }
-            set(theme);
-        },
-        toggle: () => {
-            update(current => {
-                const next = current === 'dark' ? 'light' : 'dark';
-                if (browser) {
-                    safeSetItem('theme', next);
-                    applyTheme(next);
-                }
-                return next;
-            });
-        },
-        init: () => {
-            if (browser) {
-                const stored = safeGetItem('theme') as Theme;
-                const theme = stored || 'system';
-                applyTheme(theme);
-                set(theme);
-            }
-        }
-    };
-}
-
-// Apply theme to document
-function applyTheme(theme: Theme) {
-    if (!browser) return;
-
-    const root = document.documentElement;
-
-    if (theme === 'system') {
-        // Check system preference
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (prefersDark) {
-            root.classList.add('dark');
-        } else {
-            root.classList.remove('dark');
-        }
-    } else if (theme === 'dark') {
-        root.classList.add('dark');
-    } else {
-        root.classList.remove('dark');
-    }
-}
-
-// Create the store
-export const theme = createThemeStore();
-
-// Derived store for actual theme (resolving 'system' to light/dark)
-export const resolvedTheme = derived(theme, ($theme) => {
-    if (!browser) return 'light';
-
-    if ($theme === 'system') {
-        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return $theme;
+const media = browser ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+const systemDark = writable(media?.matches ?? false);
+const validTheme = (value: string | null): Theme => value === 'light' || value === 'dark' ? value : 'system';
+const preference = writable<Theme>(validTheme(safeGetItem('theme')));
+export const resolvedTheme = derived([preference, systemDark], ([$theme, $dark]) => $theme === 'system' ? ($dark ? 'dark' : 'light') : $theme);
+export const theme = {
+    subscribe: preference.subscribe,
+    set(value: Theme) { safeSetItem('theme', value); preference.set(value); },
+    toggle() { theme.set(get(resolvedTheme) === 'dark' ? 'light' : 'dark'); },
+    init() { systemDark.set(media?.matches ?? false); preference.set(validTheme(safeGetItem('theme'))); },
+};
+const unsubscribe = resolvedTheme.subscribe(value => {
+    if (!browser)
+        return;
+    document.documentElement.classList.toggle('dark', value === 'dark');
+    document.documentElement.dataset.theme = value;
 });
-
-// Listen for system theme changes when in system mode
-if (browser) {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    mediaQuery.addEventListener('change', (e) => {
-        const currentTheme = safeGetItem('theme') as Theme;
-        if (currentTheme === 'system' || !currentTheme) {
-            applyTheme('system');
-        }
-    });
-}
-
-// Initialize theme on module load
-if (browser) {
-    theme.init();
-}
+const onSystemChange = (event: MediaQueryListEvent) => systemDark.set(event.matches);
+media?.addEventListener('change', onSystemChange);
+if (import.meta.hot)
+    import.meta.hot.dispose(() => { unsubscribe(); media?.removeEventListener('change', onSystemChange); });

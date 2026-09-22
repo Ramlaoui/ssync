@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { createEventDispatcher, onMount, tick } from "svelte";
   import { createBubbler, run } from "svelte/legacy";
   import { fade, fly, slide } from "svelte/transition";
   import Button from "../lib/components/ui/Button.svelte";
   import Card from "../lib/components/ui/Card.svelte";
+  import Dialog from "../lib/components/ui/Dialog.svelte";
+  import { createLaunchRequest } from "../lib/launchRequest";
   import Dropdown from "../lib/components/ui/Dropdown.svelte";
   import DropdownDivider from "../lib/components/ui/DropdownDivider.svelte";
   import DropdownItem from "../lib/components/ui/DropdownItem.svelte";
@@ -17,6 +19,8 @@
   } from "../lib/sbatch-parser";
   import { validateParameters } from "../lib/sbatchUtils";
   import { api } from "../services/api";
+  import { resolvedTheme } from '../stores/theme';
+  import { safeGetItem, safeSetItem } from "../lib/safeStorage";
   import {
     launchEditDraft,
     launchMonitor,
@@ -91,6 +95,11 @@
 echo "Starting job..."
 `);
   let launchRequestPending = $state(false);
+  let showLaunchReview=$state(false);
+  let reviewRequest=$state<LaunchJobRequest|null>(null);
+  let launchError=$state('');
+  let selectedPreset=$state('');
+  let draftReady=$state(false);
   let hosts: HostInfo[] = $state([]);
   let selectedHost = $state("");
   let loading = $state(false);
@@ -176,73 +185,6 @@ echo "Starting job..."
   let includePatterns = $state<string[]>([]);
   let noGitignore = $state(false);
 
-  // Helper: Convert number | undefined to string for input binding
-  function numberToString(val: number | undefined): string {
-    return val !== undefined ? String(val) : "";
-  }
-
-  // Helper: Convert string from input back to number | undefined
-  function stringToNumber(val: string): number | undefined {
-    const trimmed = val.trim();
-    if (trimmed === "") return undefined;
-    const num = Number(trimmed);
-    return isNaN(num) ? undefined : num;
-  }
-
-  // String representations for input bindings
-  let cpusStr = $state("");
-  let memoryStr = $state("");
-  let timeLimitStr = $state("");
-  let nodesStr = $state("");
-  let ntasksPerNodeStr = $state("");
-  let gpusPerNodeStr = $state("");
-
-  // Sync string inputs back to parameters (when user types)
-  $effect(() => {
-    parameters.cpus = stringToNumber(cpusStr);
-  });
-  $effect(() => {
-    parameters.memory = stringToNumber(memoryStr);
-  });
-  $effect(() => {
-    parameters.timeLimit = stringToNumber(timeLimitStr);
-  });
-  $effect(() => {
-    parameters.nodes = stringToNumber(nodesStr);
-  });
-  $effect(() => {
-    parameters.ntasksPerNode = stringToNumber(ntasksPerNodeStr);
-  });
-  $effect(() => {
-    parameters.gpusPerNode = stringToNumber(gpusPerNodeStr);
-  });
-
-  // Sync parameters back to string inputs (when programmatically updated)
-  $effect(() => {
-    const newCpusStr = numberToString(parameters.cpus);
-    if (cpusStr !== newCpusStr) cpusStr = newCpusStr;
-  });
-  $effect(() => {
-    const newMemoryStr = numberToString(parameters.memory);
-    if (memoryStr !== newMemoryStr) memoryStr = newMemoryStr;
-  });
-  $effect(() => {
-    const newTimeLimitStr = numberToString(parameters.timeLimit);
-    if (timeLimitStr !== newTimeLimitStr) timeLimitStr = newTimeLimitStr;
-  });
-  $effect(() => {
-    const newNodesStr = numberToString(parameters.nodes);
-    if (nodesStr !== newNodesStr) nodesStr = newNodesStr;
-  });
-  $effect(() => {
-    const newNtasksStr = numberToString(parameters.ntasksPerNode);
-    if (ntasksPerNodeStr !== newNtasksStr) ntasksPerNodeStr = newNtasksStr;
-  });
-  $effect(() => {
-    const newGpusStr = numberToString(parameters.gpusPerNode);
-    if (gpusPerNodeStr !== newGpusStr) gpusPerNodeStr = newGpusStr;
-  });
-
   // Parse SBATCH directives from script and update parameters
   function parseSbatchFromScript(scriptContent: string) {
     const parsed = parseSbatchDirectives(scriptContent);
@@ -252,6 +194,7 @@ echo "Starting job..."
   }
 
   function applyLaunchEditDraft(request: LaunchJobRequest) {
+    draftReady=true;
     script = request.script_content;
     selectedHost = request.host;
     parameters.sourceDir = request.source_dir;
@@ -306,28 +249,7 @@ echo "Starting job..."
   }
 
   function getDefaultEditorTheme(): string {
-    if (typeof localStorage === "undefined") {
-      return "light";
-    }
-
-    const storedEditorTheme = localStorage.getItem("editor-theme");
-    if (storedEditorTheme) {
-      return storedEditorTheme;
-    }
-
-    const storedAppTheme = localStorage.getItem("theme");
-    if (storedAppTheme === "dark" || storedAppTheme === "light") {
-      return storedAppTheme;
-    }
-
-    if (
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-    ) {
-      return "dark";
-    }
-
-    return "light";
+    return safeGetItem('editor-theme') || 'system';
   }
 
   // Editor options with localStorage persistence
@@ -539,6 +461,7 @@ echo "Starting job..."
   }
 
   function applyPreset(preset: Preset) {
+    selectedPreset=preset.id;
     parameters.timeLimit = preset.time;
     parameters.memory = preset.memory;
     parameters.cpus = preset.cpus;
@@ -656,70 +579,27 @@ echo "Starting job..."
     };
   }
 
-  function handleConfigChange() {
-    // Trigger script update when form changes
+  async function handleConfigChange() {
+    await tick();
+    // Input bindings must settle before regenerating directives.
     updateScriptWithParameters();
     dispatch("configChanged", { detail: parameters });
   }
 
-  async function handleLaunch() {
-    if (!canLaunch || launchRequestPending) return;
-
-    // Keep the original script for the actual launch
-    const originalScript = script;
-
-    void launchJobInBackground(originalScript);
+  function handleLaunch() {
+    if(!canLaunch||launchRequestPending)return;
+    launchError='';
+    try{reviewRequest=createLaunchRequest(script,selectedHost,parameters,{exclude:excludePatterns,include:includePatterns,noGitignore});showLaunchReview=true;}
+    catch(error){launchError=error instanceof Error?error.message:'Could not prepare launch.';}
   }
-
-  async function launchJobInBackground(originalScript: string) {
-    launchRequestPending = true;
-    try {
-      // Save script to localStorage for history
-      saveScriptToLocalHistory();
-
-      const sourceDir = parameters.sourceDir?.trim();
-      if (!sourceDir) {
-        throw new Error("Source directory is required");
-      }
-      if (!selectedHost) {
-        throw new Error("Host is required");
-      }
-
-      // Prepare the launch request with the backend contract
-      const launchData: LaunchJobRequest = {
-        script_content: originalScript,
-        source_dir: sourceDir,
-        host: selectedHost,
-        job_name: parameters.jobName || "Unnamed Job",
-        exclude: excludePatterns,
-        include: includePatterns,
-        no_gitignore: noGitignore,
-      };
-
-      // Only add optional parameters if they have values
-      if (parameters.partition) launchData.partition = parameters.partition;
-      if (parameters.account) launchData.account = parameters.account;
-      if (parameters.constraint) launchData.constraint = parameters.constraint;
-      if (parameters.cpus) launchData.cpus = parameters.cpus;
-      if (parameters.memory) launchData.mem = parameters.memory; // API expects 'mem'
-      if (parameters.timeLimit) launchData.time = parameters.timeLimit; // API expects 'time'
-      if (parameters.nodes) launchData.nodes = parameters.nodes;
-      if (parameters.ntasksPerNode) {
-        launchData.ntasks_per_node = parameters.ntasksPerNode;
-        launchData.n_tasks_per_node = parameters.ntasksPerNode;
-      }
-      if (parameters.gpusPerNode)
-        launchData.gpus_per_node = parameters.gpusPerNode;
-      if (parameters.gres) launchData.gres = parameters.gres;
-      if (parameters.outputFile) launchData.output = parameters.outputFile;
-      if (parameters.errorFile) launchData.error = parameters.errorFile;
-
-      await launchMonitor.startLaunch(launchData);
-    } catch (error: any) {
-      console.error("Launch failed:", error);
-    } finally {
-      launchRequestPending = false;
-    }
+  async function confirmLaunch(){
+    if(!reviewRequest||launchRequestPending)return;
+    const request=$state.snapshot(reviewRequest);
+    showLaunchReview=false;
+    launchRequestPending=true;
+    try{saveScriptToLocalHistory();await launchMonitor.startLaunch(request);}
+    catch(error){launchError=error instanceof Error?error.message:'Launch failed.';}
+    finally{launchRequestPending=false;}
   }
 
   function saveScriptToLocalHistory() {
@@ -852,6 +732,7 @@ echo "Starting job..."
 
   // Theme options
   const themeOptions = [
+    { id: "system", name: "Match appearance", description: "Follow the app appearance" },
     { id: "light", name: "Light", description: "Classic light theme" },
     { id: "dark", name: "Dark", description: "Dark theme for low-light" },
     { id: "material", name: "Material", description: "Material design theme" },
@@ -915,7 +796,7 @@ echo "Starting job..."
         );
 
         allRecentWatchers = uniqueWatchers.slice(0, 10); // Keep max 10 watchers
-        console.log("Loaded recent watchers:", allRecentWatchers);
+
       }
     } catch (error) {
       console.log("Could not fetch recent watchers:", error);
@@ -923,32 +804,28 @@ echo "Starting job..."
     }
   }
 
+  $effect(()=>{
+    if(draftReady)safeSetItem('ssync_launch_draft',JSON.stringify({script,selectedHost,parameters,excludePatterns,includePatterns,noGitignore}));
+  });
+
   // Initialize component - ensure FileBrowser uses persisted directory
   onMount(() => {
-    const initialize = async () => {
-      // Load hosts if not provided or empty
-      if (!hosts || hosts.length === 0) {
-        try {
-          const response = await api.get("/api/hosts");
-          hosts = response.data;
-
-          // Auto-select first host if none selected
-          if (hosts.length > 0 && !selectedHost) {
-            selectedHost = hosts[0].hostname;
-          }
-          // Fetch recent watchers for the selected host
-          if (selectedHost) {
-            await fetchRecentWatchers();
-          }
-        } catch (error) {
-          console.error("Failed to load hosts:", error);
+    if(!draftReady&&!resubmitStore.getResubmitData()){
+      try{
+        const saved=JSON.parse(safeGetItem('ssync_launch_draft')||'null');
+        if(saved&&typeof saved.script==='string'){
+          script=saved.script;selectedHost=typeof saved.selectedHost==='string'?saved.selectedHost:'';
+          parameters={...parameters,...saved.parameters};
+          if(Array.isArray(saved.excludePatterns))excludePatterns=saved.excludePatterns;
+          if(Array.isArray(saved.includePatterns))includePatterns=saved.includePatterns;
+          noGitignore=Boolean(saved.noGitignore);
         }
-      }
-
+      }catch{}
+    }
+    const initialize = async () => {
       // Check for resubmit data and populate fields
       const resubmitData = resubmitStore.consumeResubmitData();
       if (resubmitData) {
-        console.log("Loading resubmit data:", resubmitData);
 
         // Set resubmit flags and data
         isResubmit = true;
@@ -957,13 +834,13 @@ echo "Starting job..."
         // Set captured variables if available
         if (resubmitData.watcherVariables) {
           watcherVariables = resubmitData.watcherVariables;
-          console.log("Loaded captured variables:", watcherVariables);
+
         }
 
         // Set watcher configurations if available
         if (resubmitData.watchers) {
           watchers = resubmitData.watchers;
-          console.log("Loaded watcher configurations:", watchers);
+
         }
 
         // Set script content
@@ -999,6 +876,26 @@ echo "Starting job..."
       if (script) {
         parseSbatchFromScript(script);
       }
+      draftReady=true;
+      // Load hosts if not provided or empty
+      if (!hosts || hosts.length === 0) {
+        try {
+          const response = await api.get("/api/hosts");
+          hosts = response.data;
+
+          // Auto-select first host if none selected
+          if (hosts.length > 0 && !selectedHost) {
+            selectedHost = hosts[0].hostname;
+          }
+          // Fetch recent watchers for the selected host
+          if (selectedHost) {
+            await fetchRecentWatchers();
+          }
+        } catch (error) {
+          console.error("Failed to load hosts:", error);
+        }
+      }
+
     };
 
     void initialize();
@@ -1044,6 +941,9 @@ echo "Starting job..."
 </script>
 
 <div class="modern-launcher">
+  <div class="relay-heading launch-title"><div><h1>Launch job</h1></div></div>
+  {#if launchError}<div class="relay-banner error" role="alert"><AlertCircle size={18}/><span>{launchError}</span><button class="relay-text-button" onclick={()=>launchError=''}>Dismiss</button></div>{/if}
+  {#if !isMobile}<div class="launch-recipes" aria-label="Resource presets">{#each allPresets.slice(0,4) as preset}{@const Glyph=preset.icon}<button class:active={selectedPreset===preset.id} aria-pressed={selectedPreset===preset.id} onclick={()=>applyPreset(preset)}><span class="recipe-glyph"><Glyph size={19}/></span><span><strong>{preset.name}</strong><small>{preset.cpus} CPUs · {preset.memory} GB · {preset.time} min{preset.gpus?' · '+preset.gpus+' GPU':''}</small></span>{#if selectedPreset===preset.id}<Check size={16}/>{/if}</button>{/each}</div>{/if}
   <!-- Mobile Header -->
   {#if isMobile}
     <header class="mobile-header">
@@ -1707,7 +1607,7 @@ echo "Starting job..."
   {#if !isMobile}
     <!-- Desktop only content starts here -->
     <!-- Desktop Navigation Header -->
-    <NavigationHeader>
+    <NavigationHeader showBackButton={false}>
       {#snippet left()}
         <div class="host-selector-modern">
           <div class="host-dropdown-container">
@@ -1827,7 +1727,7 @@ echo "Starting job..."
               Launching...
             {:else}
               <Play class="mr-2 h-4 w-4" />
-              Launch Job
+              Review job
             {/if}
           </Button>
         </div>
@@ -2049,7 +1949,7 @@ echo "Starting job..."
           value={script}
           on:change={handleScriptChange}
           vimMode={editorOptions.vimMode}
-          theme={editorOptions.theme}
+          theme={editorOptions.theme === 'system' ? $resolvedTheme : editorOptions.theme}
           fontSize={editorOptions.fontSize}
           lineNumbers={editorOptions.lineNumbers}
           wordWrap={editorOptions.wordWrap}
@@ -2079,6 +1979,7 @@ echo "Starting job..."
           <div class="directory-input-row">
             <input
               id="source-dir"
+              aria-label="Source directory"
               type="text"
               bind:value={parameters.sourceDir}
               placeholder="/path/to/your/project"
@@ -2324,7 +2225,7 @@ echo "Starting job..."
             <Settings class="w-4 h-4 inline-block mr-2" />
             Job Configuration
           </h3>
-          <p class="section-description">Basic Slurm job parameters</p>
+
         </div>
 
         <div class="form-grid">
@@ -2382,7 +2283,7 @@ echo "Starting job..."
               <Cpu class="w-4 h-4 inline-block mr-2" />
               Resource Requirements
             </h3>
-            <p class="section-description">Compute resources for your job</p>
+
           </div>
           <button
             class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
@@ -2399,7 +2300,7 @@ echo "Starting job..."
             <Input
               id="cpus"
               type="number"
-              bind:value={cpusStr}
+              bind:value={parameters.cpus}
               placeholder="1"
               min="1"
               on:input={handleConfigChange}
@@ -2411,7 +2312,7 @@ echo "Starting job..."
             <Input
               id="memory"
               type="number"
-              bind:value={memoryStr}
+              bind:value={parameters.memory}
               placeholder="4"
               min="1"
               on:input={handleConfigChange}
@@ -2423,7 +2324,7 @@ echo "Starting job..."
             <Input
               id="time-limit"
               type="number"
-              bind:value={timeLimitStr}
+              bind:value={parameters.timeLimit}
               placeholder="60"
               min="1"
               on:input={handleConfigChange}
@@ -2435,7 +2336,7 @@ echo "Starting job..."
             <Input
               id="nodes"
               type="number"
-              bind:value={nodesStr}
+              bind:value={parameters.nodes}
               placeholder="1"
               min="1"
               on:input={handleConfigChange}
@@ -2448,7 +2349,7 @@ echo "Starting job..."
               <Input
                 id="ntasks-per-node"
                 type="number"
-                bind:value={ntasksPerNodeStr}
+                bind:value={parameters.ntasksPerNode}
                 placeholder="1"
                 min="1"
                 on:input={handleConfigChange}
@@ -2460,7 +2361,7 @@ echo "Starting job..."
               <Input
                 id="gpus-per-node"
                 type="number"
-                bind:value={gpusPerNodeStr}
+                bind:value={parameters.gpusPerNode}
                 placeholder="0"
                 min="0"
                 on:input={handleConfigChange}
@@ -2611,7 +2512,7 @@ echo "Starting job..."
               <span class="mobile-config-label">CPUs</span>
               <Input
                 type="number"
-                bind:value={cpusStr}
+                bind:value={parameters.cpus}
                 min="1"
                 max="128"
                 class="mobile-config-input"
@@ -2622,7 +2523,7 @@ echo "Starting job..."
               <span class="mobile-config-label">Memory (GB)</span>
               <Input
                 type="number"
-                bind:value={memoryStr}
+                bind:value={parameters.memory}
                 min="1"
                 max="512"
                 class="mobile-config-input"
@@ -2635,7 +2536,7 @@ echo "Starting job..."
               <span class="mobile-config-label">Time (min)</span>
               <Input
                 type="number"
-                bind:value={timeLimitStr}
+                bind:value={parameters.timeLimit}
                 min="1"
                 max="10080"
                 class="mobile-config-input"
@@ -2646,7 +2547,7 @@ echo "Starting job..."
               <span class="mobile-config-label">Nodes</span>
               <Input
                 type="number"
-                bind:value={nodesStr}
+                bind:value={parameters.nodes}
                 min="1"
                 max="100"
                 class="mobile-config-input"
@@ -2733,7 +2634,7 @@ echo "Starting job..."
                 <span class="mobile-config-label">Tasks/Node</span>
                 <Input
                   type="number"
-                  bind:value={ntasksPerNodeStr}
+                  bind:value={parameters.ntasksPerNode}
                   min="1"
                   placeholder="1"
                   class="mobile-config-input"
@@ -2744,7 +2645,7 @@ echo "Starting job..."
                 <span class="mobile-config-label">GPUs/Node</span>
                 <Input
                   type="number"
-                  bind:value={gpusPerNodeStr}
+                  bind:value={parameters.gpusPerNode}
                   min="0"
                   placeholder="0"
                   class="mobile-config-input"
@@ -2969,7 +2870,7 @@ echo "Starting job..."
               Launching...
             {:else}
               <Play class="mr-2 h-4 w-4" />
-              Launch Job
+              Review job
             {/if}
           </Button>
         </div>
@@ -3002,6 +2903,7 @@ echo "Starting job..."
   {#if isMobile && !showMobileConfig}
     <button
       class="mobile-launch-fab"
+      aria-label="Review job"
       onclick={handleLaunch}
       disabled={!canLaunch || launchRequestPending}
     >
@@ -3029,13 +2931,21 @@ echo "Starting job..."
   {/if}
 </div>
 
+<Dialog bind:open={showLaunchReview} title="Review job" size="xl">
+  {#if reviewRequest}<div class="launch-review"><div class="launch-review-title"><Rocket size={22}/><div><h3>{reviewRequest.job_name}</h3><span>{reviewRequest.host}{reviewRequest.partition?' · '+reviewRequest.partition:''}</span></div></div><dl><div><dt>CPUs / GPUs per node</dt><dd>{reviewRequest.cpus??'Default'} / {reviewRequest.gpus_per_node??'Default'}</dd></div><div><dt>Memory</dt><dd>{reviewRequest.mem?reviewRequest.mem+' GB':'Host default'}</dd></div><div><dt>Time limit</dt><dd>{reviewRequest.time?reviewRequest.time+' minutes':'Host default'}</dd></div><div><dt>Nodes</dt><dd>{reviewRequest.nodes??'Host default'}</dd></div></dl><div class="launch-review-source"><span>Source directory</span><code>{reviewRequest.source_dir}</code></div><p class="launch-review-sync">{reviewRequest.no_gitignore?'.gitignore is ignored':'.gitignore is respected'} · {reviewRequest.exclude.length} exclusions</p><details><summary>Batch script and sync rules</summary><pre>{reviewRequest.script_content}</pre><p>Exclude: {reviewRequest.exclude.join(', ')||'None'}</p><p>Include: {reviewRequest.include.join(', ')||'None'}</p></details></div>{/if}
+  {#snippet footer()}<button class="relay-button" onclick={()=>showLaunchReview=false}>Back to editing</button><button class="relay-button primary" disabled={launchRequestPending||!reviewRequest} onclick={()=>void confirmLaunch()}><Rocket size={16}/>Launch job</button>{/snippet}
+</Dialog>
+
 <style>
+
   .modern-launcher {
     height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--background);
     overflow: hidden;
+    min-height: 0;
+    padding: 28px 32px 24px;
   }
 
   /* Host Selector Styles */
@@ -3371,33 +3281,38 @@ echo "Starting job..."
   }
 
   /* Main Content - Master Container with Fixed Height */
-  .launcher-content {
-    height: calc(100vh - 120px); /* Fixed height master container */
+  .launcher-content { /* Fixed height master container */
     display: flex;
     flex-direction: row;
-    gap: 1.5rem;
-    padding: 1.5rem 2rem;
+    gap: 24px;
+    padding: 20px 0 0;
     box-sizing: border-box;
+    flex: 1;
+    min-height: 0;
   }
 
   /* Editor Section - Left Side Fixed Height */
-  .editor-section {
-    width: 66.67%; /* Fixed width, not flex */
+  .editor-section { /* Fixed width, not flex */
     height: 100%; /* Fixed height within master container */
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    background: var(--card);
   }
 
   .editor-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1rem;
+    margin-bottom: 0;
     flex-shrink: 0; /* Don't allow header to shrink */
-    padding: 0.75rem 1rem;
+    padding: 12px 18px;
     background: transparent;
-    border-bottom: 1px solid rgba(229, 231, 235, 0.2);
+    border-bottom: 1px solid var(--border);
   }
 
   .editor-controls {
@@ -3668,10 +3583,10 @@ echo "Starting job..."
 
   .editor-container {
     flex: 1;
-    border-radius: 8px;
+    border-radius: 0;
     overflow: hidden;
-    background: var(--secondary);
-    border: 1px solid rgba(229, 231, 235, 0.3);
+    background: var(--code-background);
+    border: 0;
     min-height: 0; /* Critical for nested flex */
     box-sizing: border-box;
     position: relative; /* Contain any absolutely positioned children */
@@ -3695,14 +3610,14 @@ echo "Starting job..."
   /* Configuration Section */
   /* Config Section - Right Side Scrollable Only */
   .config-section {
-    width: 33.33%; /* Fixed width, independent of editor */
+    width: 350px; /* Fixed width, independent of editor */
     height: 100%; /* Fixed height within master container */
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 16px;
     overflow-y: auto; /* ONLY this section scrolls */
     overflow-x: hidden;
-    padding-right: 0.5rem; /* Add padding for scrollbar */
+    padding-right: 3px; /* Add padding for scrollbar */ min-width: 0;
   }
 
   /* Custom scrollbar for config section */
@@ -3850,7 +3765,7 @@ echo "Starting job..."
   }
 
   .section-description {
-    font-size: 0.875rem;
+    font-size: .8125rem;
     color: var(--muted-foreground);
     margin: 0;
   }
@@ -4827,26 +4742,31 @@ echo "Starting job..."
 
   /* Mobile Responsive */
   @media (max-width: 1024px) {
-    .launcher-content {
-      height: calc(100vh - 100px); /* Adjust for mobile header */
+    .launcher-content { /* Adjust for mobile header */
       flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      padding: 20px 0 0;
+      gap: 24px;
     }
 
-    .editor-section {
-      width: 100%; /* Full width on mobile */
-      height: 60%; /* Fixed height portion for editor */
+    .editor-section { /* Full width on mobile */
+      height: 100%; /* Fixed height portion for editor */ flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--card);
     }
 
     .editor-container {
       flex: 1;
       min-height: 0;
       overflow: hidden;
+      border: 0;
+      border-radius: 0;
+      background: var(--code-background);
     }
 
     .config-section {
-      width: 100%; /* Full width on mobile */
-      height: 40%; /* Fixed height portion for config */
-      overflow-y: auto; /* Ensure config scrolls on mobile */
+      width: 350px; /* Full width on mobile */
+      height: 100%; /* Fixed height portion for config */
+      overflow-y: auto; /* Ensure config scrolls on mobile */ min-width: 0; gap: 16px; padding-right: 3px;
     }
   }
 
@@ -5338,30 +5258,35 @@ echo "Starting job..."
 
   @media (max-width: 768px) {
     .modern-launcher {
-      height: 100vh;
+      height: 100%;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      min-height: 0;
+      padding: 28px 32px 24px;
     }
 
-    .launcher-content {
-      height: calc(
-        100vh - 80px
-      ); /* Fixed height master container for small mobile */
-      padding: 0;
-      gap: 0;
+    .launcher-content { /* Fixed height master container for small mobile */
+      padding: 20px 0 0;
+      gap: 24px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
       box-sizing: border-box;
+      flex: 1;
+      min-height: 0;
     }
 
-    .editor-section {
-      width: 100%; /* Full width on mobile */
+    .editor-section { /* Full width on mobile */
       height: 100%; /* Full height on mobile (no config panel visible) */
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--card);
     }
 
     .editor-container {
@@ -5372,8 +5297,8 @@ echo "Starting job..."
       flex-direction: column;
       height: 100%;
       border-radius: 0;
-      border: none;
-      background: var(--secondary);
+      border: 0;
+      background: var(--code-background);
     }
 
     .editor-container.mobile {
@@ -5391,11 +5316,16 @@ echo "Starting job..."
     /* Hide config section on mobile - it's in the sidebar now */
     .config-section {
       display: none;
+      width: 350px;
+      min-width: 0;
+      height: 100%;
+      gap: 16px;
+      padding-right: 3px;
     }
 
     .editor-header {
-      padding: 0.5rem 0.75rem;
-      border-bottom: none;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
       margin-bottom: 0;
       background: transparent;
       position: relative;
@@ -5855,4 +5785,53 @@ echo "Starting job..."
       opacity: 1;
     }
   }
+
+  .launch-title{margin-bottom:24px;flex-shrink:0}
+
+  .launch-recipes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px;flex-shrink:0}
+
+  .launch-recipes>button{display:flex;gap:12px;align-items:center;min-width:0;padding:17px;background:var(--card);border:1px solid var(--border);border-radius:16px;text-align:left;transition:border-color var(--motion-state),background var(--motion-state)}
+
+  .launch-recipes>button:hover,.launch-recipes>button.active{background:var(--accent-soft);border-color:var(--accent)}
+
+  .recipe-glyph{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;color:var(--accent);background:var(--accent-soft);flex-shrink:0}
+
+  .launch-recipes>button>span:nth-child(2){min-width:0;flex:1}
+
+  .launch-recipes strong{display:block;font-size:.875rem;font-weight:550}
+
+  .launch-recipes small{display:block;font-size:.75rem;line-height:1.6;color:var(--muted-foreground);margin-top:5px}
+
+  .launch-review-title{display:flex;gap:14px;align-items:center;margin-bottom:25px;color:var(--accent)}
+
+  .launch-review-title h3{font-size:1.125rem;font-weight:600;color:var(--foreground);margin:0 0 5px}
+
+  .launch-review-title span{font-size:.8125rem;color:var(--muted-foreground)}
+
+  .launch-review dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;padding:20px;background:var(--background);border:1px solid var(--border);border-radius:12px;margin-bottom:25px}
+
+  .launch-review dt,.launch-review-source>span{font-size:.8125rem;color:var(--muted-foreground)}
+
+  .launch-review dd{margin:5px 0 0;font-size:.9375rem;font-weight:550}
+
+  .launch-review-source code{display:block;margin-top:8px;font-size:.875rem;overflow-wrap:anywhere}
+
+  .launch-review-sync{font-size:.8125rem;color:var(--muted-foreground);margin:20px 0}
+
+  .launch-review details{font-size:.875rem}
+
+  .launch-review summary{cursor:pointer}
+
+  .launch-review pre{background:var(--code-background);padding:16px;border-radius:12px;font-size:.8125rem;overflow:auto;margin-top:16px;max-height:280px}
+
+  .launch-review details p{font-size:.8125rem;margin-top:12px;overflow-wrap:anywhere}
+
+  @media(min-width:769px){.modern-launcher :global(.navigation-header){border:0;background:transparent}.modern-launcher :global(.header-shell){padding:0}.modern-launcher :global(.header-row){min-height:50px;padding:0}.modern-launcher :global(.header-left){flex:0 1 auto}.modern-launcher :global(.header-actions){flex-wrap:wrap}.config-section :global(.rounded-lg){border-radius:16px}.config-section :global(.bg-card){background:var(--card)}}
+
+  @media(max-width:1300px){.launch-recipes{grid-template-columns:repeat(2,minmax(0,1fr))}.launch-recipes>button{padding:12px 15px}.config-section{width:320px}}
+
+  @media(max-width:1000px) and (min-width:769px){.launcher-content{overflow:auto;display:flex;flex-direction:column}.editor-section{flex:none;min-height:450px;height:55vh;width:100%}.config-section{width:100%;height:auto;overflow:visible;flex:none}.modern-launcher :global(.header-row){flex-wrap:wrap}.modern-launcher :global(.header-actions){justify-content:flex-start}}
+
+  @media(max-width:768px){.modern-launcher{padding:0}.launch-title{padding:23px 16px 0;margin-bottom:10px}.launcher-content{padding:12px 16px;min-height:0;flex:1}.editor-section{width:100%;height:100%}.modern-launcher .mobile-header{position:relative;top:auto;flex-shrink:0}}
+
 </style>

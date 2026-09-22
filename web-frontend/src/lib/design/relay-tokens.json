@@ -1,0 +1,38 @@
+{
+  "name": "ssync / Relay",
+  "version": "1.0.0",
+  "platform": "iOS 26+",
+  "colors": {
+    "Canvas": {"light": "#F4F3EE", "dark": "#10141D"},
+    "Surface": {"light": "#FFFEFB", "dark": "#1A202C"},
+    "SurfaceSecondary": {"light": "#EAEDF5", "dark": "#252D3C"},
+    "Ink": {"light": "#172137", "dark": "#F2F5FC"},
+    "InkSecondary": {"light": "#59657B", "dark": "#AAB6CC"},
+    "Separator": {"light": "#DCE1EB", "dark": "#354055"},
+    "Accent": {"light": "#3155D9", "dark": "#9BADFF"},
+    "AccentSoft": {"light": "#E9EEFF", "dark": "#25335C"},
+    "OnAccent": {"light": "#FFFFFF", "dark": "#101C45"},
+    "Running": {"light": "#3155D9", "dark": "#9BADFF"},
+    "Success": {"light": "#187153", "dark": "#7EDDB5"},
+    "SuccessSoft": {"light": "#E6F4ED", "dark": "#183A31"},
+    "Warning": {"light": "#865408", "dark": "#F3CB7A"},
+    "WarningSoft": {"light": "#FFF2D9", "dark": "#3E301C"},
+    "Danger": {"light": "#B43642", "dark": "#FF9EA6"},
+    "DangerSoft": {"light": "#FCEBED", "dark": "#45262F"},
+    "CodeCanvas": {"light": "#EDF0F6", "dark": "#121824"}
+  },
+  "spacing": {"xxs": 4, "xs": 8, "sm": 12, "md": 16, "lg": 20, "xl": 24, "xxl": 32, "section": 40},
+  "radius": {"inset": 10, "control": 12, "card": 20, "hero": 24, "pill": "capsule", "sheet": "system"},
+  "size": {"minimumHitTarget": 44, "primaryButtonMinHeight": 50, "jobRowMinHeight": 88, "pageMargin": 20, "readableWidth": 680},
+  "type": {
+    "screenTitle": {"style": "largeTitle", "weight": "bold", "referencePoints": 34},
+    "sectionTitle": {"style": "title3", "weight": "semibold", "referencePoints": 20},
+    "jobName": {"style": "headline", "weight": "semibold", "referencePoints": 17},
+    "body": {"style": "body", "weight": "regular", "referencePoints": 17},
+    "secondary": {"style": "subheadline", "weight": "regular", "referencePoints": 15},
+    "metadata": {"style": "footnote", "weight": "regular", "referencePoints": 13},
+    "code": {"style": "callout", "design": "monospaced", "referencePoints": 16},
+    "statistic": {"style": "title", "weight": "semibold", "digits": "monospaced", "referencePoints": 28}
+  },
+  "motion": {"pressMilliseconds": 120, "stateMilliseconds": 180, "disclosureMilliseconds": 240, "relayArrivalMilliseconds": 480, "watcherTraceMilliseconds": 560, "launchHandoffMilliseconds": 620, "numericChangeMilliseconds": 220, "navigation": "system with a shared job-identity transition where supported", "reduceMotion": "opacity-only; immediate numeric replacement; no moving traces"}
+}

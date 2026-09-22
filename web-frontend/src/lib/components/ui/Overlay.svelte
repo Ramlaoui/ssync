@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { run } from 'svelte/legacy';
 
   import { fade } from 'svelte/transition';
   import { portal, clickOutside, keyboardNav, focusTrap } from '../../actions';
@@ -43,7 +42,7 @@
   }
 
   // Lock body scroll when open
-  run(() => {
+  $effect(() => {
     if (typeof document !== 'undefined' && lockScroll) {
       if (open) {
         document.body.style.overflow = 'hidden';
@@ -65,9 +64,9 @@
   });
 
   // Keyboard navigation handlers
-  const keyHandlers = {
+  const keyHandlers = $derived({
     onEscape: closeOnEscape ? handleClose : undefined,
-  };
+  });
 </script>
 
 {#if open}
@@ -77,8 +76,6 @@
     use:keyboardNav={keyHandlers}
     use:focusTrap={{ enabled: trapFocus }}
     class="overlay-container"
-    role="dialog"
-    aria-modal="true"
     transition:fade={{ duration: 200 }}
   >
     {#if backdrop}

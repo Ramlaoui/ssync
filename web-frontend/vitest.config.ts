@@ -12,6 +12,9 @@ function svelteClientResolver(): Plugin {
       if (!process.env.VITEST) return null;
 
       // Force main svelte export to use client build
+      if (id === 'svelte/legacy') {
+        return path.resolve(__dirname, './node_modules/svelte/src/legacy/legacy-client.js');
+      }
       if (id === 'svelte') {
         return path.resolve(__dirname, './node_modules/svelte/src/index-client.js');
       }

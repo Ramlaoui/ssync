@@ -1,530 +1,250 @@
 <script lang="ts">
-  import { run } from 'svelte/legacy';
-
-  import type { AxiosError } from "axios";
-  import { onMount } from "svelte";
-  import Router, { push, link, location } from "svelte-spa-router";
-  import ErrorBoundary from "./components/ErrorBoundary.svelte";
-  import LaunchMonitor from "./components/LaunchMonitor.svelte";
-  import PerformanceMonitor from "./components/PerformanceMonitor.svelte";
-  import JobsPage from "./pages/JobsPage.svelte";
-  import JobPage from "./pages/JobPage.svelte";
-  import LaunchPage from "./pages/LaunchPage.svelte";
-  import WatchersPage from "./pages/WatchersPage.svelte";
-  import SettingsPage from "./pages/SettingsPage.svelte";
-  import { api, apiConfig, testConnection } from "./services/api";
-  import type { HostInfo } from "./types/api";
-  import { navigationActions } from "./stores/navigation";
-  import { theme } from "./stores/theme";
-  import { sidebarOpen } from "./stores/sidebar";
-  import JobSidebar from "./components/JobSidebar.svelte";
-  // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - now using centralized JobStateManager
-  // import { connectAllJobsWebSocket } from "./stores/jobWebSocket";
-  import {
-    Home,
-    Play,
-    Eye,
-    Settings,
-    AlertCircle,
-    RefreshCw
-  } from 'lucide-svelte';
-
-  let hosts: HostInfo[] = [];
-  let hostsLoading = false;
-  let error: string | null = $state(null);
-
-  // Mobile detection
-  let isMobile = $state(typeof window !== 'undefined' && window.innerWidth < 768);
-
-  // Define routes - JobsPage is now the default landing page
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import Router, { push, location } from 'svelte-spa-router';
+  import { wrap } from 'svelte-spa-router/wrap';
+  import LoadingSpinner from './components/LoadingSpinner.svelte';
+  import { focusTrap } from './lib/actions';
+  import { Layers, Rocket, Eye, Server, Settings2, Search, Command, Menu, X, Sun, Moon, ArrowRight, TriangleAlert, RefreshCw } from 'lucide-svelte';
+  import ErrorBoundary from './components/ErrorBoundary.svelte';
+  import LaunchMonitor from './components/LaunchMonitor.svelte';
+  import PerformanceMonitor from './components/PerformanceMonitor.svelte';
+  import Brand from './components/workspace/Brand.svelte';
+  import IconButton from './components/workspace/IconButton.svelte';
+  import JobStatus from './components/workspace/JobStatus.svelte';
+  import Dialog from './lib/components/ui/Dialog.svelte';
+  import JobsPage from './pages/JobsPage.svelte';
+  import JobPage from './pages/JobPage.svelte';
+  import { apiConfig, testConnection } from './services/api';
+  import { theme, resolvedTheme } from './stores/theme';
+  import { navigationActions, navigationState } from './stores/navigation';
+  import { jobsWorkspace, setJobView } from './stores/workspace';
+  import { jobStateManager } from './lib/JobStateManager';
+  import { jobRoute, jobStatus } from './lib/jobsPresentation';
+  import { safeGetItem } from './lib/safeStorage';
+  // Router 4's declarations still use Svelte 4 constructors; the runtime also accepts Svelte 5 components.
+  function lazyRoute(loader: () => Promise<{
+    default: unknown;
+  }>) {
+    return wrap({ asyncComponent: loader, loadingComponent: LoadingSpinner } as unknown as Parameters<typeof wrap>[0]);
+  }
   const routes = {
     '/': JobsPage,
+    '/jobs': JobsPage,
     '/jobs/:id/:host': JobPage,
-    '/launch': LaunchPage,
-    '/watchers': WatchersPage,
-    '/settings': SettingsPage
+    '/launch': lazyRoute(() => import('./pages/LaunchPage.svelte')),
+    '/watchers': lazyRoute(() => import('./pages/WatchersPage.svelte')),
+    '/hosts': lazyRoute(() => import('./pages/HostsPage.svelte')),
+    '/settings': lazyRoute(() => import('./pages/SettingsPage.svelte')),
+    '*': JobsPage,
   };
-
-  let currentPath = $derived(($location || '/').split('?')[0]);
-
-  // Derive active tab from location
-  let activeTab = $derived(currentPath === '/launch' ? 'launch' :
-                 currentPath === '/settings' ? 'settings' :
-                 currentPath === '/watchers' ? 'watchers' :
-                 currentPath === '/' || currentPath.startsWith('/jobs/') ? 'jobs' :
-                 'jobs');
-
-  // Track route changes for back navigation
-  let previousLocation: string | undefined = $state();
-
-  // Import navigationState and get function for non-reactive reads
-  import { navigationState } from "./stores/navigation";
-  import { get } from "svelte/store";
-
-  // Combine navigation tracking and document title update into a single reactive block
-  // This prevents recursive reactive cycles that cause warnings
-  run(() => {
-    // Track navigation changes
-    if ($location && previousLocation && $location !== previousLocation) {
-      // Use get() to read current state without subscribing (avoids recursive reactivity)
-      const currentState = get(navigationState);
-      if (currentState.skipNextUpdate) {
-        // Clear the skip flag
-        navigationState.update(state => ({
-          ...state,
-          skipNextUpdate: false
-        }));
-      } else {
-        // Store the previous route
-        navigationActions.setPreviousRoute(previousLocation);
-      }
-
-      if (isMobile) {
-        sidebarOpen.set(false);
-        document.body.style.overflow = '';
-      }
-    }
-    previousLocation = $location;
-
-    // Update document title based on current route
-    if (currentPath === '/') {
-      document.title = 'Jobs | ssync';
-    } else if (currentPath === '/launch') {
-      document.title = 'Launch Job | ssync';
-    } else if (currentPath === '/watchers') {
-      document.title = 'Watchers | ssync';
-    } else if (currentPath === '/settings') {
-      document.title = 'Settings | ssync';
-    } else if (currentPath.startsWith('/jobs/')) {
-      // Extract job ID and host from URL: /jobs/:id/:host
-      const parts = currentPath.split('/');
-      if (parts.length >= 4) {
-        const jobId = decodeURIComponent(parts[2]);
-        const hostname = parts[3];
-        document.title = `${jobId} @ ${hostname} | ssync`;
-      } else {
-        document.title = 'Job Details | ssync';
-      }
-    } else {
-      document.title = 'ssync';
-    }
-  });
-
-  function checkMobile() {
-    const nextIsMobile = window.innerWidth < 768;
-    if (nextIsMobile !== isMobile) {
-      sidebarOpen.set(!nextIsMobile);
-      if (nextIsMobile) {
-        document.body.style.overflow = '';
-      }
-    }
-    isMobile = nextIsMobile;
-  }
-
-  // Prevent body scroll when sidebar is open on mobile
+  const jobs = jobStateManager.getAllJobs();
+  const hostStates = jobStateManager.getHostStates();
+  const connection = jobStateManager.getConnectionStatus();
+  const navigation = [{ path: '/', label: 'Jobs', icon: Layers }, { path: '/launch', label: 'Launch', icon: Rocket }, { path: '/watchers', label: 'Watchers', icon: Eye }, { path: '/hosts', label: 'Hosts', icon: Server }];
+  let mobileOpen = $state(false);
+  let commandOpen = $state(false);
+  let commandQuery = $state('');
+  let connecting = $state(true);
+  let previousLocation: string | undefined;
+  const path = $derived(($location || '/').split('?')[0]);
+  const maximized = $derived(path.startsWith('/jobs/') && path.split('/').length >= 4);
+  const activePath = $derived(path === '/jobs' || maximized ? '/' : path);
+  const title = $derived(activePath === '/launch' ? 'Launch job' : activePath === '/watchers' ? 'Watchers' : activePath === '/hosts' ? 'Hosts' : activePath === '/settings' ? 'Settings' : 'Jobs');
+  const runningCount = $derived($jobs.filter(j => jobStatus(j.state).category === 'active').length);
+  const attentionCount = $derived($jobs.filter(j => jobStatus(j.state).attention).length);
+  const commandJobs = $derived($jobs.filter(j => [j.name, j.job_id, j.hostname].some(v => v.toLowerCase().includes(commandQuery.toLowerCase()))).slice(0, 8));
+  const commandActions = $derived(navigation.filter(item => item.label.toLowerCase().includes(commandQuery.toLowerCase())));
   $effect(() => {
-    if (isMobile && $sidebarOpen) {
-      // Prevent scrolling on body
-      document.body.style.overflow = 'hidden';
-    } else {
-      // Re-enable scrolling
-      document.body.style.overflow = '';
+    const next = $location;
+    mobileOpen = false;
+    if (previousLocation && previousLocation !== next) {
+      if (get(navigationState).skipNextUpdate)
+        navigationState.update(state => ({ ...state, skipNextUpdate: false }));
+      else
+        navigationActions.setPreviousRoute(previousLocation);
     }
+    previousLocation = next;
   });
-
-  onMount(() => {
-    checkMobile();
-    if (isMobile) {
-      sidebarOpen.set(false);
-      document.body.style.overflow = '';
-    }
-    window.addEventListener('resize', checkMobile);
-
-    const rootSearchParams = new URLSearchParams(window.location.search);
-    const hasRootWatcherDeepLink = rootSearchParams.has('watcher');
-    const hashIsRoot =
-      !window.location.hash ||
-      window.location.hash === '#/' ||
-      window.location.hash.startsWith('#/?');
-
-    if (hasRootWatcherDeepLink && hashIsRoot) {
-      const nextRoute = `/watchers?${rootSearchParams.toString()}`;
-      void push(nextRoute).then(() => {
-        window.history.replaceState({}, '', `/#${nextRoute}`);
-      });
-    } else {
-      const browserRoute = `${window.location.pathname}${window.location.search}`;
-      if (browserRoute !== '/' && browserRoute !== $location) {
-        push(browserRoute);
-      }
-    }
-
-    // Initialize theme from store (already happens in theme.ts module load, but ensure it's applied)
-    theme.init();
-
-    if (!$apiConfig.apiKey) {
-    }
-
-    void testConnection().then((connected) => {
-      if (connected) {
-        loadHosts();
-        // ⚡ PERFORMANCE FIX: Disabled legacy WebSocket - JobStateManager handles WebSocket now
-        // connectAllJobsWebSocket();
-      } else if (!$apiConfig.apiKey) {
-        push('/settings');
-        error = "Please configure your API key to use the application";
-      }
-    });
-
-    return () => {
-      window.removeEventListener('resize', checkMobile);
-      // Cleanup: ensure body scroll is restored
-      document.body.style.overflow = '';
-    };
-  });
-
-  async function loadHosts(): Promise<void> {
-    if (hostsLoading) return;
-
-    hostsLoading = true;
-    try {
-      const response = await api.get<HostInfo[]>("/api/hosts");
-      hosts = response.data;
-    } catch (err: unknown) {
-      const axiosError = err as AxiosError;
-      if (axiosError.response?.status === 401) {
-        error = "Authentication failed. Please check your API key.";
-        push('/settings');
-      } else {
-        error = `Failed to load hosts: ${axiosError.message}`;
-      }
-    } finally {
-      hostsLoading = false;
-    }
+  async function connect() {
+    connecting = true;
+    const connected = await testConnection();
+    connecting = false;
+    if (connected)
+      jobStateManager.connectWebSocket();
   }
+  function navigate(route: string) { commandOpen = false; mobileOpen = false; void push(route); }
+  function openCommands() { commandQuery = ''; commandOpen = true; }
+  function keyboard(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      commandOpen ? commandOpen = false : openCommands();
+    }
+    if (event.key === 'Escape')
+      mobileOpen = false;
+  }
+  onMount(() => {
+    theme.init();
+    try {
+      document.documentElement.classList.toggle('compact-mode', Boolean(JSON.parse(safeGetItem('ssync_preferences') || '{}').compactMode));
+    }
+    catch { }
+    const search = new URLSearchParams(window.location.search);
+    if (search.has('watcher') && (!window.location.hash || window.location.hash.startsWith('#/?') || window.location.hash === '#/')) {
+      const route = `/watchers?${search.toString()}`;
+      void push(route).then(() => window.history.replaceState({}, '', `${window.location.pathname}#${route}`));
+    }
+    else if (!window.location.hash && /^\/(jobs\/|watchers|launch|hosts|settings)/.test(window.location.pathname)) {
+      void push(`${window.location.pathname}${window.location.search}`);
+    }
+    void connect();
+  });
 </script>
 
-<ErrorBoundary
-  resetError={() => {
-    error = null;
-    window.location.reload();
-  }}
->
-  <div class="h-full w-full bg-background flex flex-col overflow-hidden">
-    <!-- Minimalist Header -->
-    <header class="flex-shrink-0 navbar-header">
-      <div class="px-3 sm:px-6 lg:px-8">
-        <div class="flex h-16 md:h-16 items-center justify-between">
-          <!-- Logo and Navigation -->
-          <div class="flex items-center space-x-2 md:space-x-4">
-            <button
-              class="navbar-title text-base md:text-lg font-semibold text-foreground hover:opacity-70 transition-opacity duration-200 cursor-pointer"
-              onclick={() => sidebarOpen.update(v => !v)}
-              title="Toggle jobs sidebar"
-            >
-              ssync
-            </button>
+<svelte:window onkeydown={keyboard}/>
 
-            <!-- Desktop Navigation -->
-            <nav class="hidden md:flex items-center space-x-1">
-              <a
-                href="/"
-                use:link
-                class="nav-link {activeTab === 'jobs' ? 'nav-link-active' : ''}"
-              >
-                <span>Jobs</span>
-              </a>
+<svelte:head>
+  <title>{title} · ssync</title>
+</svelte:head>
 
-              <a
-                href="/launch"
-                use:link
-                class="nav-link {activeTab === 'launch' ? 'nav-link-active' : ''} {!$apiConfig.authenticated ? 'opacity-50 cursor-not-allowed' : ''}"
-              >
-                <span>Launch</span>
-              </a>
-
-              <a
-                href="/watchers"
-                use:link
-                class="nav-link {activeTab === 'watchers' ? 'nav-link-active' : ''} {!$apiConfig.authenticated ? 'opacity-50 cursor-not-allowed' : ''}"
-              >
-                <span>Watchers</span>
-              </a>
-
-              <a
-                href="/settings"
-                use:link
-                class="nav-link {activeTab === 'settings' ? 'nav-link-active' : ''} relative"
-              >
-                <span>Settings</span>
-                {#if !$apiConfig.authenticated}
-                  <span class="absolute -top-1 -right-1 h-1.5 w-1.5 bg-red-500 rounded-full"></span>
-                {/if}
-              </a>
-            </nav>
-
-            <!-- Mobile Navigation - inline with logo -->
-            <nav class="md:hidden flex items-center space-x-1">
-              <a
-                href="/"
-                use:link
-                class="mobile-nav-link-inline {activeTab === 'jobs' ? 'mobile-nav-link-inline-active' : ''}"
-              >
-                Jobs
-              </a>
-
-              <a
-                href="/launch"
-                use:link
-                class="mobile-nav-link-inline {activeTab === 'launch' ? 'mobile-nav-link-inline-active' : ''}"
-              >
-                Launch
-              </a>
-
-              <a
-                href="/watchers"
-                use:link
-                class="mobile-nav-link-inline {activeTab === 'watchers' ? 'mobile-nav-link-inline-active' : ''}"
-              >
-                Watchers
-              </a>
-
-              <a
-                href="/settings"
-                use:link
-                class="mobile-nav-link-inline {activeTab === 'settings' ? 'mobile-nav-link-inline-active' : ''} relative"
-              >
-                Settings
-                {#if !$apiConfig.authenticated}
-                  <span class="absolute -top-0.5 -right-0.5 h-1 w-1 bg-red-500 rounded-full"></span>
-                {/if}
-              </a>
-            </nav>
-          </div>
-
-          <!-- Right side stats - Desktop only -->
-          {#if !isMobile}
-            <div class="flex items-center space-x-4">
-              {#if $apiConfig.authenticated}
-                <div class="flex items-center space-x-1.5">
-                  <div class="h-1.5 w-1.5 bg-green-500 rounded-full"></div>
-                  <span class="text-xs text-muted-foreground">Connected</span>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </div>
-    </header>
-
-    <!-- Error Banner -->
-    {#if error}
-      <div class="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800">
-        <div class="px-4 sm:px-6 lg:px-8 py-3">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center space-x-3">
-              <AlertCircle class="h-5 w-5 text-red-600 dark:text-red-400" />
-              <p class="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
-            </div>
-            <button 
-              onclick={() => window.location.reload()} 
-              class="inline-flex items-center space-x-1 text-sm font-medium text-red-600 hover:text-red-500 dark:text-red-400 dark:hover:text-red-300"
-            >
-              <RefreshCw class="h-4 w-4" />
-              <span>Retry</span>
-            </button>
-          </div>
-        </div>
-      </div>
+<ErrorBoundary resetError={()=>window.location.reload()}>
+  <div class="relay-app" class:relay-focused={maximized}>
+    {#if mobileOpen}
+      <button class="relay-nav-backdrop" aria-label="Close navigation" onclick={()=>mobileOpen=false}></button>
     {/if}
-
-    <!-- Main Content -->
-    <main class="flex-1 w-full min-h-0 overflow-hidden flex relative">
-      <!-- Mobile Backdrop (only on mobile when sidebar is open) -->
-      {#if isMobile && $sidebarOpen}
-        <div
-          class="mobile-sidebar-backdrop"
-          role="button"
-          tabindex="0"
-          onclick={() => sidebarOpen.set(false)}
-          onkeydown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              sidebarOpen.set(false);
-            }
-          }}
-        ></div>
-      {/if}
-
-      <!-- Global Job Sidebar -->
-      {#if $sidebarOpen}
-        <div class="sidebar-container" class:mobile={isMobile}>
-          <JobSidebar />
+    <aside class="relay-sidebar" class:mobile-open={mobileOpen} aria-label="Primary navigation" use:focusTrap={{enabled:mobileOpen}}>
+      <a href="#/" class="relay-brand" aria-label="ssync jobs" title="ssync" onclick={()=>mobileOpen=false}>
+        <Brand/>
+        <span>ssync</span>
+        <small>v2</small>
+      </a>
+      <button class="relay-quick-find" aria-label="Quick find" title="Quick find · ⌘/Ctrl K" onclick={openCommands}>
+        <Search size={17}/>
+        <span>Quick find</span>
+        <kbd>⌘ K</kbd>
+      </button>
+      <nav>
+        {#each navigation as item}
+          {@const Glyph=item.icon}
+          <a href={`#${item.path}`} class:active={activePath===item.path} aria-current={activePath===item.path?'page':undefined} aria-label={item.label} title={item.label}>
+            <Glyph size={19}/>
+            <span>{item.label}</span>
+            {#if item.path==='/'&&runningCount}
+              <small>{runningCount}</small>
+            {/if}
+          </a>
+        {/each}
+      </nav>
+      <div class="relay-saved-views">
+        <span class="relay-section-label">Saved views</span>
+        <button class:active={$jobsWorkspace.view==='attention'&&activePath==='/'} onclick={()=>{setJobView('attention');navigate('/');}}>
+          <TriangleAlert size={16}/>
+          <span>Needs attention</span>
+          {#if attentionCount}
+            <small class="relay-attention-count">{attentionCount}</small>
+          {/if}
+        </button>
+        <button onclick={()=>{setJobView('running');navigate('/');}}>
+          <Layers size={16}/>
+          <span>Running jobs</span>
+        </button>
+      </div>
+      <div class="relay-sidebar-bottom">
+        <a class="relay-connection" href="#/hosts" title="View hosts">
+          <span class="relay-dot" class:connected={$connection.connected&&$connection.healthy}></span>
+          <span>{$hostStates.size} {$hostStates.size===1?'host':'hosts'} · {$connection.connected&&$connection.healthy?'Connected':'Offline'}</span>
+        </a>
+        <a class="relay-settings-link" href="#/settings" class:active={activePath==='/settings'} aria-label="Settings" title="Settings">
+          <Settings2 size={19}/>
+          <span>Settings</span>
+          {#if !$apiConfig.authenticated&&!connecting}
+            <span class="relay-auth-dot"></span>
+          {/if}
+        </a>
+        <div class="relay-appearance">
+          <span>Appearance</span>
+          <IconButton label={$resolvedTheme==='dark'?'Switch to light appearance':'Switch to dark appearance'} onclick={()=>theme.toggle()}>
+            {#if $resolvedTheme==='dark'}
+              <Sun size={18}/>
+            {:else}
+              <Moon size={18}/>
+            {/if}
+          </IconButton>
+        </div>
+      </div>
+    </aside>
+    <div class="relay-main">
+      <header class="relay-topbar">
+        <div class="relay-breadcrumb">
+          <button class="relay-icon-button relay-mobile-menu" aria-label="Open navigation" onclick={()=>mobileOpen=true}>
+            <Menu size={20}/>
+          </button>
+          <span>Workspace</span>
+          <span class="relay-slash">/</span>
+          <strong>{title}</strong>
+        </div>
+        <div class="relay-topbar-actions">
+          <span class="relay-live" class:online={$apiConfig.authenticated&&$connection.connected}>
+            <span class="relay-dot"></span>
+            {connecting?'Connecting':!$apiConfig.authenticated?'Not connected':$connection.source==='websocket'&&$connection.connected?'Live':$connection.connected?'Updating':'Reconnecting'}
+          </span>
+          <IconButton label="Quick find · ⌘/Ctrl K" onclick={openCommands}>
+            <Command size={18}/>
+          </IconButton>
+        </div>
+      </header>
+      {#if !connecting&&!$apiConfig.authenticated&&activePath!=='/settings'}
+        <div class="relay-banner" role="status">
+          <TriangleAlert size={18}/>
+          <span>{$apiConfig.authError||'Connect to your ssync server to load jobs.'}</span>
+          <a href="#/settings">Connection settings</a>
+          <IconButton label="Retry connection" onclick={()=>void connect()}>
+            <RefreshCw size={16}/>
+          </IconButton>
         </div>
       {/if}
-
-      <!-- Page Content -->
-      <div class="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
-        <Router {routes} />
-      </div>
-    </main>
+      <main id="main-content" class="relay-route">
+        <Router {routes}/>
+      </main>
+    </div>
   </div>
-
-  <LaunchMonitor />
-  
-  <!-- Performance Monitor (only in development/debug mode) -->
-  {#if import.meta.env.DEV || window.location.search.includes('debug')}
-    <PerformanceMonitor position="bottom-right" />
+  <LaunchMonitor/>
+  {#if import.meta.env.DEV&&window.location.search.includes('debug')}
+    <PerformanceMonitor position="bottom-right"/>
   {/if}
 </ErrorBoundary>
 
-<style>
-  :root {
-    --mobile-nav-height: 64px;
-  }
-
-  /* Navbar Header */
-  .navbar-header {
-    background-color: var(--background);
-    border-bottom: 1px solid var(--border);
-    position: relative;
-    z-index: 50;
-  }
-
-  /* Minimalist Navigation */
-  .nav-link {
-    padding: 0 0.75rem;
-    font-size: 0.875rem;
-    font-weight: 400;
-    color: var(--muted);
-    transition: color 150ms ease;
-    position: relative;
-  }
-
-  .nav-link:hover {
-    color: var(--foreground);
-  }
-
-  .nav-link-active {
-    color: var(--foreground);
-    font-weight: 500;
-  }
-
-  .nav-link-active::after {
-    content: '';
-    position: absolute;
-    bottom: -17px;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: var(--foreground);
-  }
-
-  /* Mobile Navigation - Inline with logo */
-  .mobile-nav-link-inline {
-    padding: 0.375rem 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 400;
-    color: var(--muted-foreground);
-    transition: color 150ms ease;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .mobile-nav-link-inline:hover {
-    color: var(--muted);
-  }
-
-  .mobile-nav-link-inline-active {
-    color: var(--foreground);
-    font-weight: 500;
-  }
-  
-
-  /* Minimal scrollbar */
-  :global(::-webkit-scrollbar) {
-    width: 6px;
-    height: 6px;
-  }
-  
-  :global(::-webkit-scrollbar-track) {
-    background: transparent;
-  }
-
-  :global(::-webkit-scrollbar-thumb) {
-    background-color: var(--border);
-    border-radius: 3px;
-  }
-
-  :global(::-webkit-scrollbar-thumb:hover) {
-    background-color: var(--muted);
-  }
-
-  /* Global animation classes */
-  :global(.animate-in) {
-    animation: fade-in 0.3s ease-out;
-  }
-
-  :global(.slide-in) {
-    animation: slide-in 0.3s ease-out;
-  }
-
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  @keyframes slide-in {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(0);
-    }
-  }
-
-  /* Mobile Sidebar Overlay */
-  .mobile-sidebar-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    z-index: 30;
-    animation: fade-in 0.2s ease-out;
-  }
-
-  .sidebar-container {
-    position: relative;
-    z-index: 1;
-  }
-
-  .sidebar-container.mobile {
-    position: fixed;
-    top: 65px; /* Below navbar (64px) + border (1px) */
-    left: 0;
-    bottom: 0;
-    z-index: 70;
-    animation: slide-in-left 0.3s ease-out;
-  }
-
-  @keyframes slide-in-left {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(0);
-    }
-  }
-</style>
+<Dialog bind:open={commandOpen} title="Quick find" size="lg" contentClass="relay-command-content">
+  <label class="relay-search">
+    <Search size={18}/>
+    <input aria-label="Find jobs and pages" placeholder="Search jobs, hosts, or pages…" bind:value={commandQuery}/>
+    {#if commandQuery}
+      <IconButton label="Clear search" onclick={()=>commandQuery=''}>
+        <X size={15}/>
+      </IconButton>
+    {/if}
+  </label>
+  <div class="relay-command-results">
+    {#each commandJobs as job}
+      <button class="relay-command-result" onclick={()=>navigate(jobRoute(job.job_id,job.hostname))}>
+        <Layers size={18}/>
+        <span>
+          <strong>{job.name||job.job_id}</strong>
+          <small>#{job.job_id} · {job.hostname}</small>
+        </span>
+        <JobStatus state={job.state}/>
+      </button>
+    {/each}
+    {#each commandActions as item}
+      {@const Glyph=item.icon}
+      <button class="relay-command-result" onclick={()=>navigate(item.path)}>
+        <Glyph size={18}/>
+        <span>{item.label}</span>
+        <ArrowRight size={16}/>
+      </button>
+    {/each}
+    {#if !commandJobs.length&&!commandActions.length}
+      <p class="relay-empty-message">No matching jobs or pages.</p>
+    {/if}
+  </div>
+</Dialog>

@@ -15,7 +15,8 @@
     type BackendNotificationStatus
   } from '../services/webpush';
   import { preferences as globalPreferences, preferencesActions } from '../stores/preferences';
-  import { theme } from '../stores/theme';
+  import AppearancePicker from '../components/workspace/AppearancePicker.svelte';
+  import { safeGetItem, safeSetItem } from '../lib/safeStorage';
   import {
     Key,
     Eye,
@@ -62,20 +63,18 @@
 
   // UI Preferences (stored in localStorage) - theme now managed by theme store
   let preferences = $state<LocalPreferences>({
-    autoRefresh: false,
-    refreshInterval: 30,
+    autoRefresh: $globalPreferences.autoRefresh,
+    refreshInterval: $globalPreferences.refreshInterval / 1000,
     compactMode: false,
     showNotifications: false,
     soundAlerts: false,
     webPushEnabled: false,
-    jobsPerPage: 50,
+    jobsPerPage: $globalPreferences.jobsPerPage,
     defaultJobView: 'table',
     showCompletedJobs: true,
     groupJobsByHost: false
   });
 
-  // Auto-refresh timer
-  let refreshTimer: number | null = null;
 
   // Cache stats
   let cacheStats = $state({
@@ -91,7 +90,7 @@
 
   // Collapsible sections state - expand on mobile when viewing sync section
   let collapsedSections = $derived({
-    sync: !(isMobile && activeSection === 'sync') // Expand on mobile when viewing sync section
+    sync: activeSection !== 'sync' // Expand on mobile when viewing sync section
   });
 
   // WebSocket settings from global preferences
@@ -157,10 +156,10 @@
   });
 
   function loadPreferences() {
-    const saved = localStorage.getItem('ssync_preferences');
+    const saved = safeGetItem('ssync_preferences');
     if (saved) {
       try {
-        preferences = { ...preferences, ...JSON.parse(saved) };
+        preferences = { ...preferences, ...JSON.parse(saved), autoRefresh: $globalPreferences.autoRefresh, refreshInterval: $globalPreferences.refreshInterval / 1000, jobsPerPage: $globalPreferences.jobsPerPage };
       } catch (e) {
         console.error('Failed to load preferences:', e);
       }
@@ -168,7 +167,7 @@
   }
 
   function savePreferences() {
-    localStorage.setItem('ssync_preferences', JSON.stringify(preferences));
+    safeSetItem('ssync_preferences', JSON.stringify(preferences));
   }
 
   async function loadBackendNotificationSettings() {
@@ -224,6 +223,10 @@
   async function handlePreferenceChange(key: keyof LocalPreferences, value: any) {
     preferences = { ...preferences, [key]: value } as LocalPreferences;
     savePreferences();
+
+    if (key === 'autoRefresh' || key === 'refreshInterval' || key === 'jobsPerPage') {
+      globalPreferences.update(current => ({ ...current, autoRefresh: preferences.autoRefresh, refreshInterval: Math.max(10, preferences.refreshInterval) * 1000, jobsPerPage: preferences.jobsPerPage }));
+    }
 
     // Apply changes immediately
     if (key === 'compactMode') {
@@ -419,6 +422,8 @@
           if (data.preferences) {
             preferences = { ...preferences, ...data.preferences };
             savePreferences();
+            globalPreferences.update(current => ({ ...current, autoRefresh: preferences.autoRefresh, refreshInterval: Math.max(10, preferences.refreshInterval) * 1000, jobsPerPage: preferences.jobsPerPage }));
+            document.documentElement.classList.toggle('compact-mode', preferences.compactMode);
           }
         } catch (e) {
           console.error('Failed to import settings:', e);
@@ -430,30 +435,41 @@
 
   function getSectionTitle(section: string): string {
     const titles: Record<string, string> = {
-      'api': 'API Authentication',
-      'display': 'Display Preferences',
+      'api': 'Connection',
+      'display': 'Appearance',
       'sync': 'Sync Settings',
       'notifications': 'Notifications',
-      'cache': 'Cache Management',
-      'websocket': 'WebSocket Connection',
-      'data': 'Data & Privacy'
+      'cache': 'Cache',
+      'websocket': 'Live updates',
+      'data': 'Import & export'
     };
     return titles[section] || 'Settings';
+  }
+  const sections = [
+    { id: 'api', label: 'Connection', icon: Key },
+    { id: 'display', label: 'Appearance', icon: Monitor },
+    { id: 'sync', label: 'File sync', icon: RefreshCw },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
+    { id: 'cache', label: 'Cache', icon: Database },
+    { id: 'websocket', label: 'Live updates', icon: Wifi },
+    { id: 'data', label: 'Import & export', icon: Shield }
+  ];
+  function showSection(id: string) {
+    activeSection = id;
+    document.getElementById('settings-' + id)?.scrollIntoView({ block: 'start' });
   }
 </script>
 
 <div class="h-full flex flex-col bg-background">
-  {#if !isMobile || activeSection !== null}
     <NavigationHeader
       title={isMobile && activeSection ? getSectionTitle(activeSection) : "Settings"}
-      showBackButton={true}
+      showBackButton={isMobile && activeSection !== null}
       customBackHandler={isMobile && activeSection !== null}
       customBackLabel={isMobile && activeSection ? "Settings" : ""}
       on:back={() => activeSection = null}
     />
-  {/if}
 
-  <div class="flex-1 overflow-auto">
+  <div class="settings-scroll flex-1 overflow-auto">
     {#if isMobile && !activeSection}
       <!-- Mobile: Settings list -->
       <div>
@@ -462,11 +478,11 @@
           onclick={() => activeSection = 'api'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <Key class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <Key class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 dark:text-foreground mb-1">API Authentication</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Connection</div>
+            <div class="text-sm text-gray-500">
               {#if $apiConfig.authenticated}
                 <Badge variant="success">Connected</Badge>
               {:else if isConfigured}
@@ -476,7 +492,7 @@
               {/if}
             </div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
@@ -484,13 +500,13 @@
           onclick={() => activeSection = 'display'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <Monitor class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <Monitor class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Display Preferences</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">Theme, layout, and appearance</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Appearance</div>
+            <div class="text-sm text-gray-500">Theme, layout, and appearance</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
@@ -498,13 +514,13 @@
           onclick={() => activeSection = 'sync'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <RefreshCw class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <RefreshCw class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
             <div class="font-medium text-gray-900 dark:text-foreground mb-1">Sync Settings</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">File patterns and filters</div>
+            <div class="text-sm text-gray-500">File patterns and filters</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
@@ -512,13 +528,13 @@
           onclick={() => activeSection = 'notifications'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <Bell class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <Bell class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
             <div class="font-medium text-gray-900 dark:text-foreground mb-1">Notifications</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">Alerts and sounds</div>
+            <div class="text-sm text-gray-500">Alerts and sounds</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
@@ -526,13 +542,13 @@
           onclick={() => activeSection = 'cache'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <Database class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <Database class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Cache Management</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">{cacheStats.size} used</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Cache</div>
+            <div class="text-sm text-gray-500">{cacheStats.size} used</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
@@ -540,13 +556,13 @@
           onclick={() => activeSection = 'websocket'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <Wifi class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <Wifi class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 dark:text-foreground mb-1">WebSocket Connection</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">Real-time updates settings</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Live updates</div>
+            <div class="text-sm text-gray-500">Real-time updates settings</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
 
         <button
@@ -554,25 +570,27 @@
           onclick={() => activeSection = 'data'}
         >
           <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-secondary rounded-[10px] mr-4">
-            <Shield class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <Shield class="w-5 h-5 text-gray-600" />
           </div>
           <div class="flex-1">
-            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Data & Privacy</div>
-            <div class="text-sm text-gray-500 dark:text-gray-400">Export and import settings</div>
+            <div class="font-medium text-gray-900 dark:text-foreground mb-1">Import & export</div>
+            <div class="text-sm text-gray-500">Export and import settings</div>
           </div>
-          <ChevronRight class="w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <ChevronRight class="w-4 h-4 text-gray-400" />
         </button>
       </div>
     {:else}
       <!-- Desktop: Grid layout / Mobile: Section view -->
-      <div class="p-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3 {isMobile ? 'grid-cols-1' : ''}">
+      <div class="settings-layout">
+        {#if !isMobile}<nav class="settings-nav" aria-label="Settings sections">{#each sections as section}{@const Icon = section.icon}<button class:active={(activeSection || 'api') === section.id} onclick={() => showSection(section.id)}><Icon size={17}/>{section.label}</button>{/each}</nav>{/if}
+        <div class="settings-sections">
         {#if !isMobile || activeSection === 'api'}
-          <!-- API Authentication Section -->
-          <div class="settings-section {activeSection === 'sync' ? 'lg:col-span-2 xl:col-span-3' : ''}">
+          <!-- Connection Section -->
+          <div id="settings-api" class="settings-section {activeSection === 'sync' ? 'lg:col-span-2 xl:col-span-3' : ''}">
             <div class="section-header">
               <div class="section-title">
                 <Key class="w-5 h-5" />
-                <h2>API Authentication</h2>
+                <h2>Connection</h2>
               </div>
               {#if $apiConfig.authenticated}
                 <Badge variant="success">Connected</Badge>
@@ -586,7 +604,7 @@
             <div class="section-content">
               {#if !isConfigured}
                 <div class="help-text">
-                  To use the API, generate a key using the CLI:
+                  Create a key with:
                 </div>
                 <pre class="command">ssync auth setup</pre>
 
@@ -594,7 +612,7 @@
                   {#if showApiKey}
                     <input
                       type="text"
-                      placeholder="Enter your API key..."
+                      placeholder="API key" aria-label="API key"
                       bind:value={apiKeyInput}
                       onkeydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
                       class="input-field"
@@ -602,7 +620,7 @@
                   {:else}
                     <input
                       type="password"
-                      placeholder="Enter your API key..."
+                      placeholder="API key" aria-label="API key"
                       bind:value={apiKeyInput}
                       onkeydown={(e) => e.key === 'Enter' && handleSaveApiKey()}
                       class="input-field"
@@ -611,6 +629,7 @@
                   <button
                     type="button"
                     class="btn-icon"
+                    aria-label={showApiKey ? "Hide API key" : "Show API key"}
                     onclick={toggleShowApiKey}
                   >
                     {#if showApiKey}
@@ -662,7 +681,7 @@
                 {#if testResult === 'success'}
                   <div class="alert alert-success">
                     <Check class="w-4 h-4" />
-                    API connection successful!
+                    Connected.
                   </div>
                 {:else if testResult === 'error'}
                   <div class="alert alert-error">
@@ -676,45 +695,17 @@
         {/if}
 
         {#if !isMobile || activeSection === 'display'}
-          <!-- Display Preferences Section -->
-          <div class="settings-section">
+          <!-- Appearance Section -->
+          <div id="settings-display" class="settings-section">
             <div class="section-header">
               <div class="section-title">
                 <Monitor class="w-5 h-5" />
-                <h2>Display Preferences</h2>
+                <h2>Appearance</h2>
               </div>
             </div>
 
             <div class="section-content">
-              <div class="preference-item">
-                <div class="preference-info">
-                  <span class="preference-label">Theme</span>
-                  <span class="preference-description">Choose your preferred color scheme</span>
-                </div>
-                <div class="button-toggle">
-                  <button
-                    class="toggle-option {$theme === 'light' ? 'active' : ''}"
-                    onclick={() => theme.set('light')}
-                  >
-                    <Sun class="w-4 h-4" />
-                    Light
-                  </button>
-                  <button
-                    class="toggle-option {$theme === 'dark' ? 'active' : ''}"
-                    onclick={() => theme.set('dark')}
-                  >
-                    <Moon class="w-4 h-4" />
-                    Dark
-                  </button>
-                  <button
-                    class="toggle-option {$theme === 'system' ? 'active' : ''}"
-                    onclick={() => theme.set('system')}
-                  >
-                    <Monitor class="w-4 h-4" />
-                    System
-                  </button>
-                </div>
-              </div>
+              <AppearancePicker />
 
               <div class="preference-item">
                 <div class="preference-info">
@@ -723,9 +714,9 @@
                 </div>
                 <label class="switch">
                   <input
-                    type="checkbox"
+                    type="checkbox" aria-label="Compact Mode"
                     bind:checked={preferences.compactMode}
-                    onchange={() => handlePreferenceChange('compactMode', preferences.compactMode)}
+                    onchange={(event) => handlePreferenceChange('compactMode', event.currentTarget.checked)}
                   />
                   <span class="slider"></span>
                 </label>
@@ -738,9 +729,9 @@
                 </div>
                 <label class="switch">
                   <input
-                    type="checkbox"
+                    type="checkbox" aria-label="Auto Refresh"
                     bind:checked={preferences.autoRefresh}
-                    onchange={() => handlePreferenceChange('autoRefresh', preferences.autoRefresh)}
+                    onchange={(event) => handlePreferenceChange('autoRefresh', event.currentTarget.checked)}
                   />
                   <span class="slider"></span>
                 </label>
@@ -752,9 +743,9 @@
                   <span class="preference-description">How often to check for updates</span>
                 </div>
                 <select
-                  class="select-field"
+                  class="select-field" aria-label="Refresh interval"
                   bind:value={preferences.refreshInterval}
-                  onchange={() => handlePreferenceChange('refreshInterval', preferences.refreshInterval)}
+                  onchange={(event) => handlePreferenceChange('refreshInterval', event.currentTarget.value ? Number(event.currentTarget.value) : 30)}
                   disabled={!preferences.autoRefresh}
                 >
                   <option value={10}>10 seconds</option>
@@ -771,9 +762,9 @@
                   <span class="preference-description">Number of jobs to display</span>
                 </div>
                 <select
-                  class="select-field"
+                  class="select-field" aria-label="Jobs per page"
                   bind:value={preferences.jobsPerPage}
-                  onchange={() => handlePreferenceChange('jobsPerPage', preferences.jobsPerPage)}
+                  onchange={(event) => handlePreferenceChange('jobsPerPage', event.currentTarget.value ? Number(event.currentTarget.value) : 30)}
                 >
                   <option value={25}>25</option>
                   <option value={50}>50</option>
@@ -789,7 +780,7 @@
                   <span class="preference-description">How far back to load completed jobs</span>
                 </div>
                 <select
-                  class="select-field"
+                  class="select-field" aria-label="History window"
                   value={$globalPreferences.defaultSince}
                   onchange={(event) => preferencesActions.setDefaultSince(event.currentTarget.value)}
                 >
@@ -801,23 +792,14 @@
                 </select>
               </div>
 
-              <div class="preference-item disabled">
-                <div class="preference-info">
-                  <span class="preference-label">Default Job View</span>
-                  <span class="preference-description">How to display job listings (Coming soon)</span>
-                </div>
-                <div class="button-toggle disabled">
-                  <button class="toggle-option disabled">Table</button>
-                  <button class="toggle-option disabled">Cards</button>
-                </div>
-              </div>
+
             </div>
           </div>
         {/if}
 
         {#if !isMobile || activeSection === 'sync'}
           <!-- Sync Settings Section -->
-          <div class="settings-section full-width">
+          <div id="settings-sync" class="settings-section full-width">
             <div class="section-header collapsible" class:collapsed={collapsedSections.sync}>
               <div class="section-title">
                 <RefreshCw class="w-5 h-5" />
@@ -842,7 +824,7 @@
 
         {#if !isMobile || activeSection === 'notifications'}
           <!-- Notifications Section -->
-          <div class="settings-section">
+          <div id="settings-notifications" class="settings-section">
             <div class="section-header">
               <div class="section-title">
                 <Bell class="w-5 h-5" />
@@ -886,9 +868,9 @@
                 </div>
                 <label class="switch">
                   <input
-                    type="checkbox"
+                    type="checkbox" aria-label="Show Notifications"
                     bind:checked={preferences.showNotifications}
-                    onchange={() => handlePreferenceChange('showNotifications', preferences.showNotifications)}
+                    onchange={(event) => handlePreferenceChange('showNotifications', event.currentTarget.checked)}
                   />
                   <span class="slider"></span>
                 </label>
@@ -921,9 +903,9 @@
                 </div>
                 <label class="switch">
                   <input
-                    type="checkbox"
+                    type="checkbox" aria-label="Web Push Enabled"
                     bind:checked={preferences.webPushEnabled}
-                    onchange={() => handlePreferenceChange('webPushEnabled', preferences.webPushEnabled)}
+                    onchange={(event) => handlePreferenceChange('webPushEnabled', event.currentTarget.checked)}
                     disabled={!webPushSupported}
                   />
                   <span class="slider"></span>
@@ -937,9 +919,9 @@
                 </div>
                 <label class="switch">
                   <input
-                    type="checkbox"
+                    type="checkbox" aria-label="Sound Alerts"
                     bind:checked={preferences.soundAlerts}
-                    onchange={() => handlePreferenceChange('soundAlerts', preferences.soundAlerts)}
+                    onchange={(event) => handlePreferenceChange('soundAlerts', event.currentTarget.checked)}
                     disabled={!preferences.showNotifications}
                   />
                   <span class="slider"></span>
@@ -950,12 +932,12 @@
         {/if}
 
         {#if !isMobile || activeSection === 'cache'}
-          <!-- Cache Management Section -->
-          <div class="settings-section">
+          <!-- Cache Section -->
+          <div id="settings-cache" class="settings-section">
             <div class="section-header">
               <div class="section-title">
                 <Database class="w-5 h-5" />
-                <h2>Cache Management</h2>
+                <h2>Cache</h2>
               </div>
             </div>
 
@@ -1001,12 +983,12 @@
         {/if}
 
         {#if !isMobile || activeSection === 'websocket'}
-          <!-- WebSocket Connection Settings -->
-          <div class="settings-section">
+          <!-- Live updates Settings -->
+          <div id="settings-websocket" class="settings-section">
             <div class="section-header">
               <div class="section-title">
                 <Wifi class="w-5 h-5" />
-                <h2>WebSocket Connection</h2>
+                <h2>Live updates</h2>
               </div>
             </div>
 
@@ -1109,7 +1091,7 @@
               <div class="flex gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900">
                 <Monitor class="w-4 h-4 flex-shrink-0 mt-0.5" />
                 <div>
-                  <strong class="text-blue-950">About WebSocket Connection:</strong><br/>
+                  <strong class="text-blue-950">About Live updates:</strong><br/>
                   Real-time updates use WebSocket for instant job status changes. If auto-reconnect is enabled,
                   the system will automatically try to restore connection with exponential backoff.
                 </div>
@@ -1119,12 +1101,12 @@
         {/if}
 
         {#if !isMobile || activeSection === 'data'}
-          <!-- Data & Privacy Section -->
-          <div class="settings-section">
+          <!-- Import & export Section -->
+          <div id="settings-data" class="settings-section">
             <div class="section-header">
               <div class="section-title">
                 <Shield class="w-5 h-5" />
-                <h2>Data & Privacy</h2>
+                <h2>Import & export</h2>
               </div>
             </div>
 
@@ -1146,11 +1128,12 @@
               </button>
 
               <div class="help-text">
-                Export your settings to back them up or transfer to another device. API keys are not included in exports for security.
+                API keys are excluded from exports.
               </div>
             </div>
           </div>
         {/if}
+        </div>
       </div>
     {/if}
   </div>
@@ -1478,49 +1461,21 @@
     width: 18px;
     left: 3px;
     bottom: 3px;
-    background-color: var(--background);
+    background-color: var(--muted-foreground);
     transition: 0.3s;
     border-radius: 50%;
   }
 
   input:checked + .slider {
-    background-color: var(--accent);
+    background-color: var(--primary);
   }
 
   input:checked + .slider:before {
+    background-color:var(--primary-foreground);
     transform: translateX(24px);
   }
 
   /* Button Toggle */
-  .button-toggle {
-    display: flex;
-    background: var(--secondary);
-    border-radius: 8px;
-    padding: 2px;
-  }
-
-  .toggle-option {
-    flex: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.375rem;
-    padding: 0.5rem 1rem;
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .toggle-option.active {
-    background: var(--background);
-    color: var(--foreground);
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  }
 
   .select-field {
     padding: 0.625rem 1rem;
@@ -1573,29 +1528,6 @@
   }
 
   /* Disabled state styles */
-  .preference-item.disabled {
-    opacity: 0.6;
-    pointer-events: none;
-  }
-
-  .preference-item.disabled .preference-label {
-    color: var(--muted-foreground);
-  }
-
-  .preference-item.disabled .preference-description {
-    color: var(--muted-foreground);
-  }
-
-  .button-toggle.disabled {
-    opacity: 0.6;
-    pointer-events: none;
-  }
-
-  .toggle-option.disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
 
   /* Compact Mode - Global styles */
   :global(.compact-mode) {
@@ -1631,12 +1563,6 @@
       gap: 0.75rem;
     }
 
-    .button-toggle,
-    .switch,
-    .select-field {
-      width: 100%;
-    }
-
     .button-group {
       flex-direction: column;
     }
@@ -1649,4 +1575,20 @@
       padding: 1rem;
     }
   }
+
+  .settings-layout { display:grid; grid-template-columns:190px minmax(0,760px); gap:32px; padding:12px 32px 40px; align-items:start; }
+  .settings-nav { display:flex; flex-direction:column; gap:4px; position:sticky; top:12px; }
+  .settings-nav button { display:flex; align-items:center; gap:10px; min-height:42px; padding:10px 12px; border:0; border-radius:10px; background:transparent; text-align:left; font-size:14px; color:var(--muted-foreground); }
+  .settings-nav button:hover { color:var(--foreground); background:var(--secondary); }
+  .settings-nav button.active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .settings-sections { min-width:0; display:flex; flex-direction:column; gap:24px; }
+  .settings-section { border-radius:var(--radius-card); scroll-margin-top:16px; }
+  .preference-item { gap:20px; }
+  .switch { flex-shrink:0; }
+  .switch input:focus-visible + .slider { outline:2px solid var(--ring); outline-offset:4px; }
+  .input-field { min-width:0; }
+  .btn-primary,.btn-secondary,.btn-danger,.input-field,.select-field { border-radius:12px; }
+  .btn-danger { color:var(--error); background:var(--error-bg); border-color:transparent; }
+  @media(max-width:1000px) { .settings-layout { grid-template-columns:160px minmax(0,1fr); gap:20px; padding:12px 24px 32px; } }
+  @media(max-width:767px) { .settings-layout { display:block; padding:12px 16px 24px; } .preference-item { flex-direction:row; align-items:center; } .switch { width:48px; } .select-field { width:auto; max-width:48%; } .input-group { flex-wrap:wrap; } .state-toggles { justify-content:flex-start; } .notification-states-item { flex-direction:column; align-items:flex-start; } }
 </style>

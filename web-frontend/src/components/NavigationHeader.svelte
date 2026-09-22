@@ -75,7 +75,7 @@
   let backLabel = $derived(customBackLabel || getBackLabel($navigationState));
 </script>
 
-<header class="bg-background border-b border-border sticky top-0 z-40">
+<header class="navigation-header bg-background border-b border-border sticky top-0 z-40">
   <div class="header-shell px-4 sm:px-6 lg:px-8">
     <div class="header-row flex h-16 items-center justify-between">
       <!-- Left side -->
@@ -219,4 +219,5 @@
       justify-content: space-between;
     }
   }
+.navigation-header{flex-shrink:0}.header-row{min-height:100px;height:auto;padding:24px 0}.header-left :global(h1){font-size:2.125rem;line-height:1.2;letter-spacing:-.04em;font-weight:650}.header-left :global(.page-title-row){font-size:2.125rem;line-height:1.2;letter-spacing:-.04em;font-weight:650}.header-left :global(.page-title-row svg){display:none}@media(max-width:760px){.header-row{min-height:88px;padding:21px 0}.header-left :global(h1),.header-left :global(.page-title-row){font-size:1.875rem}}
 </style>
