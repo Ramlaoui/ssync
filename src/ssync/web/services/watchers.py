@@ -1,17 +1,29 @@
 """Watcher-related orchestration helpers used by web routes."""
 
-import asyncio
-import gzip
 import json
+import shlex
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from ...models.job import JobState
 from ...utils.async_helpers import create_task
+from ...utils.executors import WorkQueueFull, run_local, run_output, run_remote
 from ...utils.logging import setup_logger
+from ...utils.output_buffer import _iter_output_chunks
 
 logger = setup_logger(__name__)
 DEFAULT_TRIGGER_JOB_STATES = ["completed", "failed", "timeout"]
+MAX_MANUAL_WATCHER_BYTES = 8 * 1024 * 1024
+
+
+class WatcherOutputTooLarge(RuntimeError):
+    def __init__(self):
+        super().__init__(
+            "Manual watcher scans support at most 8 MiB of output. "
+            "Use incremental monitoring or provide a smaller test sample."
+        )
+
+
 FINISHED_JOB_STATES = {
     JobState.COMPLETED,
     JobState.FAILED,
@@ -190,53 +202,33 @@ def start_watcher_task(watcher_id: int, job_id: str, hostname: str) -> None:
         logger.debug(f"Could not start watcher task {watcher_id}: {exc}")
 
 
-def decode_cached_output(
-    compressed_data: Optional[bytes], compression: str, output_type: str
+def read_remote_output(
+    conn, file_path: Optional[str], output_type: str, max_bytes: int
 ) -> str:
-    if not compressed_data:
-        return ""
-
-    try:
-        if compression == "gzip":
-            return gzip.decompress(compressed_data).decode("utf-8")
-        return compressed_data.decode("utf-8")
-    except Exception as exc:
-        logger.warning(f"Failed to decompress cached {output_type}: {exc}")
-        return ""
-
-
-def decode_cached_job_outputs(cached_job) -> tuple[str, str]:
-    return (
-        decode_cached_output(
-            cached_job.stdout_compressed,
-            cached_job.stdout_compression,
-            "stdout",
-        ),
-        decode_cached_output(
-            cached_job.stderr_compressed,
-            cached_job.stderr_compression,
-            "stderr",
-        ),
-    )
-
-
-def read_remote_output(conn, file_path: Optional[str], output_type: str) -> str:
     if not conn or not file_path:
         return ""
 
     try:
-        result = conn.run(f"cat '{file_path}'", warn=True, hide=True)
+        result = conn.run(
+            f"head -c {max_bytes + 1} -- {shlex.quote(file_path)}",
+            warn=True,
+            hide=True,
+        )
         if result.ok:
             content = result.stdout
+            if len(content.encode("utf-8")) > max_bytes:
+                raise WatcherOutputTooLarge()
             logger.info(f"Fetched {output_type} from Slurm: {len(content)} chars")
             return content
+    except WatcherOutputTooLarge:
+        raise
     except Exception as exc:
         logger.warning(f"Failed to fetch {output_type} from Slurm: {exc}")
     return ""
 
 
 def fetch_job_outputs_from_slurm(
-    *, get_slurm_manager, hostname: str, job_id: str
+    *, get_slurm_manager, hostname: str, job_id: str, output_type: str = "both"
 ) -> tuple[str, str]:
     try:
         logger.info(f"Cache empty, fetching output from Slurm for job {job_id}")
@@ -252,10 +244,22 @@ def fetch_job_outputs_from_slurm(
             logger.warning(f"Failed to get connection for {hostname}: {exc}")
             return "", ""
 
-        return (
-            read_remote_output(conn, job_info.stdout_file, "stdout"),
-            read_remote_output(conn, job_info.stderr_file, "stderr"),
-        )
+        outputs = []
+        remaining = MAX_MANUAL_WATCHER_BYTES
+        for kind, path in (
+            ("stdout", job_info.stdout_file),
+            ("stderr", job_info.stderr_file),
+        ):
+            content = (
+                read_remote_output(conn, path, kind, remaining)
+                if output_type in (kind, "both")
+                else ""
+            )
+            outputs.append(content)
+            remaining -= len(content.encode("utf-8"))
+        return tuple(outputs)
+    except WatcherOutputTooLarge:
+        raise
     except Exception as exc:
         logger.warning(f"Failed to fetch output from Slurm: {exc}")
         return "", ""
@@ -264,20 +268,59 @@ def fetch_job_outputs_from_slurm(
 def load_watcher_output_text(
     *, get_slurm_manager, cache, job_id: str, hostname: str, watcher_id: int
 ) -> tuple[str, str]:
-    cached_job = cache.get_cached_job(job_id, hostname)
-    if cached_job and (cached_job.stdout_compressed or cached_job.stderr_compressed):
-        stdout_content, stderr_content = decode_cached_job_outputs(cached_job)
-        logger.info(
-            f"Using cached output for watcher {watcher_id} - "
-            f"stdout: {len(stdout_content)} chars, stderr: {len(stderr_content)} chars"
-        )
-        if stdout_content or stderr_content:
-            return stdout_content, stderr_content
+    cached_output = load_cached_watcher_output_text(
+        cache=cache,
+        job_id=job_id,
+        hostname=hostname,
+        watcher_id=watcher_id,
+    )
+    if cached_output is not None:
+        return cached_output
 
     return fetch_job_outputs_from_slurm(
         get_slurm_manager=get_slurm_manager,
         hostname=hostname,
         job_id=job_id,
+    )
+
+
+def load_cached_watcher_output_text(
+    *, cache, job_id: str, hostname: str, watcher_id: int, output_type: str = "both"
+) -> Optional[tuple[str, str]]:
+    """Read a bounded manual scan without materializing SQLite output blobs."""
+    outputs = []
+    found = False
+    remaining = MAX_MANUAL_WATCHER_BYTES
+    for kind in ("stdout", "stderr"):
+        content = bytearray()
+        with cache.open_job_output(job_id, hostname, kind) as output:
+            if output is not None:
+                found = True
+                source, compression, _size = output
+                if output_type in (kind, "both"):
+                    for chunk in _iter_output_chunks(source, compression):
+                        if len(chunk) > remaining:
+                            raise WatcherOutputTooLarge()
+                        content.extend(chunk)
+                        remaining -= len(chunk)
+        outputs.append(content.decode("utf-8", errors="replace"))
+    return tuple(outputs) if found else None
+
+
+def content_stats(content: str) -> tuple[int, int]:
+    """Return the line and character counts used in watcher messages."""
+    return content.count("\n") + 1, len(content)
+
+
+def count_pattern_matches(regex, content: str) -> int:
+    """Count matches without retaining all match objects in memory."""
+    from ...watchers.engine import PATTERN_TIMEOUT_SECONDS
+
+    return sum(
+        1
+        for _ in regex.finditer(
+            content, concurrent=True, timeout=PATTERN_TIMEOUT_SECONDS
+        )
     )
 
 
@@ -556,6 +599,7 @@ async def cleanup_orphaned_watchers_payload(*, cache, dry_run: bool) -> Dict[str
 
     engine = get_watcher_engine()
     if dry_run:
+
         def load_active_watchers():
             with cache._get_connection() as conn:
                 return [
@@ -575,7 +619,7 @@ async def cleanup_orphaned_watchers_payload(*, cache, dry_run: bool) -> Dict[str
                     ).fetchall()
                 ]
 
-        active_watchers = await asyncio.to_thread(load_active_watchers)
+        active_watchers = await run_local(load_active_watchers)
         return {
             "dry_run": True,
             "active_watchers": active_watchers,
@@ -586,7 +630,9 @@ async def cleanup_orphaned_watchers_payload(*, cache, dry_run: bool) -> Dict[str
     return {"message": "Cleanup completed", "dry_run": False}
 
 
-def pause_watcher(*, cache, watcher_id: int) -> Dict[str, Any]:
+def pause_watcher(
+    *, cache, watcher_id: int, manage_task: bool = True
+) -> Dict[str, Any]:
     with cache._get_connection() as conn:
         row = conn.execute(
             "SELECT state FROM job_watchers WHERE id = ?", (watcher_id,)
@@ -604,7 +650,8 @@ def pause_watcher(*, cache, watcher_id: int) -> Dict[str, Any]:
         )
         conn.commit()
 
-    cancel_watcher_task(watcher_id)
+    if manage_task:
+        cancel_watcher_task(watcher_id)
     return {"message": f"Watcher {watcher_id} paused successfully"}
 
 
@@ -619,6 +666,7 @@ async def trigger_watcher_manually_payload(
     from ...watchers.engine import get_watcher_engine
 
     engine = get_watcher_engine()
+
     def load_watcher_row():
         with cache._get_connection() as conn:
             return conn.execute(
@@ -630,11 +678,11 @@ async def trigger_watcher_manually_payload(
                 (watcher_id,),
             ).fetchone()
 
-    watcher_row = await asyncio.to_thread(load_watcher_row)
+    watcher_row = await run_local(load_watcher_row)
     if not watcher_row:
         raise ValueError("Watcher not found")
 
-    watcher = engine._get_watcher(watcher_id)
+    watcher = await run_local(engine._get_watcher, watcher_id)
     if not watcher:
         raise ValueError("Watcher not found in database")
     if watcher.state not in [WatcherState.ACTIVE, WatcherState.STATIC]:
@@ -654,29 +702,37 @@ async def trigger_watcher_manually_payload(
         }
 
     if test_text:
+        if len(test_text.encode("utf-8")) > MAX_MANUAL_WATCHER_BYTES:
+            raise WatcherOutputTooLarge()
         content = test_text
         logger.info(f"Manually triggering watcher {watcher_id} with test text")
     else:
-        stdout_content, stderr_content = await asyncio.to_thread(
-            load_watcher_output_text,
-            get_slurm_manager=get_slurm_manager,
+        output_type = watcher.definition.output_type
+        cached_output = await run_output(
+            load_cached_watcher_output_text,
             cache=cache,
             job_id=watcher_row["job_id"],
             hostname=watcher_row["hostname"],
             watcher_id=watcher_id,
+            output_type=output_type,
         )
-        output_type = (
-            watcher.definition.output_type
-            if hasattr(watcher.definition, "output_type")
-            else "stdout"
-        )
+        if cached_output is None:
+            stdout_content, stderr_content = await run_remote(
+                fetch_job_outputs_from_slurm,
+                get_slurm_manager=get_slurm_manager,
+                hostname=watcher_row["hostname"],
+                job_id=watcher_row["job_id"],
+                output_type=output_type,
+            )
+        else:
+            stdout_content, stderr_content = cached_output
         content = select_watcher_content(output_type, stdout_content, stderr_content)
 
         if content:
-            lines = content.split("\n")
+            line_count, char_count = await run_output(content_stats, content)
             logger.info(
                 f"Triggering watcher {watcher_id} with job output "
-                f"({len(lines)} lines, {len(content)} chars)"
+                f"({line_count} lines, {char_count} chars)"
             )
         else:
             content = ""
@@ -696,10 +752,10 @@ async def trigger_watcher_manually_payload(
             "timer_mode": False,
         }
 
-    matches_found = engine._check_patterns(watcher, content)
+    matches_found = await engine._check_patterns_async(watcher, content)
     if matches_found:
         if watcher.definition.timer_mode_enabled and not watcher.timer_mode_active:
-            engine._update_watcher_timer_mode(watcher_id, True)
+            await run_local(engine._update_watcher_timer_mode, watcher_id, True)
             logger.info(
                 f"Watcher {watcher_id} switched to timer mode after manual pattern match"
             )
@@ -707,7 +763,7 @@ async def trigger_watcher_manually_payload(
         pattern = watcher.definition.pattern
         if pattern in engine._pattern_cache:
             regex = engine._pattern_cache[pattern]
-            match_count = len(list(regex.finditer(content)))
+            match_count = await run_output(count_pattern_matches, regex, content)
         else:
             match_count = 1
 
@@ -719,18 +775,20 @@ async def trigger_watcher_manually_payload(
             "timer_mode": False,
         }
 
-    lines = content.split("\n")
+    line_count, char_count = await run_output(content_stats, content)
     return {
         "success": True,
         "message": (
-            f"No matches found (searched {len(lines)} lines, {len(content)} chars)"
+            f"No matches found (searched {line_count} lines, {char_count} chars)"
         ),
         "matches": False,
         "timer_mode": False,
     }
 
 
-def resume_watcher(*, cache, watcher_id: int) -> Dict[str, Any]:
+def resume_watcher(
+    *, cache, watcher_id: int, manage_task: bool = True
+) -> Dict[str, Any]:
     with cache._get_connection() as conn:
         row = conn.execute(
             "SELECT job_id, hostname, state FROM job_watchers WHERE id = ?",
@@ -749,7 +807,8 @@ def resume_watcher(*, cache, watcher_id: int) -> Dict[str, Any]:
         )
         conn.commit()
 
-    start_watcher_task(watcher_id, row["job_id"], row["hostname"])
+    if manage_task:
+        start_watcher_task(watcher_id, row["job_id"], row["hostname"])
     return {"message": f"Watcher {watcher_id} resumed successfully"}
 
 
@@ -783,7 +842,14 @@ async def discover_array_tasks_payload(*, watcher_id: int) -> Dict[str, Any]:
     }
 
 
-def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
+def create_watcher(
+    *,
+    cache,
+    watcher_config: Dict[str, Any],
+    get_slurm_manager,
+    initial_state: Optional[str] = None,
+    manage_task: bool = True,
+):
     required_fields = ["job_id", "hostname", "name"]
     for field in required_fields:
         if field not in watcher_config:
@@ -822,7 +888,7 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
         if not pattern and not trigger_on_job_end:
             raise ValueError("Missing required field: pattern")
 
-        state = resolve_initial_watcher_state(
+        state = initial_state or resolve_initial_watcher_state(
             get_slurm_manager=get_slurm_manager,
             job_id=job_id,
             hostname=hostname,
@@ -869,7 +935,7 @@ def create_watcher(*, cache, watcher_config: Dict[str, Any], get_slurm_manager):
         watcher_id = cursor.lastrowid
         conn.commit()
 
-        if state == "active":
+        if state == "active" and manage_task:
             start_watcher_task(watcher_id, job_id, hostname)
         else:
             logger.info(
@@ -959,7 +1025,7 @@ async def attach_watchers_to_job_payload(
 ) -> Dict[str, Any]:
     from ...watchers import get_watcher_engine
 
-    manager = get_slurm_manager()
+    manager = await run_local(get_slurm_manager)
     try:
         slurm_host = manager.get_host_by_name(host)
     except Exception as exc:
@@ -967,14 +1033,17 @@ async def attach_watchers_to_job_payload(
         raise ValueError(f"Unknown host: {host}") from exc
 
     try:
-        job_info = await asyncio.to_thread(manager.get_job_info, slurm_host, job_id)
-        if not job_info:
-            raise LookupError(f"Job {job_id} not found on {host}")
+        job_info = await run_remote(manager.get_job_info, slurm_host, job_id)
+    except WorkQueueFull:
+        raise
     except LookupError:
         raise
     except Exception as exc:
         logger.error(f"Error getting job info for {job_id}: {exc}")
         raise RuntimeError(f"Error checking job status: {str(exc)}") from exc
+
+    if not job_info:
+        raise LookupError(f"Job {job_id} not found on {host}")
 
     if job_info.state not in [JobState.RUNNING, JobState.PENDING]:
         raise RuntimeError(
@@ -995,7 +1064,9 @@ async def attach_watchers_to_job_payload(
     }
 
 
-def update_watcher(*, cache, watcher_id: int, watcher_update: Dict[str, Any]):
+def update_watcher(
+    *, cache, watcher_id: int, watcher_update: Dict[str, Any], manage_task: bool = True
+):
     with cache._get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM job_watchers WHERE id = ?", (watcher_id,)
@@ -1037,7 +1108,7 @@ def update_watcher(*, cache, watcher_id: int, watcher_update: Dict[str, Any]):
             ).fetchone()
         )
 
-    if previous_row["state"] != updated_row["state"]:
+    if manage_task and previous_row["state"] != updated_row["state"]:
         if updated_row["state"] == "active" and previous_row["state"] == "paused":
             start_watcher_task(
                 watcher_id,
@@ -1050,14 +1121,16 @@ def update_watcher(*, cache, watcher_id: int, watcher_update: Dict[str, Any]):
     return format_watcher_row(updated_row)
 
 
-def delete_watcher(*, cache, watcher_id: int) -> Dict[str, Any]:
+def delete_watcher(
+    *, cache, watcher_id: int, manage_task: bool = True
+) -> Dict[str, Any]:
     with cache._get_connection() as conn:
         row = conn.execute(
             "SELECT state FROM job_watchers WHERE id = ?", (watcher_id,)
         ).fetchone()
         if not row:
             raise ValueError("Watcher not found")
-        if row["state"] == "active":
+        if row["state"] == "active" and manage_task:
             cancel_watcher_task(watcher_id)
 
         conn.execute("DELETE FROM watcher_events WHERE watcher_id = ?", (watcher_id,))

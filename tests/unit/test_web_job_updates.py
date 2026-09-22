@@ -7,12 +7,25 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
-from ssync.web.cache_middleware import CacheMiddleware
 
 from ssync.models.cluster import Host, SlurmHost
 from ssync.models.job import JobInfo, JobState
 from ssync.web import app as web_app
+from ssync.web.cache.responses import cache_job_state_transition
+from ssync.web.cache_middleware import CacheMiddleware
+from ssync.web.models import JobInfoWeb
+from ssync.web.realtime import monitor as realtime_monitor
+from ssync.web.realtime import state as realtime_state
+
+
+def _get_route_endpoint(path: str, method: str):
+    for route in web_app.app.routes:
+        if getattr(route, "path", None) != path:
+            continue
+        if method.upper() not in getattr(route, "methods", set()):
+            continue
+        return route.endpoint
+    raise AssertionError(f"Route {method} {path} not found")
 
 
 def _make_slurm_host(hostname: str) -> SlurmHost:
@@ -88,11 +101,14 @@ async def test_cancel_job_updates_cache_and_broadcasts(monkeypatch, test_cache):
     fake_watchers.get_watcher_engine = lambda: _FakeWatcherEngine()
 
     monkeypatch.setitem(sys.modules, "ssync.watchers", fake_watchers)
-    monkeypatch.setattr(web_app, "get_slurm_manager", lambda: _FakeManager())
+    manager = web_app.get_slurm_manager()
+    monkeypatch.setattr(manager, "slurm_hosts", [slurm_host])
+    monkeypatch.setattr(manager, "cancel_job", _FakeManager().cancel_job)
     monkeypatch.setattr(web_app._cache_middleware, "cache", test_cache)
     monkeypatch.setattr(web_app.job_manager, "broadcast_job_update", fake_broadcast)
 
-    result = await web_app.cancel_job("7001", host=hostname, _authenticated=True)
+    cancel_job = _get_route_endpoint("/api/jobs/{job_id}/cancel", "POST")
+    result = await cancel_job("7001", host=hostname, _authenticated=True)
 
     assert result == {"message": "Job cancelled successfully"}
 
@@ -112,11 +128,11 @@ async def test_cancel_job_updates_cache_and_broadcasts(monkeypatch, test_cache):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_cache_fallback_skips_stale_active_jobs(test_cache):
+async def test_cache_fallback_skips_stale_active_jobs(monkeypatch, test_cache):
     hostname = "cluster-fallback.example.com"
+    monkeypatch.setattr("ssync.web.cache.middleware.get_cache", lambda: test_cache)
     middleware = CacheMiddleware()
-    middleware.cache = test_cache
-    middleware._recent_active_cache_ttl_seconds = 60
+    middleware._responses._recent_active_cache_ttl_seconds = 60
 
     cached_job = JobInfo(
         job_id="7002",
@@ -150,49 +166,54 @@ async def test_cache_fallback_skips_stale_active_jobs(test_cache):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_get_job_details_force_refresh_skips_cache_fallback(
-    monkeypatch, test_cache
+async def test_get_job_details_force_refresh_returns_cached_job_immediately(
+    monkeypatch,
 ):
     hostname = "cluster-force-refresh.example.com"
-    slurm_host = _make_slurm_host(hostname)
+    cached_job = _make_job("7003", hostname)
+    queue_calls = []
 
-    cached_job = JobInfo(
-        job_id="7003",
-        name="stale-running",
-        state=JobState.RUNNING,
-        hostname=hostname,
-        user="testuser",
+    def fake_queue_job_refresh(**kwargs):
+        queue_calls.append(kwargs)
+        return True
+
+    async def fake_get_job_with_cache_fallback(*args, **kwargs):
+        return JobInfoWeb.from_job_info(cached_job)
+
+    manager = web_app.get_slurm_manager()
+
+    def fail_get_job_info(*args, **kwargs):
+        raise AssertionError("cached force_refresh should not block on get_job_info")
+
+    monkeypatch.setattr(manager, "slurm_hosts", [_make_slurm_host(hostname)])
+    monkeypatch.setattr(manager, "get_job_info", fail_get_job_info)
+    monkeypatch.setattr(
+        web_app._cache_middleware,
+        "get_job_with_cache_fallback",
+        fake_get_job_with_cache_fallback,
     )
-    test_cache.cache_job(cached_job)
+    monkeypatch.setattr("ssync.web.api.job.queue_job_refresh", fake_queue_job_refresh)
 
-    class _FakeManager:
-        def __init__(self):
-            self.slurm_hosts = [slurm_host]
+    get_job_details = _get_route_endpoint("/api/jobs/{job_id}", "GET")
+    result = await get_job_details(
+        "7003",
+        host=hostname,
+        cache_first=False,
+        force_refresh=True,
+        force=False,
+        _authenticated=True,
+    )
 
-        def get_job_info(self, target_host, job_id: str):
-            assert target_host.host.hostname == hostname
-            assert job_id == "7003"
-            return None
-
-    monkeypatch.setattr(web_app, "get_slurm_manager", lambda: _FakeManager())
-    monkeypatch.setattr(web_app._cache_middleware, "cache", test_cache)
-
-    with pytest.raises(HTTPException) as excinfo:
-        await web_app.get_job_details(
-            "7003",
-            host=hostname,
-            cache_first=False,
-            force_refresh=True,
-            force=False,
-            _authenticated=True,
-        )
-
-    assert excinfo.value.status_code == 404
+    assert result.job_id == "7003"
+    assert result.cached is True
+    assert result.stale is True
+    assert result.refresh_queued is True
+    assert queue_calls and queue_calls[0]["host"] == hostname
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_verify_active_snapshot_cache_includes_hosts_without_jobs(monkeypatch):
+async def test_verify_active_snapshot_cache_includes_hosts_without_jobs():
     host_a = _make_slurm_host("cluster-a.example.com")
     host_b = _make_slurm_host("cluster-b.example.com")
 
@@ -205,11 +226,9 @@ async def test_verify_active_snapshot_cache_includes_hosts_without_jobs(monkeypa
     async def fake_verify(current_job_ids):
         captured.update(current_job_ids)
 
-    monkeypatch.setattr(
-        web_app._cache_middleware, "_verify_and_update_cache", fake_verify
-    )
+    cache_middleware = types.SimpleNamespace(_verify_and_update_cache=fake_verify)
 
-    await web_app._verify_active_snapshot_cache(
+    await realtime_monitor._verify_active_snapshot_cache(
         [
             JobInfo(
                 job_id="8001",
@@ -221,6 +240,7 @@ async def test_verify_active_snapshot_cache_includes_hosts_without_jobs(monkeypa
         ],
         _FakeManager(),
         500,
+        cache_middleware,
     )
 
     assert captured == {
@@ -233,9 +253,8 @@ async def test_verify_active_snapshot_cache_includes_hosts_without_jobs(monkeypa
 def test_cache_job_state_marks_array_submission_parent_placeholder(
     monkeypatch, test_cache
 ):
-    monkeypatch.setattr(web_app._cache_middleware, "cache", test_cache)
-
-    job_info, previous_state = web_app._cache_job_state(
+    job_info, previous_state = cache_job_state_transition(
+        test_cache,
         "8002",
         "cluster-array.example.com",
         JobState.PENDING,
@@ -334,7 +353,7 @@ def test_filter_ws_initial_cached_jobs_skips_stale_placeholders(test_cache):
                 and bool(job_info.submit_line)
             )
 
-    filtered_jobs = web_app._filter_ws_initial_cached_jobs(
+    filtered_jobs = realtime_monitor.filter_ws_initial_cached_jobs(
         _FakeJobDataManager(), cached_rows
     )
     filtered_ids = {job.job_id for job in filtered_jobs}
@@ -358,7 +377,7 @@ async def test_fetch_completed_job_updates_batches_requests_by_host():
                 _make_job(job_id, hostname, JobState.COMPLETED) for job_id in job_ids
             ]
 
-    updates = await web_app._fetch_completed_job_updates(
+    updates = await realtime_monitor._fetch_completed_job_updates(
         _FakeJobDataManager(),
         {
             f"{host_b}:9103",
@@ -381,12 +400,14 @@ async def test_fetch_completed_job_updates_batches_requests_by_host():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_broadcast_json_to_websockets_returns_failed_clients(monkeypatch):
-    monkeypatch.setattr(web_app, "_WS_SEND_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(realtime_state, "_WS_SEND_TIMEOUT_SECONDS", 0.0)
     ok = _FakeWebSocket()
     failing = _FakeWebSocket(fail=True)
     message = {"type": "batch_update", "updates": []}
 
-    disconnected = await web_app._broadcast_json_to_websockets([ok, failing], message)
+    disconnected = await realtime_state.broadcast_json_to_websockets(
+        [ok, failing], message
+    )
 
     assert disconnected == {failing}
     assert ok.messages == [message]
@@ -395,11 +416,11 @@ async def test_broadcast_json_to_websockets_returns_failed_clients(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_broadcast_json_to_websockets_times_out_slow_clients(monkeypatch):
-    monkeypatch.setattr(web_app, "_WS_SEND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(realtime_state, "_WS_SEND_TIMEOUT_SECONDS", 0.01)
     ok = _FakeWebSocket()
     slow = _FakeWebSocket(delay=0.05)
 
-    disconnected = await web_app._broadcast_json_to_websockets(
+    disconnected = await realtime_state.broadcast_json_to_websockets(
         [ok, slow], {"type": "job_update"}
     )
 

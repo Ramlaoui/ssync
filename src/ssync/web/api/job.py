@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 
 from ...cache import get_cache
+from ...utils.executors import WorkQueueFull, run_local
 from ...utils.logging import setup_logger
 from ..models import (
     CompleteJobDataResponse,
@@ -16,15 +17,14 @@ from ..models import (
 )
 from ..security import InputSanitizer
 from ..services.jobs import (
-    build_complete_job_data_response,
     build_download_job_output_response,
     build_stream_job_output_response,
-    get_job_data_with_optional_host_search,
     get_job_output_response,
     get_job_script_payload,
     mark_job_response_cached,
     queue_job_refresh,
 )
+from ..services.output_transfer import complete_job_response, full_output_response
 
 logger = setup_logger(__name__)
 
@@ -49,7 +49,7 @@ def register_job_routes(
             True, description="Include stdout/stderr content"
         ),
         lines: Optional[int] = Query(
-            None, description="Number of output lines to return (tail)"
+            None, ge=1, description="Number of output lines to return (tail)"
         ),
         _authenticated: bool = Depends(verify_api_key_dependency),
     ):
@@ -58,22 +58,17 @@ def register_job_routes(
             job_id = InputSanitizer.sanitize_job_id(job_id)
             if host:
                 host = InputSanitizer.sanitize_hostname(host)
-            complete_data, _ = await get_job_data_with_optional_host_search(
+            return await complete_job_response(
                 job_id=job_id,
                 host=host,
-                get_slurm_manager=get_slurm_manager,
-            )
-
-            if not complete_data:
-                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-            return build_complete_job_data_response(
-                job_id=job_id,
-                complete_data=complete_data,
                 include_outputs=include_outputs,
                 lines=lines,
+                get_slurm_manager=get_slurm_manager,
+                cache=cache_middleware.cache,
             )
         except HTTPException:
+            raise
+        except WorkQueueFull:
             raise
         except Exception as e:
             logger.error(f"Error in get_complete_job_data: {e}")
@@ -133,7 +128,7 @@ def register_job_routes(
                         refresh_queued=refresh_queued,
                     )
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             slurm_hosts = manager.slurm_hosts
             if host:
                 slurm_hosts = [h for h in slurm_hosts if h.host.hostname == host]
@@ -168,6 +163,8 @@ def register_job_routes(
                             },
                         )
                         return job_web
+                except WorkQueueFull:
+                    raise
                 except Exception:
                     continue
 
@@ -184,6 +181,8 @@ def register_job_routes(
 
             raise HTTPException(status_code=404, detail="Job not found")
         except HTTPException:
+            raise
+        except WorkQueueFull:
             raise
         except Exception as e:
             logger.error(f"Error in get_job_details: {e}")
@@ -249,7 +248,7 @@ def register_job_routes(
             description="Which output stream to return",
         ),
         lines: Optional[int] = Query(
-            None, description="Number of lines to return (tail)"
+            None, ge=1, description="Number of lines to return (tail)"
         ),
         max_bytes: Optional[int] = Query(
             524288,
@@ -279,6 +278,17 @@ def register_job_routes(
             if host:
                 host = InputSanitizer.sanitize_hostname(host)
             force_refresh = force_refresh or force
+            if full_output and not metadata_only:
+                return await full_output_response(
+                    job_id=job_id,
+                    host=host,
+                    output_type=output_type,
+                    get_slurm_manager=get_slurm_manager,
+                    cache_middleware=cache_middleware,
+                    job_manager=job_manager,
+                    force_refresh=force_refresh,
+                    lines=lines,
+                )
             return await get_job_output_response(
                 job_id=job_id,
                 host=host,
@@ -292,6 +302,8 @@ def register_job_routes(
                 job_manager=job_manager,
             )
         except HTTPException:
+            raise
+        except WorkQueueFull:
             raise
         except Exception as e:
             error_msg = str(e)
@@ -336,6 +348,8 @@ def register_job_routes(
             )
         except HTTPException:
             raise
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error in get_job_script: {e}")
             raise HTTPException(
@@ -352,7 +366,7 @@ def register_job_routes(
         try:
             job_id = InputSanitizer.sanitize_job_id(job_id)
             host = InputSanitizer.sanitize_hostname(host)
-            manifest = await asyncio.to_thread(
+            manifest = await run_local(
                 lambda: get_cache().get_run_manifest(job_id, host)
             )
             if manifest is None:
@@ -362,6 +376,8 @@ def register_job_routes(
                 )
             return manifest
         except HTTPException:
+            raise
+        except WorkQueueFull:
             raise
         except Exception as e:
             logger.error(f"Error in get_job_manifest: {e}")

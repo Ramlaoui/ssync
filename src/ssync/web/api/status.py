@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from pydantic import TypeAdapter
 
 from ...cache import get_cache
+from ...utils.executors import WorkQueueFull, run_local
 from ...utils.logging import setup_logger
 from ..models import JobInfoWeb, JobStatusResponse
 from ..security import InputSanitizer
@@ -25,7 +26,7 @@ _STATUS_RESPONSE_ADAPTER = TypeAdapter(List[JobStatusResponse])
 
 async def _json_status_response(results: List[JobStatusResponse]) -> Response:
     """Serialize large status payloads off the event loop."""
-    payload = await asyncio.to_thread(_STATUS_RESPONSE_ADAPTER.dump_json, results)
+    payload = await run_local(_STATUS_RESPONSE_ADAPTER.dump_json, results)
     return Response(content=payload, media_type="application/json")
 
 
@@ -89,9 +90,10 @@ def register_status_routes(
         """Get cache statistics including date range cache information."""
         try:
             stats = await cache_middleware.get_cache_stats()
-            await asyncio.to_thread(cache_middleware.cache.cleanup_expired_ranges)
+            await run_local(cache_middleware.cache.cleanup_expired_ranges)
 
             from ...request_coalescer import get_request_coalescer
+            from ...utils import executors
 
             coalescer_stats = get_request_coalescer().get_stats()
             return {
@@ -99,9 +101,22 @@ def register_status_routes(
                 "statistics": {
                     **stats,
                     "request_coalescer": coalescer_stats,
+                    "worker_pools": {
+                        name: getattr(executors, f"{name}_executor").stats()
+                        for name in (
+                            "local",
+                            "interactive",
+                            "background",
+                            "launch",
+                            "output",
+                            "transfer",
+                        )
+                    },
                 },
                 "message": "Cache statistics retrieved successfully",
             }
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting cache stats: {e}")
             raise HTTPException(
@@ -112,8 +127,10 @@ def register_status_routes(
     async def clear_cache(_authenticated: bool = Depends(verify_api_key_dependency)):
         """Clear all cache entries."""
         try:
-            await asyncio.to_thread(lambda: get_cache().clear_all())
+            await run_local(lambda: get_cache().clear_all())
             return {"status": "success", "message": "Cache cleared successfully"}
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error clearing cache: {e}")
             raise HTTPException(status_code=500, detail="Failed to clear cache")
@@ -206,7 +223,7 @@ def register_status_routes(
                 and limit is None
             )
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             slurm_hosts = manager.slurm_hosts
             if host:
                 slurm_hosts = [
@@ -243,7 +260,7 @@ def register_status_routes(
                         profile=profile,
                     )
 
-                    results = await asyncio.to_thread(
+                    results = await run_local(
                         _build_status_results_from_jobs,
                         all_jobs=all_jobs,
                         slurm_hosts=slurm_hosts,
@@ -260,13 +277,21 @@ def register_status_routes(
                         results, verify_active_jobs=safe_for_cache_verification
                     )
                     return await _json_status_response(cached_results)
+                except WorkQueueFull:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in optimized concurrent fetch: {e}")
                     logger.info("Falling back to per-host fetching")
 
             async def fetch_host_jobs(slurm_host, *, use_cache: bool = True):
                 hostname = slurm_host.host.hostname
-                if use_cache and host and since and not job_id_list and not force_refresh:
+                if (
+                    use_cache
+                    and host
+                    and since
+                    and not job_id_list
+                    and not force_refresh
+                ):
                     cache_filters = build_status_cache_filters(
                         user=user,
                         state=state,
@@ -328,7 +353,7 @@ def register_status_routes(
                         skip_user_detection,
                         force_refresh,
                     )
-                    return await asyncio.to_thread(
+                    return await run_local(
                         _build_status_response_for_jobs,
                         hostname=hostname,
                         jobs=jobs,
@@ -336,6 +361,8 @@ def register_status_routes(
                         group_array_jobs=group_array_jobs,
                         limit=limit,
                     )
+                except WorkQueueFull:
+                    raise
                 except Exception as e:
                     logger.error(f"Error querying {hostname}: {e}")
                     return JobStatusResponse(
@@ -370,6 +397,8 @@ def register_status_routes(
             )
             return await _json_status_response(cached_results)
         except HTTPException:
+            raise
+        except WorkQueueFull:
             raise
         except Exception as e:
             import traceback

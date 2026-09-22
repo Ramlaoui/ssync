@@ -1,6 +1,5 @@
 """Action executor for watchers."""
 
-import asyncio
 import json
 import os
 import re
@@ -12,6 +11,7 @@ from ..launch import LaunchManager
 from ..models.watcher import ActionType
 from ..parsers.script_processor import ScriptProcessor
 from ..slurm.params import SlurmParams
+from ..utils.executors import run_background, run_local, run_remote
 from ..utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -243,12 +243,12 @@ class ActionExecutor:
         try:
             from ..web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 return False, "No Slurm manager available"
 
             slurm_host = manager.get_host_by_name(hostname)
-            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+            conn = await run_background(manager._get_connection, slurm_host.host)
 
             # Reserve a lane for scheduler-changing actions so routine watcher
             # polling cannot delay a cancellation.
@@ -261,7 +261,7 @@ class ActionExecutor:
                 return conn.run(f"scancel {job_id}", hide=True, warn=True)
 
             async with throttler.throttle(hostname):
-                result = await asyncio.to_thread(do_cancel)
+                result = await run_remote(do_cancel)
 
             if result.ok:
                 reason = params.get("reason", "Triggered by watcher")
@@ -300,14 +300,14 @@ class ActionExecutor:
             from ..cache import get_cache
             from ..web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 return False, "No Slurm manager available"
 
             # Get original script
             cache = get_cache()
-            cached_job = cache.get_cached_job(job_id, hostname)
-            raw_manifest = cache.get_run_manifest(job_id, hostname)
+            cached_job = await run_local(cache.get_cached_job, job_id, hostname)
+            raw_manifest = await run_local(cache.get_run_manifest, job_id, hostname)
             manifest = raw_manifest if isinstance(raw_manifest, dict) else None
             manifest_script = (
                 manifest.get("rendered_script") if isinstance(manifest, dict) else None
@@ -446,10 +446,10 @@ class ActionExecutor:
             # Use mail command if available
             from ..web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if manager:
                 slurm_host = manager.get_host_by_name(hostname)
-                conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+                conn = await run_background(manager._get_connection, slurm_host.host)
 
                 # Import throttler for rate limiting SSH commands per host
                 from .engine import get_host_throttler
@@ -465,7 +465,7 @@ class ActionExecutor:
                     )
 
                 async with throttler.throttle(hostname):
-                    result = await asyncio.to_thread(do_send_email)
+                    result = await run_background(do_send_email)
 
                 if result.ok:
                     logger.info(
@@ -598,12 +598,12 @@ class ActionExecutor:
 
             from ..web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 return False, "No Slurm manager available"
 
             slurm_host = manager.get_host_by_name(hostname)
-            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+            conn = await run_background(manager._get_connection, slurm_host.host)
 
             # Telemetry commands use a separate lane so they cannot delay resubmits.
             from .engine import get_background_host_throttler
@@ -626,7 +626,7 @@ class ActionExecutor:
                                     return line.split("WorkDir=")[1].split()[0]
                         return None
 
-                    work_dir = await asyncio.to_thread(get_work_dir)
+                    work_dir = await run_background(get_work_dir)
             except Exception:
                 pass  # Continue without work dir
 
@@ -655,7 +655,7 @@ class ActionExecutor:
             # Throttle the main command execution
             async with throttler.throttle(hostname):
                 # Run the SSH command in a thread pool to avoid blocking the event loop
-                result = await asyncio.to_thread(run_ssh_command)
+                result = await run_background(run_ssh_command)
 
             if result is None:
                 return False, "Failed to execute SSH command"
@@ -713,7 +713,7 @@ class ActionExecutor:
                     )
                     conn.commit()
 
-            await asyncio.to_thread(store_metric)
+            await run_local(store_metric)
 
             logger.info(f"Stored metric {metric_name}={metric_value} for job {job_id}")
             return True, f"Stored {metric_name}={metric_value}"

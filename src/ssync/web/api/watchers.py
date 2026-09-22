@@ -6,17 +6,23 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
 
 from ...cache import get_cache
+from ...utils.executors import WorkQueueFull, run_local, run_remote
 from ...utils.logging import setup_logger
+from ..realtime.state import watcher_manager
 from ..security import InputSanitizer
 from ..services.watchers import (
+    WatcherOutputTooLarge,
     attach_watchers_to_job_payload,
+    cancel_watcher_task,
     cleanup_orphaned_watchers_payload,
     discover_array_tasks_payload,
     get_all_watchers_payload,
     get_job_watchers_payload,
-    get_watcher_payload_by_id,
     get_watcher_events_payload,
+    get_watcher_payload_by_id,
     get_watcher_stats_payload,
+    resolve_initial_watcher_state,
+    start_watcher_task,
     trigger_watcher_manually_payload,
 )
 from ..services.watchers import (
@@ -34,7 +40,6 @@ from ..services.watchers import (
 from ..services.watchers import (
     update_watcher as update_watcher_record,
 )
-from ..realtime.state import watcher_manager
 
 logger = setup_logger(__name__)
 
@@ -48,7 +53,9 @@ def register_watcher_routes(
     """Register watcher-related routes."""
 
     async def broadcast_watcher_update(watcher_id: int) -> None:
-        watcher_payload = get_watcher_payload_by_id(cache=get_cache(), watcher_id=watcher_id)
+        watcher_payload = await run_local(
+            lambda: get_watcher_payload_by_id(cache=get_cache(), watcher_id=watcher_id)
+        )
         if watcher_payload is None:
             return
         await watcher_manager.broadcast(
@@ -70,11 +77,15 @@ def register_watcher_routes(
         try:
             job_id_sanitized = InputSanitizer.sanitize_job_id(job_id)
             host_sanitized = InputSanitizer.sanitize_hostname(host) if host else None
-            return get_job_watchers_payload(
-                cache=get_cache(),
-                job_id=job_id_sanitized,
-                host=host_sanitized,
+            return await run_local(
+                lambda: get_job_watchers_payload(
+                    cache=get_cache(),
+                    job_id=job_id_sanitized,
+                    host=host_sanitized,
+                )
             )
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting watchers for job {job_id}: {e}")
             raise HTTPException(status_code=500, detail="Failed to get watchers")
@@ -89,11 +100,15 @@ def register_watcher_routes(
     ):
         """Get all watchers across all jobs."""
         try:
-            return get_all_watchers_payload(
-                cache=get_cache(),
-                state=state,
-                limit=limit,
+            return await run_local(
+                lambda: get_all_watchers_payload(
+                    cache=get_cache(),
+                    state=state,
+                    limit=limit,
+                )
             )
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting all watchers: {e}")
             raise HTTPException(status_code=500, detail="Failed to get watchers")
@@ -109,12 +124,16 @@ def register_watcher_routes(
         try:
             if job_id:
                 job_id = InputSanitizer.sanitize_job_id(job_id)
-            return get_watcher_events_payload(
-                cache=get_cache(),
-                job_id=job_id,
-                watcher_id=watcher_id,
-                limit=limit,
+            return await run_local(
+                lambda: get_watcher_events_payload(
+                    cache=get_cache(),
+                    job_id=job_id,
+                    watcher_id=watcher_id,
+                    limit=limit,
+                )
             )
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting watcher events: {e}")
             raise HTTPException(status_code=500, detail="Failed to get watcher events")
@@ -125,7 +144,9 @@ def register_watcher_routes(
     ):
         """Get watcher statistics."""
         try:
-            return get_watcher_stats_payload(cache=get_cache())
+            return await run_local(lambda: get_watcher_stats_payload(cache=get_cache()))
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting watcher stats: {e}")
             raise HTTPException(
@@ -145,6 +166,8 @@ def register_watcher_routes(
                 cache=get_cache(),
                 dry_run=dry_run,
             )
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error cleaning up watchers: {e}")
             raise HTTPException(
@@ -158,9 +181,22 @@ def register_watcher_routes(
     ):
         """Pause a watcher."""
         try:
-            response = pause_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            previous = await run_local(
+                lambda: get_watcher_payload_by_id(
+                    cache=get_cache(), watcher_id=watcher_id
+                )
+            )
+            response = await run_local(
+                lambda: pause_watcher_record(
+                    cache=get_cache(), watcher_id=watcher_id, manage_task=False
+                )
+            )
+            if previous and previous["state"] == "active":
+                cancel_watcher_task(watcher_id)
             await broadcast_watcher_update(watcher_id)
             return response
+        except WorkQueueFull:
+            raise
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -183,6 +219,10 @@ def register_watcher_routes(
                 watcher_id=watcher_id,
                 test_text=test_text,
             )
+        except WatcherOutputTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc))
+        except WorkQueueFull:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         except RuntimeError as exc:
@@ -202,9 +242,22 @@ def register_watcher_routes(
     ):
         """Resume a paused watcher."""
         try:
-            response = resume_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            previous = await run_local(
+                lambda: get_watcher_payload_by_id(
+                    cache=get_cache(), watcher_id=watcher_id
+                )
+            )
+            response = await run_local(
+                lambda: resume_watcher_record(
+                    cache=get_cache(), watcher_id=watcher_id, manage_task=False
+                )
+            )
+            if previous and previous["state"] == "paused":
+                start_watcher_task(watcher_id, previous["job_id"], previous["hostname"])
             await broadcast_watcher_update(watcher_id)
             return response
+        except WorkQueueFull:
+            raise
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -223,6 +276,8 @@ def register_watcher_routes(
             response = await discover_array_tasks_payload(watcher_id=watcher_id)
             await broadcast_watcher_update(watcher_id)
             return response
+        except WorkQueueFull:
+            raise
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -240,13 +295,33 @@ def register_watcher_routes(
     ):
         """Create a new watcher."""
         try:
-            response = create_watcher_record(
-                cache=get_cache(),
-                watcher_config=watcher_config,
-                get_slurm_manager=get_slurm_manager,
+            manager = await run_local(get_slurm_manager)
+            initial_state = await run_remote(
+                resolve_initial_watcher_state,
+                get_slurm_manager=lambda: manager,
+                job_id=watcher_config.get("job_id", ""),
+                hostname=watcher_config.get("hostname", ""),
+                requested_state=watcher_config.get("state", "active"),
             )
-            await watcher_manager.broadcast({"type": "watcher_update", "watcher": response})
+            response = await run_local(
+                lambda: create_watcher_record(
+                    cache=get_cache(),
+                    watcher_config=watcher_config,
+                    get_slurm_manager=lambda: manager,
+                    initial_state=initial_state,
+                    manage_task=False,
+                )
+            )
+            if response.get("state") == "active":
+                start_watcher_task(
+                    response["id"], response["job_id"], response["hostname"]
+                )
+            await watcher_manager.broadcast(
+                {"type": "watcher_update", "watcher": response}
+            )
             return response
+        except WorkQueueFull:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except HTTPException:
@@ -266,13 +341,32 @@ def register_watcher_routes(
     ):
         """Update a watcher configuration."""
         try:
-            response = update_watcher_record(
-                cache=get_cache(),
-                watcher_id=watcher_id,
-                watcher_update=watcher_update,
+            previous = await run_local(
+                lambda: get_watcher_payload_by_id(
+                    cache=get_cache(), watcher_id=watcher_id
+                )
             )
-            await watcher_manager.broadcast({"type": "watcher_update", "watcher": response})
+            response = await run_local(
+                lambda: update_watcher_record(
+                    cache=get_cache(),
+                    watcher_id=watcher_id,
+                    watcher_update=watcher_update,
+                    manage_task=False,
+                )
+            )
+            if previous and previous["state"] != response["state"]:
+                if response["state"] == "active":
+                    start_watcher_task(
+                        watcher_id, response["job_id"], response["hostname"]
+                    )
+                elif response["state"] == "paused":
+                    cancel_watcher_task(watcher_id)
+            await watcher_manager.broadcast(
+                {"type": "watcher_update", "watcher": response}
+            )
             return response
+        except WorkQueueFull:
+            raise
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -288,9 +382,22 @@ def register_watcher_routes(
     ):
         """Delete a watcher."""
         try:
-            response = delete_watcher_record(cache=get_cache(), watcher_id=watcher_id)
+            previous = await run_local(
+                lambda: get_watcher_payload_by_id(
+                    cache=get_cache(), watcher_id=watcher_id
+                )
+            )
+            response = await run_local(
+                lambda: delete_watcher_record(
+                    cache=get_cache(), watcher_id=watcher_id, manage_task=False
+                )
+            )
+            if previous and previous["state"] == "active":
+                cancel_watcher_task(watcher_id)
             await broadcast_watcher_deleted(watcher_id)
             return response
+        except WorkQueueFull:
+            raise
         except ValueError:
             raise HTTPException(status_code=404, detail="Watcher not found")
         except HTTPException:
@@ -318,6 +425,8 @@ def register_watcher_routes(
                 host=host,
                 watchers=watchers,
             )
+        except WorkQueueFull:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except LookupError as exc:

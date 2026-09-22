@@ -58,7 +58,9 @@ def _make_job(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fetch_host_jobs_caches_active_jobs_off_event_loop(monkeypatch, test_cache):
+async def test_fetch_host_jobs_caches_active_jobs_off_event_loop(
+    monkeypatch, test_cache
+):
     hostname = "cluster-cache-offloop.example.com"
     slurm_host = _make_slurm_host(hostname)
     job = _make_job("3000", hostname)
@@ -265,7 +267,7 @@ async def test_fetch_all_jobs_concurrent_requests_use_cache_for_second_request(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_immediately(
+async def test_fetch_all_jobs_timeout_returns_cache_and_keeps_host_reserved(
     monkeypatch, test_cache
 ):
     hostname = "cluster-timeout.example.com"
@@ -307,9 +309,9 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_immediatel
     result = await job_data_manager.fetch_all_jobs(hostname=hostname)
 
     # Fast response with cached data while the slow fetch is put into backoff and
-    # the host reservation is released immediately.
+    # the host reservation remains held until the actual fetch completes.
     assert [job.job_id for job in result] == ["3001"]
-    assert hostname not in job_data_manager._fetching_hosts
+    assert hostname in job_data_manager._fetching_hosts
     assert hostname in job_data_manager._host_failure_until
     assert fetch_calls["count"] == 1
 
@@ -318,9 +320,15 @@ async def test_fetch_all_jobs_timeout_returns_cache_and_releases_host_immediatel
     assert fetch_calls["count"] == 1
     assert busy_cache_calls["count"] == 0
 
+    # Even after backoff expires, no second fetch may overlap the slow one.
+    await job_data_manager._clear_host_fetch_failure(hostname)
+    third_result = await job_data_manager.fetch_all_jobs(hostname=hostname)
+    assert [job.job_id for job in third_result] == ["3001"]
+    assert fetch_calls["count"] == 1
+
     release.set()
     for _ in range(50):
-        if hostname not in job_data_manager._host_failure_until:
+        if hostname not in job_data_manager._fetching_hosts:
             break
         await asyncio.sleep(0.01)
 
@@ -410,9 +418,12 @@ async def test_force_output_fetch_deduplicates_concurrent_requests(test_cache):
         fetch_calls["count"] += 1
         started.set()
         await release.wait()
-        return (
-            f"stdout:{job_info_arg.job_id}:{force_fetch}",
-            f"stderr:{job_info_arg.job_id}:{force_fetch}",
+        test_cache.cache_job(job_info_arg)
+        test_cache.update_job_outputs(
+            job_info_arg.job_id,
+            hostname,
+            stdout_content=f"stdout:{job_info_arg.job_id}:{force_fetch}",
+            stderr_content=f"stderr:{job_info_arg.job_id}:{force_fetch}",
         )
 
     job_data_manager._do_fetch_outputs = fake_do_fetch_outputs
@@ -432,9 +443,13 @@ async def test_force_output_fetch_deduplicates_concurrent_requests(test_cache):
     first_result = await first
     second_result = await second
 
-    assert first_result == second_result == (
-        "stdout:6001:True",
-        "stderr:6001:True",
+    assert (
+        first_result
+        == second_result
+        == (
+            "stdout:6001:True",
+            "stderr:6001:True",
+        )
     )
     assert not job_data_manager._output_fetch_futures
 
@@ -450,11 +465,11 @@ async def test_do_fetch_outputs_reuses_shared_stdout_stderr_path(
     fake_conn = types.SimpleNamespace()
     commands = []
 
-    def run(command, hide=True, timeout=None):
-        commands.append(command)
-        return types.SimpleNamespace(ok=True, stdout="shared output")
+    def get(remote, local):
+        commands.append(remote)
+        Path(local).write_text("shared output")
 
-    fake_conn.run = run
+    fake_conn.get = get
     manager._get_connection = lambda _host: fake_conn
     _install_fake_web_app(monkeypatch, manager)
 
@@ -470,11 +485,15 @@ async def test_do_fetch_outputs_reuses_shared_stdout_stderr_path(
     job_info.stdout_file = "/tmp/shared.log"
     job_info.stderr_file = "/tmp/shared.log"
 
-    stdout_content, stderr_content = await job_data_manager._do_fetch_outputs(job_info)
+    test_cache.cache_job(job_info)
+    (
+        stdout_content,
+        stderr_content,
+    ) = await job_data_manager._fetch_outputs_from_cached_paths(job_info)
 
     assert stdout_content == "shared output"
     assert stderr_content == "shared output"
-    assert commands == ["test -f /tmp/shared.log && cat /tmp/shared.log"]
+    assert commands == ["/tmp/shared.log"]
 
 
 @pytest.mark.unit
@@ -493,17 +512,17 @@ async def test_do_fetch_outputs_fetches_distinct_streams_concurrently(
             self.max_active = 0
             self.lock = threading.Lock()
 
-        def run(self, command, hide=True, timeout=None):
+        def get(self, remote, local):
             with self.lock:
-                self.commands.append(command)
+                self.commands.append(remote)
                 self.active += 1
                 self.max_active = max(self.max_active, self.active)
             time.sleep(0.05)
             with self.lock:
                 self.active -= 1
 
-            label = "stdout" if "stdout.log" in command else "stderr"
-            return types.SimpleNamespace(ok=True, stdout=label)
+            label = "stdout" if "stdout.log" in remote else "stderr"
+            Path(local).write_text(label)
 
     fake_conn = _ConcurrentConn()
     manager._get_connection = lambda _host: fake_conn
@@ -521,14 +540,18 @@ async def test_do_fetch_outputs_fetches_distinct_streams_concurrently(
     job_info.stdout_file = "/tmp/stdout.log"
     job_info.stderr_file = "/tmp/stderr.log"
 
-    stdout_content, stderr_content = await job_data_manager._do_fetch_outputs(job_info)
+    test_cache.cache_job(job_info)
+    (
+        stdout_content,
+        stderr_content,
+    ) = await job_data_manager._fetch_outputs_from_cached_paths(job_info)
 
     assert stdout_content == "stdout"
     assert stderr_content == "stderr"
     assert fake_conn.max_active >= 2
     assert sorted(fake_conn.commands) == [
-        "test -f /tmp/stderr.log && cat /tmp/stderr.log",
-        "test -f /tmp/stdout.log && cat /tmp/stdout.log",
+        "/tmp/stderr.log",
+        "/tmp/stdout.log",
     ]
 
 

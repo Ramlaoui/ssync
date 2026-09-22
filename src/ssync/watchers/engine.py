@@ -4,11 +4,14 @@ import asyncio
 import json
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
+
+import regex as bounded_regex
 
 from ..cache import get_cache
 from ..models.job import JobInfo, JobState
@@ -19,10 +22,13 @@ from ..models.watcher import (
     WatcherState,
 )
 from ..parsers.slurm import SlurmParser
-from ..utils.async_helpers import create_task
+from ..utils.async_helpers import create_task, queue_task_once
+from ..utils.executors import run_background, run_local, run_output
 from ..utils.logging import setup_logger
+from ..utils.output_buffer import read_output_from_position
 
 logger = setup_logger(__name__)
+PATTERN_TIMEOUT_SECONDS = 2.0
 
 
 class HostCommandThrottler:
@@ -77,13 +83,26 @@ class HostCommandThrottler:
                 f"(max concurrent: {self.max_concurrent})"
             )
 
+        acquired = False
+        pending_registered = True
         try:
             await semaphore.acquire()
+            acquired = True
             async with self._lock:
                 self._pending_count[hostname] -= 1
+                pending_registered = False
             yield
         finally:
-            semaphore.release()
+            # Cancellation while waiting never acquired a slot. Releasing in
+            # that case inflates the semaphore and lets a later burst exceed
+            # the per-host SSH limit.
+            if pending_registered:
+                async with self._lock:
+                    self._pending_count[hostname] = max(
+                        0, self._pending_count.get(hostname, 0) - 1
+                    )
+            if acquired:
+                semaphore.release()
 
     def get_stats(self) -> Dict[str, Dict[str, int]]:
         """Get current throttling statistics."""
@@ -163,7 +182,21 @@ class WatcherEngine:
         self.cache = get_cache()
         self.active_tasks: Dict[int, asyncio.Task] = {}
         self._shutdown = False
-        self._pattern_cache: Dict[str, re.Pattern] = {}  # Cache compiled regex patterns
+        try:
+            self._event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._event_loop = None
+        self._pattern_cache: Dict[str, bounded_regex.Pattern] = {}
+        self._pattern_cache_lock = threading.Lock()
+        # Pattern scans can discover many actions in one output chunk.  Keep
+        # admission bounded while allowing the output worker to apply
+        # backpressure to the event loop instead of dropping actions.
+        self._action_tasks: List[asyncio.Task] = []
+        self._action_admission = asyncio.Semaphore(64)
+        self._event_loop_thread_id: Optional[int] = None
+        self._watcher_refresh_tasks: Dict[int, asyncio.Task] = {}
+        self._watcher_refresh_pending: Set[int] = set()
+        self._watcher_refresh_lock = threading.Lock()
 
     @staticmethod
     def _looks_like_placeholder_capture(value: Any) -> bool:
@@ -282,8 +315,8 @@ class WatcherEngine:
 
         for definition in watchers:
             # Store watcher in database
-            watcher_id = self._store_watcher(
-                job_id, hostname, definition, parent_watcher_id
+            watcher_id = await run_local(
+                self._store_watcher, job_id, hostname, definition, parent_watcher_id
             )
             if watcher_id:
                 watcher_ids.append(watcher_id)
@@ -296,8 +329,10 @@ class WatcherEngine:
                         definition.array_spec
                     )
                     if expected_tasks:
-                        self._update_watcher_expected_task_count(
-                            watcher_id, expected_tasks
+                        await run_local(
+                            self._update_watcher_expected_task_count,
+                            watcher_id,
+                            expected_tasks,
                         )
 
                 # Only start monitoring for non-template watchers
@@ -330,7 +365,7 @@ class WatcherEngine:
     async def stop_watchers_for_job(self, job_id: str, hostname: str):
         """Stop all watchers for a job."""
         # Get watcher IDs from database
-        watcher_ids = self._get_watcher_ids_for_job(job_id, hostname)
+        watcher_ids = await run_local(self._get_watcher_ids_for_job, job_id, hostname)
 
         for watcher_id in watcher_ids:
             if watcher_id in self.active_tasks:
@@ -342,7 +377,9 @@ class WatcherEngine:
                 del self.active_tasks[watcher_id]
 
             # Update state in database
-            self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
+            await run_local(
+                self._update_watcher_state, watcher_id, WatcherState.COMPLETED
+            )
 
         logger.info(f"Stopped {len(watcher_ids)} watchers for job {job_id}")
 
@@ -357,7 +394,7 @@ class WatcherEngine:
                     )
                     return cursor.fetchall()
 
-            active_watchers = await asyncio.to_thread(load_active_watchers)
+            active_watchers = await run_local(load_active_watchers)
 
             for row in active_watchers:
                 watcher_id, job_id, hostname = row
@@ -377,7 +414,7 @@ class WatcherEngine:
                     JobState.CANCELLED,
                     JobState.TIMEOUT,
                 ]:
-                    watcher = self._get_watcher(watcher_id)
+                    watcher = await run_local(self._get_watcher, watcher_id)
                     if watcher:
                         terminal_variables = {
                             **watcher.variables,
@@ -408,7 +445,9 @@ class WatcherEngine:
                         del self.active_tasks[watcher_id]
 
                     # Update state in database
-                    self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
+                    await run_local(
+                        self._update_watcher_state, watcher_id, WatcherState.COMPLETED
+                    )
 
         except Exception as e:
             logger.error(f"Error cleaning up orphaned watchers: {e}")
@@ -425,7 +464,7 @@ class WatcherEngine:
         """
         try:
             # Get template watcher
-            template = self._get_watcher(template_watcher_id)
+            template = await run_local(self._get_watcher, template_watcher_id)
             if not template or not template.definition.is_array_template:
                 logger.warning(
                     f"Watcher {template_watcher_id} is not an array template"
@@ -445,7 +484,9 @@ class WatcherEngine:
             )
 
             # Get already spawned tasks
-            existing_task_ids = self._get_spawned_task_ids(template_watcher_id)
+            existing_task_ids = await run_local(
+                self._get_spawned_task_ids, template_watcher_id
+            )
 
             # Spawn watchers for new tasks
             new_tasks = [
@@ -498,8 +539,10 @@ class WatcherEngine:
 
                 # Update discovered task count
                 total_discovered = len(existing_task_ids) + len(new_tasks)
-                self._update_watcher_discovered_task_count(
-                    template_watcher_id, total_discovered
+                await run_local(
+                    self._update_watcher_discovered_task_count,
+                    template_watcher_id,
+                    total_discovered,
                 )
 
                 return len(new_tasks)
@@ -580,7 +623,7 @@ class WatcherEngine:
                     )
                     return cursor.fetchall()
 
-            templates = await asyncio.to_thread(load_templates)
+            templates = await run_local(load_templates)
 
             if not templates:
                 return
@@ -602,7 +645,9 @@ class WatcherEngine:
                     logger.info(
                         f"Parent job {job_id} not found, completing template {template_id}"
                     )
-                    self._update_watcher_state(template_id, WatcherState.COMPLETED)
+                    await run_local(
+                        self._update_watcher_state, template_id, WatcherState.COMPLETED
+                    )
                     continue
 
                 if job_info.state in [
@@ -615,7 +660,9 @@ class WatcherEngine:
                     logger.info(
                         f"Parent job {job_id} finished, completing template {template_id}"
                     )
-                    self._update_watcher_state(template_id, WatcherState.COMPLETED)
+                    await run_local(
+                        self._update_watcher_state, template_id, WatcherState.COMPLETED
+                    )
                     continue
 
                 # Discover and spawn new array tasks
@@ -639,7 +686,7 @@ class WatcherEngine:
                     )
                     return cursor.fetchall()
 
-            watchers = await asyncio.to_thread(load_active_watchers)
+            watchers = await run_local(load_active_watchers)
 
             for row in watchers:
                 watcher_id = row["id"]
@@ -693,6 +740,7 @@ class WatcherEngine:
 
     async def _monitor_watcher(self, watcher_id: int, job_id: str, hostname: str):
         """Monitor a single watcher."""
+        self._event_loop = asyncio.get_running_loop()
         backoff_factor = 1.0
         consecutive_failures = 0
         last_action_time = datetime.now()
@@ -709,12 +757,12 @@ class WatcherEngine:
             while not self._shutdown:
                 try:
                     # Get watcher details from database (fresh state each iteration)
-                    watcher = self._get_watcher(watcher_id)
+                    watcher = await run_local(self._get_watcher, watcher_id)
                     if not watcher or watcher.state != WatcherState.ACTIVE:
                         break
 
                     # Update last check timestamp
-                    self._update_watcher_last_check(watcher_id)
+                    await run_local(self._update_watcher_last_check, watcher_id)
 
                     # Check if job is still active
                     job_info = await self._get_job_info(job_id, hostname)
@@ -722,7 +770,11 @@ class WatcherEngine:
                         logger.info(
                             f"Job {job_id} not found, stopping watcher {watcher_id}"
                         )
-                        self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
+                        await run_local(
+                            self._update_watcher_state,
+                            watcher_id,
+                            WatcherState.COMPLETED,
+                        )
                         break
 
                     # Check if job has finished (any terminal state)
@@ -742,11 +794,15 @@ class WatcherEngine:
                         if final_result:
                             if final_result.next_position != watcher.last_position:
                                 watcher.last_position = final_result.next_position
-                                self._update_watcher_position(
-                                    watcher_id, final_result.next_position
+                                await run_local(
+                                    self._update_watcher_position,
+                                    watcher_id,
+                                    final_result.next_position,
                                 )
                             if final_result.content:
-                                self._check_patterns(watcher, final_result.content)
+                                await self._check_patterns_async(
+                                    watcher, final_result.content
+                                )
 
                         job_end_result = await self._handle_job_end_trigger(
                             watcher, job_info.state
@@ -759,7 +815,11 @@ class WatcherEngine:
                             await asyncio.sleep(watcher.definition.interval_seconds)
                             continue
 
-                        self._update_watcher_state(watcher_id, WatcherState.COMPLETED)
+                        await run_local(
+                            self._update_watcher_state,
+                            watcher_id,
+                            WatcherState.COMPLETED,
+                        )
                         break
 
                     # Check if watcher is in timer mode
@@ -785,7 +845,9 @@ class WatcherEngine:
 
                         # Timer mode: execute actions periodically using cached variables
                         # Reload variables from database for consistency
-                        fresh_variables = self._get_watcher_variables(watcher_id)
+                        fresh_variables = await run_local(
+                            self._get_watcher_variables, watcher_id
+                        )
 
                         actions_executed = 0
                         for action in watcher.definition.actions:
@@ -812,8 +874,10 @@ class WatcherEngine:
 
                         # Update trigger count for timer mode (increment from current database value)
                         new_trigger_count = watcher.trigger_count + 1
-                        self._update_watcher_trigger_count(
-                            watcher.id, new_trigger_count
+                        await run_local(
+                            self._update_watcher_trigger_count,
+                            watcher.id,
+                            new_trigger_count,
                         )
 
                         # Check max triggers in timer mode
@@ -823,8 +887,10 @@ class WatcherEngine:
                                     f"Timer mode watcher {watcher_id} reached max triggers "
                                     f"({watcher.definition.max_triggers}), disabling"
                                 )
-                                self._update_watcher_state(
-                                    watcher_id, WatcherState.TRIGGERED
+                                await run_local(
+                                    self._update_watcher_state,
+                                    watcher_id,
+                                    WatcherState.TRIGGERED,
                                 )
                                 break
 
@@ -847,12 +913,16 @@ class WatcherEngine:
                         if read_result:
                             if read_result.next_position != watcher.last_position:
                                 watcher.last_position = read_result.next_position
-                                self._update_watcher_position(
-                                    watcher_id, read_result.next_position
+                                await run_local(
+                                    self._update_watcher_position,
+                                    watcher_id,
+                                    read_result.next_position,
                                 )
 
                             matches_found = (
-                                self._check_patterns(watcher, read_result.content)
+                                await self._check_patterns_async(
+                                    watcher, read_result.content
+                                )
                                 if read_result.content
                                 else False
                             )
@@ -865,7 +935,11 @@ class WatcherEngine:
                                 # Switch to timer mode if enabled
                                 if watcher.definition.timer_mode_enabled:
                                     watcher.timer_mode_active = True
-                                    self._update_watcher_timer_mode(watcher_id, True)
+                                    await run_local(
+                                        self._update_watcher_timer_mode,
+                                        watcher_id,
+                                        True,
+                                    )
                                     logger.info(
                                         f"Watcher {watcher_id} switched to timer mode after pattern match"
                                     )
@@ -887,7 +961,11 @@ class WatcherEngine:
                         logger.error(
                             f"Too many failures for watcher {watcher_id}, disabling"
                         )
-                        self._update_watcher_state(watcher_id, WatcherState.DISABLED)
+                        await run_local(
+                            self._update_watcher_state,
+                            watcher_id,
+                            WatcherState.DISABLED,
+                        )
                         break
 
                     # Exponential backoff on failures
@@ -899,7 +977,170 @@ class WatcherEngine:
             if watcher_id in self.active_tasks:
                 del self.active_tasks[watcher_id]
 
-    def _check_patterns(self, watcher: WatcherInstance, content: str) -> bool:
+    async def _check_patterns_async(
+        self, watcher: WatcherInstance, content: str
+    ) -> bool:
+        """Run a pattern scan away from the event loop.
+
+        The synchronous matcher remains available for legacy callers and
+        tests.  Production monitor/manual paths use this wrapper so regex
+        work, database writes, and action admission cannot freeze requests.
+        """
+        loop = asyncio.get_running_loop()
+        self._event_loop = loop
+        self._event_loop_thread_id = threading.get_ident()
+        cancelled = threading.Event()
+        try:
+            return await run_output(
+                self._check_patterns,
+                watcher,
+                content,
+                action_loop=loop,
+                cancelled=cancelled,
+            )
+        except asyncio.CancelledError:
+            # Cancelling run_in_executor cannot stop a running worker thread.
+            # Tell the matcher to stop at its next admission boundary.
+            cancelled.set()
+            raise
+
+    async def _admit_action(
+        self,
+        watcher: WatcherInstance,
+        action: Any,
+        matched_text: str,
+        captured_vars: Dict[str, Any],
+        cancelled: Optional[threading.Event] = None,
+    ) -> Optional[asyncio.Task]:
+        """Admit one action and retain its task until it completes."""
+        if self._shutdown or (cancelled is not None and cancelled.is_set()):
+            return None
+        await self._action_admission.acquire()
+        if self._shutdown or (cancelled is not None and cancelled.is_set()):
+            self._action_admission.release()
+            return None
+        try:
+            task = create_task(
+                self._execute_action(watcher, action, matched_text, captured_vars)
+            )
+        except BaseException:
+            self._action_admission.release()
+            raise
+
+        if task is None:
+            self._action_admission.release()
+            return None
+
+        self._action_tasks.append(task)
+
+        def finished(done: asyncio.Task) -> None:
+            try:
+                self._action_tasks.remove(done)
+            except ValueError:
+                pass
+            self._action_admission.release()
+            if not done.cancelled():
+                try:
+                    exception = done.exception()
+                except Exception:
+                    exception = None
+                if exception is not None:
+                    logger.error("Watcher action failed: %s", exception)
+
+        task.add_done_callback(finished)
+        return task
+
+    def _schedule_action_from_worker(
+        self,
+        watcher: WatcherInstance,
+        action: Any,
+        matched_text: str,
+        captured_vars: Dict[str, Any],
+        action_loop: asyncio.AbstractEventLoop,
+        cancelled: Optional[threading.Event] = None,
+    ) -> bool:
+        """Schedule an action on the owning loop from an output worker."""
+        # ``run_coroutine_threadsafe`` is deliberately used only from output
+        # workers.  The action coroutine itself uses the remote/background/
+        # local pools, so waiting here cannot re-enter the output pool.
+        if self._shutdown or (cancelled is not None and cancelled.is_set()):
+            return False
+        if threading.get_ident() == self._event_loop_thread_id:
+            create_task(
+                self._admit_action(
+                    watcher,
+                    action,
+                    matched_text,
+                    captured_vars,
+                    cancelled,
+                )
+            )
+            return True
+        if action_loop.is_closed():
+            return False
+        admission = self._admit_action(
+            watcher,
+            action,
+            matched_text,
+            captured_vars,
+            cancelled,
+        )
+        try:
+            future = asyncio.run_coroutine_threadsafe(admission, action_loop)
+        except RuntimeError:
+            admission.close()
+            return False
+        while True:
+            try:
+                future.result(timeout=0.1)
+                return not self._shutdown and not (
+                    cancelled is not None and cancelled.is_set()
+                )
+            except TimeoutError:
+                if self._shutdown or (cancelled is not None and cancelled.is_set()):
+                    future.cancel()
+                    return False
+
+    def _schedule_action_compat(
+        self,
+        watcher: WatcherInstance,
+        action: Any,
+        matched_text: str,
+        captured_vars: Dict[str, Any],
+    ) -> None:
+        """Preserve synchronous matcher behavior for existing callers."""
+        if self._shutdown:
+            return
+        task = create_task(
+            self._execute_action(watcher, action, matched_text, captured_vars)
+        )
+        if task is None:
+            return
+        self._action_tasks.append(task)
+
+        def finished(done: asyncio.Task) -> None:
+            try:
+                self._action_tasks.remove(done)
+            except ValueError:
+                pass
+            if not done.cancelled():
+                try:
+                    exception = done.exception()
+                except Exception:
+                    exception = None
+                if exception is not None:
+                    logger.error("Watcher action failed: %s", exception)
+
+        task.add_done_callback(finished)
+
+    def _check_patterns(
+        self,
+        watcher: WatcherInstance,
+        content: str,
+        *,
+        action_loop: Optional[asyncio.AbstractEventLoop] = None,
+        cancelled: Optional[threading.Event] = None,
+    ) -> bool:
         """Check content for pattern matches and trigger actions."""
         pattern = watcher.definition.pattern
         matches_found = False
@@ -908,17 +1149,27 @@ class WatcherEngine:
             if not pattern:
                 return False
 
-            # Use cached compiled regex if available
-            if pattern not in self._pattern_cache:
-                try:
-                    self._pattern_cache[pattern] = re.compile(pattern, re.MULTILINE)
-                except re.error as e:
-                    logger.error(f"Invalid regex pattern '{pattern}': {e}")
-                    return False
+            # Use cached compiled regex if available.  Scans run concurrently
+            # in the output pool, so protect first-use compilation.
+            with self._pattern_cache_lock:
+                regex = self._pattern_cache.get(pattern)
+                if regex is None:
+                    try:
+                        regex = bounded_regex.compile(
+                            pattern, bounded_regex.MULTILINE | bounded_regex.VERSION0
+                        )
+                    except bounded_regex.error as e:
+                        logger.error(f"Invalid regex pattern '{pattern}': {e}")
+                        return False
+                    if len(self._pattern_cache) >= 256:
+                        self._pattern_cache.pop(next(iter(self._pattern_cache)))
+                    self._pattern_cache[pattern] = regex
 
-            regex = self._pattern_cache[pattern]
-
-            for match in regex.finditer(content):
+            for match in regex.finditer(
+                content, concurrent=True, timeout=PATTERN_TIMEOUT_SECONDS
+            ):
+                if cancelled is not None and cancelled.is_set():
+                    break
                 matched_text = match.group(0)
 
                 # Extract captured groups
@@ -975,16 +1226,21 @@ class WatcherEngine:
 
                     # Execute action and track results properly
                     try:
-                        # Create task but also track it for cleanup
-                        task = create_task(
-                            self._execute_action(
+                        if action_loop is not None:
+                            admitted = self._schedule_action_from_worker(
+                                watcher,
+                                action,
+                                matched_text,
+                                captured_vars,
+                                action_loop,
+                                cancelled,
+                            )
+                            if not admitted:
+                                return matches_found
+                        else:
+                            self._schedule_action_compat(
                                 watcher, action, matched_text, captured_vars
                             )
-                        )
-                        # Store task reference for potential cleanup
-                        if not hasattr(self, "_action_tasks"):
-                            self._action_tasks = []
-                        self._action_tasks.append(task)
                     except Exception as e:
                         logger.error(f"Failed to create action task: {e}")
 
@@ -1002,6 +1258,12 @@ class WatcherEngine:
                         self._update_watcher_state(watcher.id, WatcherState.TRIGGERED)
                         break
 
+        except TimeoutError as e:
+            self._update_watcher_state(watcher.id, WatcherState.DISABLED)
+            raise RuntimeError(
+                f"Watcher {watcher.id} pattern exceeded its matching time limit; "
+                "simplify the pattern before resuming it"
+            ) from e
         except Exception as e:
             logger.error(f"Error checking patterns for watcher {watcher.id}: {e}")
 
@@ -1073,9 +1335,7 @@ class WatcherEngine:
             )
             return 3600.0
 
-    def _job_end_claim_is_stale(
-        self, updated_at: Optional[str], now: datetime
-    ) -> bool:
+    def _job_end_claim_is_stale(self, updated_at: Optional[str], now: datetime) -> bool:
         """Return True when an in-flight terminal-action claim can be reused."""
         ttl_seconds = self._job_end_claim_ttl_seconds()
         if ttl_seconds <= 0:
@@ -1211,9 +1471,8 @@ class WatcherEngine:
         self, watcher: WatcherInstance, variables: Dict[str, Any]
     ) -> bool:
         """Return True when an eligible job-end action still needs handling."""
-        if (
-            not watcher.definition.trigger_on_job_end
-            or self._job_end_trigger_completed(variables)
+        if not watcher.definition.trigger_on_job_end or self._job_end_trigger_completed(
+            variables
         ):
             return False
 
@@ -1272,7 +1531,7 @@ class WatcherEngine:
 
         fresh_variables = {
             **watcher.variables,
-            **self._get_watcher_variables(watcher.id),
+            **await run_local(self._get_watcher_variables, watcher.id),
             "job_end_state": state_name,
         }
         if self._job_end_trigger_completed(fresh_variables):
@@ -1295,8 +1554,8 @@ class WatcherEngine:
             ):
                 continue
 
-            claim_result = self._claim_job_end_action(
-                watcher.id, action_index, fresh_variables
+            claim_result = await run_local(
+                self._claim_job_end_action, watcher.id, action_index, fresh_variables
             )
             if claim_result == JobEndActionClaimResult.ALREADY_DONE:
                 any_action_succeeded = True
@@ -1314,28 +1573,42 @@ class WatcherEngine:
                 if success:
                     any_action_succeeded = True
                     success_key = self._job_end_action_success_key(action_index)
-                    self._update_watcher_variables(watcher.id, {success_key: "1"})
+                    await run_local(
+                        self._update_watcher_variables, watcher.id, {success_key: "1"}
+                    )
                     fresh_variables[success_key] = "1"
                 elif watcher.state == WatcherState.DISABLED:
                     retry_pending = False
                 elif self._should_retry_failed_job_end_action(action, result):
-                    self._release_job_end_action_claim(watcher.id, action_index)
+                    await run_local(
+                        self._release_job_end_action_claim, watcher.id, action_index
+                    )
                     retry_pending = True
             except Exception as e:
                 logger.error(
                     f"Failed to execute job-end action for watcher {watcher.id}: {e}"
                 )
                 if self._should_retry_failed_job_end_action(action, f"Error: {e}"):
-                    self._release_job_end_action_claim(watcher.id, action_index)
+                    await run_local(
+                        self._release_job_end_action_claim, watcher.id, action_index
+                    )
                     retry_pending = True
 
         if retry_pending:
             return JobEndHandlingResult.RETRY_PENDING
 
-        if any_action_succeeded and not self._job_end_trigger_completed(fresh_variables):
+        if any_action_succeeded and not self._job_end_trigger_completed(
+            fresh_variables
+        ):
             completion_key = self._job_end_completion_key()
-            self._update_watcher_variables(watcher.id, {completion_key: "1"})
-            self._update_watcher_trigger_count(watcher.id, watcher.trigger_count + 1)
+            await run_local(
+                self._update_watcher_variables, watcher.id, {completion_key: "1"}
+            )
+            await run_local(
+                self._update_watcher_trigger_count,
+                watcher.id,
+                watcher.trigger_count + 1,
+            )
             fresh_variables[completion_key] = "1"
 
         return JobEndHandlingResult.COMPLETE
@@ -1386,7 +1659,9 @@ class WatcherEngine:
                 watcher=watcher,
             )
 
-            failure_count = self._record_action_result(watcher, success)
+            failure_count = await run_local(
+                self._record_action_result, watcher, success
+            )
             if (
                 not success
                 and watcher.definition.max_failures is not None
@@ -1398,7 +1673,8 @@ class WatcherEngine:
                 )
 
             # Log event
-            event_payload = self._log_watcher_event(
+            event_payload = await run_local(
+                self._log_watcher_event,
                 watcher_id=watcher.id,
                 job_id=watcher.job_id,
                 hostname=watcher.hostname,
@@ -1422,7 +1698,7 @@ class WatcherEngine:
             return success, result
 
         except Exception as e:
-            failure_count = self._record_action_result(watcher, False)
+            failure_count = await run_local(self._record_action_result, watcher, False)
             logger.exception(f"Failed to execute action for watcher {watcher.id}: {e}")
             result = f"Error: {e}"
             if (
@@ -1445,7 +1721,7 @@ class WatcherEngine:
         """
         try:
             # Get watcher instance
-            watcher = self._get_watcher(watcher_id)
+            watcher = await run_local(self._get_watcher, watcher_id)
             if not watcher:
                 return False, "Watcher not found"
 
@@ -1454,7 +1730,7 @@ class WatcherEngine:
                 return False, "Watcher is not in timer mode"
 
             # Get fresh variables from database
-            fresh_variables = self._get_watcher_variables(watcher_id)
+            fresh_variables = await run_local(self._get_watcher_variables, watcher_id)
 
             actions_executed = 0
             action_results = []
@@ -1481,12 +1757,16 @@ class WatcherEngine:
 
             # Update trigger count
             new_trigger_count = watcher.trigger_count + 1
-            self._update_watcher_trigger_count(watcher.id, new_trigger_count)
+            await run_local(
+                self._update_watcher_trigger_count, watcher.id, new_trigger_count
+            )
 
             # Check max triggers
             if watcher.definition.max_triggers:
                 if new_trigger_count >= watcher.definition.max_triggers:
-                    self._update_watcher_state(watcher.id, WatcherState.TRIGGERED)
+                    await run_local(
+                        self._update_watcher_state, watcher.id, WatcherState.TRIGGERED
+                    )
                     action_results.append("Max triggers reached - watcher disabled")
 
             if actions_executed > 0:
@@ -1507,17 +1787,17 @@ class WatcherEngine:
         try:
             from ..web.app import get_slurm_manager
 
-            slurm_manager = get_slurm_manager()
+            slurm_manager = await run_local(get_slurm_manager)
             if slurm_manager:
                 throttler = get_host_throttler()
                 async with throttler.throttle(hostname):
-                    live_job_info = await asyncio.to_thread(
+                    live_job_info = await run_background(
                         slurm_manager.get_job_info, hostname, job_id
                     )
                 if live_job_info:
                     try:
                         # Keep cache warm with corrected paths.
-                        await asyncio.to_thread(
+                        await run_local(
                             self.cache.cache_job,
                             live_job_info,
                             script_content=None,
@@ -1535,7 +1815,9 @@ class WatcherEngine:
             from ..job_data_manager import get_job_data_manager
 
             manager = get_job_data_manager()
-            job_data = await manager.get_job_data(job_id, hostname)
+            job_data = await manager.get_job_data(
+                job_id, hostname, include_outputs=False
+            )
             return job_data.job_info if job_data else None
 
         except Exception as e:
@@ -1553,7 +1835,7 @@ class WatcherEngine:
         try:
             from ..web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 return None
 
@@ -1595,9 +1877,20 @@ class WatcherEngine:
                         from ..job_data_manager import get_job_data_manager
 
                         data_manager = get_job_data_manager()
-                        cached_output = data_manager._get_cached_output_content(
+                        with data_manager.cache.open_job_output(
                             job_info.job_id, job_info.hostname, output_type
-                        )
+                        ) as opened:
+                            if opened is None:
+                                return None
+                            compressed_output, compression, _original_size = opened
+                            cached_chunk, cached_next_position = (
+                                read_output_from_position(
+                                    compressed_output,
+                                    compression,
+                                    position,
+                                    max_read_size,
+                                )
+                            )
                     except Exception as e:
                         logger.debug(
                             f"Failed cached output fallback for watcher job "
@@ -1605,11 +1898,6 @@ class WatcherEngine:
                         )
                         return None
 
-                    cached_chunk, cached_next_position = (
-                        self._slice_output_from_position(
-                            cached_output, position, max_read_size
-                        )
-                    )
                     if cached_chunk is None and cached_next_position == position:
                         return None
 
@@ -1661,7 +1949,9 @@ class WatcherEngine:
                 previous_path = None
                 path_key = self._watcher_output_path_key(output_type)
                 if watcher_id is not None:
-                    previous_path = self._get_watcher_variables(watcher_id).get(path_key)
+                    previous_path = self._get_watcher_variables(watcher_id).get(
+                        path_key
+                    )
 
                 path_changed = bool(
                     file_path
@@ -1744,7 +2034,7 @@ class WatcherEngine:
 
             throttler = get_host_throttler()
             async with throttler.throttle(job_info.hostname):
-                return await asyncio.to_thread(read_new_output)
+                return await run_background(read_new_output)
 
         except Exception as e:
             logger.error(f"Failed to get output for job {job_info.job_id}: {e}")
@@ -1941,14 +2231,40 @@ class WatcherEngine:
 
     def _schedule_watcher_refresh(self, watcher_id: int):
         """Schedule a websocket refresh for a watcher if a loop is available."""
+        if self._shutdown:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            loop = self._event_loop
+        if loop is None or loop.is_closed():
             return
-        loop.create_task(
-            self._broadcast_watcher_snapshot(watcher_id),
-            name=f"watcher-refresh-{watcher_id}",
-        )
+        with self._watcher_refresh_lock:
+            if (
+                watcher_id in self._watcher_refresh_pending
+                or len(self._watcher_refresh_pending) >= 64
+            ):
+                return
+            self._watcher_refresh_pending.add(watcher_id)
+
+        def dispatch_refresh() -> None:
+            with self._watcher_refresh_lock:
+                self._watcher_refresh_pending.discard(watcher_id)
+            if self._shutdown:
+                return
+            queue_task_once(
+                registry=self._watcher_refresh_tasks,
+                key=watcher_id,
+                coro_factory=lambda: self._broadcast_watcher_snapshot(watcher_id),
+                name=f"watcher-refresh-{watcher_id}",
+                limit=64,
+            )
+
+        try:
+            loop.call_soon_threadsafe(dispatch_refresh)
+        except RuntimeError:
+            with self._watcher_refresh_lock:
+                self._watcher_refresh_pending.discard(watcher_id)
 
     async def _broadcast_watcher_snapshot(self, watcher_id: int):
         """Broadcast the latest watcher snapshot to any connected web clients."""
@@ -1959,7 +2275,8 @@ class WatcherEngine:
             if not watcher_manager.active_connections:
                 return
 
-            watcher_payload = get_watcher_payload_by_id(
+            watcher_payload = await run_local(
+                get_watcher_payload_by_id,
                 cache=self.cache,
                 watcher_id=watcher_id,
             )
@@ -1987,7 +2304,8 @@ class WatcherEngine:
                 return
 
             payload = {"type": "watcher_event", "event": event_payload}
-            watcher_payload = get_watcher_payload_by_id(
+            watcher_payload = await run_local(
+                get_watcher_payload_by_id,
                 cache=self.cache,
                 watcher_id=event_payload["watcher_id"],
             )
@@ -2017,9 +2335,7 @@ class WatcherEngine:
         except Exception as e:
             logger.error(f"Failed to update watcher {watcher_id} state: {e}")
 
-    def _record_action_result(
-        self, watcher: WatcherInstance, success: bool
-    ) -> int:
+    def _record_action_result(self, watcher: WatcherInstance, success: bool) -> int:
         """Persist action failure count and disable watcher at its threshold."""
         if watcher.id is None:
             return watcher.failure_count
