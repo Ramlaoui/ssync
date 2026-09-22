@@ -90,8 +90,14 @@ environment setup, preparation fragments, and a project-owned run fragment from
 
 ### Output Retrieval
 ```bash
-# View job output
-ssync status --job-id 12345 --cat-output
+# Print job output
+ssync output 12345
+ssync output 12345 --stderr
+ssync output 12345 --lines 200
+ssync output 12345 --all
+
+# Copy output files locally
+ssync copy-output 12345 ./outputs
 ```
 
 ## Web Interface
