@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ...utils.async_helpers import create_task
+from ...utils.executors import run_background, run_local
 from ...utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -47,14 +48,15 @@ class CacheVerificationService:
 
         self._verify_in_progress = True
         self._last_verify_time = current_time
-        create_task(self._run_verification_in_background(current_job_ids))
+        if create_task(self._run_verification_in_background(current_job_ids)) is None:
+            self._verify_in_progress = False
 
     async def _run_verification_in_background(
         self, current_job_ids: Dict[str, List[str]]
     ):
         try:
             logger.info("Starting background cache verification")
-            to_mark_completed = await asyncio.to_thread(
+            to_mark_completed = await run_local(
                 self.cache.verify_cached_jobs, current_job_ids
             )
             if not to_mark_completed:
@@ -69,7 +71,7 @@ class CacheVerificationService:
             )
 
             for job_id, hostname in successfully_updated:
-                await asyncio.to_thread(self.cache.mark_job_completed, job_id, hostname)
+                await run_local(self.cache.mark_job_completed, job_id, hostname)
 
             if successfully_updated:
                 logger.info(
@@ -100,7 +102,7 @@ class CacheVerificationService:
         try:
             from ..app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 logger.warning("No manager available for fetching final states")
                 return []
@@ -134,17 +136,14 @@ class CacheVerificationService:
 
         try:
             slurm_host = manager.get_host_by_name(hostname)
-            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
-            tasks = [
-                self._fetch_single_job_final_state(manager, conn, hostname, job_id)
-                for job_id in job_ids
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for job_id, result in zip(job_ids, results):
-                if isinstance(result, Exception):
-                    logger.warning(f"Error processing job {job_id}: {result}")
-                elif result is not None:
+            conn = await run_background(manager._get_connection, slurm_host.host)
+            # Keep memory and remote pressure independent of the number of
+            # completed jobs. The next host can still progress concurrently.
+            for job_id in job_ids:
+                result = await self._fetch_single_job_final_state(
+                    manager, conn, hostname, job_id
+                )
+                if result is not None:
                     successfully_updated.append((job_id, hostname))
         except Exception as e:
             logger.error(f"Error processing host {hostname}: {e}")
@@ -164,11 +163,7 @@ class CacheVerificationService:
                 self._unknown_retry_attempts.pop(job_key, None)
                 return None
 
-            from ..app import executor
-
-            loop = asyncio.get_event_loop()
-            final_state = await loop.run_in_executor(
-                executor,
+            final_state = await run_background(
                 manager.slurm_client.get_job_final_state,
                 conn,
                 hostname,
@@ -191,7 +186,7 @@ class CacheVerificationService:
                 logger.info(
                     f"Updating job {job_id} with final state: {final_state.state.value}"
                 )
-                cached_map = await asyncio.to_thread(
+                cached_map = await run_local(
                     self.cache.get_cached_jobs_by_ids, [job_id], hostname
                 )
                 cached_job = cached_map.get(job_id)
@@ -199,8 +194,7 @@ class CacheVerificationService:
 
                 if not script_content:
                     try:
-                        script_content = await loop.run_in_executor(
-                            executor,
+                        script_content = await run_background(
                             manager.slurm_client.get_job_batch_script,
                             conn,
                             job_id,
@@ -213,7 +207,7 @@ class CacheVerificationService:
                     except Exception as e:
                         logger.debug(f"Could not fetch script for job {job_id}: {e}")
 
-                await asyncio.to_thread(
+                await run_local(
                     self.cache.cache_job, final_state, script_content=script_content
                 )
                 return True
@@ -247,7 +241,7 @@ class CacheVerificationService:
                 f"Giving up on job {job_id} after {attempts} failed sacct attempts "
                 f"({time_elapsed:.0f}s elapsed). Marking as completed with UNKNOWN state."
             )
-            cached_map = await asyncio.to_thread(
+            cached_map = await run_local(
                 self.cache.get_cached_jobs_by_ids, [job_id], hostname
             )
             cached_job = cached_map.get(job_id)
@@ -255,7 +249,7 @@ class CacheVerificationService:
                 from ...models.job import JobState
 
                 cached_job.job_info.state = JobState.UNKNOWN
-                await asyncio.to_thread(
+                await run_local(
                     self.cache.cache_job,
                     cached_job.job_info,
                     script_content=cached_job.script_content,

@@ -9,7 +9,7 @@ import hashlib
 import json
 import sqlite3
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta
 from enum import Enum
@@ -544,13 +544,21 @@ class JobDataCache:
             conn.commit()
 
     @contextmanager
-    def _get_connection(self):
-        """Get thread-safe database connection."""
-        with self._lock:
-            conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+    def _get_connection(self, *, read_only: bool = False):
+        """Serialize writers while allowing WAL readers to proceed independently."""
+        with nullcontext() if read_only else self._lock:
+            # A read-only output blob may be consumed by a synchronous
+            # streaming iterator whose worker can change between ``next``
+            # calls. Writers retain sqlite's default thread check.
+            conn = sqlite3.connect(
+                str(self.db_path),
+                timeout=30.0,
+                check_same_thread=not read_only,
+            )
             conn.row_factory = sqlite3.Row
-            # Set WAL mode for this connection (idempotent, safe to call multiple times)
-            conn.execute("PRAGMA journal_mode=WAL")
+            # WAL is enabled once at initialization; changing it per read can lock.
+            if read_only:
+                conn.execute("PRAGMA query_only=ON")
             conn.execute("PRAGMA busy_timeout=10000")
             try:
                 yield conn
@@ -722,42 +730,46 @@ class JobDataCache:
             script_content: Optional script content (if None, preserves existing)
             local_source_dir: Optional local source directory that was synced
         """
-        existing_cached = self.get_cached_job(job_info.job_id, job_info.hostname)
-        cached_data = self._build_cached_job_data(
-            job_info,
-            existing_cached=existing_cached,
-            script_content=script_content,
-            local_source_dir=local_source_dir,
-        )
+        with self._lock:
+            existing_cached = self.get_cached_job(
+                job_info.job_id, job_info.hostname, include_outputs=False
+            )
+            cached_data = self._build_cached_job_data(
+                job_info,
+                existing_cached=existing_cached,
+                script_content=script_content,
+                local_source_dir=local_source_dir,
+            )
 
-        self._store_cached_data(cached_data)
+            self._store_cached_data(cached_data)
 
     def cache_jobs(self, job_infos: List[JobInfo]) -> None:
         """Cache many jobs in a single connection and transaction."""
         if not job_infos:
             return
 
-        now = datetime.now()
-        keys = [
-            (job_info.job_id, job_info.hostname)
-            for job_info in job_infos
-            if job_info.job_id and job_info.hostname
-        ]
-        existing_by_key = self._get_cached_jobs_for_keys(keys)
+        with self._lock:
+            now = datetime.now()
+            keys = [
+                (job_info.job_id, job_info.hostname)
+                for job_info in job_infos
+                if job_info.job_id and job_info.hostname
+            ]
+            existing_by_key = self._get_cached_jobs_for_keys(keys)
 
-        with self._get_connection() as conn:
-            for job_info in job_infos:
-                if not job_info.job_id or not job_info.hostname:
-                    continue
-                cached_data = self._build_cached_job_data(
-                    job_info,
-                    existing_cached=existing_by_key.get(
-                        (job_info.job_id, job_info.hostname)
-                    ),
-                    now=now,
-                )
-                self._store_cached_data_in_connection(conn, cached_data)
-            conn.commit()
+            with self._get_connection() as conn:
+                for job_info in job_infos:
+                    if not job_info.job_id or not job_info.hostname:
+                        continue
+                    cached_data = self._build_cached_job_data(
+                        job_info,
+                        existing_cached=existing_by_key.get(
+                            (job_info.job_id, job_info.hostname)
+                        ),
+                        now=now,
+                    )
+                    self._store_cached_data_in_connection(conn, cached_data)
+                conn.commit()
 
     def _get_cached_jobs_for_keys(
         self,
@@ -776,22 +788,20 @@ class JobDataCache:
         results: Dict[Tuple[str, str], CachedJobData] = {}
         unique_keys = list(dict.fromkeys(keys))
         chunk_size = 250
-        with self._get_connection() as conn:
+        with self._get_connection(read_only=True) as conn:
             for i in range(0, len(unique_keys), chunk_size):
                 chunk = unique_keys[i : i + chunk_size]
-                conditions = " OR ".join(
-                    ["(job_id = ? AND hostname = ?)"] * len(chunk)
-                )
+                conditions = " OR ".join(["(job_id = ? AND hostname = ?)"] * len(chunk))
                 params: List[Any] = [
                     value for job_id, hostname in chunk for value in (job_id, hostname)
                 ]
-                query = f"SELECT * FROM cached_jobs WHERE ({conditions})"
+                query = f"SELECT {self._job_projection(False)} FROM cached_jobs WHERE ({conditions})"
                 if cache_cutoff:
                     query += " AND cached_at >= ?"
                     params.append(cache_cutoff)
 
                 cursor = conn.execute(query, params)
-                for row in cursor.fetchall():
+                for row in cursor:
                     cached_data = self._row_to_cached_data(row)
                     if cached_data.job_info and cached_data.job_info.submit_time:
                         if self._is_submit_time_older_than_cutoff(
@@ -820,12 +830,28 @@ class JobDataCache:
 
         conn.execute(
             """
-            INSERT OR REPLACE INTO cached_jobs
+            INSERT INTO cached_jobs
             (job_id, hostname, job_info_json, script_content, local_source_dir,
              stdout_compressed, stdout_size, stdout_compression,
              stderr_compressed, stderr_size, stderr_compression,
              cached_at, last_updated, is_active, array_job_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id, hostname) DO UPDATE SET
+                job_info_json = excluded.job_info_json,
+                script_content = excluded.script_content,
+                local_source_dir = excluded.local_source_dir,
+                last_updated = excluded.last_updated,
+                is_active = excluded.is_active,
+                array_job_id = excluded.array_job_id,
+                stdout_compressed = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stdout_compressed ELSE excluded.stdout_compressed END,
+                stdout_size = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stdout_size ELSE excluded.stdout_size END,
+                stdout_compression = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stdout_compression ELSE excluded.stdout_compression END,
+                stderr_compressed = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stderr_compressed ELSE excluded.stderr_compressed END,
+                stderr_size = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stderr_size ELSE excluded.stderr_size END,
+                stderr_compression = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stderr_compression ELSE excluded.stderr_compression END,
+                stdout_fetched_after_completion = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stdout_fetched_after_completion ELSE excluded.stdout_fetched_after_completion END,
+                stderr_fetched_after_completion = CASE WHEN cached_jobs.cached_at = excluded.cached_at THEN cached_jobs.stderr_fetched_after_completion ELSE excluded.stderr_fetched_after_completion END,
+                cached_at = excluded.cached_at
         """,
             (
                 cached_data.job_id,
@@ -1090,11 +1116,24 @@ class JobDataCache:
 
             return jobs
 
+    @staticmethod
+    def _job_projection(include_outputs: bool) -> str:
+        if include_outputs:
+            return "*"
+        return (
+            "job_id, hostname, job_info_json, script_content, local_source_dir, "
+            "NULL AS stdout_compressed, stdout_size, stdout_compression, "
+            "NULL AS stderr_compressed, stderr_size, stderr_compression, "
+            "cached_at, last_updated, is_active"
+        )
+
     def get_cached_job(
         self,
         job_id: str,
         hostname: Optional[str] = None,
         max_age_days: Optional[int] = None,
+        *,
+        include_outputs: bool = True,
     ) -> Optional[CachedJobData]:
         """
         Retrieve cached job data.
@@ -1114,8 +1153,8 @@ class JobDataCache:
         cache_cutoff = self._get_cache_cutoff_iso(max_age_days)
         submit_time_cutoff = self._get_submit_time_cutoff(max_age_days)
 
-        with self._get_connection() as conn:
-            query = "SELECT * FROM cached_jobs WHERE job_id = ?"
+        with self._get_connection(read_only=True) as conn:
+            query = f"SELECT {self._job_projection(include_outputs)} FROM cached_jobs WHERE job_id = ?"
             params: List[Any] = [job_id]
             if hostname:
                 query += " AND hostname = ?"
@@ -1149,6 +1188,8 @@ class JobDataCache:
         job_ids: List[str],
         hostname: Optional[str] = None,
         max_age_days: Optional[int] = None,
+        *,
+        include_outputs: bool = True,
     ) -> Dict[str, CachedJobData]:
         """Batch lookup cached jobs by ID.
 
@@ -1166,27 +1207,25 @@ class JobDataCache:
         # SQLite has a limit on variables; chunk to stay under it.
         chunk_size = 500
         skipped_stale: List[str] = []
-        with self._get_connection() as conn:
+        with self._get_connection(read_only=True) as conn:
             for i in range(0, len(job_ids), chunk_size):
                 chunk = job_ids[i : i + chunk_size]
                 placeholders = ",".join(["?"] * len(chunk))
                 if hostname:
                     query = (
-                        f"SELECT * FROM cached_jobs WHERE job_id IN ({placeholders}) "
+                        f"SELECT {self._job_projection(include_outputs)} FROM cached_jobs WHERE job_id IN ({placeholders}) "
                         "AND hostname = ?"
                     )
                     params = [*chunk, hostname]
                 else:
-                    query = (
-                        f"SELECT * FROM cached_jobs WHERE job_id IN ({placeholders})"
-                    )
+                    query = f"SELECT {self._job_projection(include_outputs)} FROM cached_jobs WHERE job_id IN ({placeholders})"
                     params = [*chunk]
                 if cache_cutoff:
                     query += " AND cached_at >= ?"
                     params.append(cache_cutoff)
 
                 cursor = conn.execute(query, params)
-                rows = cursor.fetchall()
+                rows = cursor
                 for row in rows:
                     cached_data = self._row_to_cached_data(row)
                     job_id = cached_data.job_id
@@ -1260,6 +1299,8 @@ class JobDataCache:
         active_only: bool = False,
         limit: Optional[int] = None,
         since: Optional[datetime] = None,
+        *,
+        include_outputs: bool = True,
     ) -> List[CachedJobData]:
         """
         Get list of cached jobs with optional filtering.
@@ -1273,8 +1314,8 @@ class JobDataCache:
         Returns:
             List of CachedJobData objects
         """
-        with self._get_connection() as conn:
-            query = "SELECT * FROM cached_jobs WHERE 1=1"
+        with self._get_connection(read_only=True) as conn:
+            query = f"SELECT {self._job_projection(include_outputs)} FROM cached_jobs WHERE 1=1"
             params = []
 
             if hostname:
@@ -1300,7 +1341,7 @@ class JobDataCache:
                 params.append(limit)
 
             cursor = conn.execute(query, params)
-            return [self._row_to_cached_data(row) for row in cursor.fetchall()]
+            return [self._row_to_cached_data(row) for row in cursor]
 
     def _row_to_cached_data(self, row: sqlite3.Row) -> CachedJobData:
         """Convert database row to CachedJobData."""
@@ -1338,6 +1379,174 @@ class JobDataCache:
             last_updated=datetime.fromisoformat(row["last_updated"]),
             is_active=is_active,
         )
+
+    @staticmethod
+    def _output_storage_columns(output_type: str) -> tuple[str, str, str, str]:
+        """Return storage columns for one validated output stream."""
+        if output_type == "stdout":
+            return (
+                "stdout_compressed",
+                "stdout_size",
+                "stdout_compression",
+                "stdout_fetched_after_completion",
+            )
+        if output_type == "stderr":
+            return (
+                "stderr_compressed",
+                "stderr_size",
+                "stderr_compression",
+                "stderr_fetched_after_completion",
+            )
+        raise ValueError("output_type must be 'stdout' or 'stderr'")
+
+    def update_job_output_file(
+        self,
+        job_id: str,
+        hostname: str,
+        output_type: str,
+        file_path: Path,
+        *,
+        mark_fetched_after_completion: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        """Gzip a local output file into the matching cache row incrementally.
+
+        The source and compressed data are streamed through fixed-size buffers.
+        SQLite receives a zeroblob and incremental blob writes inside the writer
+        transaction, so neither representation is assembled in Python memory.
+        """
+        import gzip
+        import tempfile
+
+        blob_column, size_column, compression_column, fetched_column = (
+            self._output_storage_columns(output_type)
+        )
+        source_path = Path(file_path)
+        temp_path: Optional[Path] = None
+        original_size = 0
+        compressed_size = 0
+
+        try:
+            with (
+                source_path.open("rb") as source,
+                tempfile.NamedTemporaryFile(
+                    mode="w+b",
+                    dir=self.cache_dir,
+                    prefix=".ssync-output-",
+                    delete=False,
+                ) as compressed_file,
+            ):
+                temp_path = Path(compressed_file.name)
+                with gzip.GzipFile(fileobj=compressed_file, mode="wb") as gzip_file:
+                    while chunk := source.read(64 * 1024):
+                        original_size += len(chunk)
+                        gzip_file.write(chunk)
+                compressed_file.flush()
+                compressed_size = compressed_file.tell()
+
+            with self._lock:
+                with self._get_connection() as conn:
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        row = conn.execute(
+                            """
+                            SELECT rowid FROM cached_jobs
+                            WHERE job_id = ? AND hostname = ?
+                            """,
+                            (job_id, hostname),
+                        ).fetchone()
+                        if row is None:
+                            conn.rollback()
+                            return None
+
+                        fetched_update = (
+                            f", {fetched_column} = 1"
+                            if mark_fetched_after_completion
+                            else ""
+                        )
+                        conn.execute(
+                            f"""
+                            UPDATE cached_jobs
+                            SET {blob_column} = zeroblob(?),
+                                {size_column} = ?,
+                                {compression_column} = 'gzip',
+                                last_updated = ?{fetched_update}
+                            WHERE rowid = ?
+                            """,
+                            (
+                                compressed_size,
+                                original_size,
+                                datetime.now().isoformat(),
+                                row["rowid"],
+                            ),
+                        )
+
+                        with conn.blobopen(
+                            "cached_jobs", blob_column, row["rowid"], readonly=False
+                        ) as output_blob:
+                            with temp_path.open("rb") as compressed_file:
+                                while chunk := compressed_file.read(64 * 1024):
+                                    output_blob.write(chunk)
+                        conn.commit()
+                    except BaseException:
+                        conn.rollback()
+                        raise
+
+            return {
+                "output_type": output_type,
+                "original_size": original_size,
+                "compressed_size": compressed_size,
+                "compression": "gzip",
+            }
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to remove temporary output file %s: %s",
+                        temp_path,
+                        exc,
+                    )
+
+    @contextmanager
+    def open_job_output(self, job_id: str, hostname: str, output_type: str):
+        """Open one cached output blob without materializing it in memory.
+
+        Yields ``(blob, compression, original_size)`` or ``None`` when the
+        cache row or requested output is absent. The blob and read-only
+        connection remain open for the duration of the context.
+        """
+        blob_column, size_column, compression_column, _ = self._output_storage_columns(
+            output_type
+        )
+
+        with self._get_connection(read_only=True) as conn:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                f"""
+                SELECT rowid, {blob_column} IS NOT NULL AS has_blob,
+                       {size_column}, {compression_column}
+                FROM cached_jobs
+                WHERE job_id = ? AND hostname = ?
+                """,
+                (job_id, hostname),
+            ).fetchone()
+            if row is None or not row["has_blob"]:
+                yield None
+                return
+
+            output_blob = conn.blobopen(
+                "cached_jobs", blob_column, row["rowid"], readonly=True
+            )
+
+            try:
+                yield (
+                    output_blob,
+                    row[compression_column],
+                    int(row[size_column] or 0),
+                )
+            finally:
+                output_blob.close()
 
     def update_job_outputs_compressed(
         self,
@@ -1453,58 +1662,26 @@ class JobDataCache:
         import base64
         import gzip
 
-        # Convert text content to compressed format
-        stdout_data = None
-        stderr_data = None
+        output_data = {}
+        for kind, content in (("stdout", stdout_content), ("stderr", stderr_content)):
+            if content is None:
+                continue
+            raw = content.encode("utf-8")
+            compressed = len(raw) > 1024
+            output_data[kind] = {
+                "compressed": compressed,
+                "data": base64.b64encode(
+                    gzip.compress(raw) if compressed else raw
+                ).decode("ascii"),
+                "original_size": len(raw),
+                "compression": "gzip" if compressed else "none",
+            }
 
-        if stdout_content is not None:
-            # Compress if large enough
-            if len(stdout_content) > 1024:
-                compressed = gzip.compress(stdout_content.encode("utf-8"))
-                stdout_data = {
-                    "compressed": True,
-                    "data": base64.b64encode(compressed).decode("ascii"),
-                    "original_size": len(stdout_content),
-                    "compression": "gzip",
-                }
-            else:
-                # Store uncompressed for small content
-                stdout_data = {
-                    "compressed": False,
-                    "data": base64.b64encode(stdout_content.encode("utf-8")).decode(
-                        "ascii"
-                    ),
-                    "original_size": len(stdout_content),
-                    "compression": "none",
-                }
-
-        if stderr_content is not None:
-            # Compress if large enough
-            if len(stderr_content) > 1024:
-                compressed = gzip.compress(stderr_content.encode("utf-8"))
-                stderr_data = {
-                    "compressed": True,
-                    "data": base64.b64encode(compressed).decode("ascii"),
-                    "original_size": len(stderr_content),
-                    "compression": "gzip",
-                }
-            else:
-                # Store uncompressed for small content
-                stderr_data = {
-                    "compressed": False,
-                    "data": base64.b64encode(stderr_content.encode("utf-8")).decode(
-                        "ascii"
-                    ),
-                    "original_size": len(stderr_content),
-                    "compression": "none",
-                }
-
-        # Call the compressed version
         self.update_job_outputs_compressed(
             job_id=job_id,
             hostname=hostname,
-            stdout_data=stdout_data,
-            stderr_data=stderr_data,
+            stdout_data=output_data.get("stdout"),
+            stderr_data=output_data.get("stderr"),
             mark_fetched_after_completion=mark_fetched_after_completion,
         )
 

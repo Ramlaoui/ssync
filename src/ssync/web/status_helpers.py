@@ -1,15 +1,16 @@
 """Shared status endpoint helpers for web job views."""
 
-import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from ..cache import get_cache
-from ..utils.async_helpers import create_task
+from ..utils.async_helpers import queue_task_once as _queue_deduped_task
+from ..utils.executors import run_local
 from ..utils.logging import setup_logger
 from .models import ArrayJobGroup, JobInfoWeb, JobStateWeb, JobStatusResponse
 
 logger = setup_logger(__name__)
+_STATUS_REFRESH_TASKS = {}
 
 
 def _get_array_base_job_ids(jobs: List[JobInfoWeb]) -> Set[str]:
@@ -218,6 +219,7 @@ def _prepare_cached_host_status_response(
     limit: Optional[int],
 ) -> tuple[Optional[JobStatusResponse], bool]:
     cached_jobs = cache_middleware.cache.get_cached_jobs(
+        include_outputs=False,
         hostname=hostname,
         active_only=active_only,
     )
@@ -304,7 +306,7 @@ async def get_cached_host_status_response(
     if not effective_user:
         return None
 
-    response, should_refresh = await asyncio.to_thread(
+    response, should_refresh = await run_local(
         _prepare_cached_host_status_response,
         cache_middleware=cache_middleware,
         hostname=hostname,
@@ -317,7 +319,12 @@ async def get_cached_host_status_response(
         limit=limit,
     )
     if should_refresh:
-        create_task(refresh_callback())
+        _queue_deduped_task(
+            registry=_STATUS_REFRESH_TASKS,
+            key=(hostname, "status"),
+            coro_factory=refresh_callback,
+            name=f"status-refresh:{hostname}",
+        )
     return response
 
 
@@ -344,7 +351,7 @@ async def get_cached_date_range_status_response(
     if cached_jobs is None:
         return None
 
-    response, should_refresh = await asyncio.to_thread(
+    response, should_refresh = await run_local(
         _prepare_cached_date_range_status_response,
         cache_middleware=cache_middleware,
         hostname=hostname,
@@ -359,7 +366,12 @@ async def get_cached_date_range_status_response(
         limit=limit,
     )
     if should_refresh:
-        create_task(refresh_callback())
+        _queue_deduped_task(
+            registry=_STATUS_REFRESH_TASKS,
+            key=(hostname, "status"),
+            coro_factory=refresh_callback,
+            name=f"status-refresh:{hostname}",
+        )
     return response
 
 
@@ -380,6 +392,7 @@ def _prepare_cached_date_range_status_response(
     cached_state_map = cache_middleware.cache.get_cached_jobs_by_ids(
         [job.job_id for job in cached_jobs],
         hostname,
+        include_outputs=False,
     )
     normalized_jobs = _normalize_cached_status_jobs(
         cached_jobs=cached_jobs,

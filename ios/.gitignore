@@ -1,0 +1,15 @@
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+Configuration/Local.xcconfig
+.build/
+.swiftpm/
+!assets/**/*.pdf
+!Resources/Assets.xcassets/**/*.pdf
+
+# Private signing material
+*.p8
+*.p12
+*.mobileprovision

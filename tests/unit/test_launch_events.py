@@ -232,3 +232,43 @@ def test_launch_command_prints_launch_logs_without_verbose(monkeypatch, tmp_path
         ("Using cached wheel", True),
         ("Job launched successfully with ID: 5150", False),
     ]
+
+
+@pytest.mark.unit
+def test_cross_thread_launch_events_bound_queue_before_loop_dispatch():
+    from types import SimpleNamespace
+
+    from ssync.launch_events import DISPATCH_BACKLOG_LIMIT
+
+    callbacks = []
+    manager = LaunchEventManager()
+    manager._loop = SimpleNamespace(call_soon_threadsafe=callbacks.append)
+    manager._dispatch_ready = asyncio.Event()
+    emitter = manager.create_emitter("flood", "cluster")
+    for i in range(DISPATCH_BACKLOG_LIMIT * 2):
+        emitter.log("setup", str(i))
+    emitter.result(success=True, message="done", job_id="123")
+    assert len(callbacks) == 1
+    assert len(manager._dispatch_buffer) == DISPATCH_BACKLOG_LIMIT
+    assert manager._dispatch_buffer[-1]["type"] == "launch_result"
+    callbacks[0]()
+    assert manager._dispatch_ready.is_set()
+
+
+@pytest.mark.unit
+def test_launch_event_stream_bounds_unterminated_unicode_lines():
+    from types import SimpleNamespace
+
+    from ssync.launch import _LaunchEventStream
+
+    fragments = []
+    emitter = SimpleNamespace(
+        log=lambda source, message, **kwargs: fragments.append(message)
+    )
+    stream = _LaunchEventStream(emitter, source="setup", stream="stdout")
+    text = "🧪" * 100000
+    assert stream.write(text) == len(text)
+    assert len(stream._buffer) < 1000
+    stream.finish()
+    assert "".join(fragments) == text
+    assert all(len(fragment.encode()) <= 4000 for fragment in fragments)

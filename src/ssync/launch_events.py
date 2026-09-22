@@ -121,6 +121,7 @@ class LaunchEventManager:
         self._dispatch_buffer: Deque[dict[str, Any]] = deque()
         self._dispatcher_task: Optional[asyncio.Task] = None
         self._ws_broadcaster = None
+        self._dispatch_wakeup_pending = False
 
     def set_websocket_broadcaster(self, broadcaster) -> None:
         self._ws_broadcaster = broadcaster
@@ -142,8 +143,11 @@ class LaunchEventManager:
             except asyncio.CancelledError:
                 pass
             self._dispatcher_task = None
-        self._loop = None
-        self._dispatch_ready = None
+        with self._lock:
+            self._loop = None
+            self._dispatch_ready = None
+            self._dispatch_wakeup_pending = False
+            self._dispatch_buffer.clear()
 
     def create_emitter(self, launch_id: str, hostname: str) -> LaunchEventEmitter:
         with self._lock:
@@ -262,46 +266,46 @@ class LaunchEventManager:
             self._subscribers.pop(launch_id, None)
 
     def _enqueue_for_dispatch(self, payload: dict[str, Any]) -> None:
-        if self._loop is None:
-            return
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-        if running_loop is self._loop:
-            self._enqueue_on_loop(payload)
-        else:
-            self._loop.call_soon_threadsafe(self._enqueue_on_loop, payload)
-
-    def _enqueue_on_loop(self, payload: dict[str, Any]) -> None:
-        if self._dispatch_ready is None:
-            return
-        if len(self._dispatch_buffer) >= DISPATCH_BACKLOG_LIMIT:
-            if payload["type"] == LOG_EVENT_TYPE:
+        # Apply the bound before crossing threads. Scheduling one callback per
+        # log line would create an unbounded event-loop ready queue even though
+        # the eventual dispatch deque itself has a limit.
+        with self._lock:
+            if self._loop is None or self._dispatch_ready is None:
                 return
-            for index, queued in enumerate(self._dispatch_buffer):
-                if queued["type"] == LOG_EVENT_TYPE:
-                    del self._dispatch_buffer[index]
-                    break
-            else:
-                self._dispatch_buffer.popleft()
-        self._dispatch_buffer.append(payload)
-        self._dispatch_ready.set()
+            if len(self._dispatch_buffer) >= DISPATCH_BACKLOG_LIMIT:
+                if payload["type"] == LOG_EVENT_TYPE:
+                    return
+                for index, queued in enumerate(self._dispatch_buffer):
+                    if queued["type"] == LOG_EVENT_TYPE:
+                        del self._dispatch_buffer[index]
+                        break
+                else:
+                    self._dispatch_buffer.popleft()
+            self._dispatch_buffer.append(payload)
+            if not self._dispatch_wakeup_pending:
+                self._dispatch_wakeup_pending = True
+                self._loop.call_soon_threadsafe(self._wake_dispatch)
+
+    def _wake_dispatch(self):
+        with self._lock:
+            self._dispatch_wakeup_pending = False
+            if self._dispatch_ready is not None:
+                self._dispatch_ready.set()
 
     async def _dispatch_loop(self) -> None:
         assert self._dispatch_ready is not None
         while True:
             await self._dispatch_ready.wait()
             while True:
-                try:
+                with self._lock:
+                    if not self._dispatch_buffer:
+                        self._dispatch_ready.clear()
+                        break
                     payload = self._dispatch_buffer.popleft()
-                except IndexError:
-                    self._dispatch_ready.clear()
-                    if self._dispatch_buffer:
-                        self._dispatch_ready.set()
-                        continue
-                    break
                 await self._dispatch_payload(payload)
+                # A fast broadcaster need not suspend; let incoming requests run
+                # even when setup commands are continuously emitting output.
+                await asyncio.sleep(0)
 
     async def _dispatch_payload(self, payload: dict[str, Any]) -> None:
         launch_id = payload["launch_id"]

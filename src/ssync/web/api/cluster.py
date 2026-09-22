@@ -8,6 +8,7 @@ from typing import List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query
 
 from ...cache import get_cache
+from ...utils.executors import WorkQueueFull, run_local
 from ...utils.logging import setup_logger
 from ..models import (
     HostInfoWeb,
@@ -58,7 +59,7 @@ def register_cluster_routes(
         """Get the incremental fetch state for hosts."""
         try:
             cache = get_cache()
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
 
             if host:
                 host = InputSanitizer.sanitize_hostname(host)
@@ -77,7 +78,7 @@ def register_cluster_routes(
             fetch_states = {}
             for slurm_host in hosts_to_check:
                 hostname = slurm_host.host.hostname
-                state = await asyncio.to_thread(cache.get_host_fetch_state, hostname)
+                state = await run_local(cache.get_host_fetch_state, hostname)
                 if not state:
                     fetch_states[hostname] = {
                         "status": "never_fetched",
@@ -107,6 +108,8 @@ def register_cluster_routes(
             }
         except HTTPException:
             raise
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting fetch state: {e}")
             raise HTTPException(
@@ -117,7 +120,7 @@ def register_cluster_routes(
     async def get_hosts(_authenticated: bool = Depends(verify_api_key_dependency)):
         """Get list of configured Slurm hosts."""
         try:
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             hosts = []
             for slurm_host in manager.slurm_hosts:
                 slurm_defaults_web = None
@@ -135,6 +138,8 @@ def register_cluster_routes(
                     )
                 )
             return hosts
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error getting hosts: {e}")
             raise HTTPException(status_code=500, detail=sanitize_error_message(e))
@@ -149,7 +154,7 @@ def register_cluster_routes(
     ):
         """Get partition resource state across hosts."""
         try:
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
 
             if host:
                 host = InputSanitizer.sanitize_hostname(host)
@@ -226,6 +231,8 @@ def register_cluster_routes(
                         cache_age_seconds=cache_age_seconds,
                         updated_at=updated_at,
                     )
+                except WorkQueueFull:
+                    raise
                 except Exception as e:
                     logger.error(f"Failed to fetch partitions for {hostname}: {e}")
                     return PartitionStatusResponse(
@@ -239,6 +246,8 @@ def register_cluster_routes(
                 *(fetch_host_partitions(slurm_host) for slurm_host in slurm_hosts)
             )
         except HTTPException:
+            raise
+        except WorkQueueFull:
             raise
         except Exception as e:
             logger.error(f"Error getting partition state: {e}")

@@ -14,15 +14,23 @@ DESIGN PRINCIPLE: One fetcher, one source of truth, one data flow.
 
 import asyncio
 import os
-import shlex
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .cache import get_cache
 from .models.job import JobInfo, JobState
-from .utils.async_helpers import create_task
+from .utils.async_helpers import queue_task_once
+from .utils.executors import (
+    WorkQueueFull,
+    run_background,
+    run_local,
+    run_output,
+    run_transfer,
+)
 from .utils.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -66,11 +74,15 @@ class JobDataManager:
         if compression == "gzip":
             try:
                 return gzip.decompress(compressed_data).decode("utf-8")
+            except WorkQueueFull:
+                raise
             except Exception:
                 return None
         elif compression == "none":
             try:
                 return compressed_data.decode("utf-8")
+            except WorkQueueFull:
+                raise
             except Exception:
                 return None
         return None
@@ -94,23 +106,9 @@ class JobDataManager:
         self, job_id: str, hostname: str, output_type: str
     ) -> Optional[str]:
         """Read and decompress cached output without blocking the event loop."""
-        return await self._run_in_executor(
+        return await run_output(
             self._get_cached_output_content, job_id, hostname, output_type
         )
-
-    async def _read_remote_output_file(
-        self, conn, file_path: str
-    ) -> tuple[bool, Optional[str]]:
-        quoted_path = shlex.quote(file_path)
-        result = await self._run_in_executor(
-            conn.run,
-            f"test -f {quoted_path} && cat {quoted_path}",
-            hide=True,
-            timeout=60,
-        )
-        if result.ok:
-            return True, result.stdout
-        return False, None
 
     """THE SINGLE JOB FETCHER - replaces all job fetching logic."""
 
@@ -118,6 +116,9 @@ class JobDataManager:
         self.cache = get_cache()
         # Track in-flight host fetches to prevent duplicate expensive queries.
         self._fetching_hosts: Set[str] = set()
+        self._host_fetch_tasks = {}
+        self._output_harvest_tasks = {}
+        self._output_fetch_forced = set()
         self._fetching_hosts_lock = asyncio.Lock()
 
         # Hard timeout for response-path fetches. Timed-out host tasks keep running
@@ -210,25 +211,14 @@ class JobDataManager:
         logger.info(f"PROFILE {scope} [{request_id}] {meta_text}{timing_text}")
 
     async def _run_in_executor(self, func, *args, **kwargs):
-        """Run a blocking function in the thread pool if available."""
-        loop = asyncio.get_running_loop()
-        try:
-            # Prefer the background pool so bulk refresh work cannot starve
-            # interactive launch/status requests.
-            from .web.app import background_executor, executor
-
-            pool = background_executor or executor
-            return await loop.run_in_executor(pool, lambda: func(*args, **kwargs))
-        except ImportError:
-            # Outside the web app, still avoid blocking the caller's event loop.
-            logger.debug("No web thread pool available, using default executor")
-            return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+        """Run remote refreshes independently of local/cache requests."""
+        return await run_background(func, *args, **kwargs)
 
     async def _cache_jobs_in_executor(self, jobs: List[JobInfo]) -> None:
         """Persist fetched jobs without blocking the event loop."""
         if not jobs:
             return
-        await self._run_in_executor(self.cache.cache_jobs, list(jobs))
+        await run_local(self.cache.cache_jobs, list(jobs))
 
     async def _cache_job_in_executor(
         self,
@@ -238,7 +228,7 @@ class JobDataManager:
         local_source_dir: Optional[str] = None,
     ) -> None:
         """Persist one job without blocking the event loop."""
-        await self._run_in_executor(
+        await run_local(
             self.cache.cache_job,
             job_info,
             script_content=script_content,
@@ -249,7 +239,7 @@ class JobDataManager:
         self, job_id: str, hostname: Optional[str] = None
     ):
         """Read one cached job without blocking the event loop."""
-        return await self._run_in_executor(self.cache.get_cached_job, job_id, hostname)
+        return await run_local(self.cache.get_cached_job, job_id, hostname)
 
     async def _get_cached_jobs_for_host_in_executor(
         self,
@@ -258,7 +248,7 @@ class JobDataManager:
         limit: Optional[int],
     ) -> List[JobInfo]:
         """Return cached host jobs without blocking the event loop."""
-        return await self._run_in_executor(
+        return await run_local(
             self._get_cached_jobs_for_host, host_name, job_ids, limit
         )
 
@@ -266,28 +256,7 @@ class JobDataManager:
         self, job_id: str, hostname: str, script_content: str
     ) -> None:
         """Persist a job script without blocking the event loop."""
-        await self._run_in_executor(
-            self.cache.update_job_script, job_id, hostname, script_content
-        )
-
-    async def _update_job_outputs_in_executor(
-        self,
-        job_id: str,
-        hostname: str,
-        *,
-        stdout_content: Optional[str] = None,
-        stderr_content: Optional[str] = None,
-        mark_fetched_after_completion: bool = False,
-    ) -> None:
-        """Persist fetched output content without blocking the event loop."""
-        await self._run_in_executor(
-            self.cache.update_job_outputs,
-            job_id,
-            hostname,
-            stdout_content=stdout_content,
-            stderr_content=stderr_content,
-            mark_fetched_after_completion=mark_fetched_after_completion,
-        )
+        await run_local(self.cache.update_job_script, job_id, hostname, script_content)
 
     async def fetch_all_jobs(
         self,
@@ -340,7 +309,7 @@ class JobDataManager:
         try:
             from .web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 logger.warning("No Slurm manager available")
                 return []
@@ -390,15 +359,17 @@ class JobDataManager:
                         hostname, job_ids, limit
                     )
                 elif job_ids:
-                    cached_job_data = await self._run_in_executor(
-                        self.cache.get_cached_jobs_by_ids, job_ids
+                    cached_job_data = await run_local(
+                        self.cache.get_cached_jobs_by_ids,
+                        job_ids,
+                        include_outputs=False,
                     )
                     cached_jobs = [
                         cjd.job_info for cjd in cached_job_data.values() if cjd.job_info
                     ]
                 elif limit:
-                    cached_job_data = await self._run_in_executor(
-                        self.cache.get_cached_jobs, limit=limit
+                    cached_job_data = await run_local(
+                        self.cache.get_cached_jobs, limit=limit, include_outputs=False
                     )
                     cached_jobs = [
                         cjd.job_info for cjd in cached_job_data if cjd.job_info
@@ -445,21 +416,6 @@ class JobDataManager:
                 )
                 return filtered_jobs
 
-            # Busy hosts: wait briefly for in-flight fetch to complete, then use cache.
-            if busy_hosts:
-                section_start = time.perf_counter()
-                busy_results = await asyncio.gather(
-                    *[
-                        self._get_cached_jobs_for_busy_host(
-                            slurm_host.host.hostname, job_ids, limit
-                        )
-                        for slurm_host in busy_hosts
-                    ]
-                )
-                for jobs_for_host in busy_results:
-                    cached_jobs_from_busy_hosts.extend(jobs_for_host)
-                mark_timing("busy_host_cache", section_start)
-
             host_tasks: Dict[str, asyncio.Task] = {}
             try:
                 # Fetch from all available hosts concurrently with bounded response time,
@@ -488,6 +444,26 @@ class JobDataManager:
                         name=f"fetch_jobs_{host_name}",
                     )
 
+                    self._host_fetch_tasks[host_name] = host_tasks[host_name]
+                    host_tasks[host_name].add_done_callback(
+                        self._make_release_callback(host_name)
+                    )
+
+                # Busy hosts: wait briefly for in-flight fetch to complete, then use cache.
+                if busy_hosts:
+                    section_start = time.perf_counter()
+                    busy_results = await asyncio.gather(
+                        *[
+                            self._get_cached_jobs_for_busy_host(
+                                slurm_host.host.hostname, job_ids, limit
+                            )
+                            for slurm_host in busy_hosts
+                        ]
+                    )
+                    for jobs_for_host in busy_results:
+                        cached_jobs_from_busy_hosts.extend(jobs_for_host)
+                    mark_timing("busy_host_cache", section_start)
+
                 task_to_host = {task: host for host, task in host_tasks.items()}
                 all_tasks = set(host_tasks.values())
 
@@ -513,6 +489,8 @@ class JobDataManager:
                     host_name = task_to_host[done_task]
                     try:
                         result = done_task.result()
+                    except WorkQueueFull:
+                        raise
                     except Exception as exc:
                         logger.error(
                             f"Error fetching from {host_name}: {exc}. Falling back to cache."
@@ -539,26 +517,14 @@ class JobDataManager:
                             host_name, job_ids, limit
                         )
                     )
-                if timed_out_hosts:
-                    await self._release_hosts(timed_out_hosts)
                 mark_timing("pending_cache_fallback", section_start)
 
-                completed_hosts = {task_to_host[task] for task in done_tasks}
-                if completed_hosts:
-                    await self._release_hosts(completed_hosts)
-
             finally:
-                # Safety cleanup: release any tasks that are done and attach callbacks
-                # for those still running.
-                releasable_hosts = {
-                    host_name for host_name, task in host_tasks.items() if task.done()
-                }
-                if releasable_hosts:
-                    await self._release_hosts(releasable_hosts)
-
-                for host_name, task in host_tasks.items():
-                    if not task.done():
-                        task.add_done_callback(self._make_release_callback(host_name))
+                # Tasks retain their host reservation even if this HTTP caller
+                # times out or disconnects. Only unstarted hosts can be released.
+                await self._release_hosts(
+                    {host.host.hostname for host in available_hosts} - set(host_tasks)
+                )
 
             # Apply final filtering (limit already applied per-host)
             section_start = time.perf_counter()
@@ -586,6 +552,8 @@ class JobDataManager:
             )
             return filtered_jobs
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error in fetch_all_jobs: {e}")
             return []
@@ -694,15 +662,14 @@ class JobDataManager:
                         logger.debug(
                             f"In-flight fetch task for {host_name} ended with error: {exc}"
                         )
+            except WorkQueueFull:
+                raise
             except Exception:
                 # Ignore callback inspection failures.
                 pass
 
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._release_hosts({host_name}))
-            except RuntimeError:
-                # Loop may already be closing; fallback best effort.
+            if self._host_fetch_tasks.get(host_name) is task:
+                self._host_fetch_tasks.pop(host_name, None)
                 self._fetching_hosts.discard(host_name)
 
         return _on_done
@@ -715,11 +682,13 @@ class JobDataManager:
     ) -> List[JobInfo]:
         """Return cached jobs for a host."""
         if job_ids:
-            cached_job_data = self.cache.get_cached_jobs_by_ids(job_ids, host_name)
+            cached_job_data = self.cache.get_cached_jobs_by_ids(
+                job_ids, host_name, include_outputs=False
+            )
             return [cjd.job_info for cjd in cached_job_data.values() if cjd.job_info]
 
         cached_job_data = self.cache.get_cached_jobs(
-            hostname=host_name, limit=limit or 1000
+            hostname=host_name, limit=limit or 1000, include_outputs=False
         )
         return [cjd.job_info for cjd in cached_job_data if cjd.job_info]
 
@@ -863,6 +832,8 @@ class JobDataManager:
                         manager.slurm_client.get_username, conn, None, hostname
                     )
                     logger.debug(f"Auto-detected user on {hostname}: {effective_user}")
+                except WorkQueueFull:
+                    raise
                 except Exception as e:
                     logger.error(
                         f"CRITICAL: Could not detect current user on {hostname}: {e}"
@@ -902,6 +873,8 @@ class JobDataManager:
                             manager.slurm_client.get_username, conn, None, hostname
                         )
                         logger.info(f"Using detected user: {effective_user}")
+                    except WorkQueueFull:
+                        raise
                     except Exception as e:
                         logger.error(
                             f"Could not detect current user on {hostname}: {e}"
@@ -949,7 +922,7 @@ class JobDataManager:
                 # Use cache even on force_refresh for completed jobs (they don't change)
                 # Only skip cache if we're looking for specific job_ids
                 if not job_ids:
-                    cached_completed_ids = await self._run_in_executor(
+                    cached_completed_ids = await run_local(
                         self.cache.get_cached_completed_job_ids,
                         hostname,
                         effective_since,
@@ -978,7 +951,7 @@ class JobDataManager:
 
                 # CACHE COMPLETED JOBS AND FETCH OUTPUTS
                 section_start = time.perf_counter()
-                cached_completed_map = await self._run_in_executor(
+                cached_completed_map = await run_local(
                     self.cache.get_cached_jobs_by_ids,
                     [job.job_id for job in completed_jobs],
                     hostname,
@@ -997,7 +970,9 @@ class JobDataManager:
                         if job.stdout_file or job.stderr_file:
                             try:
                                 # Fetch outputs asynchronously without blocking the main fetch
-                                create_task(self._fetch_outputs_from_cached_paths(job))
+                                self._queue_output_harvest(job)
+                            except WorkQueueFull:
+                                raise
                             except Exception:
                                 pass
                 # Cache job info (preserving existing data) off the event loop.
@@ -1021,7 +996,7 @@ class JobDataManager:
                     f"Looking for {len(missing_job_ids)} missing job_ids in cache: {missing_job_ids}"
                 )
 
-                cached_missing_map = await self._run_in_executor(
+                cached_missing_map = await run_local(
                     self.cache.get_cached_jobs_by_ids,
                     list(missing_job_ids),
                     hostname,
@@ -1040,7 +1015,7 @@ class JobDataManager:
             # Regular case: merge with cached completed jobs for bulk queries
             elif not active_only and not job_ids:
                 section_start = time.perf_counter()
-                cached_jobs = await self._run_in_executor(
+                cached_jobs = await run_local(
                     self.cache.get_cached_completed_jobs,
                     hostname,
                     since_dt,
@@ -1068,13 +1043,11 @@ class JobDataManager:
             # jobs so the UI can surface them before Slurm propagation catches up.
             if not completed_only:
                 section_start = time.perf_counter()
-                recent_cached_active_jobs = (
-                    await self._run_in_executor(
-                        self._get_recent_cached_active_jobs_for_host,
-                        hostname,
-                        effective_user,
-                        limit,
-                    )
+                recent_cached_active_jobs = await run_local(
+                    self._get_recent_cached_active_jobs_for_host,
+                    hostname,
+                    effective_user,
+                    limit,
                 )
                 jobs = self._merge_with_cached_jobs(jobs, recent_cached_active_jobs)
                 mark_host_timing("merge_recent_cached_active", section_start)
@@ -1105,6 +1078,8 @@ class JobDataManager:
             )
             return jobs
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             if profile_enabled:
                 host_profile_timings["total"] = (
@@ -1126,6 +1101,8 @@ class JobDataManager:
             # Get current username
             current_user = manager.slurm_client.get_username(conn)
             return job.user == current_user
+        except WorkQueueFull:
+            raise
         except Exception:
             return False
 
@@ -1152,7 +1129,7 @@ class JobDataManager:
             # Get manager and connection
             from .web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 logger.warning(
                     f"No manager available for comprehensive capture of job {job_id}"
@@ -1201,6 +1178,8 @@ class JobDataManager:
                         local_source_dir=local_source_dir,
                     )
 
+            except WorkQueueFull:
+                raise
             except Exception as e:
                 import traceback
 
@@ -1232,6 +1211,8 @@ class JobDataManager:
                     )
                     # These paths are now safely stored in the cached job info
 
+            except WorkQueueFull:
+                raise
             except Exception:
                 pass
 
@@ -1239,6 +1220,8 @@ class JobDataManager:
                 f"Comprehensive submission data captured for job {job_id} on {hostname}"
             )
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Failed to capture submission data for job {job_id}: {e}")
             # At minimum, try to save the script
@@ -1246,6 +1229,8 @@ class JobDataManager:
                 await self._update_job_script_in_executor(
                     job_id, hostname, script_content
                 )
+            except WorkQueueFull:
+                raise
             except Exception as script_error:
                 logger.error(
                     f"Even script caching failed for job {job_id}: {script_error}"
@@ -1285,13 +1270,30 @@ class JobDataManager:
                         logger.info(
                             f"Job {job_info.job_id} completed, fetching outputs"
                         )
-                        create_task(self._fetch_outputs_from_cached_paths(job_info))
+                        self._queue_output_harvest(job_info)
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Failed to update job status for {job_info.job_id}: {e}")
 
+    def _queue_output_harvest(self, job_info):
+        return queue_task_once(
+            registry=self._output_harvest_tasks,
+            key=(job_info.hostname, job_info.job_id),
+            coro_factory=lambda: self._fetch_outputs_from_cached_paths(
+                job_info, include_content=False
+            ),
+            name=f"output-harvest:{job_info.hostname}:{job_info.job_id}",
+            limit=32,
+        )
+
     async def _fetch_outputs_from_cached_paths(
-        self, job_info: JobInfo, force_fetch: bool = False
+        self,
+        job_info: JobInfo,
+        force_fetch: bool = False,
+        *,
+        include_content: bool = True,
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Fetch output files from remote filesystem.
@@ -1305,305 +1307,149 @@ class JobDataManager:
             job_info: Job information including output file paths
             force_fetch: If True, always fetch from SSH regardless of cache state
         """
-        # Deduplicate expensive concurrent SSH fetches for the same job.
-        # Force refreshes also share a single in-flight fetch so bursts of
-        # identical refreshes do not fan out into repeated SSH work.
-        is_completed_state = job_info.state in [
+        dedup_key = f"{job_info.hostname}:{job_info.job_id}"
+        existing = self._output_fetch_futures.get(dedup_key)
+        if (
+            existing is not None
+            and force_fetch
+            and dedup_key not in self._output_fetch_forced
+        ):
+            # Upgrade after the ordinary refresh finishes; never overlap two
+            # transfers for one job just because a viewer requested a refresh.
+            await asyncio.shield(existing)
+            return await self._fetch_outputs_from_cached_paths(
+                job_info,
+                force_fetch=True,
+                include_content=include_content,
+            )
+        if existing is None:
+            if len(self._output_fetch_futures) >= 32:
+                raise WorkQueueFull("Output refresh queue is full")
+            existing = asyncio.create_task(
+                self._do_fetch_outputs(job_info, force_fetch=force_fetch)
+            )
+            self._output_fetch_futures[dedup_key] = existing
+            if force_fetch:
+                self._output_fetch_forced.add(dedup_key)
+
+            def finished(task):
+                if self._output_fetch_futures.get(dedup_key) is task:
+                    self._output_fetch_futures.pop(dedup_key, None)
+                    self._output_fetch_forced.discard(dedup_key)
+                if not task.cancelled():
+                    task.exception()  # Retrieve errors even if all callers disconnected.
+
+            existing.add_done_callback(finished)
+        # A disconnected viewer must not cancel another viewer's shared fetch.
+        try:
+            await asyncio.shield(existing)
+        except WorkQueueFull:
+            raise
+        except Exception:
+            if force_fetch:
+                raise
+            logger.debug(
+                "Using cached output after failed refresh for %s",
+                dedup_key,
+                exc_info=True,
+            )
+        if not include_content:
+            return None, None
+        return (
+            await self._get_cached_output_content_in_executor(
+                job_info.job_id, job_info.hostname, "stdout"
+            ),
+            await self._get_cached_output_content_in_executor(
+                job_info.job_id, job_info.hostname, "stderr"
+            ),
+        )
+
+    async def _do_fetch_outputs(self, job_info: JobInfo, force_fetch: bool = False):
+        """Refresh complete logs through disk, retaining no whole-file strings.
+
+        SCP uses the same connection and per-host command slots as normal SSH.
+        The worker owns its temporary file through cancellation and cleanup.
+        """
+        from .web.app import get_slurm_manager
+
+        manager = await run_local(get_slurm_manager)
+        if not manager:
+            return
+        is_completed = job_info.state in (
             JobState.COMPLETED,
             JobState.FAILED,
             JobState.CANCELLED,
             JobState.TIMEOUT,
+        )
+        fetched = await run_local(
+            self.cache.check_outputs_fetched_after_completion,
+            job_info.job_id,
+            job_info.hostname,
+        )
+        wanted = [
+            stream
+            for stream, already_fetched in zip(("stdout", "stderr"), fetched)
+            if (force_fetch or not is_completed or not already_fetched)
+            and getattr(job_info, f"{stream}_file")
         ]
-        if force_fetch or is_completed_state:
-            dedup_mode = "force" if force_fetch else "cached"
-            dedup_key = f"{job_info.hostname}:{job_info.job_id}:{dedup_mode}"
-            existing: "asyncio.Future[tuple[Optional[str], Optional[str]]] | None" = (
-                self._output_fetch_futures.get(dedup_key)
+        if not wanted:
+            return
+        host = manager.get_host_by_name(job_info.hostname)
+        conn = await self._run_in_executor(manager._get_connection, host.host)
+        if any(
+            self._is_suspicious_output_path(getattr(job_info, f"{stream}_file"))
+            for stream in wanted
+        ):
+            stdout, stderr = await self._run_in_executor(
+                manager.slurm_client.get_job_output_files,
+                conn,
+                job_info.job_id,
+                job_info.hostname,
             )
-            if existing is not None:
-                logger.debug(
-                    f"[output-dedup] Waiting for in-flight fetch for job {job_info.job_id}"
-                )
-                return await existing
+            job_info.stdout_file = stdout or job_info.stdout_file
+            job_info.stderr_file = stderr or job_info.stderr_file
+            await self._cache_job_in_executor(job_info)
 
-            future: "asyncio.Future[tuple[Optional[str], Optional[str]]]" = (
-                asyncio.get_running_loop().create_future()
-            )
-            self._output_fetch_futures[dedup_key] = future
-            try:
-                result = await self._do_fetch_outputs(
-                    job_info, force_fetch=force_fetch
-                )
-                future.set_result(result)
-                return result
-            except Exception as exc:
-                future.set_exception(exc)
-                raise
-            finally:
-                self._output_fetch_futures.pop(dedup_key, None)
+        by_path = {}
+        for stream in wanted:
+            path = getattr(job_info, f"{stream}_file")
+            if path and not self._is_suspicious_output_path(path):
+                by_path.setdefault(path, []).append(stream)
 
-        return await self._do_fetch_outputs(job_info, force_fetch=force_fetch)
-
-    async def _do_fetch_outputs(
-        self, job_info: JobInfo, force_fetch: bool = False
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Internal implementation of output fetching (no dedup logic)."""
-        try:
-            from .web.app import get_slurm_manager
-
-            manager = get_slurm_manager()
-            if not manager:
-                return None, None
-
-            # Check if job is completed
-            is_completed = job_info.state in [
-                JobState.COMPLETED,
-                JobState.FAILED,
-                JobState.CANCELLED,
-                JobState.TIMEOUT,
-            ]
-
-            # Check if we've already fetched outputs after completion
-            stdout_fetched_after, stderr_fetched_after = (
-                await self._run_in_executor(
-                    self.cache.check_outputs_fetched_after_completion,
-                    job_info.job_id,
-                    job_info.hostname,
-                )
-            )
-
-            # Determine what to fetch
-            should_fetch_stdout = (
-                force_fetch
-                or not is_completed  # Always fetch for running jobs
-                or (
-                    is_completed and not stdout_fetched_after
-                )  # Fetch if not fetched after completion
-            ) and job_info.stdout_file
-
-            should_fetch_stderr = (
-                force_fetch
-                or not is_completed  # Always fetch for running jobs
-                or (
-                    is_completed and not stderr_fetched_after
-                )  # Fetch if not fetched after completion
-            ) and job_info.stderr_file
-
-            # If nothing to fetch, return existing cached content
-            if not should_fetch_stdout and not should_fetch_stderr:
-                cached_job = await self._get_cached_job_in_executor(
-                    job_info.job_id, job_info.hostname
-                )
-                if cached_job:
-                    logger.debug(
-                        f"Job {job_info.job_id} outputs already fetched after completion, using cache"
-                    )
-                    stdout = self._decompress_output(
-                        cached_job.stdout_compressed, cached_job.stdout_compression
-                    )
-                    stderr = self._decompress_output(
-                        cached_job.stderr_compressed, cached_job.stderr_compression
-                    )
-                    return stdout, stderr
-                return None, None
-
-            try:
-                slurm_host = manager.get_host_by_name(job_info.hostname)
-                conn = await self._run_in_executor(
-                    manager._get_connection, slurm_host.host
-                )
-            except Exception as e:
-                error_msg = f"Failed to connect to {job_info.hostname}: {e}"
-                logger.error(error_msg)
-                if force_fetch:
-                    raise RuntimeError(error_msg)
-                # Return cached content if available
-                cached_job = await self._get_cached_job_in_executor(
-                    job_info.job_id, job_info.hostname
-                )
-                if cached_job:
-                    logger.info(
-                        f"Using cached content for job {job_info.job_id} after connection error"
-                    )
-                    stdout = self._decompress_output(
-                        cached_job.stdout_compressed, cached_job.stdout_compression
-                    )
-                    stderr = self._decompress_output(
-                        cached_job.stderr_compressed, cached_job.stderr_compression
-                    )
-                    return stdout, stderr
-                return None, None
-
-            # Self-heal stale/incorrect cached output paths by asking scontrol directly.
-            needs_stdout_path_refresh = should_fetch_stdout and (
-                not job_info.stdout_file
-                or self._is_suspicious_output_path(job_info.stdout_file)
-            )
-            needs_stderr_path_refresh = should_fetch_stderr and (
-                not job_info.stderr_file
-                or self._is_suspicious_output_path(job_info.stderr_file)
-            )
-            if needs_stdout_path_refresh or needs_stderr_path_refresh:
-                try:
-                    refreshed_stdout, refreshed_stderr = await self._run_in_executor(
-                        manager.slurm_client.get_job_output_files,
-                        conn,
+        def transfer(remote_path, streams):
+            with tempfile.TemporaryDirectory(prefix="ssync-harvest-") as directory:
+                local_path = Path(directory) / "output"
+                conn.get(remote_path, local=str(local_path))
+                for stream in streams:
+                    self.cache.update_job_output_file(
                         job_info.job_id,
                         job_info.hostname,
-                    )
-                    if refreshed_stdout:
-                        job_info.stdout_file = refreshed_stdout
-                    if refreshed_stderr:
-                        job_info.stderr_file = refreshed_stderr
-                    # Persist corrected paths for future calls.
-                    await self._cache_job_in_executor(job_info, script_content=None)
-                except Exception as e:
-                    logger.debug(
-                        f"Could not refresh output paths for job {job_info.job_id}: {e}"
+                        stream,
+                        local_path,
+                        mark_fetched_after_completion=is_completed,
                     )
 
-            stdout_content = None
-            stderr_content = None
-            # Never treat a submission script path as output content.
-            if should_fetch_stdout and job_info.stdout_file and self._is_suspicious_output_path(
-                job_info.stdout_file
-            ):
+        async def fetch(remote_path, streams):
+            try:
+                await run_transfer(transfer, remote_path, streams)
+            except WorkQueueFull:
+                raise
+            except Exception as exc:
                 logger.warning(
-                    f"Job {job_info.job_id} has suspicious stdout path: {job_info.stdout_file}. "
-                    "Skipping stdout fetch to avoid returning script content."
-                )
-                should_fetch_stdout = False
-
-            if should_fetch_stderr and job_info.stderr_file and self._is_suspicious_output_path(
-                job_info.stderr_file
-            ):
-                logger.warning(
-                    f"Job {job_info.job_id} has suspicious stderr path: {job_info.stderr_file}. "
-                    "Skipping stderr fetch to avoid returning script content."
-                )
-                should_fetch_stderr = False
-
-            async def fetch_remote_output(
-                output_type: str, file_path: Optional[str]
-            ) -> Optional[str]:
-                if not file_path:
-                    return None
-
-                try:
-                    exists, content = await self._read_remote_output_file(conn, file_path)
-                    if exists:
-                        logger.debug(
-                            f"Fetched {output_type} for job {job_info.job_id} from SSH"
-                        )
-                        return content
-
-                    logger.debug(
-                        f"{output_type.capitalize()} file not found for job {job_info.job_id}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Error fetching {output_type} for job {job_info.job_id} from {job_info.hostname}: {e}"
-                    )
-                    if force_fetch:
-                        raise RuntimeError(
-                            f"Failed to fetch {output_type} from SSH: {e}"
-                        )
-                    logger.info(
-                        f"Using cached {output_type} for job {job_info.job_id} after fetch error"
-                    )
-
-                return await self._get_cached_output_content_in_executor(
-                    job_info.job_id, job_info.hostname, output_type
-                )
-
-            if should_fetch_stdout or should_fetch_stderr:
-                shared_output_path = (
-                    should_fetch_stdout
-                    and should_fetch_stderr
-                    and job_info.stdout_file
-                    and job_info.stdout_file == job_info.stderr_file
-                )
-                if shared_output_path:
-                    shared_content = await fetch_remote_output(
-                        "stdout", job_info.stdout_file
-                    )
-                    stdout_content = shared_content
-                    stderr_content = shared_content
-                else:
-                    tasks = []
-                    task_names = []
-                    if should_fetch_stdout:
-                        tasks.append(
-                            asyncio.create_task(
-                                fetch_remote_output("stdout", job_info.stdout_file)
-                            )
-                        )
-                        task_names.append("stdout")
-                    else:
-                        stdout_content = await self._get_cached_output_content_in_executor(
-                            job_info.job_id, job_info.hostname, "stdout"
-                        )
-
-                    if should_fetch_stderr:
-                        tasks.append(
-                            asyncio.create_task(
-                                fetch_remote_output("stderr", job_info.stderr_file)
-                            )
-                        )
-                        task_names.append("stderr")
-                    else:
-                        stderr_content = await self._get_cached_output_content_in_executor(
-                            job_info.job_id, job_info.hostname, "stderr"
-                        )
-
-                    if tasks:
-                        results = await asyncio.gather(*tasks)
-                        for name, content in zip(task_names, results, strict=False):
-                            if name == "stdout":
-                                stdout_content = content
-                            else:
-                                stderr_content = content
-            else:
-                stdout_content = await self._get_cached_output_content_in_executor(
-                    job_info.job_id, job_info.hostname, "stdout"
-                )
-                stderr_content = await self._get_cached_output_content_in_executor(
-                    job_info.job_id, job_info.hostname, "stderr"
-                )
-
-            # Update cache with fetched outputs
-            if should_fetch_stdout or should_fetch_stderr:
-                await self._update_job_outputs_in_executor(
+                    "Output refresh failed for %s on %s: %s",
                     job_info.job_id,
                     job_info.hostname,
-                    stdout_content=stdout_content if should_fetch_stdout else None,
-                    stderr_content=stderr_content if should_fetch_stderr else None,
-                    mark_fetched_after_completion=is_completed,  # Mark as fetched after completion if job is completed
+                    exc,
                 )
-                logger.info(
-                    f"Updated outputs for job {job_info.job_id} (completed={is_completed})"
-                )
+                if force_fetch:
+                    raise
 
-            return stdout_content, stderr_content
-
-        except Exception as e:
-            logger.error(f"Error fetching outputs for job {job_info.job_id}: {e}")
-            # Return cached content on error
-            cached_job = await self._get_cached_job_in_executor(
-                job_info.job_id, job_info.hostname
-            )
-            if cached_job:
-                stdout = self._decompress_output(
-                    cached_job.stdout_compressed, cached_job.stdout_compression
-                )
-                stderr = self._decompress_output(
-                    cached_job.stderr_compressed, cached_job.stderr_compression
-                )
-                return stdout, stderr
-            return None, None
+        await asyncio.gather(
+            *(fetch(path, streams) for path, streams in by_path.items())
+        )
 
     async def get_job_data(
-        self, job_id: str, hostname: str
+        self, job_id: str, hostname: str, *, include_outputs: bool = True
     ) -> Optional[CompleteJobData]:
         """
         Unified interface for retrieving all job data.
@@ -1617,15 +1463,30 @@ class JobDataManager:
             Complete job data if found, None otherwise
         """
         try:
-            cached_job = await self._get_cached_job_in_executor(job_id, hostname)
+            cached_job = await run_local(
+                self.cache.get_cached_job,
+                job_id,
+                hostname,
+                include_outputs=include_outputs,
+            )
             if not cached_job:
                 return None
 
-            stdout_content = self._decompress_output(
-                cached_job.stdout_compressed, cached_job.stdout_compression
+            if not include_outputs:
+                return CompleteJobData(
+                    job_info=cached_job.job_info,
+                    script_content=cached_job.script_content,
+                )
+
+            stdout_content = await run_output(
+                self._decompress_output,
+                cached_job.stdout_compressed,
+                cached_job.stdout_compression,
             )
-            stderr_content = self._decompress_output(
-                cached_job.stderr_compressed, cached_job.stderr_compression
+            stderr_content = await run_output(
+                self._decompress_output,
+                cached_job.stderr_compressed,
+                cached_job.stderr_compression,
             )
 
             # If job is completed but we don't have outputs cached, fetch them from filesystem
@@ -1648,6 +1509,8 @@ class JobDataManager:
                 stderr_metadata=None,
             )
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error retrieving job data for {job_id}: {e}")
             return None
@@ -1667,14 +1530,16 @@ class JobDataManager:
         """
         try:
             # Check cache first
-            cached_job = await self._get_cached_job_in_executor(job_id, hostname)
+            cached_job = await run_local(
+                self.cache.get_cached_job, job_id, hostname, include_outputs=False
+            )
             if cached_job and cached_job.script_content:
                 return cached_job.script_content
 
             # Try to get from Slurm as fallback
             from .web.app import get_slurm_manager
 
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             if not manager:
                 return None
 
@@ -1704,11 +1569,15 @@ class JobDataManager:
                         )
                         return script_content
 
+                except WorkQueueFull:
+                    raise
                 except Exception:
                     continue
 
             return None
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.error(f"Error retrieving script for job {job_id}: {e}")
             return None
@@ -1786,9 +1655,7 @@ class JobDataManager:
             return requested_since
 
         # No explicit since requested - use incremental fetching from last fetch time
-        fetch_state = await self._run_in_executor(
-            self.cache.get_host_fetch_state, hostname
-        )
+        fetch_state = await run_local(self.cache.get_host_fetch_state, hostname)
         if fetch_state:
             last_fetch_utc_str = fetch_state["last_fetch_time_utc"]
             if "+" in last_fetch_utc_str or "Z" in last_fetch_utc_str:
@@ -1822,7 +1689,7 @@ class JobDataManager:
 
             utc_time = datetime.now(timezone.utc)
 
-            await self._run_in_executor(
+            await run_local(
                 self.cache.update_host_fetch_state,
                 hostname=hostname,
                 fetch_time=cluster_time,
@@ -1830,6 +1697,8 @@ class JobDataManager:
                 cluster_timezone=None,
             )
 
+        except WorkQueueFull:
+            raise
         except Exception as e:
             logger.warning(f"Failed to update fetch state for {hostname}: {e}")
 
@@ -1896,7 +1765,7 @@ class JobDataManager:
 
     async def cleanup_old_data(self, max_age_days: Optional[int] = None) -> int:
         """Clean up old job data according to retention policies."""
-        return await self._run_in_executor(self.cache.cleanup_old_entries, max_age_days)
+        return await run_local(self.cache.cleanup_old_entries, max_age_days)
 
 
 # Global instance

@@ -3,11 +3,10 @@
 import asyncio
 import base64
 import gzip
-import io
 import json
 import shlex
 import time
-from collections.abc import Callable
+import zlib
 from datetime import datetime
 from typing import Any, Optional
 
@@ -16,8 +15,13 @@ from fastapi.responses import StreamingResponse
 
 from ...cache import get_cache
 from ...models.job import JobState
-from ...utils.async_helpers import create_task
+from ...utils.async_helpers import queue_task_once as _queue_deduped_task
+from ...utils.executors import WorkQueueFull, run_local, run_output, run_remote
 from ...utils.logging import setup_logger
+from ...utils.output_buffer import (
+    compute_bounded_output_window,
+    decode_output,
+)
 from ..models import (
     CompleteJobDataResponse,
     FileMetadata,
@@ -49,11 +53,34 @@ def build_output_metadata(
         return None
     return FileMetadata(
         path=path,
-        size_bytes=size_bytes if size_bytes is not None else len(content) if content else 0,
+        size_bytes=size_bytes
+        if size_bytes is not None
+        else len(content)
+        if content
+        else 0,
         last_modified=None,
         exists=bool(content) if exists is None else exists,
         access_path=f"/api/jobs/{job_id}/output/download?host={host}&output_type={output_type}",
     )
+
+
+def read_cached_output_window(
+    cache,
+    job_id,
+    host,
+    output_type,
+    *,
+    lines=None,
+    max_bytes=DEFAULT_OUTPUT_MAX_BYTES,
+    metadata_only=False,
+):
+    if metadata_only:
+        return None, False
+    with cache.open_job_output(job_id, host, output_type) as opened:
+        if opened is None:
+            return None, False
+        raw, compression, _ = opened
+        return decode_output(raw, compression, lines=lines, max_bytes=max_bytes)
 
 
 def decode_cached_output(
@@ -66,6 +93,8 @@ def decode_cached_output(
         if compression == "gzip":
             return gzip.decompress(compressed_data).decode("utf-8")
         return compressed_data.decode("utf-8")
+    except WorkQueueFull:
+        raise
     except Exception as exc:
         logger.error(f"Failed to decompress cached {output_type}: {exc}")
         return None
@@ -103,33 +132,6 @@ def limit_output_lines(content: Optional[str], lines: Optional[int]) -> Optional
     if len(chunks) <= lines:
         return content
     return "".join(chunks[-lines:])
-
-
-def build_output_omission_marker(omitted_bytes: int) -> str:
-    return (
-        "\n\n"
-        f"[... {max(0, omitted_bytes):,} bytes omitted; showing beginning and latest output ...]"
-        "\n\n"
-    )
-
-
-def compute_bounded_output_window(
-    *,
-    total_bytes: int,
-    max_bytes: int,
-    min_head_bytes: int = 1,
-    max_head_bytes: Optional[int] = None,
-) -> tuple[int, int, str]:
-    marker = build_output_omission_marker(total_bytes - max_bytes)
-
-    for _ in range(2):
-        available = max(1, max_bytes - len(marker.encode("utf-8")))
-        head_cap = max_head_bytes if max_head_bytes is not None else available
-        head_bytes = max(min_head_bytes, min(head_cap, available // 4))
-        tail_bytes = max(1, available - head_bytes)
-        marker = build_output_omission_marker(total_bytes - head_bytes - tail_bytes)
-
-    return head_bytes, tail_bytes, marker
 
 
 def limit_output_bytes(
@@ -199,8 +201,7 @@ def decode_cached_output_for_response(
     if metadata_only or compressed_data is None:
         return None, False
 
-    content = decode_cached_output(compressed_data, compression, output_type)
-    return limit_output_content(content, lines=lines, max_bytes=max_bytes)
+    return decode_output(compressed_data, compression, lines=lines, max_bytes=max_bytes)
 
 
 def build_job_output_response(
@@ -265,33 +266,6 @@ def mark_job_response_cached(job: JobInfoWeb, *, refresh_queued: bool) -> JobInf
     )
 
 
-def _queue_deduped_task(
-    *,
-    registry: dict[tuple[str, str], asyncio.Task],
-    key: tuple[str, str],
-    coro_factory: Callable[[], Any],
-    name: str,
-) -> bool:
-    existing = registry.get(key)
-    if existing and not existing.done():
-        return True
-
-    coro = coro_factory()
-    task = create_task(coro, name=name)
-    if task is None:
-        return False
-
-    registry[key] = task
-
-    def _cleanup(done_task: asyncio.Task) -> None:
-        current = registry.get(key)
-        if current is done_task:
-            registry.pop(key, None)
-
-    task.add_done_callback(_cleanup)
-    return True
-
-
 def iter_chunk_payloads(
     data: str, chunk_size: int, *, compressed: bool, start_index: int = 0
 ):
@@ -319,18 +293,68 @@ async def fetch_and_cache_compressed_output(
     job_id: str,
     host: str,
     output_type: str,
+    job_info=None,
 ):
-    result = await asyncio.to_thread(
-        lambda: manager.fetch_job_output_compressed(job_id, host, output_type)
-    )
-    if result:
-        cache.update_job_outputs_compressed(
-            job_id,
-            host,
-            stdout_data=result if output_type == "stdout" else None,
-            stderr_data=result if output_type == "stderr" else None,
+    """Fetch an uncached output through the shared incremental cache path.
+
+    The old implementation requested a base64 payload from Slurm, which held
+    the complete compressed log in both the remote response and Python.  The
+    job data manager transfers the path to a temporary file and incrementally
+    writes the SQLite blob instead, while deduplicating concurrent callers.
+    """
+    if job_info is None:
+        cached_job = await run_local(
+            cache.get_cached_job, job_id, host, include_outputs=False
         )
-    return result
+        job_info = cached_job.job_info if cached_job else None
+
+    if job_info is None and manager is not None:
+        try:
+            slurm_host = manager.get_host_by_name(host)
+            conn = await run_remote(manager._get_connection, slurm_host.host)
+            job_info = await run_remote(
+                manager.slurm_client.get_job_details,
+                conn,
+                job_id,
+                host,
+            )
+        except WorkQueueFull:
+            raise
+        except Exception as exc:
+            logger.debug("Failed to resolve uncached output job %s: %s", job_id, exc)
+            return None
+
+    if job_info is None:
+        return None
+
+    cached_job = await run_local(
+        cache.get_cached_job,
+        job_info.job_id,
+        job_info.hostname,
+        include_outputs=False,
+    )
+    if cached_job is None:
+        await run_local(cache.cache_job, job_info, script_content=None)
+
+    from ...job_data_manager import get_job_data_manager
+
+    job_data_manager = get_job_data_manager()
+    await job_data_manager._fetch_outputs_from_cached_paths(
+        job_info,
+        include_content=False,
+    )
+    cached_job = await run_local(
+        cache.get_cached_job,
+        job_info.job_id,
+        job_info.hostname,
+        include_outputs=False,
+    )
+    if cached_job and (
+        getattr(cached_job, f"{output_type}_size")
+        or getattr(cached_job, f"{output_type}_compression") == "gzip"
+    ):
+        return cached_job
+    return None
 
 
 def format_sse_event(payload: dict[str, Any]) -> str:
@@ -360,7 +384,7 @@ async def stat_remote_file_size(conn, file_path: Optional[str]) -> int:
     if not file_path:
         return 0
     quoted_path = shlex.quote(file_path)
-    result = await asyncio.to_thread(
+    result = await run_remote(
         conn.run,
         f"stat -c %s {quoted_path} 2>/dev/null || echo 0",
         hide=True,
@@ -381,7 +405,7 @@ async def read_remote_file_chunk_text(
     if not file_path or max_bytes <= 0:
         return None
     quoted_path = shlex.quote(file_path)
-    result = await asyncio.to_thread(
+    result = await run_remote(
         conn.run,
         (
             f"tail -c +{start_offset + 1} {quoted_path} 2>/dev/null | "
@@ -396,6 +420,8 @@ async def read_remote_file_chunk_text(
         return None
     try:
         return base64.b64decode(encoded).decode("utf-8", errors="replace")
+    except WorkQueueFull:
+        raise
     except Exception as exc:
         logger.warning(f"Failed to decode remote output chunk from {file_path}: {exc}")
         return None
@@ -411,16 +437,18 @@ async def build_stream_job_output_response(
     max_initial_bytes: int,
     get_slurm_manager,
 ) -> StreamingResponse:
-    manager = get_slurm_manager()
+    manager = await run_local(get_slurm_manager)
     slurm_host = manager.get_host_by_name(host)
-    conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
+    conn = await run_remote(manager._get_connection, slurm_host.host)
 
     max_initial_bytes = max(1024, min(max_initial_bytes, MAX_OUTPUT_MAX_BYTES))
     max_live_chunk_bytes = min(chunk_size, 256 * 1024)
 
     async def generate():
         cache = get_cache()
-        cached_job = cache.get_cached_job(job_id, host)
+        cached_job = await run_local(
+            cache.get_cached_job, job_id, host, include_outputs=False
+        )
 
         def cached_job_info_with_path():
             if cached_job and cached_job.job_info:
@@ -435,7 +463,7 @@ async def build_stream_job_output_response(
                 if cached_info:
                     return cached_info
             try:
-                job_info = await asyncio.to_thread(
+                job_info = await run_remote(
                     manager.slurm_client.get_job_details,
                     conn,
                     job_id,
@@ -443,6 +471,8 @@ async def build_stream_job_output_response(
                 )
                 if job_info:
                     return job_info
+            except WorkQueueFull:
+                raise
             except Exception as exc:
                 logger.debug(
                     f"Failed to refresh job info for output stream {job_id}: {exc}"
@@ -598,19 +628,17 @@ async def build_stream_job_output_response(
             return
 
         if cached_job:
-            compressed_data, compression, original_size = get_cached_output_payload(
-                cached_job,
-                output_type,
-            )
-            if compressed_data:
-                content = decode_cached_output(
-                    compressed_data,
-                    compression,
+            original_size = getattr(cached_job, f"{output_type}_size")
+            if (
+                original_size
+                or getattr(cached_job, f"{output_type}_compression") == "gzip"
+            ):
+                limited_content, truncated = await run_output(
+                    read_cached_output_window,
+                    cache,
+                    job_id,
+                    host,
                     output_type,
-                )
-                limited_content, truncated = limit_output_content(
-                    content,
-                    lines=None,
                     max_bytes=max_initial_bytes,
                 )
                 metadata.update(
@@ -639,14 +667,15 @@ async def build_stream_job_output_response(
                 return
 
         try:
-            result = await fetch_and_cache_compressed_output(
+            cached_job = await fetch_and_cache_compressed_output(
                 manager=manager,
                 cache=cache,
                 job_id=job_id,
                 host=host,
                 output_type=output_type,
+                job_info=job_info,
             )
-            if not result:
+            if not cached_job:
                 yield format_sse_event(
                     {
                         "type": "error",
@@ -655,24 +684,23 @@ async def build_stream_job_output_response(
                 )
                 return
 
-            metadata.update(
-                {
-                    "original_size": result.get("original_size", 0),
-                    "compression": "none",
-                    "source": "fresh",
-                }
-            )
-            content_bytes = base64.b64decode(result["data"])
-            if result.get("compressed"):
-                content_text = gzip.decompress(content_bytes).decode("utf-8")
-            else:
-                content_text = content_bytes.decode("utf-8", errors="replace")
-            limited_content, truncated = limit_output_content(
-                content_text,
-                lines=None,
+            original_size = getattr(cached_job, f"{output_type}_size")
+            limited_content, truncated = await run_output(
+                read_cached_output_window,
+                cache,
+                job_id,
+                host,
+                output_type,
                 max_bytes=max_initial_bytes,
             )
-            metadata["truncated"] = truncated
+            metadata.update(
+                {
+                    "original_size": original_size,
+                    "compression": "none",
+                    "source": "fresh",
+                    "truncated": truncated,
+                }
+            )
             yield format_sse_event(metadata)
 
             for chunk_payload in iter_chunk_payloads(
@@ -687,10 +715,12 @@ async def build_stream_job_output_response(
                 yield format_sse_event(
                     {
                         "type": "truncation_notice",
-                        "original_size": result.get("original_size", 0),
+                        "original_size": original_size,
                     }
                 )
             yield format_sse_event({"type": "complete"})
+        except WorkQueueFull:
+            raise
         except Exception as exc:
             logger.error(f"Error streaming output for job {job_id}: {exc}")
             yield format_sse_event({"type": "error", "message": str(exc)})
@@ -716,50 +746,66 @@ async def build_download_job_output_response(
     get_slurm_manager,
 ) -> StreamingResponse:
     cache = get_cache()
-    manager = get_slurm_manager()
-    cached_job = cache.get_cached_job(job_id, host)
+    manager = await run_local(get_slurm_manager)
+    cached_job = await run_local(
+        cache.get_cached_job, job_id, host, include_outputs=False
+    )
 
-    content = None
-    compression = "none"
     original_size = 0
-    if cached_job:
-        content, compression, original_size = get_cached_output_payload(
-            cached_job,
-            output_type,
-        )
+    cached_content = cached_job and (
+        getattr(cached_job, f"{output_type}_size")
+        or getattr(cached_job, f"{output_type}_compression") == "gzip"
+    )
+    if cached_content:
+        original_size = getattr(cached_job, f"{output_type}_size")
 
-    if content is None:
-        result = await fetch_and_cache_compressed_output(
+    if not cached_content:
+        cached_job = await fetch_and_cache_compressed_output(
             manager=manager,
             cache=cache,
             job_id=job_id,
             host=host,
             output_type=output_type,
         )
-        if result:
-            content = base64.b64decode(result["data"])
-            compression = result.get("compression", "none")
-            original_size = result.get("original_size", 0)
+        cached_content = cached_job and (
+            getattr(cached_job, f"{output_type}_size")
+            or getattr(cached_job, f"{output_type}_compression") == "gzip"
+        )
+        if cached_content:
+            original_size = getattr(cached_job, f"{output_type}_size")
 
-    if content is None:
+    if not cached_content:
         raise HTTPException(status_code=404, detail="Output not found")
 
-    content, media_type, filename_suffix = decode_download_content(
-        content,
-        compression,
-        compressed,
-    )
+    media_type = "application/gzip" if compressed else "text/plain"
+    filename_suffix = ".log.gz" if compressed else ".log"
     filename = f"job_{job_id}_{output_type}{filename_suffix}"
 
-    return StreamingResponse(
-        io.BytesIO(content),
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f"attachment; filename={filename}",
-            "Content-Length": str(len(content)),
-            "X-Original-Size": str(original_size),
-        },
-    )
+    def chunks():
+        with cache.open_job_output(job_id, host, output_type) as opened:
+            if opened is None:
+                return
+            raw, compression, _ = opened
+            if compression == "gzip" and not compressed:
+                with gzip.GzipFile(fileobj=raw) as decoded:
+                    while chunk := decoded.read(64 * 1024):
+                        yield chunk
+            elif compression != "gzip" and compressed:
+                compressor = zlib.compressobj(wbits=31)
+                while chunk := raw.read(64 * 1024):
+                    encoded = compressor.compress(chunk)
+                    if encoded:
+                        yield encoded
+                yield compressor.flush()
+            else:
+                while chunk := raw.read(64 * 1024):
+                    yield chunk
+
+    headers = {
+        "Content-Disposition": f"attachment; filename={filename}",
+        "X-Original-Size": str(original_size),
+    }
+    return StreamingResponse(chunks(), media_type=media_type, headers=headers)
 
 
 async def get_job_data_with_optional_host_search(
@@ -767,17 +813,22 @@ async def get_job_data_with_optional_host_search(
     job_id: str,
     host: Optional[str],
     get_slurm_manager,
+    include_outputs=True,
 ):
     from ...job_data_manager import get_job_data_manager
 
     job_data_manager = get_job_data_manager()
     if host:
-        return await job_data_manager.get_job_data(job_id, host), host
+        return await job_data_manager.get_job_data(
+            job_id, host, include_outputs=include_outputs
+        ), host
 
-    manager = get_slurm_manager()
+    manager = await run_local(get_slurm_manager)
     for slurm_host in manager.slurm_hosts:
         resolved_host = slurm_host.host.hostname
-        complete_data = await job_data_manager.get_job_data(job_id, resolved_host)
+        complete_data = await job_data_manager.get_job_data(
+            job_id, resolved_host, include_outputs=include_outputs
+        )
         if complete_data:
             return complete_data, resolved_host
 
@@ -789,7 +840,7 @@ async def fetch_outputs_for_job_info(job_info, *, force_fetch: bool = False):
 
     job_data_manager = get_job_data_manager()
     return await job_data_manager._fetch_outputs_from_cached_paths(
-        job_info, force_fetch=force_fetch
+        job_info, force_fetch=force_fetch, include_content=False
     )
 
 
@@ -824,23 +875,22 @@ async def refresh_job_output_in_background(
     refresh_reason: str,
 ) -> None:
     try:
-        stdout_content, stderr_content = await fetch_outputs_for_job_info(
+        await fetch_outputs_for_job_info(
             job_info,
             force_fetch=force_fetch,
         )
-        is_running = job_info.state == JobState.RUNNING
-        await asyncio.to_thread(
-            cache_middleware.cache.update_job_outputs,
-            job_id=job_info.job_id,
-            hostname=job_info.hostname,
-            stdout_content=stdout_content,
-            stderr_content=stderr_content,
-            mark_fetched_after_completion=not is_running,
-        )
+        # The data manager already persisted and compressed these outputs.
+        # Repeating that write doubled compression work on every refresh.
 
         if not job_manager:
             return
 
+        cached = await run_local(
+            cache_middleware.cache.get_cached_job,
+            job_info.job_id,
+            job_info.hostname,
+            include_outputs=False,
+        )
         output_response = build_job_output_response(
             job_id=job_info.job_id,
             host=job_info.hostname,
@@ -850,14 +900,10 @@ async def refresh_job_output_in_background(
             stdout_content=None,
             stderr_content=None,
             metadata_only=True,
-            stdout_size_bytes=len(stdout_content)
-            if stdout_content is not None
-            else None,
-            stderr_size_bytes=len(stderr_content)
-            if stderr_content is not None
-            else None,
-            stdout_exists=stdout_content is not None,
-            stderr_exists=stderr_content is not None,
+            stdout_size_bytes=cached.stdout_size if cached else None,
+            stderr_size_bytes=cached.stderr_size if cached else None,
+            stdout_exists=bool(cached and cached.stdout_size),
+            stderr_exists=bool(cached and cached.stderr_size),
         )
         await job_manager.broadcast_job_update(
             job_info.job_id,
@@ -869,6 +915,8 @@ async def refresh_job_output_in_background(
                 "source": "background_refresh",
             },
         )
+    except WorkQueueFull:
+        raise
     except Exception as exc:
         logger.debug(
             "Background output refresh failed for job %s on %s: %s",
@@ -990,10 +1038,16 @@ def get_file_metadata_and_content(
         content = None
         truncated = False
         if not metadata_only:
-            if lines:
-                cmd = f"tail -n {lines} {quoted_path}"
+            if lines is not None:
+                cmd = f"tail -n {max(0, lines)} {quoted_path}"
+                if max_bytes is not None:
+                    cmd += f" | tail -c {max_bytes}"
             elif max_bytes:
-                if max_bytes >= 8192 and metadata.size_bytes and metadata.size_bytes > max_bytes:
+                if (
+                    max_bytes >= 8192
+                    and metadata.size_bytes
+                    and metadata.size_bytes > max_bytes
+                ):
                     head_bytes, tail_bytes, marker = compute_bounded_output_window(
                         total_bytes=metadata.size_bytes,
                         max_bytes=max_bytes,
@@ -1015,6 +1069,8 @@ def get_file_metadata_and_content(
                 truncated = metadata.size_bytes > len(content.encode("utf-8"))
 
         return content, metadata, truncated
+    except WorkQueueFull:
+        raise
     except Exception as exc:
         logger.error(f"Error reading {file_type} file {file_path}: {exc}")
         return f"[Error reading {file_type} file: {str(exc)}]", None, False
@@ -1040,17 +1096,23 @@ async def get_job_output_response(
             max_bytes = max(1, min(max_bytes, MAX_OUTPUT_MAX_BYTES))
 
         cached_job = (
-            await asyncio.to_thread(cache_middleware.cache.get_cached_job, job_id, host)
+            await run_local(
+                cache_middleware.cache.get_cached_job,
+                job_id,
+                host,
+                include_outputs=False,
+            )
             if host
             else None
         )
         if not cached_job and not host:
-            manager = get_slurm_manager()
+            manager = await run_local(get_slurm_manager)
             for slurm_host in manager.slurm_hosts:
-                cached_job = await asyncio.to_thread(
+                cached_job = await run_local(
                     cache_middleware.cache.get_cached_job,
                     job_id,
                     slurm_host.host.hostname,
+                    include_outputs=False,
                 )
                 if cached_job:
                     host = slurm_host.host.hostname
@@ -1063,14 +1125,9 @@ async def get_job_output_response(
                 JobState.PENDING,
                 JobState.RUNNING,
             ]
-            stdout_payload, stdout_compression, stdout_size = get_cached_output_payload(
-                cached_job, "stdout"
-            )
-            stderr_payload, stderr_compression, stderr_size = get_cached_output_payload(
-                cached_job, "stderr"
-            )
-            stdout_exists = has_cached_output_payload(stdout_payload, stdout_size)
-            stderr_exists = has_cached_output_payload(stderr_payload, stderr_size)
+            stdout_size, stderr_size = cached_job.stdout_size, cached_job.stderr_size
+            stdout_exists = bool(stdout_size or cached_job.stdout_compression == "gzip")
+            stderr_exists = bool(stderr_size or cached_job.stderr_compression == "gzip")
 
             stdout_content = None
             stderr_content = None
@@ -1078,20 +1135,24 @@ async def get_job_output_response(
             stderr_truncated = False
 
             if should_include_output(output_type, "stdout"):
-                stdout_content, stdout_truncated = decode_cached_output_for_response(
-                    compressed_data=stdout_payload,
-                    compression=stdout_compression,
-                    output_type="stdout",
+                stdout_content, stdout_truncated = await run_output(
+                    read_cached_output_window,
+                    cache_middleware.cache,
+                    job_id,
+                    host,
+                    "stdout",
                     lines=lines,
                     max_bytes=max_bytes,
                     metadata_only=metadata_only,
                 )
 
             if should_include_output(output_type, "stderr"):
-                stderr_content, stderr_truncated = decode_cached_output_for_response(
-                    compressed_data=stderr_payload,
-                    compression=stderr_compression,
-                    output_type="stderr",
+                stderr_content, stderr_truncated = await run_output(
+                    read_cached_output_window,
+                    cache_middleware.cache,
+                    job_id,
+                    host,
+                    "stderr",
                     lines=lines,
                     max_bytes=max_bytes,
                     metadata_only=metadata_only,
@@ -1102,20 +1163,33 @@ async def get_job_output_response(
                 throttle_key = f"output:{host}:{job_id}"
                 min_interval = 10
                 now = time.time()
+                if len(_OUTPUT_THROTTLE_CACHE) >= 1024:
+                    expired = [
+                        key
+                        for key, stamp in _OUTPUT_THROTTLE_CACHE.items()
+                        if now - stamp >= min_interval
+                    ]
+                    for key in expired:
+                        _OUTPUT_THROTTLE_CACHE.pop(key, None)
                 last_fetch = _OUTPUT_THROTTLE_CACHE.get(throttle_key, 0)
-                needs_stdout = should_include_output(output_type, "stdout") and not stdout_exists
-                needs_stderr = should_include_output(output_type, "stderr") and not stderr_exists
+                needs_stdout = (
+                    should_include_output(output_type, "stdout") and not stdout_exists
+                )
+                needs_stderr = (
+                    should_include_output(output_type, "stderr") and not stderr_exists
+                )
                 should_refresh = (
                     force_refresh
                     or now - last_fetch >= min_interval
                     or needs_stdout
                     or needs_stderr
                 )
-                if should_refresh:
+                if should_refresh and (
+                    throttle_key in _OUTPUT_THROTTLE_CACHE
+                    or len(_OUTPUT_THROTTLE_CACHE) < 4096
+                ):
                     refresh_reason = (
-                        "force_refresh"
-                        if force_refresh
-                        else "running_output_refresh"
+                        "force_refresh" if force_refresh else "running_output_refresh"
                     )
                     refresh_queued = queue_job_output_refresh(
                         job_info=cached_job.job_info,
@@ -1132,12 +1206,10 @@ async def get_job_output_response(
                         f"({now - last_fetch:.1f}s since last fetch)"
                     )
             elif is_completed:
-                stdout_fetched_after, stderr_fetched_after = (
-                    await asyncio.to_thread(
-                        cache_middleware.cache.check_outputs_fetched_after_completion,
-                        job_id,
-                        host,
-                    )
+                stdout_fetched_after, stderr_fetched_after = await run_local(
+                    cache_middleware.cache.check_outputs_fetched_after_completion,
+                    job_id,
+                    host,
                 )
                 needs_stdout_refresh = (
                     should_include_output(output_type, "stdout")
@@ -1182,8 +1254,12 @@ async def get_job_output_response(
                     ),
                     stdout_content=None,
                     stderr_content=None,
-                    stdout_exists=False if should_include_output(output_type, "stdout") else None,
-                    stderr_exists=False if should_include_output(output_type, "stderr") else None,
+                    stdout_exists=False
+                    if should_include_output(output_type, "stdout")
+                    else None,
+                    stderr_exists=False
+                    if should_include_output(output_type, "stderr")
+                    else None,
                     content_limit_bytes=max_bytes,
                     cached=True,
                     stale=True,
@@ -1207,10 +1283,18 @@ async def get_job_output_response(
                 stdout_content=stdout_content,
                 stderr_content=stderr_content,
                 metadata_only=metadata_only,
-                stdout_size_bytes=stdout_size if should_include_output(output_type, "stdout") else None,
-                stderr_size_bytes=stderr_size if should_include_output(output_type, "stderr") else None,
-                stdout_exists=stdout_exists if should_include_output(output_type, "stdout") else None,
-                stderr_exists=stderr_exists if should_include_output(output_type, "stderr") else None,
+                stdout_size_bytes=stdout_size
+                if should_include_output(output_type, "stdout")
+                else None,
+                stderr_size_bytes=stderr_size
+                if should_include_output(output_type, "stderr")
+                else None,
+                stdout_exists=stdout_exists
+                if should_include_output(output_type, "stdout")
+                else None,
+                stderr_exists=stderr_exists
+                if should_include_output(output_type, "stderr")
+                else None,
                 content_truncated=stdout_truncated or stderr_truncated,
                 content_limit_bytes=max_bytes,
                 cached=True,
@@ -1218,7 +1302,7 @@ async def get_job_output_response(
                 refresh_queued=refresh_queued,
             )
 
-        manager = get_slurm_manager()
+        manager = await run_local(get_slurm_manager)
         slurm_hosts = [
             slurm_host
             for slurm_host in manager.slurm_hosts
@@ -1231,12 +1315,12 @@ async def get_job_output_response(
         target_host = None
         for slurm_host in slurm_hosts:
             try:
-                job_info = await asyncio.to_thread(
-                    manager.get_job_info, slurm_host, job_id
-                )
+                job_info = await run_remote(manager.get_job_info, slurm_host, job_id)
                 if job_info:
                     target_host = slurm_host
                     break
+            except WorkQueueFull:
+                raise
             except Exception as exc:
                 logger.debug(f"Error querying {slurm_host.host.hostname}: {exc}")
                 continue
@@ -1244,9 +1328,9 @@ async def get_job_output_response(
         if not job_info or not target_host:
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-        conn = await asyncio.to_thread(manager._get_connection, target_host.host)
+        conn = await run_remote(manager._get_connection, target_host.host)
         if not job_info.stdout_file or not job_info.stderr_file:
-            stdout_path, stderr_path = await asyncio.to_thread(
+            stdout_path, stderr_path = await run_remote(
                 manager.slurm_client.get_job_output_files,
                 conn,
                 job_id,
@@ -1265,7 +1349,7 @@ async def get_job_output_response(
         stderr_truncated = False
 
         if should_include_output(output_type, "stdout"):
-            stdout_content, stdout_metadata, stdout_truncated = await asyncio.to_thread(
+            stdout_content, stdout_metadata, stdout_truncated = await run_remote(
                 get_file_metadata_and_content,
                 conn=conn,
                 file_path=job_info.stdout_file,
@@ -1277,7 +1361,7 @@ async def get_job_output_response(
                 metadata_only=metadata_only,
             )
         if should_include_output(output_type, "stderr"):
-            stderr_content, stderr_metadata, stderr_truncated = await asyncio.to_thread(
+            stderr_content, stderr_metadata, stderr_truncated = await run_remote(
                 get_file_metadata_and_content,
                 conn=conn,
                 file_path=job_info.stderr_file,
@@ -1316,6 +1400,8 @@ async def get_job_output_response(
         return response
     except HTTPException:
         raise
+    except WorkQueueFull:
+        raise
     except Exception as exc:
         error_msg = str(exc)
         logger.error(f"Error in get_job_output for job {job_id} on {host}: {error_msg}")
@@ -1345,7 +1431,7 @@ async def get_job_script_payload(
     get_slurm_manager,
     cache_middleware,
 ) -> dict[str, Any]:
-    manager = get_slurm_manager()
+    manager = await run_local(get_slurm_manager)
     slurm_hosts = manager.slurm_hosts
     if host:
         slurm_hosts = [entry for entry in slurm_hosts if entry.host.hostname == host]
@@ -1360,8 +1446,8 @@ async def get_job_script_payload(
     script_found_in_slurm = False
     for slurm_host in slurm_hosts:
         try:
-            conn = await asyncio.to_thread(manager._get_connection, slurm_host.host)
-            script_content = await asyncio.to_thread(
+            conn = await run_remote(manager._get_connection, slurm_host.host)
+            script_content = await run_remote(
                 manager.slurm_client.get_job_batch_script,
                 conn,
                 job_id,
@@ -1372,10 +1458,11 @@ async def get_job_script_payload(
 
             script_found_in_slurm = True
             local_source_dir = None
-            cached_job = await asyncio.to_thread(
+            cached_job = await run_local(
                 cache_middleware.cache.get_cached_job,
                 job_id,
                 slurm_host.host.hostname,
+                include_outputs=False,
             )
             if cached_job:
                 local_source_dir = cached_job.local_source_dir
@@ -1393,6 +1480,8 @@ async def get_job_script_payload(
                 script_content,
             )
             return response
+        except WorkQueueFull:
+            raise
         except Exception as exc:
             logger.debug(f"Error getting script from {slurm_host.host.hostname}: {exc}")
             continue
@@ -1420,7 +1509,7 @@ async def refresh_job_in_background(
     """Refresh job data from Slurm and broadcast updates via websocket."""
     try:
         logger.debug(f"Background refresh started for job {job_id} on host {host}")
-        manager = get_slurm_manager()
+        manager = await run_local(get_slurm_manager)
         slurm_hosts = manager.slurm_hosts
         if host:
             slurm_hosts = [
@@ -1429,8 +1518,16 @@ async def refresh_job_in_background(
 
         for slurm_host in slurm_hosts:
             try:
-                job_info = await asyncio.to_thread(
-                    manager.get_job_info, slurm_host, job_id
+                from ...job_data_manager import get_job_data_manager
+                from ...request_coalescer import get_request_coalescer
+
+                async def fetch_batch(hostname, job_ids):
+                    return await get_job_data_manager().fetch_all_jobs(
+                        hostname=hostname, job_ids=job_ids, limit=len(job_ids)
+                    )
+
+                job_info = await get_request_coalescer().fetch_job(
+                    job_id, slurm_host.host.hostname, fetch_batch
                 )
                 if not job_info:
                     continue
@@ -1459,11 +1556,15 @@ async def refresh_job_in_background(
                     f"Background refresh completed for job {job_id}, broadcasted update"
                 )
                 return
+            except WorkQueueFull:
+                raise
             except Exception as exc:
                 logger.debug(
                     f"Failed to refresh job {job_id} from host {slurm_host.host.hostname}: {exc}"
                 )
 
         logger.debug(f"Background refresh: job {job_id} not found in Slurm")
+    except WorkQueueFull:
+        raise
     except Exception as exc:
         logger.error(f"Background refresh failed for job {job_id}: {exc}")

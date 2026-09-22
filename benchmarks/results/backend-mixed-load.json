@@ -1,0 +1,140 @@
+{
+  "source": "benchmarks/backend_mixed_load.py",
+  "workload": {
+    "payload_bytes": 67108864,
+    "payload_sha256": "5f484474c1c646dd227d6f52230d496d0e54586b824f527e0404f4468c94c8e2",
+    "concurrent_downloads": 4,
+    "download_mode": "2 gzip + 2 uncompressed streams, incremental checksum",
+    "gated_lanes": {
+      "remote": {
+        "workers": 8,
+        "queue": 16,
+        "capacity": 24
+      },
+      "background": {
+        "workers": 4,
+        "queue": 16,
+        "capacity": 20
+      },
+      "transfer": {
+        "workers": 2,
+        "queue": 4,
+        "capacity": 6
+      }
+    }
+  },
+  "server_process": {
+    "pid": 2737121,
+    "baseline_vmrss_kib": 61320,
+    "peak_vmrss_kib": 72208
+  },
+  "health": {
+    "samples": 95,
+    "successful": 95,
+    "p50_ms": 0.673,
+    "p95_ms": 1.408,
+    "max_ms": 3.199,
+    "all_status_200": true,
+    "measurement": "client-observed HTTP round trip; gzip decode/checksum offloaded"
+  },
+  "cache": {
+    "metadata_success": 16,
+    "preview_success": 16,
+    "metadata_latency": {
+      "samples": 16,
+      "p50_ms": 3.029,
+      "p95_ms": 8.353,
+      "max_ms": 8.353
+    },
+    "preview_latency": {
+      "samples": 16,
+      "p50_ms": 61.748,
+      "p95_ms": 99.403,
+      "max_ms": 99.403
+    },
+    "downloads": [
+      {
+        "mode": "gzip",
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5f484474c1c646dd227d6f52230d496d0e54586b824f527e0404f4468c94c8e2"
+      },
+      {
+        "mode": "gzip",
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5f484474c1c646dd227d6f52230d496d0e54586b824f527e0404f4468c94c8e2"
+      },
+      {
+        "mode": "uncompressed",
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5f484474c1c646dd227d6f52230d496d0e54586b824f527e0404f4468c94c8e2"
+      },
+      {
+        "mode": "uncompressed",
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5f484474c1c646dd227d6f52230d496d0e54586b824f527e0404f4468c94c8e2"
+      }
+    ],
+    "all_downloads_valid": true
+  },
+  "overload": {
+    "remote": {
+      "requests": 27,
+      "status_503": 3,
+      "retry_after_1": 3
+    },
+    "background": {
+      "requests": 23,
+      "status_503": 3,
+      "retry_after_1": 3
+    },
+    "transfer": {
+      "requests": 9,
+      "status_503": 3,
+      "retry_after_1": 3
+    }
+  },
+  "recovery": {
+    "all_requests_200": true,
+    "final_stats": {
+      "executors": {
+        "remote": {
+          "workers": 8,
+          "capacity": 24,
+          "outstanding": 0,
+          "rejected": 3
+        },
+        "background": {
+          "workers": 4,
+          "capacity": 20,
+          "outstanding": 0,
+          "rejected": 3
+        },
+        "transfer": {
+          "workers": 2,
+          "capacity": 6,
+          "outstanding": 0,
+          "rejected": 3
+        }
+      },
+      "admission": {
+        "request": 0,
+        "output": 0,
+        "stream": 0,
+        "websocket": 0,
+        "filesystem": 0,
+        "watcher": 0
+      }
+    },
+    "capacity_counters_zero": true
+  },
+  "limits": [
+    "Synthetic event-gated executor work and a local temporary SQLite cache.",
+    "VmRSS is sampled from the private server PID; client RSS is excluded.",
+    "This is not a production throughput or network performance benchmark."
+  ],
+  "generated_at": "2026-09-22T10:38:52.439159+00:00"
+}

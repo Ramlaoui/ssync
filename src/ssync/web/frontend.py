@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..utils.executors import run_local
+
 _FRONTEND_RESERVED_PREFIXES = (
     "api",
     "assets",
@@ -71,7 +73,9 @@ def register_frontend_routes(app: FastAPI, frontend_dist: Path) -> bool:
     @app.get("/{full_path:path}", response_class=FileResponse)
     async def serve_frontend_spa_fallback(full_path: str):
         """Serve SPA routes and root-level frontend files on direct navigation."""
-        resolved_path = _resolve_frontend_request_path(frontend_dist, full_path)
+        resolved_path = await run_local(
+            _resolve_frontend_request_path, frontend_dist, full_path
+        )
         if resolved_path is None:
             raise HTTPException(status_code=404, detail="Not Found")
         return FileResponse(str(resolved_path))

@@ -30,6 +30,7 @@ class RateLimiter:
         self._request_counts: Dict[str, List[float]] = defaultdict(list)
         self._burst_tokens: Dict[str, int] = defaultdict(lambda: burst_size)
         self._last_refill: Dict[str, float] = defaultdict(time.time)
+        self._next_cleanup = 0.0
 
     def _get_client_id(self, request: Request) -> str:
         api_key = request.headers.get("x-api-key")
@@ -63,6 +64,22 @@ class RateLimiter:
     async def check_rate_limit(self, request: Request) -> bool:
         client_id = self._get_client_id(request)
         current_time = time.time()
+
+        if current_time >= self._next_cleanup:
+            expired = [
+                key
+                for key, requests in self._request_counts.items()
+                if not requests or requests[-1] <= current_time - 3600
+            ]
+            for key in expired:
+                self._request_counts.pop(key, None)
+                self._burst_tokens.pop(key, None)
+                self._last_refill.pop(key, None)
+            self._next_cleanup = current_time + 60
+        # Reject new identities at capacity instead of evicting active limits
+        # or retaining an unbounded number of one-off clients forever.
+        if client_id not in self._request_counts and len(self._request_counts) >= 1024:
+            return False
 
         self._cleanup_old_requests(client_id, current_time)
         self._refill_tokens(client_id, current_time)

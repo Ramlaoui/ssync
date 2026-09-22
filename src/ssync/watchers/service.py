@@ -12,6 +12,7 @@ from typing import Optional
 
 from ..cache import get_cache
 from ..utils.async_helpers import create_task
+from ..utils.executors import run_local
 from .engine import get_watcher_engine
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class WatcherService:
             return
 
         self.running = True
+        self.engine._shutdown = False
         self._task = create_task(self._run())
         logger.info("Watcher service started")
 
@@ -52,6 +54,50 @@ class WatcherService:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+        # Stop monitors first, then let actions that were already admitted
+        # finish while the remote/local worker pools are still available.
+        self.engine._shutdown = True
+        active_tasks = tuple(self.engine.active_tasks.values())
+        for task in active_tasks:
+            if not task.done():
+                task.cancel()
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
+        self.engine.active_tasks.clear()
+
+        while True:
+            action_tasks = tuple(
+                task
+                for task in getattr(self.engine, "_action_tasks", [])
+                if not task.done()
+            )
+            if not action_tasks:
+                break
+            await asyncio.gather(*action_tasks, return_exceptions=True)
+
+        # Actions can schedule websocket refreshes while they finish. Cancel
+        # refresh tasks only after the action drain so no late refresh is left
+        # behind when the service releases its lock.
+        refresh_tasks = tuple(
+            task
+            for task in getattr(self.engine, "_watcher_refresh_tasks", {}).values()
+            if not task.done()
+        )
+        for task in refresh_tasks:
+            task.cancel()
+        if refresh_tasks:
+            await asyncio.gather(*refresh_tasks, return_exceptions=True)
+        getattr(self.engine, "_watcher_refresh_tasks", {}).clear()
+        refresh_pending = getattr(self.engine, "_watcher_refresh_pending", None)
+        refresh_lock = getattr(self.engine, "_watcher_refresh_lock", None)
+        if refresh_pending is not None:
+            if refresh_lock is None:
+                refresh_pending.clear()
+            else:
+                with refresh_lock:
+                    refresh_pending.clear()
+
         self._release_lock()
         logger.info("Watcher service stopped")
 
@@ -81,7 +127,7 @@ class WatcherService:
                 """)
                 return cursor.fetchall()
 
-        watchers = await asyncio.to_thread(load_active_watchers)
+        watchers = await run_local(load_active_watchers)
 
         for watcher_id, job_id, hostname in watchers:
             existing_task = self.engine.active_tasks.get(watcher_id)
