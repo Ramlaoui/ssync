@@ -101,16 +101,35 @@ class HostCommandThrottler:
         return stats
 
 
-# Global throttler instance - shared across all watchers and action executors
+# Global throttlers partition routine polling from terminal job control.  The
+# native SSH command-slot cap remains the final per-host limit across both lanes.
 _host_throttler: Optional[HostCommandThrottler] = None
+_control_host_throttler: Optional[HostCommandThrottler] = None
+_background_host_throttler: Optional[HostCommandThrottler] = None
 
 
 def get_host_throttler() -> HostCommandThrottler:
-    """Get or create the global host command throttler."""
+    """Get the throttler for routine watcher polling."""
     global _host_throttler
     if _host_throttler is None:
-        _host_throttler = HostCommandThrottler(max_concurrent_per_host=3)
+        _host_throttler = HostCommandThrottler(max_concurrent_per_host=1)
     return _host_throttler
+
+
+def get_control_host_throttler() -> HostCommandThrottler:
+    """Get the lane reserved for scheduler-changing terminal actions."""
+    global _control_host_throttler
+    if _control_host_throttler is None:
+        _control_host_throttler = HostCommandThrottler(max_concurrent_per_host=1)
+    return _control_host_throttler
+
+
+def get_background_host_throttler() -> HostCommandThrottler:
+    """Get the separate throttle for long-running telemetry commands."""
+    global _background_host_throttler
+    if _background_host_throttler is None:
+        _background_host_throttler = HostCommandThrottler(max_concurrent_per_host=1)
+    return _background_host_throttler
 
 
 class JobEndHandlingResult(Enum):
@@ -241,6 +260,8 @@ class WatcherEngine:
         hostname: str,
         watchers: List[WatcherDefinition],
         parent_watcher_id: Optional[int] = None,
+        *,
+        start_monitoring: bool = True,
     ) -> List[int]:
         """
         Start watchers for a newly submitted job.
@@ -250,6 +271,9 @@ class WatcherEngine:
             hostname: Hostname of the Slurm cluster
             watchers: List of watcher definitions
             parent_watcher_id: Optional parent watcher ID for array task watchers
+            start_monitoring: Start monitor tasks on the current event loop. Set
+                this to False when registering from a temporary loop; the
+                long-lived watcher service will start the monitors.
 
         Returns:
             List of watcher IDs
@@ -278,16 +302,22 @@ class WatcherEngine:
 
                 # Only start monitoring for non-template watchers
                 # Templates will spawn child watchers for discovered tasks
-                if not definition.is_array_template:
+                if not definition.is_array_template and start_monitoring:
                     # Start monitoring task
                     task = create_task(
                         self._monitor_watcher(watcher_id, job_id, hostname)
                     )
-                    self.active_tasks[watcher_id] = task
+                    if task is not None:
+                        self.active_tasks[watcher_id] = task
 
                     logger.info(
                         f"Started watcher {watcher_id} for job {job_id}: "
                         f"pattern='{definition.pattern}', interval={definition.interval_seconds}s"
+                    )
+                elif not definition.is_array_template:
+                    logger.info(
+                        f"Registered watcher {watcher_id} for job {job_id}; "
+                        "the long-lived watcher service will start monitoring"
                     )
                 else:
                     logger.info(
@@ -353,12 +383,12 @@ class WatcherEngine:
                             **watcher.variables,
                             "job_end_state": self._job_end_state_name(job_info.state),
                         }
-                        if self._has_pending_job_end_resubmit(
+                        if self._has_pending_job_end_action(
                             watcher, terminal_variables
                         ):
                             logger.info(
                                 f"Job {job_id} is {job_info.state}, keeping watcher "
-                                f"{watcher_id} active until resubmit succeeds"
+                                f"{watcher_id} active until terminal actions finish"
                             )
                             continue
 
@@ -1177,10 +1207,10 @@ class WatcherEngine:
                 e,
             )
 
-    def _has_pending_job_end_resubmit(
+    def _has_pending_job_end_action(
         self, watcher: WatcherInstance, variables: Dict[str, Any]
     ) -> bool:
-        """Return True when a job-end resubmit action has not succeeded yet."""
+        """Return True when an eligible job-end action still needs handling."""
         if (
             not watcher.definition.trigger_on_job_end
             or self._job_end_trigger_completed(variables)
@@ -1201,8 +1231,6 @@ class WatcherEngine:
             return False
 
         for action_index, action in enumerate(watcher.definition.actions):
-            if action.type != ActionType.RESUBMIT:
-                continue
             if action.condition and not self._evaluate_condition(
                 action.condition, variables
             ):
@@ -1481,9 +1509,11 @@ class WatcherEngine:
 
             slurm_manager = get_slurm_manager()
             if slurm_manager:
-                live_job_info = await asyncio.to_thread(
-                    slurm_manager.get_job_info, hostname, job_id
-                )
+                throttler = get_host_throttler()
+                async with throttler.throttle(hostname):
+                    live_job_info = await asyncio.to_thread(
+                        slurm_manager.get_job_info, hostname, job_id
+                    )
                 if live_job_info:
                     try:
                         # Keep cache warm with corrected paths.
@@ -1712,7 +1742,9 @@ class WatcherEngine:
                     file_path=file_path,
                 )
 
-            return await asyncio.to_thread(read_new_output)
+            throttler = get_host_throttler()
+            async with throttler.throttle(job_info.hostname):
+                return await asyncio.to_thread(read_new_output)
 
         except Exception as e:
             logger.error(f"Failed to get output for job {job_info.job_id}: {e}")

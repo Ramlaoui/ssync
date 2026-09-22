@@ -84,12 +84,26 @@ class WatcherService:
         watchers = await asyncio.to_thread(load_active_watchers)
 
         for watcher_id, job_id, hostname in watchers:
-            if watcher_id not in self.engine.active_tasks:
+            existing_task = self.engine.active_tasks.get(watcher_id)
+            task_loop_closed = False
+            if existing_task is not None and not existing_task.done():
+                try:
+                    task_loop_closed = existing_task.get_loop().is_closed()
+                except (AttributeError, RuntimeError):
+                    pass
+
+            if existing_task is None or existing_task.done() or task_loop_closed:
+                if task_loop_closed:
+                    logger.warning(
+                        f"Replacing watcher {watcher_id} task bound to a closed loop"
+                    )
+                    existing_task.cancel()
                 logger.info(f"Starting monitor for watcher {watcher_id} (job {job_id})")
                 task = create_task(
                     self.engine._monitor_watcher(watcher_id, job_id, hostname)
                 )
-                self.engine.active_tasks[watcher_id] = task
+                if task is not None:
+                    self.engine.active_tasks[watcher_id] = task
 
         # Clean up completed tasks
         completed = []

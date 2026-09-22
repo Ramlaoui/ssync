@@ -58,3 +58,12 @@ def test_stop_all_terminates_all_runner_processes(
     assert stopped == 2
     mock_kill.assert_any_call(123, signal.SIGTERM)
     mock_kill.assert_any_call(456, signal.SIGTERM)
+
+
+@patch.object(WatcherDaemon, "stop_all")
+@patch.object(WatcherDaemon, "integrated_service_is_running", return_value=True)
+def test_ensure_running_does_not_duplicate_integrated_service(
+    _mock_integrated_service, mock_stop_all
+):
+    assert WatcherDaemon.ensure_running() is True
+    mock_stop_all.assert_called_once_with()
