@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <a href="https://ssync.readthedocs.io/"><strong>Documentation</strong></a> ·
-  <a href="https://ssync.readthedocs.io/en/latest/getting-started/quickstart/">Quickstart</a> ·
-  <a href="https://ssync.readthedocs.io/en/latest/guides/web-app/">Web app</a> ·
-  <a href="https://ssync.readthedocs.io/en/latest/guides/ios-app/">iPhone app</a>
+  <a href="https://ssync-slurm.readthedocs.io/"><strong>Documentation</strong></a> ·
+  <a href="https://ssync-slurm.readthedocs.io/en/latest/getting-started/quickstart/">Quickstart</a> ·
+  <a href="https://ssync-slurm.readthedocs.io/en/latest/guides/web-app/">Web app</a> ·
+  <a href="https://ssync-slurm.readthedocs.io/en/latest/guides/ios-app/">iPhone app</a>
 </p>
 
 <p align="center">
@@ -72,16 +72,16 @@ ssync output 12345 --lines 50             # follow a job's output
 ssync web                                 # open the web app at https://localhost:8042
 ```
 
-The web app's first start builds the frontend, which needs Node.js 18 or newer. Read the [quickstart](https://ssync.readthedocs.io/en/latest/getting-started/quickstart/) for a guided tour.
+The web app's first start builds the frontend, which needs Node.js 18 or newer. Read the [quickstart](https://ssync-slurm.readthedocs.io/en/latest/getting-started/quickstart/) for a guided tour.
 
 ## Documentation
 
-Full documentation lives at **[ssync.readthedocs.io](https://ssync.readthedocs.io/)**:
+Full documentation lives at **[ssync-slurm.readthedocs.io](https://ssync-slurm.readthedocs.io/)**:
 
-- [Installation](https://ssync.readthedocs.io/en/latest/getting-started/installation/) and [configuration](https://ssync.readthedocs.io/en/latest/getting-started/configuration/)
-- [Web app](https://ssync.readthedocs.io/en/latest/guides/web-app/) and [iPhone app](https://ssync.readthedocs.io/en/latest/guides/ios-app/) tours
-- [Launching jobs](https://ssync.readthedocs.io/en/latest/guides/launching-jobs/), [watchers](https://ssync.readthedocs.io/en/latest/guides/watchers/), and [launch recipes](https://ssync.readthedocs.io/en/latest/guides/recipes/)
-- [CLI](https://ssync.readthedocs.io/en/latest/reference/cli/) and [API](https://ssync.readthedocs.io/en/latest/reference/api/) references, and [security](https://ssync.readthedocs.io/en/latest/reference/security/)
+- [Installation](https://ssync-slurm.readthedocs.io/en/latest/getting-started/installation/) and [configuration](https://ssync-slurm.readthedocs.io/en/latest/getting-started/configuration/)
+- [Web app](https://ssync-slurm.readthedocs.io/en/latest/guides/web-app/) and [iPhone app](https://ssync-slurm.readthedocs.io/en/latest/guides/ios-app/) tours
+- [Launching jobs](https://ssync-slurm.readthedocs.io/en/latest/guides/launching-jobs/), [watchers](https://ssync-slurm.readthedocs.io/en/latest/guides/watchers/), and [launch recipes](https://ssync-slurm.readthedocs.io/en/latest/guides/recipes/)
+- [CLI](https://ssync-slurm.readthedocs.io/en/latest/reference/cli/) and [API](https://ssync-slurm.readthedocs.io/en/latest/reference/api/) references, and [security](https://ssync-slurm.readthedocs.io/en/latest/reference/security/)
 
 To preview the documentation locally:
 
