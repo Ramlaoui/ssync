@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { deleteWatcher as removeWatcher } from "../stores/watchers";
   import { run } from "svelte/legacy";
 
   import { createEventDispatcher } from "svelte";
@@ -323,7 +324,7 @@
     }
 
     try {
-      await api.delete(`/api/watchers/${watcher.id}`);
+      await removeWatcher(watcher.id);
       dispatch("deleted", watcher.id);
       handleClose();
     } catch (err: any) {

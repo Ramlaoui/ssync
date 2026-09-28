@@ -330,6 +330,12 @@ export async function resumeWatcher(watcherId: number): Promise<void> {
   }
 }
 
+// Delete a watcher and drop it from local state
+export async function deleteWatcher(watcherId: number): Promise<void> {
+  await api.delete(`/api/watchers/${watcherId}`);
+  watchers.update(current => current.filter(w => w.id !== watcherId));
+}
+
 // WebSocket connection for real-time updates
 let watcherWs: WebSocket | null = null;
 let watcherReconnectTimer: ReturnType<typeof setTimeout> | null = null;

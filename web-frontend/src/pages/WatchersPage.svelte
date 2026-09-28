@@ -8,10 +8,12 @@
     eventsLoading,
     fetchAllWatchers,
     fetchWatcherEvents,
+    fetchWatcherStats,
     watcherEvents,
     watchers,
     watchersLoading,
     watcherSocketConnected,
+    watcherStats,
   } from '../stores/watchers';
   import { jobStateManager } from '../lib/JobStateManager';
   import { api } from '../services/api';
@@ -20,24 +22,23 @@
   import WatcherActivityFeed from '../components/WatcherActivityFeed.svelte';
   import WatcherCreator from '../components/WatcherCreator.svelte';
   import JobSelectionDialog from '../components/JobSelectionDialog.svelte';
-  import NavigationHeader from '../components/NavigationHeader.svelte';
+  import IconButton from '../components/workspace/IconButton.svelte';
   import {
-    BarChart3,
-    Clock3,
-    ChevronRight,
-    Eye,
-    Filter,
     Layers,
     Plus,
     Radio,
+    RefreshCw,
     Search,
     Server,
-    Zap,
+    TriangleAlert,
+    X,
   } from 'lucide-svelte';
 
   const allCurrentJobs = jobStateManager.getAllJobs();
+  // The list endpoint returns the most recent watchers up to this cap, without a total.
+  const WATCHER_LIMIT = 300;
 
-  type FilterState = 'all' | 'active' | 'paused' | 'static' | 'completed';
+  type FilterState = 'live' | 'active' | 'paused' | 'completed' | 'static' | 'all';
   type SortMode = 'activity' | 'recent' | 'name';
   type BackgroundRefreshScope = 'events' | 'all';
   type EnhancedWatcher = Watcher & { job_name?: string | null };
@@ -51,7 +52,7 @@
   };
 
   let searchQuery = $state('');
-  let filterState: FilterState = $state('all');
+  let filterState: FilterState = $state('live');
   let sortMode: SortMode = $state('activity');
   let selectedWatcherId: number | null = $state(null);
   let error: string | null = $state(null);
@@ -69,6 +70,9 @@
   let pageRefreshing = $state(false);
   let backgroundRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingBackgroundScope: BackgroundRefreshScope = 'events';
+  let urlSelectionPending = false;
+  let listFetchedComplete = $state(false);
+  let narrowLayout = $state(false);
 
   function getWatcherSearchText(
     watcher: EnhancedWatcher,
@@ -108,9 +112,19 @@
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
-  function getStateLabel(state: FilterState): string {
-    if (state === 'all') return 'All';
-    return state.charAt(0).toUpperCase() + state.slice(1);
+  const filterLabels: Record<FilterState, string> = {
+    live: 'Active & paused',
+    active: 'Active',
+    paused: 'Paused',
+    completed: 'Completed',
+    static: 'Static',
+    all: 'All',
+  };
+
+  function matchesFilter(watcher: Watcher, state: FilterState): boolean {
+    if (state === 'all') return true;
+    if (state === 'live') return watcher.state === 'active' || watcher.state === 'paused';
+    return watcher.state === state;
   }
 
   function truncateInline(value?: string | null, fallback = 'No event payload'): string {
@@ -150,6 +164,7 @@
     const parsed = Number(watcherParam);
     if (!Number.isNaN(parsed)) {
       selectedWatcherId = parsed;
+      urlSelectionPending = true;
     }
   }
 
@@ -192,8 +207,14 @@
     }
 
     try {
+      if (!silent) {
+        // Stats carry the real per-state totals; the query is heavy, so only user-driven loads fetch it.
+        void fetchWatcherStats().catch(() => {});
+      }
       await Promise.all([
-        fetchAllWatchers({ silent, limit: 300 }),
+        fetchAllWatchers({ silent, limit: WATCHER_LIMIT }).then(() => {
+          listFetchedComplete = get(watchers).length < WATCHER_LIMIT;
+        }),
         fetchWatcherEvents(undefined, undefined, 300, { silent }),
       ]);
       refreshJobNamesInBackground();
@@ -393,8 +414,9 @@
   function handleWatcherInspect(
     event: CustomEvent<{ watcherId: number; scrollToActivity?: boolean }>,
   ) {
+    // In the stacked layout the activity panel sits below the list, so bring it into view.
     inspectWatcher(event.detail.watcherId, {
-      scrollToActivity: event.detail.scrollToActivity,
+      scrollToActivity: event.detail.scrollToActivity ?? narrowLayout,
     });
   }
 
@@ -442,10 +464,9 @@
   });
 
   let filteredWatchers = $derived.by(() => {
-    let nextWatchers = enhancedWatchers.filter((watcher) => {
-      if (filterState === 'all') return true;
-      return watcher.state === filterState;
-    });
+    let nextWatchers = enhancedWatchers.filter((watcher) =>
+      matchesFilter(watcher, filterState),
+    );
 
     if (searchQuery.trim()) {
       const term = searchQuery.trim().toLowerCase();
@@ -510,27 +531,46 @@
       : [],
   );
 
-  let watcherCounts = $derived.by(() => {
-    return {
-      total: watcherItems.length,
-      active: watcherItems.filter((watcher) => watcher.state === 'active').length,
-      paused: watcherItems.filter((watcher) => watcher.state === 'paused').length,
-      static: watcherItems.filter((watcher) => watcher.state === 'static').length,
-      completed: watcherItems.filter((watcher) => watcher.state === 'completed').length,
-    };
-  });
+  // The list is capped, so loaded counts are lower bounds; stats (when loaded) give real totals.
+  // The websocket's initial snapshot is capped too, so the list is only known to be complete
+  // once a list fetch returned fewer rows than it asked for.
+  let listCapped = $derived(!listFetchedComplete || watcherItems.length >= WATCHER_LIMIT);
 
-  let hostCount = $derived.by(() => {
-    return new Set(watcherItems.map((watcher) => watcher.hostname)).size;
-  });
-  let recentEventCount = $derived.by(() => watcherEventItems.length);
-  let stateFilterChips = $derived.by(() =>
-    (['all', 'active', 'paused', 'static', 'completed'] as FilterState[]).map((state) => ({
-      state,
-      label: getStateLabel(state),
-      count: state === 'all' ? watcherCounts.total : watcherCounts[state],
-    })),
+  function loadedCount(state: FilterState): number {
+    return watcherItems.filter((watcher) => matchesFilter(watcher, state)).length;
+  }
+
+  function totalCount(state: FilterState): number | null {
+    const stats = $watcherStats;
+    if (!stats) return listCapped ? null : loadedCount(state);
+    const byState = (stats.watchers_by_state || {}) as Record<string, number>;
+    if (state === 'all') return stats.total_watchers;
+    if (state === 'live') return (byState.active || 0) + (byState.paused || 0);
+    return byState[state] || 0;
+  }
+
+  function formatCount(state: FilterState): string {
+    const total = totalCount(state);
+    return total === null ? `${loadedCount(state).toLocaleString()}+` : total.toLocaleString();
+  }
+
+  let stateTabs = $derived.by(() =>
+    (['live', 'active', 'paused', 'completed', 'static', 'all'] as FilterState[])
+      .filter((state) => state !== 'static' || filterState === 'static' || (totalCount(state) ?? loadedCount(state)) > 0)
+      .map((state) => ({ state, label: filterLabels[state], count: formatCount(state) })),
   );
+
+  let headingSummary = $derived(
+    `${formatCount('active')} active · ${formatCount('paused')} paused`,
+  );
+
+  // How many watchers of the current tab exist beyond the loaded, most-recent slice.
+  let hiddenByCap = $derived.by(() => {
+    const total = totalCount(filterState);
+    const loaded = loadedCount(filterState);
+    if (total === null) return listCapped ? -1 : 0;
+    return Math.max(0, total - loaded);
+  });
   let latestEvents = $derived.by(() => watcherEventItems.slice(0, 8));
   let hostSummaries = $derived.by(() => {
     const summaries: Record<string, HostSummary> = {};
@@ -586,7 +626,21 @@
       .slice(0, 6);
   });
 
+  // A deep-linked watcher outside the default tab (e.g. completed) switches to "All" once.
   $effect(() => {
+    if (!urlSelectionPending || selectedWatcherId === null) return;
+    const target = watcherItems.find((watcher) => watcher.id === selectedWatcherId);
+    if (!target) return;
+    urlSelectionPending = false;
+    if (!matchesFilter(target, filterState)) {
+      filterState = 'all';
+    }
+  });
+
+  $effect(() => {
+    if (urlSelectionPending && selectedWatcherId !== null && $watchersLoading) {
+      return;
+    }
     if (filteredWatchers.length === 0) {
       if ($watchersLoading || $eventsLoading) {
         return;
@@ -626,9 +680,18 @@
       previousRoute: window.location.pathname,
     });
 
+    const media = window.matchMedia?.('(max-width: 1100px)');
+    const syncLayout = () => {
+      narrowLayout = media?.matches ?? false;
+    };
+    syncLayout();
+    media?.addEventListener?.('change', syncLayout);
+    unsubscribePageStores.push(() => media?.removeEventListener?.('change', syncLayout));
+
     readSelectionFromUrl();
     connectWatcherWebSocket();
     await refreshData();
+    urlSelectionPending = false;
   });
 
   onDestroy(() => {
@@ -642,178 +705,176 @@
   });
 </script>
 
-<div class="watchers-page">
-  <NavigationHeader
-    showBackButton={false}
-    showRefresh={true}
-    refreshing={pageRefreshing}
-    on:refresh={() => refreshData()}
-  >
-    {#snippet left()}
-      <div class="page-copy">
-        <h1>Watchers</h1>
-
-      </div>
-    {/snippet}
-
-    {#snippet actions()}
-      <button class="create-button" onclick={openAttachDialog}>
-        <Plus class="w-4 h-4" />
+<div class="relay-page watchers-page">
+  <div class="relay-heading">
+    <div>
+      <h1>Watchers</h1>
+      <p>
+        {headingSummary}
+        <span
+          class="watchers-live"
+          class:online={$watcherSocketConnected}
+          title={$watcherSocketConnected ? 'Receiving live watcher updates' : 'Live watcher updates are reconnecting'}
+        >
+          <span class="relay-dot" class:connected={$watcherSocketConnected}></span>
+          {$watcherSocketConnected ? 'Live' : 'Reconnecting…'}
+        </span>
+      </p>
+    </div>
+    <div class="relay-heading-actions">
+      <IconButton label="Refresh watchers" disabled={pageRefreshing} onclick={() => void refreshData()}>
+        <RefreshCw size={17} class={pageRefreshing ? 'animate-spin' : ''} />
+      </IconButton>
+      <button type="button" class="relay-button primary" onclick={openAttachDialog}>
+        <Plus size={17} />
         New watcher
       </button>
-    {/snippet}
+    </div>
+  </div>
 
-    {#snippet additional()}
-      <div class="toolbar">
-        <label class="toolbar-search">
-          <Search class="w-4 h-4" />
-          <input
-            type="text"
-            bind:value={searchQuery}
-            placeholder="Search watchers…" aria-label="Search watchers"
-          />
-        </label>
+  {#if error}
+    <div class="relay-banner error watchers-banner" role="alert">
+      <TriangleAlert size={17} />
+      <span>{error}</span>
+      <button class="relay-text-button" onclick={() => void refreshData()}>Retry</button>
+    </div>
+  {/if}
 
-        <div class="toolbar-controls">
-          <label class="toolbar-select">
-            <Filter class="w-4 h-4" />
-            <select bind:value={filterState}>
-              <option value="all">All states</option>
-              <option value="active">Active</option>
-              <option value="paused">Paused</option>
-              <option value="static">Static</option>
-              <option value="completed">Completed</option>
-            </select>
-          </label>
-
-          <label class="toolbar-select">
-            <Clock3 class="w-4 h-4" />
-            <select bind:value={sortMode}>
-              <option value="activity">Sort by activity</option>
-              <option value="recent">Sort by created</option>
-              <option value="name">Sort by name</option>
-            </select>
-          </label>
-
-          <div class:connected={$watcherSocketConnected} class="live-indicator">
-            <span class="live-dot"></span>
-            {$watcherSocketConnected ? 'Live updates' : 'Reconnecting'}
-          </div>
-        </div>
-      </div>
-
-      <div class="state-chips" aria-label="Watcher state filters">
-        {#each stateFilterChips as chip}
+  <div class="watchers-workspace">
+    <section class="watchers-list" aria-label="Watchers">
+      <div class="relay-tabs" role="group" aria-label="Filter by state">
+        {#each stateTabs as tab (tab.state)}
           <button
-            class:active={filterState === chip.state}
-            class="state-chip"
-            data-state={chip.state}
+            class:active={filterState === tab.state}
+            aria-pressed={filterState === tab.state}
             onclick={() => {
-              filterState = chip.state;
+              filterState = tab.state;
             }}
           >
-            <span class="state-chip-dot"></span>
-            <span>{chip.label}</span>
-            <strong>{chip.count}</strong>
+            {tab.label}
+            <span>{tab.count}</span>
           </button>
         {/each}
       </div>
-    {/snippet}
-  </NavigationHeader>
 
-  {#if error}
-    <div class="error-banner">{error}</div>
-  {/if}
-
-  <main class="workspace">
-    <section class="primary-column">
-      <div class="list-header">
-        <div>
-          <h2>{filteredWatchers.length} watcher{filteredWatchers.length === 1 ? '' : 's'}</h2>
-
-        </div>
+      <div class="watchers-filters">
+        <label class="relay-search">
+          <Search size={16} />
+          <input
+            type="text"
+            bind:value={searchQuery}
+            placeholder="Search name, job, host, pattern…"
+            aria-label="Search watchers"
+          />
+          {#if searchQuery}
+            <IconButton label="Clear search" onclick={() => (searchQuery = '')}>
+              <X size={14} />
+            </IconButton>
+          {/if}
+        </label>
+        <select class="relay-select" aria-label="Sort watchers" bind:value={sortMode}>
+          <option value="activity">Last activity</option>
+          <option value="recent">Newest</option>
+          <option value="name">Name</option>
+        </select>
       </div>
 
       {#if $watchersLoading && $watchers.length === 0}
-        <div class="panel-empty">Loading watchers…</div>
+        <div class="relay-empty-message">Loading watchers…</div>
       {:else if filteredWatchers.length === 0}
-        <div class="panel-empty">
+        <div class="relay-empty watchers-empty">
           {#if searchQuery}
-            No watchers match this search.
+            <p>No {filterLabels[filterState].toLowerCase()} watchers match “{searchQuery}”.</p>
+          {:else if filterState === 'live' && watcherItems.length > 0}
+            <p>No active or paused watchers. Completed watchers are under “Completed”.</p>
           {:else}
-            No watchers yet. Create one from a running job.
+            <p>No watchers yet. Create one from a running job.</p>
           {/if}
         </div>
       {:else}
-        <div class="watcher-grid">
-          {#each filteredWatchers as watcher (watcher.id)}
-            {@const latestEvent = eventSummaryByWatcher[watcher.id]?.latest}
-            <article
-              id={"watcher-card-" + watcher.id}
-              class:selected={selectedWatcher?.id === watcher.id}
-              class="watcher-shell"
-            >
-              <WatcherCard
-                watcher={watcher}
-                showJobLink={true}
-                lastEvent={latestEvent}
-                class={selectedWatcher?.id === watcher.id ? 'watcher-card-selected' : ''}
-                on:copy={handleWatcherCopy}
-                on:inspect={handleWatcherInspect}
-                on:refresh={handleWatcherRefresh}
-              />
-              <div class="watcher-shell-footer"><span>{watcher.hostname} · {watcher.interval_seconds}s interval</span><button class="relay-text-button" onclick={() => inspectWatcher(watcher.id, { scrollToActivity: true })}>Activity <ChevronRight size={14}/></button></div>
-            </article>
-          {/each}
+        <div class="watcher-table">
+          <div class="watcher-rows" role="list">
+            <div class="watcher-head" aria-hidden="true">
+              <span></span>
+              <span>Watcher</span>
+              <span class="h-job">Job</span>
+              <span class="h-trigger">Trigger</span>
+              <span class="h-num h-count">Fired</span>
+              <span class="h-num h-interval">Every</span>
+              <span class="h-num">Last</span>
+              <span></span>
+            </div>
+            {#each filteredWatchers as watcher (watcher.id)}
+              <div role="listitem">
+                <WatcherCard
+                  {watcher}
+                  lastEvent={eventSummaryByWatcher[watcher.id]?.latest}
+                  selected={selectedWatcher?.id === watcher.id}
+                  on:copy={handleWatcherCopy}
+                  on:inspect={handleWatcherInspect}
+                  on:refresh={handleWatcherRefresh}
+                />
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
 
+      {#if hiddenByCap !== 0 && !searchQuery}
+        <p class="watchers-cap-note">
+          {#if hiddenByCap > 0}
+            Showing the {filteredWatchers.length.toLocaleString()} loaded of {(filteredWatchers.length + hiddenByCap).toLocaleString()}
+            {filterLabels[filterState].toLowerCase()} watchers — only the {WATCHER_LIMIT} most recent watchers are loaded.
+          {:else}
+            Only the {WATCHER_LIMIT} most recent watchers are loaded; older ones are not shown.
+          {/if}
+        </p>
+      {/if}
     </section>
 
-    <aside class="activity-column" aria-label="Watcher activity">
+    <aside class="watchers-side" aria-label="Watcher activity">
       {#if selectedWatcher}
-        <div id="watcher-activity-panel" class="activity-card selected-activity-card">
-          <div class="detail-header">
-            <div>
-              <div class="page-title-row">
-                <Zap class="w-4 h-4" />
-                <span>Watcher Activity</span>
-              </div>
-              <p>
-                {selectedWatcher.name} • Job #{selectedWatcher.job_id} on {selectedWatcher.hostname}
-              </p>
-            </div>
+        <div id="watcher-activity-panel" class="side-panel activity-panel">
+          <div class="activity-heading">
+            <span class="activity-state" data-state={selectedWatcher.state}>{selectedWatcher.state}</span>
+            <h2>{selectedWatcher.name}</h2>
+            <p>
+              Job <span class="mono">#{selectedWatcher.job_id}</span>{selectedWatcher.job_name ? ` · ${selectedWatcher.job_name}` : ''} on {selectedWatcher.hostname}
+            </p>
           </div>
 
-          <div class="detail-pills">
-            <span class="detail-pill">{selectedWatcher.state}</span>
-            <span class="detail-pill">
-              {eventSummaryByWatcher[selectedWatcher.id]?.count || 0} recent event(s)
-            </span>
-            <span class="detail-pill">
-              created {formatRelativeTime(selectedWatcher.created_at)}
-            </span>
-            <span class="detail-pill">
-              {selectedWatcher.trigger_on_job_end
-                ? 'Terminal-state trigger'
-                : selectedWatcher.timer_mode_enabled
-                  ? 'Pattern + timer'
-                  : 'Pattern monitor'}
-            </span>
-          </div>
+          <dl class="activity-facts">
+            <div>
+              <dt>Recent events</dt>
+              <dd>{eventSummaryByWatcher[selectedWatcher.id]?.count || 0}</dd>
+            </div>
+            <div>
+              <dt>Created</dt>
+              <dd>{formatRelativeTime(selectedWatcher.created_at)}</dd>
+            </div>
+            <div>
+              <dt>Mode</dt>
+              <dd>
+                {selectedWatcher.trigger_on_job_end && !selectedWatcher.pattern
+                  ? 'Job end'
+                  : selectedWatcher.timer_mode_enabled
+                    ? 'Pattern + timer'
+                    : 'Pattern'}
+              </dd>
+            </div>
+          </dl>
 
           {#if sameJobWatchers.length > 0}
             <div class="peer-list">
+              <span class="peer-label">Same job</span>
               {#each sameJobWatchers as peer (peer.id)}
                 <button
                   class="peer-chip"
                   onclick={() =>
                     inspectWatcher(peer.id, {
                       scrollToCard: true,
-                      scrollToActivity: true,
                     })}
                 >
-                  <Server class="w-3.5 h-3.5" />
                   {peer.name}
                 </button>
               {/each}
@@ -828,110 +889,60 @@
         </div>
       {/if}
 
-      {#if $watchers.length > 0 || latestEvents.length > 0}
-        <div class="board-panel host-panel">
-          <div class="board-heading">
-            <Layers class="w-4 h-4" />
+      {#if latestEvents.length > 0}
+        <div class="side-panel">
+          <div class="side-heading">
+            <Radio size={15} />
+            <span>Latest events</span>
+          </div>
+          <div class="event-stream">
+            {#each latestEvents as event (event.id)}
+              <button
+                class:failed={!event.success}
+                class="event-stream-item"
+                onclick={() =>
+                  inspectWatcher(event.watcher_id, {
+                    scrollToCard: true,
+                  })}
+              >
+                <span class="event-dot"></span>
+                <span class="event-body">
+                  <strong>{event.watcher_name || `Watcher #${event.watcher_id}`}</strong>
+                  <small>{truncateInline(event.matched_text || event.action_result, event.action_type)}</small>
+                </span>
+                <time>{formatRelativeTime(event.timestamp)}</time>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if hostSummaries.length > 0}
+        <div class="side-panel">
+          <div class="side-heading">
+            <Layers size={15} />
             <span>Hosts</span>
           </div>
-
-          {#if hostSummaries.length === 0}
-            <p class="board-empty">No host activity yet.</p>
-          {:else}
-            <div class="host-lanes">
-              {#each hostSummaries as host (host.host)}
-                <button
-                  class="host-lane"
-                  onclick={() => {
-                    searchQuery = host.host;
-                  }}
-                >
-                  <div class="host-lane-title">
-                    <Server class="w-3.5 h-3.5" />
-                    <strong>{host.host}</strong>
-                    <span>{host.total} watcher{host.total === 1 ? '' : 's'}</span>
-                  </div>
-                  <div class="host-lane-meter">
-                    <span
-                      class="host-lane-fill"
-                      style={`width: ${host.total ? Math.max(8, Math.round((host.active / host.total) * 100)) : 0}%`}
-                    ></span>
-                  </div>
-                  <div class="host-lane-meta">
-                    <span>{host.active} active</span>
-                    <span>{host.recentEvents} events</span>
-                    <span>{formatRelativeTime(host.latest)}</span>
-                  </div>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="board-panel stream-panel">
-          <div class="board-heading">
-            <Radio class="w-4 h-4" />
-            <span>Live stream</span>
-            <span class:connected={$watcherSocketConnected} class="stream-status">
-              {$watcherSocketConnected ? 'connected' : 'waiting'}
-            </span>
-          </div>
-
-          {#if latestEvents.length === 0}
-            <p class="board-empty">Events will appear here as watchers fire.</p>
-          {:else}
-            <div class="event-stream">
-              {#each latestEvents as event (event.id)}
-                <button
-                  class:failed={!event.success}
-                  class="event-stream-item"
-                  onclick={() =>
-                    inspectWatcher(event.watcher_id, {
-                      scrollToCard: true,
-                      scrollToActivity: true,
-                    })}
-                >
-                  <span class="event-dot"></span>
-                  <div>
-                    <strong>{event.watcher_name || `Watcher #${event.watcher_id}`}</strong>
-                    <p>{truncateInline(event.matched_text || event.action_result, event.action_type)}</p>
-                  </div>
-                  <time>{formatRelativeTime(event.timestamp)}</time>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="board-panel pulse-panel">
-          <div class="board-heading">
-            <BarChart3 class="w-4 h-4" />
-            <span>State mix</span>
-          </div>
-          <div class="state-bars">
-            {#each stateFilterChips.filter((chip) => chip.state !== 'all') as chip}
+          <div class="host-lanes">
+            {#each hostSummaries as host (host.host)}
               <button
-                class="state-bar-row"
-                data-state={chip.state}
+                class="host-lane"
+                title={`Search watchers on ${host.host}`}
                 onclick={() => {
-                  filterState = chip.state;
+                  searchQuery = host.host;
                 }}
               >
-                <span>{chip.label}</span>
-                <div class="state-bar-track">
-                  <span
-                    class="state-bar-fill"
-                    style={`width: ${watcherCounts.total ? Math.round((chip.count / watcherCounts.total) * 100) : 0}%`}
-                  ></span>
-                </div>
-                <strong>{chip.count}</strong>
+                <Server size={14} />
+                <strong>{host.host}</strong>
+                <span>{host.active} active · {host.paused} paused</span>
+                <time>{formatRelativeTime(host.latest)}</time>
               </button>
             {/each}
           </div>
         </div>
       {/if}
     </aside>
-  </main>
+  </div>
 </div>
 
 {#if showJobSelectionDialog}
@@ -973,533 +984,392 @@
 
 <style>
   .watchers-page {
-    height: 100%;
-    min-height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--background);
+  }
+
+  .watchers-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 10px;
+    white-space: nowrap;
+  }
+
+  .watchers-live.online .relay-dot {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
+  }
+
+  .watchers-banner {
+    margin-bottom: 16px;
+    border-radius: 10px;
+  }
+
+  .watchers-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+    gap: 24px;
+    align-items: start;
+  }
+
+  .watchers-list {
+    min-width: 0;
+  }
+
+  .watchers-filters {
+    display: flex;
+    gap: 8px;
+    padding: 12px 0;
+    align-items: center;
+  }
+
+  .watchers-filters .relay-search {
+    flex: 1;
+  }
+
+  .watchers-filters > .relay-select {
+    max-width: 160px;
+  }
+
+  .watchers-empty {
+    min-height: 200px;
+  }
+
+  .watcher-table {
+    container: watcher-list / inline-size;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
     overflow: hidden;
   }
 
-  .page-copy {
+  /* Column tracks shared by the header and every WatcherCard row. */
+  .watcher-rows {
+    --watcher-cols: 10px minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 1.3fr) 44px 44px 64px 30px;
+  }
+
+  .watcher-head {
+    display: grid;
+    grid-template-columns: var(--watcher-cols);
+    gap: 12px;
+    padding: 8px 6px 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--secondary);
+    color: var(--muted-foreground);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .watcher-head .h-num {
+    text-align: right;
+  }
+
+  .watchers-cap-note {
+    margin: 10px 2px 0;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  @container watcher-list (max-width: 720px) {
+    .watcher-rows {
+      --watcher-cols: 10px minmax(0, 1.6fr) minmax(0, 1fr) 44px 64px 30px;
+    }
+    .h-job,
+    .h-interval {
+      display: none;
+    }
+  }
+
+  @container watcher-list (max-width: 520px) {
+    .watcher-rows {
+      --watcher-cols: 10px minmax(0, 1fr) 64px 30px;
+    }
+    .watcher-head {
+      display: none;
+    }
+  }
+
+  .watchers-side {
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 16px;
+    min-width: 0;
+    position: sticky;
+    top: 0;
   }
 
-  .page-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    font-weight: 600;
+  .side-panel {
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    background: var(--card);
+    overflow-wrap: anywhere;
+  }
+
+  .activity-panel {
+    display: grid;
+    gap: 14px;
+  }
+
+  .activity-heading h2 {
+    margin: 6px 0 4px;
     color: var(--foreground);
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
   }
 
-  .detail-header p {
+  .activity-heading p {
     margin: 0;
     color: var(--muted-foreground);
-    font-size: 0.84rem;
+    font-size: 0.8125rem;
   }
 
-  .create-button {
+  .activity-state {
     display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-    border: none;
-    border-radius: 0.75rem;
-    padding: 0.72rem 1rem;
-    background: var(--accent);
-    color: var(--accent-foreground);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--secondary);
+    color: var(--muted-foreground);
+    font-size: 0.6875rem;
     font-weight: 600;
-    cursor: pointer;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
-  .toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0 0 1rem;
+  .activity-state[data-state='active'] {
+    background: var(--success-bg);
+    color: var(--success);
   }
 
-  .state-chips {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    overflow-x: auto;
-    padding-bottom: 0.25rem;
+  .activity-state[data-state='paused'] {
+    background: var(--warning-bg);
+    color: var(--warning);
   }
 
-  .state-chip {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0.42rem 0.65rem;
-    background: var(--background);
-    color: var(--muted-foreground);
-    font-size: 0.78rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
-  }
-
-  .state-chip:hover,
-  .state-chip.active {
-    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-    background: color-mix(in srgb, var(--accent) 8%, var(--background));
-    color: var(--foreground);
-  }
-
-  .state-chip strong {
-    color: var(--foreground);
-    font-size: 0.76rem;
-  }
-
-  .state-chip-dot {
-    width: 0.48rem;
-    height: 0.48rem;
-    border-radius: 999px;
-    background: var(--muted-foreground);
-  }
-
-  .state-chip[data-state='active'] .state-chip-dot {
-    background: var(--success);
-  }
-
-  .state-chip[data-state='paused'] .state-chip-dot {
-    background: var(--warning);
-  }
-
-  .state-chip[data-state='static'] .state-chip-dot,
-  .state-chip[data-state='completed'] .state-chip-dot {
-    background: var(--accent);
-  }
-
-  .toolbar-search {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
-    min-width: 0;
-    padding: 0.8rem 0.95rem;
-    border: 1px solid var(--border);
-    border-radius: 0.9rem;
-    background: var(--background);
-    color: var(--muted-foreground);
-  }
-
-  .toolbar-search input,
-  .toolbar-select select {
-    width: 100%;
-    border: none;
-    background: transparent;
-    color: var(--foreground);
-    font-size: 0.88rem;
-  }
-
-  .toolbar-search input:focus,
-  .toolbar-select select:focus {
-    outline: none;
-  }
-
-  .toolbar-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-  }
-
-  .toolbar-select {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.55rem;
-    min-width: 180px;
-    padding: 0.75rem 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 0.9rem;
-    background: var(--background);
-    color: var(--muted-foreground);
-  }
-
-  .live-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.7rem 0.85rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--secondary) 85%, transparent);
-    color: var(--muted-foreground);
-    font-size: 0.82rem;
-    font-weight: 600;
-  }
-
-  .live-indicator.connected {
-    color: var(--foreground);
-  }
-
-  .live-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 999px;
-    background: var(--warning);
-  }
-
-  .live-indicator.connected .live-dot {
-    background: var(--success);
-    box-shadow: 0 0 0 0.24rem color-mix(in srgb, var(--success) 20%, transparent);
-  }
-
-  .error-banner {
-    margin: 0 1.5rem;
-    padding: 0.85rem 1rem;
-    border-radius: 0.9rem;
-    background: color-mix(in srgb, var(--destructive) 12%, transparent);
-    color: var(--destructive);
-    font-size: 0.9rem;
-  }
-
-  .workspace {
-    flex: 1;
-    min-height: 0;
+  .activity-facts {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
-    gap: 1rem;
-    align-items: start;
-    padding: 1.25rem 1.5rem 1.5rem;
-    overflow: auto;
-  }
-
-  .primary-column,
-  .activity-column {
-    min-height: 0;
-  }
-
-  .primary-column {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .board-panel,
-  .activity-card,
-  .watcher-shell {
-    min-width: 0;
-    border: 1px solid var(--border);
-    border-radius: 1.1rem;
-    background: var(--card);
-  }
-
-  .list-header h2 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
     margin: 0;
-    color: var(--foreground);
-    font-size: 1.1rem;
   }
 
-  .panel-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 220px;
-    border: 1px dashed var(--border);
-    border-radius: 1.2rem;
-    background: var(--card);
+  .activity-facts div {
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--secondary);
+  }
+
+  .activity-facts dt {
     color: var(--muted-foreground);
-    text-align: center;
-    padding: 1.2rem;
+    font-size: 0.6875rem;
   }
 
-  .watcher-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 1rem;
-  }
-
-  .watcher-shell {
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    padding: 1rem;
-    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
-  }
-
-  .watcher-shell:hover,
-  .watcher-shell.selected {
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-    box-shadow: 0 12px 28px color-mix(in srgb, var(--foreground) 8%, transparent);
-    transform: translateY(-1px);
-  }
-
-  .detail-pill,
-  .peer-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    min-width: max-content;
-    padding: 0.35rem 0.65rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--secondary) 92%, transparent);
+  .activity-facts dd {
+    margin: 2px 0 0;
     color: var(--foreground);
-    font-size: 0.76rem;
-    font-weight: 600;
-  }
-
-  .activity-card {
-    padding: 1rem;
-  }
-
-  .selected-activity-card {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .detail-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .detail-pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
+    font-size: 0.8125rem;
+    font-weight: 550;
   }
 
   .peer-list {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.55rem;
+    align-items: center;
+    gap: 6px;
   }
 
-  .activity-column {
-    display: flex;
+  .peer-label {
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  .peer-chip {
+    max-width: 100%;
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--card);
+    color: var(--foreground);
+    font-size: 0.75rem;
+    text-align: left;
+  }
+
+  .peer-chip:hover {
+    background: var(--hover);
+  }
+
+  /* Keep long paths, commands and captured values inside the panel. */
+  .activity-panel :global(.activity-header) {
     flex-direction: column;
-    gap: 1rem;
-    position: sticky;
-    top: 0;
+    align-items: stretch;
+    gap: 10px;
   }
 
-  .board-panel {
-    padding: 0.9rem;
+  .activity-panel :global(.activity-search) {
+    min-width: 0;
+    border-radius: 10px;
+    background: var(--card);
   }
 
-  .board-heading {
+  .activity-panel :global(.activity-item) {
+    grid-template-columns: 1.5rem minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  .activity-panel :global(.activity-row) {
+    flex-wrap: wrap;
+    gap: 4px 10px;
+  }
+
+  .activity-panel :global(.activity-snippet),
+  .activity-panel :global(.activity-result),
+  .activity-panel :global(.activity-var),
+  .activity-panel :global(.activity-meta span) {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .activity-panel :global(.activity-snippet) {
+    max-height: 240px;
+    overflow: auto;
+  }
+
+  .side-heading {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    margin-bottom: 0.75rem;
+    gap: 7px;
+    margin-bottom: 10px;
     color: var(--foreground);
-    font-size: 0.86rem;
-    font-weight: 700;
+    font-size: 0.8125rem;
+    font-weight: 600;
   }
 
-  .stream-status {
-    margin-left: auto;
-    color: var(--muted-foreground);
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .stream-status.connected {
-    color: var(--success);
-  }
-
-  .board-empty {
-    margin: 0;
-    color: var(--muted-foreground);
-    font-size: 0.82rem;
-  }
-
-  .host-lanes,
   .event-stream,
-  .state-bars {
+  .host-lanes {
     display: grid;
-    gap: 0.55rem;
   }
 
-  .host-lane,
   .event-stream-item,
-  .state-bar-row {
-    width: 100%;
-    border: 1px solid var(--border);
-    border-radius: 0.75rem;
-    background: var(--background);
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
   .host-lane {
     display: grid;
-    gap: 0.45rem;
-    padding: 0.7rem;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    padding: 8px 4px;
+    border: 0;
+    border-bottom: 1px solid var(--border-soft);
+    background: none;
+    color: inherit;
+    text-align: left;
   }
 
-  .host-lane-title,
-  .host-lane-meta {
+  .event-stream-item:last-child,
+  .host-lane:last-child {
+    border-bottom: 0;
+  }
+
+  .event-stream-item:hover,
+  .host-lane:hover {
+    background: var(--hover);
+  }
+
+  .event-stream-item {
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+  }
+
+  .event-body {
     display: flex;
-    align-items: center;
-    gap: 0.45rem;
+    flex-direction: column;
     min-width: 0;
   }
 
-  .host-lane-title strong {
-    color: var(--foreground);
+  .event-body strong,
+  .event-body small,
+  .host-lane strong,
+  .host-lane span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .host-lane-title span,
-  .host-lane-meta {
-    color: var(--muted-foreground);
-    font-size: 0.74rem;
-  }
-
-  .host-lane-meta {
-    justify-content: space-between;
-    flex-wrap: wrap;
-  }
-
-  .host-lane-meter,
-  .state-bar-track {
-    width: 100%;
-    height: 0.55rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--secondary) 88%, transparent);
-    overflow: hidden;
-  }
-
-  .host-lane-fill,
-  .state-bar-fill {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 65%, white),
-      var(--accent)
-    );
-  }
-
-  .event-stream-item {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 0.6rem;
-    align-items: start;
-    padding: 0.75rem;
-  }
-
-  .event-stream-item strong {
+  .event-body strong {
     color: var(--foreground);
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
+    font-weight: 550;
   }
 
-  .event-stream-item p,
-  .event-stream-item time {
-    margin: 0.2rem 0 0;
+  .event-body small,
+  .event-stream-item time,
+  .host-lane span,
+  .host-lane time {
     color: var(--muted-foreground);
-    font-size: 0.74rem;
-    line-height: 1.4;
+    font-size: 0.75rem;
   }
 
-  .event-stream-item.failed {
-    border-color: color-mix(in srgb, var(--destructive) 30%, var(--border));
+  .event-stream-item time,
+  .host-lane time {
+    white-space: nowrap;
   }
 
   .event-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    margin-top: 0.35rem;
-    border-radius: 999px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
     background: var(--success);
   }
 
   .event-stream-item.failed .event-dot {
-    background: var(--destructive);
+    background: var(--error);
   }
 
-  .state-bar-row {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.72rem 0.8rem;
+  .host-lane {
+    grid-template-columns: 14px minmax(0, 1fr) auto auto;
+    color: var(--muted-foreground);
   }
 
-  .state-bar-row span,
-  .state-bar-row strong {
-    font-size: 0.78rem;
+  .host-lane strong {
+    color: var(--foreground);
+    font-size: 0.8125rem;
+    font-weight: 550;
   }
 
-  .state-bar-row[data-state='active'] .state-bar-fill {
-    background: var(--success);
-  }
-
-  .state-bar-row[data-state='paused'] .state-bar-fill {
-    background: var(--warning);
-  }
-
-  .state-bar-row[data-state='static'] .state-bar-fill,
-  .state-bar-row[data-state='completed'] .state-bar-fill {
-    background: var(--accent);
-  }
-
-  :global(.watcher-card-selected) {
-    border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
-  }
-
-  @media (max-width: 1400px) {
-    .workspace {
-      grid-template-columns: 1fr;
+  @media (max-width: 1100px) {
+    .watchers-workspace {
+      grid-template-columns: minmax(0, 1fr);
     }
-
-    .activity-column {
+    .watchers-side {
       position: static;
     }
   }
 
-  @media (max-width: 900px) {
-  }
-
-  @media (max-width: 720px) {
-    .toolbar {
-      flex-direction: column;
-      align-items: stretch;
+  @media (max-width: 760px) {
+    .relay-heading {
+      flex-wrap: wrap;
     }
-
-    .toolbar-controls {
-      width: 100%;
+    .watchers-filters {
+      flex-wrap: wrap;
     }
-
-    .toolbar-select {
-      min-width: 0;
+    .watchers-filters .relay-search {
+      flex-basis: 100%;
+    }
+    .watchers-filters > .relay-select {
+      max-width: none;
       flex: 1;
     }
-
-    .workspace {
-      grid-template-columns: 1fr;
-      padding: 1rem;
+    .host-lane {
+      grid-template-columns: 14px minmax(0, 1fr) auto;
     }
-
-    .watcher-grid {
-      grid-template-columns: 1fr;
+    .host-lane time {
+      display: none;
     }
   }
-.watcher-shell,.board-panel,.activity-card{border-radius:var(--radius-card);background:var(--card)}.watcher-shell{transition:border-color var(--motion-state),background var(--motion-state)}.watcher-shell:hover{border-color:color-mix(in srgb,var(--accent) 60%,var(--border))}.watcher-shell.selected{border-color:var(--accent)}.state-chip[data-state='active'] .state-chip-dot{background:var(--accent)}.state-chip[data-state='completed'] .state-chip-dot{background:var(--success)}.state-chips{gap:18px;border-bottom:1px solid var(--border);padding-bottom:0}.state-chip{border:0;border-radius:0;border-bottom:2px solid transparent;background:transparent;padding:12px 0;font-size:.875rem;font-weight:450}.state-chip.active{border-bottom-color:var(--accent);background:transparent;color:var(--accent)}.toolbar-search,.toolbar-select{border-radius:10px;background:var(--card)}.workspace{padding:24px 32px;gap:24px}@media(max-width:760px){.workspace{padding:20px 16px}.toolbar{flex-wrap:wrap}.toolbar-search{flex-basis:100%}}
-
-  .page-copy h1 { margin:0; font-size:2.125rem; line-height:1.2; letter-spacing:-.04em; font-weight:650; }
-  .workspace { grid-template-columns:minmax(0,1fr) minmax(300px,380px); }
-  .watcher-shell { padding:14px; }
-  .watcher-shell :global(.watcher-card-selected) { box-shadow:none; }
-  .watcher-shell-footer { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:12px; color:var(--muted-foreground); padding:6px 4px 0; }
-  .activity-column { max-height:calc(100dvh - 245px); overflow:auto; }
-  @media(max-width:1100px) { .workspace { grid-template-columns:1fr; } .activity-column { position:static; max-height:none; } }
 </style>
