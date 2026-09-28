@@ -17,6 +17,9 @@
   import { jobUtils } from '../lib/jobUtils';
   import { prepareRelaunch } from '../lib/relaunch';
   import JobTabContent from "../components/JobTabContent.svelte";
+  import Dropdown from "../lib/components/ui/Dropdown.svelte";
+  import DropdownItem from "../lib/components/ui/DropdownItem.svelte";
+  import DropdownDivider from "../lib/components/ui/DropdownDivider.svelte";
   import WatcherAttachmentDialog from "../components/WatcherAttachmentDialog.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
   import { ArrowLeft, Eye, Maximize2, Minimize2, X, Copy, RefreshCw, Square, RotateCcw, MoreHorizontal } from 'lucide-svelte';
@@ -34,6 +37,7 @@
   let { params = {}, embedded = false, onclose = closeJob, onexpand = () => { } }: Props = $props();
   let cancelOpen = $state(false);
   let jobActionsOpen = $state(false);
+  let actionsAnchor: HTMLElement | null = $state(null);
   let canceling = $state(false);
   let relaunching = $state(false);
   let notice = $state('');
@@ -553,9 +557,21 @@
       {/if}
     </div>
     <div class="job-panel-controls">
-      <IconButton label="Job actions" disabled={!job} onclick={()=>jobActionsOpen=true}>
-        <MoreHorizontal size={18}/>
-      </IconButton>
+      <span class="job-actions-anchor" bind:this={actionsAnchor}>
+        <IconButton label="Job actions" disabled={!job} onclick={()=>jobActionsOpen=!jobActionsOpen}>
+          <MoreHorizontal size={18}/>
+        </IconButton>
+      </span>
+      <Dropdown bind:open={jobActionsOpen} triggerRef={actionsAnchor} align="end" width="220px" maxHeight="360px">
+        <DropdownItem disabled={loading} on:click={()=>{jobActionsOpen=false;void loadJob(true);}}><RefreshCw size={15}/>Refresh job</DropdownItem>
+        <DropdownItem disabled={relaunching} on:click={()=>{jobActionsOpen=false;void relaunch();}}><RotateCcw size={15}/>{relaunching?'Preparing…':'Relaunch…'}</DropdownItem>
+        <DropdownItem on:click={()=>{jobActionsOpen=false;handleAttachWatchers();}}><Eye size={15}/>Attach watchers…</DropdownItem>
+        <DropdownItem on:click={()=>{jobActionsOpen=false;handleShareJob();}}><Copy size={15}/>Copy job link</DropdownItem>
+        {#if job&&jobUtils.canCancelJob(job.state)}
+          <DropdownDivider/>
+          <DropdownItem danger on:click={()=>{jobActionsOpen=false;cancelOpen=true;}}><Square size={15}/>Cancel job…</DropdownItem>
+        {/if}
+      </Dropdown>
       {#if embedded}
         <IconButton label="Maximize job" onclick={onexpand}>
           <Maximize2 size={16}/>
@@ -594,7 +610,7 @@
       </nav>
       <div class="job-panel-body" class:scrollable={activeTab==='details'||activeTab==='activity'}>
         {#if activeTab==='details'}
-          <JobOverview {job} onwatchers={()=>handleTabClick('watchers')} oncopy={value=>void copy(value)}/>
+          <JobOverview {job} onwatchers={()=>handleTabClick('watchers')} oncopy={value=>void copy(value)} onoutput={()=>handleTabClick('output')}/>
           {:else if activeTab==='activity'}
             {#key job.hostname+':'+job.job_id}
               <JobActivity {job}/>
@@ -605,19 +621,6 @@
       </div>
     {/if}
 </section>
-
-<Dialog bind:open={jobActionsOpen} title="Job actions" size="sm">
-  <p class="mb-4 text-sm text-muted-foreground">{job?.name||job?.job_id} · {job?.hostname}</p>
-  <div class="flex flex-col gap-2">
-    <button class="relay-button" disabled={loading} onclick={()=>{jobActionsOpen=false;void loadJob(true);}}><RefreshCw size={16}/>Refresh job</button>
-    <button class="relay-button" disabled={relaunching} onclick={()=>{jobActionsOpen=false;void relaunch();}}><RotateCcw size={16}/>{relaunching?'Preparing…':'Relaunch'}</button>
-    <button class="relay-button" onclick={()=>{jobActionsOpen=false;handleAttachWatchers();}}><Eye size={16}/>Attach watchers</button>
-    <button class="relay-button" onclick={()=>{jobActionsOpen=false;handleShareJob();}}><Copy size={16}/>Copy job link</button>
-    {#if job&&jobUtils.canCancelJob(job.state)}
-      <button class="relay-button danger" onclick={()=>{jobActionsOpen=false;cancelOpen=true;}}><Square size={16}/>Cancel job</button>
-    {/if}
-  </div>
-</Dialog>
 
 {#if showAttachWatchersDialog&&job}
   <WatcherAttachmentDialog jobId={job.job_id} hostname={job.hostname} on:close={()=>showAttachWatchersDialog=false} on:success={()=>{showAttachWatchersDialog=false;if(job)void fetchJobWatchers(job.job_id,job.hostname,{silent:true,maxAgeMs:0});}}/>

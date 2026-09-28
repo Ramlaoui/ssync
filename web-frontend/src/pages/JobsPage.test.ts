@@ -94,7 +94,7 @@ describe('Job inspector interactions', () => {
     render(JobsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Inspect First training/ }));
     await fireEvent.click(await screen.findByRole('button', { name: 'Job actions' }));
-    await fireEvent.click(await screen.findByRole('button', { name: 'Cancel job' }));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: /Cancel job/ }));
     expect(mocks.post).not.toHaveBeenCalled();
     const dialog = await screen.findByRole('dialog', { name: 'Cancel this job?' });
     expect(dialog).toHaveTextContent('Cancel #111 on alpha');
@@ -107,7 +107,7 @@ describe('Job inspector interactions', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Inspect First training/ }));
     const actions = await screen.findByRole('button', { name: 'Job actions' });
     await fireEvent.click(actions);
-    await fireEvent.click(await screen.findByRole('button', { name: 'Cancel job' }));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: /Cancel job/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Cancel this job?' });
 
     // A key arriving before focus moves into the dialog must not close the job.
