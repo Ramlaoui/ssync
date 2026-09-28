@@ -96,6 +96,8 @@ echo "Starting job..."
 `);
   let launchRequestPending = $state(false);
   let showLaunchReview=$state(false);
+  // Validation errors stay hidden until the user tries to review or leaves a required field empty.
+  let showValidationErrors=$state(false);
   let reviewRequest=$state<LaunchJobRequest|null>(null);
   let launchError=$state('');
   let selectedPreset=$state('');
@@ -587,8 +589,9 @@ echo "Starting job..."
   }
 
   function handleLaunch() {
-    if(!canLaunch||launchRequestPending)return;
+    if(!selectedHost||launchRequestPending)return;
     launchError='';
+    if(!validationDetails.isValid){showValidationErrors=true;showValidationInfo=isMobile;return;}
     try{reviewRequest=createLaunchRequest(script,selectedHost,parameters,{exclude:excludePatterns,include:includePatterns,noGitignore});showLaunchReview=true;}
     catch(error){launchError=error instanceof Error?error.message:'Could not prepare launch.';}
   }
@@ -924,6 +927,7 @@ echo "Starting job..."
   // Compute validation details reactively based on parameters
   let validationDetails = $derived(validateParameters(parameters));
   let canLaunch = $derived(validationDetails.isValid && selectedHost);
+  let flagInvalid = $derived(showValidationErrors && !validationDetails.isValid);
   // Fetch recent watchers when host changes
   run(() => {
     if (selectedHost) {
@@ -943,7 +947,6 @@ echo "Starting job..."
 <div class="modern-launcher">
   <div class="relay-heading launch-title"><div><h1>Launch job</h1></div></div>
   {#if launchError}<div class="relay-banner error" role="alert"><AlertCircle size={18}/><span>{launchError}</span><button class="relay-text-button" onclick={()=>launchError=''}>Dismiss</button></div>{/if}
-  {#if !isMobile}<div class="launch-recipes" aria-label="Resource presets">{#each allPresets.slice(0,4) as preset}{@const Glyph=preset.icon}<button class:active={selectedPreset===preset.id} aria-pressed={selectedPreset===preset.id} onclick={()=>applyPreset(preset)}><span class="recipe-glyph"><Glyph size={19}/></span><span><strong>{preset.name}</strong><small>{preset.cpus} CPUs · {preset.memory} GB · {preset.time} min{preset.gpus?' · '+preset.gpus+' GPU':''}</small></span>{#if selectedPreset===preset.id}<Check size={16}/>{/if}</button>{/each}</div>{/if}
   <!-- Mobile Header -->
   {#if isMobile}
     <header class="mobile-header">
@@ -973,14 +976,15 @@ echo "Starting job..."
         <button
           class="mobile-icon-btn validation-dot-mobile"
           class:valid={validationDetails.isValid}
-          class:invalid={!validationDetails.isValid}
+          class:invalid={flagInvalid}
           onclick={() => (showValidationInfo = !showValidationInfo)}
-          title={validationDetails.isValid ? "Valid" : "Invalid"}
+          title={validationDetails.isValid ? "Ready to review" : "Required fields"}
+          aria-label={validationDetails.isValid ? "Ready to review" : "Required fields"}
         >
           <div
             class="status-dot-small"
             class:valid={validationDetails.isValid}
-            class:invalid={!validationDetails.isValid}
+            class:invalid={flagInvalid}
           ></div>
         </button>
 
@@ -1662,65 +1666,54 @@ echo "Starting job..."
               {/if}
             </Dropdown>
           </div>
-
-          {#if selectedHost}
-            <div class="connection-indicator">
-              <div class="pulse-dot"></div>
-            </div>
-          {/if}
         </div>
       {/snippet}
 
       {#snippet actions()}
-        <div class="flex items-center space-x-3">
-          <!-- Presets - Now opens sidebar on desktop too -->
-          <button
-            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-            onclick={() => (showPresetSidebar = !showPresetSidebar)}
-            title="Presets"
-          >
-            <Zap class="w-4 h-4" />
-            <span class="hidden sm:inline">Presets</span>
-          </button>
-
-          <!-- Script Templates -->
-          <button
-            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-            onclick={() => (showTemplates = !showTemplates)}
-            title="Script Templates"
-          >
-            <FileText class="w-4 h-4" />
-            <span class="hidden sm:inline">Templates</span>
-          </button>
-
-          <!-- Script History -->
-          <button
-            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-            onclick={handleHistoryClick}
-            title="Script History"
-          >
-            <History class="w-4 h-4" />
-            <span class="hidden sm:inline">History</span>
-          </button>
-
-          <!-- Save as Template -->
-          <button
-            class="flex items-center gap-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-            onclick={() => (showSaveTemplateDialog = true)}
-            title="Save current script as template"
-            disabled={!script || script.trim() === ""}
-          >
-            <Save class="w-4 h-4" />
-            <span class="hidden sm:inline">Save Template</span>
-          </button>
+        <div class="launch-actions">
+          <div class="launch-tools" role="group" aria-label="Script tools">
+            <button
+              class="launch-tool"
+              onclick={() => (showPresetSidebar = !showPresetSidebar)}
+              title="Resource presets"
+            >
+              <Zap class="w-4 h-4" />
+              <span>Presets</span>
+            </button>
+            <button
+              class="launch-tool"
+              onclick={() => (showTemplates = !showTemplates)}
+              title="Script templates"
+            >
+              <FileText class="w-4 h-4" />
+              <span>Templates</span>
+            </button>
+            <button
+              class="launch-tool"
+              onclick={handleHistoryClick}
+              title="Script history"
+            >
+              <History class="w-4 h-4" />
+              <span>History</span>
+            </button>
+            <button
+              class="launch-tool icon-only"
+              onclick={() => (showSaveTemplateDialog = true)}
+              title="Save current script as template"
+              aria-label="Save as template"
+              disabled={!script || script.trim() === ""}
+            >
+              <Save class="w-4 h-4" />
+            </button>
+          </div>
 
           <!-- Launch Button -->
           <Button
             on:click={handleLaunch}
-            disabled={!canLaunch || launchRequestPending}
+            disabled={!selectedHost || launchRequestPending}
             class="launch-header-button"
             size="default"
-            title={!canLaunch ? launchDisabledReason : ""}
+            title={launchDisabledReason}
           >
             {#if launchRequestPending}
               <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
@@ -1934,8 +1927,8 @@ echo "Starting job..."
                 <div class="status-dot valid"></div>
                 <span>Valid</span>
               </div>
-            {:else if validationDetails.missingText}
-              <div class="validation-status invalid">
+            {:else if flagInvalid}
+              <div class="validation-status invalid" role="alert">
                 <div class="status-dot invalid"></div>
                 <span>{validationDetails.missingText}</span>
               </div>
@@ -1984,7 +1977,10 @@ echo "Starting job..."
               bind:value={parameters.sourceDir}
               placeholder="/path/to/your/project"
               class="directory-input-full"
+              class:invalid={flagInvalid && !parameters.sourceDir?.trim()}
+              aria-invalid={flagInvalid && !parameters.sourceDir?.trim()}
               oninput={handleConfigChange}
+              onblur={() => { if (!parameters.sourceDir?.trim()) showValidationErrors = true; }}
             />
             <button
               class="directory-browse-btn-inline"
@@ -2435,6 +2431,10 @@ echo "Starting job..."
                 Ready to launch on {selectedHost}
               </p>
             </div>
+          {:else if selectedHost && !flagInvalid}
+            <p class="text-sm text-muted-foreground">
+              Add {validationDetails.missing.join(" and ").toLowerCase() || "the required fields"}, then review the job.
+            </p>
           {:else}
             <div class="flex items-center gap-2">
               <AlertCircle class="w-4 h-4 text-amber-500" />
@@ -2448,7 +2448,7 @@ echo "Starting job..."
               </p>
             {:else if !validationDetails.isValid}
               <p class="text-xs text-gray-500 mt-1 ml-5">
-                Check the script editor for missing SBATCH directives
+                Fill in the highlighted fields to continue
               </p>
             {/if}
           {/if}
@@ -2861,7 +2861,7 @@ echo "Starting job..."
               showMobileConfig = false;
               mobileConfigView = "main";
             }}
-            disabled={!canLaunch || launchRequestPending}
+            disabled={!selectedHost || launchRequestPending}
             class="w-full"
             size="lg"
           >
@@ -2905,7 +2905,7 @@ echo "Starting job..."
       class="mobile-launch-fab"
       aria-label="Review job"
       onclick={handleLaunch}
-      disabled={!canLaunch || launchRequestPending}
+      disabled={!selectedHost || launchRequestPending}
     >
       {#if launchRequestPending}
         <RefreshCw class="w-5 h-5 animate-spin" />
@@ -3139,17 +3139,6 @@ echo "Starting job..."
     padding: 1.5rem;
     color: var(--muted-foreground);
     font-size: 0.875rem;
-  }
-
-  .connection-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.5rem;
-    background: var(--success-bg);
-    border: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
-    border-radius: 9999px;
-    animation: fade-in 0.3s;
   }
 
   /* Launch button wrapper */
@@ -3720,7 +3709,7 @@ echo "Starting job..."
       var(--accent),
       var(--accent)
     ) !important;
-    color: white !important;
+    color: var(--accent-foreground) !important;
     font-weight: 500 !important;
     padding: 0.5rem 1rem !important;
     border-radius: 0.5rem !important;
@@ -3740,8 +3729,50 @@ echo "Starting job..."
   }
 
   :global(.launch-header-button:disabled) {
-    opacity: 0.5 !important;
+    background: var(--secondary) !important;
+    color: var(--muted-foreground) !important;
     cursor: not-allowed !important;
+  }
+
+  .launch-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .launch-tools {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+  }
+
+  .launch-tool {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    height: 32px;
+    padding: 0 0.625rem;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
+    transition: background var(--motion-state, 0.15s), color var(--motion-state, 0.15s);
+  }
+
+  .launch-tool.icon-only {
+    padding: 0 0.5rem;
+  }
+
+  .launch-tool:hover:not(:disabled) {
+    background: var(--secondary);
+    color: var(--foreground);
+  }
+
+  .launch-tool:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .status-card-content {
@@ -3813,6 +3844,10 @@ echo "Starting job..."
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }
+
+  .directory-input-full.invalid {
+    border-color: var(--destructive);
   }
 
   .directory-input-full:disabled {
@@ -5788,20 +5823,6 @@ echo "Starting job..."
 
   .launch-title{margin-bottom:24px;flex-shrink:0}
 
-  .launch-recipes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px;flex-shrink:0}
-
-  .launch-recipes>button{display:flex;gap:12px;align-items:center;min-width:0;padding:17px;background:var(--card);border:1px solid var(--border);border-radius:16px;text-align:left;transition:border-color var(--motion-state),background var(--motion-state)}
-
-  .launch-recipes>button:hover,.launch-recipes>button.active{background:var(--accent-soft);border-color:var(--accent)}
-
-  .recipe-glyph{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;color:var(--accent);background:var(--accent-soft);flex-shrink:0}
-
-  .launch-recipes>button>span:nth-child(2){min-width:0;flex:1}
-
-  .launch-recipes strong{display:block;font-size:.875rem;font-weight:550}
-
-  .launch-recipes small{display:block;font-size:.75rem;line-height:1.6;color:var(--muted-foreground);margin-top:5px}
-
   .launch-review-title{display:flex;gap:14px;align-items:center;margin-bottom:25px;color:var(--accent)}
 
   .launch-review-title h3{font-size:1.125rem;font-weight:600;color:var(--foreground);margin:0 0 5px}
@@ -5828,7 +5849,7 @@ echo "Starting job..."
 
   @media(min-width:769px){.modern-launcher :global(.navigation-header){border:0;background:transparent}.modern-launcher :global(.header-shell){padding:0}.modern-launcher :global(.header-row){min-height:50px;padding:0}.modern-launcher :global(.header-left){flex:0 1 auto}.modern-launcher :global(.header-actions){flex-wrap:wrap}.config-section :global(.rounded-lg){border-radius:16px}.config-section :global(.bg-card){background:var(--card)}}
 
-  @media(max-width:1300px){.launch-recipes{grid-template-columns:repeat(2,minmax(0,1fr))}.launch-recipes>button{padding:12px 15px}.config-section{width:320px}}
+  @media(max-width:1300px){.config-section{width:320px}}
 
   @media(max-width:1000px) and (min-width:769px){.launcher-content{overflow:auto;display:flex;flex-direction:column}.editor-section{flex:none;min-height:450px;height:55vh;width:100%}.config-section{width:100%;height:auto;overflow:visible;flex:none}.modern-launcher :global(.header-row){flex-wrap:wrap}.modern-launcher :global(.header-actions){justify-content:flex-start}}
 
