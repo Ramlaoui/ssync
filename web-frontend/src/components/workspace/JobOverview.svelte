@@ -81,6 +81,7 @@
   {/if}
 {/snippet}
 
+<div class="overview-container">
 <div class="job-overview">
   <section class="overview-summary tone-{status.tone}">
     {#if status.category==='pending'}
@@ -153,10 +154,15 @@
   {@render section('usage', 'Usage', details.usage)}
   {@render section('details', 'Details', details.scheduling)}
 </div>
+</div>
 
 <style>
-  .job-overview {
+  /* The layout follows the overview's own width, in the side panel or maximized. */
+  .overview-container {
     container-type: inline-size;
+  }
+
+  .job-overview {
     display: flex;
     flex-direction: column;
     gap: 14px;
