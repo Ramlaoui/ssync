@@ -71,12 +71,14 @@ The interface is built with:
 
 ```
 src/
-├── App.svelte              # Main application component
-├── main.js                 # Application entry point
-└── components/
-    ├── FilterPanel.svelte  # Job filtering controls
-    ├── JobList.svelte      # Job table display
-    └── JobDetail.svelte    # Detailed job view
+├── main.ts                 # Application entry point
+├── App.svelte              # Shell: sidebar, top bar, routes, quick find
+├── pages/                  # Jobs, job detail, launch, watchers, hosts, settings
+├── components/             # Output/script viewers, launcher, watcher UI
+│   └── workspace/          # Shared job overview, activity, status, buttons
+├── lib/                    # Job state manager, presentation helpers, actions
+├── stores/                 # Preferences, workspace, watchers, theme
+└── services/               # API client and realtime connections
 ```
 
 ## Configuration
