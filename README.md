@@ -109,4 +109,4 @@ Issues and pull requests are welcome.
 
 ## License
 
-Apache 2.0.
+Apache 2.0. See [LICENSE](LICENSE).
