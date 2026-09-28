@@ -18,20 +18,57 @@ enum DemoData {
       "work_dir": .string("/scratch/alex/folding"),
       "stdout_file": .string("/scratch/alex/folding/slurm-\(number).out"),
       "stderr_file": .string("/scratch/alex/folding/slurm-\(number).err"),
+      "submit_time": .string(Date.now.addingTimeInterval(-9000).ISO8601Format()),
       "start_time": .string(Date.now.addingTimeInterval(-8280).ISO8601Format()),
+      "account": .string("bio-lab"), "qos": .string("normal"), "priority": .string("4213"),
+      "node_list": .string("atlas-gpu[03-04]"), "batch_host": .string("atlas-gpu03"),
+      "req_tres": .string("cpu=32,mem=128G,node=1,gres/gpu=4"),
+      "submit_line": .string("sbatch --gpus=4 run.sh"),
     ])
+  }
+  /// A queued job that the server has ranked in its partition.
+  static func queued(_ number: String, name: String, rank: Int) -> Job {
+    var queued = job(number, name: name, state: "PD", runtime: "00:00:00")
+    for key in ["start_time", "node_list", "batch_host", "alloc_tres"] {
+      queued.fields.removeValue(forKey: key)
+    }
+    queued.fields.merge([
+      "priority_rank": .number(Double(rank)), "priority_jobs_ahead": .number(Double(rank - 1)),
+      "priority_queue_size": .number(14),
+      "priority_percentile": .number(Double(14 - rank) / 13 * 100),
+      "priority_snapshot_at": .string(Date.now.addingTimeInterval(-50).ISO8601Format()),
+    ]) { _, new in new }
+    return queued
+  }
+  /// A finished job with accounting figures.
+  static func finished(
+    _ number: String, name: String, host: String = "Atlas", state: String, partition: String,
+    runtime: String, exit: String
+  ) -> Job {
+    var done = job(
+      number, name: name, host: host, state: state, partition: partition, runtime: runtime)
+    done.fields.merge([
+      "end_time": .string(Date.now.addingTimeInterval(-3600).ISO8601Format()),
+      "exit_code": .string(exit), "cpu_time": .string("7-01:04:00"),
+      "total_cpu": .string("6-22:10:31"),
+      "max_rss": .string("96.4G"), "ave_rss": .string("71.2G"), "max_disk_read": .string("412G"),
+      "max_disk_write": .string("38G"), "consumed_energy": .string("18.2 kWh"),
+    ]) { _, new in new }
+    return done
   }
   static var jobs: [Job] {
     [
       job("48192", name: "protein-fold-v3"),
       job("48194", name: "structure-refinement", runtime: "00:46:00"),
-      job("48196", name: "embedding-sweep", state: "PD", runtime: "00:00:00"),
-      job("48198", name: "sequence-design", state: "PD", runtime: "00:00:00"),
+      queued("48196", name: "embedding-sweep", rank: 3),
+      queued("48198", name: "sequence-design", rank: 5),
       job("82013", name: "eval-baseline", host: "Boreal", partition: "cpu", runtime: "00:12:00"),
-      job("47981", name: "protein-fold-v2", state: "CD", runtime: "05:32:00"),
-      job(
+      finished(
+        "47981", name: "protein-fold-v2", state: "CD", partition: "gpu-a100", runtime: "05:32:00",
+        exit: "0:0"),
+      finished(
         "47990", name: "dataset-validation", host: "Boreal", state: "F", partition: "cpu",
-        runtime: "00:03:12"),
+        runtime: "00:03:12", exit: "1:0"),
     ]
   }
   static var partitions: [PartitionSnapshot] {

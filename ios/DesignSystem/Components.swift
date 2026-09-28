@@ -109,6 +109,23 @@ struct DetailRow: View {
     }
   }
 }
+/// Short values sit on the right; paths and long values wrap below their label.
+struct FactRow: View {
+  var fact: JobFact
+  var body: some View {
+    if fact.monospaced || fact.value.count > 28 {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(fact.label).font(.subheadline).foregroundStyle(.secondary)
+        Text(fact.value)
+          .font(fact.monospaced ? .system(.footnote, design: .monospaced) : .subheadline)
+          .textSelection(.enabled)
+      }
+      .accessibilityElement(children: .combine)
+    } else {
+      DetailRow(name: fact.label, value: fact.value)
+    }
+  }
+}
 struct CapacityBar: View {
   var allocated: Int
   var idle: Int
@@ -154,5 +171,72 @@ struct FilterChip: View {
     }
     .buttonStyle(.plain)
     .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+}
+/// A list section whose header collapses it. The choice is remembered per `key`.
+struct CollapsibleSection<Content: View, Footer: View>: View {
+  var title: String
+  var detail: String?
+  @AppStorage private var collapsed: Bool
+  @ViewBuilder var content: Content
+  @ViewBuilder var footer: Footer
+  init(
+    _ title: String, detail: String? = nil, key: String, collapsedByDefault: Bool = false,
+    @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer
+  ) {
+    self.title = title
+    self.detail = detail
+    _collapsed = AppStorage(wrappedValue: collapsedByDefault, "collapsed.\(key)")
+    self.content = content()
+    self.footer = footer()
+  }
+  var body: some View {
+    Section {
+      if !collapsed { content }
+    } header: {
+      Button {
+        withAnimation(.snappy) { collapsed.toggle() }
+      } label: {
+        HStack(spacing: 6) {
+          Text(title)
+          if let detail { Text(detail).foregroundStyle(.secondary).fontWeight(.regular) }
+          Spacer()
+          Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary).rotationEffect(.degrees(collapsed ? 0 : 90))
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+      .accessibilityHint("Shows or hides this section")
+    } footer: {
+      if !collapsed { footer }
+    }
+  }
+}
+extension CollapsibleSection where Footer == EmptyView {
+  init(
+    _ title: String, detail: String? = nil, key: String, collapsedByDefault: Bool = false,
+    @ViewBuilder content: () -> Content
+  ) {
+    self.init(
+      title, detail: detail, key: key, collapsedByDefault: collapsedByDefault, content: content,
+      footer: { EmptyView() })
+  }
+}
+/// Shows the first `limit` rows of a long list, with a row to reveal the rest.
+struct CappedRows<Item: Identifiable, Row: View>: View {
+  var items: [Item]
+  var limit = 8
+  @ViewBuilder var row: (Item) -> Row
+  @State private var showAll = false
+  var body: some View {
+    ForEach(showAll ? items : Array(items.prefix(limit))) { row($0) }
+    if items.count > limit {
+      Button(showAll ? "Show fewer" : "Show all \(items.count)") {
+        withAnimation(.snappy) { showAll.toggle() }
+      }
+      .font(.subheadline)
+    }
   }
 }

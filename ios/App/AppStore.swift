@@ -28,7 +28,6 @@ struct LaunchRequest: Identifiable {
   var partitions: [PartitionSnapshot] = []
   var watchers: [Watcher] = []
   var pins: Set<JobID> = []
-  var acknowledgements: Set<JobID> = []
   var hostErrors: [String: String] = [:]
   var error: String?
   var watcherError: String?
@@ -78,9 +77,6 @@ struct LaunchRequest: Identifiable {
       return !arrayIDs.contains(JobID(host: job.host, number: parent))
     }
   }
-  var attentionJobs: [Job] {
-    sortedJobs.filter { $0.state.needsAttention && !acknowledgements.contains($0.id) }
-  }
 
   init(inMemory: Bool = false, demo: Bool = false) {
     do { storage = try LocalStorage(inMemory: inMemory) } catch {
@@ -128,7 +124,6 @@ struct LaunchRequest: Identifiable {
     arrays = []
     hostErrors = [:]
     pins = []
-    acknowledgements = []
     receivedAt = nil
     error = nil
     watcherError = nil
@@ -149,7 +144,6 @@ struct LaunchRequest: Identifiable {
       arrays = saved.arrays
       receivedAt = saved.receivedAt
       pins = saved.pins
-      acknowledgements = saved.acknowledgements
     }
     reloadDrafts()
     publishSnapshot()
@@ -167,7 +161,6 @@ struct LaunchRequest: Identifiable {
     arrays = []
     drafts = []
     pins = []
-    acknowledgements = []
     receivedAt = nil
     resetPaths()
     launch = nil
@@ -348,10 +341,6 @@ struct LaunchRequest: Identifiable {
     if pins.contains(id) { pins.remove(id) } else { pins.insert(id) }
     save()
   }
-  func acknowledge(_ id: JobID) {
-    acknowledgements.insert(id)
-    save()
-  }
 
   func cancel(_ id: JobID) async throws {
     if demo {
@@ -412,6 +401,14 @@ struct LaunchRequest: Identifiable {
     }
     draft.provenance = "Relaunch of \(job.host) / #\(job.number)"
     return draft
+  }
+  /// Pushes onto the stack of the tab the user is currently in.
+  func push(_ route: Route) {
+    switch tab {
+    case .jobs: jobPath.append(route)
+    case .cluster: clusterPath.append(route)
+    case .activity: activityPath.append(route)
+    }
   }
   private func resetPaths() {
     jobPath = []
@@ -476,8 +473,7 @@ struct LaunchRequest: Identifiable {
         try storage.save(
           SavedSession(
             connection: connection, hosts: hosts, jobs: jobs, partitions: partitions,
-            watchers: watchers, arrays: arrays, receivedAt: receivedAt, pins: pins,
-            acknowledgements: acknowledgements))
+            watchers: watchers, arrays: arrays, receivedAt: receivedAt, pins: pins))
       } catch { self.error = "Could not save the offline snapshot: \(error.localizedDescription)" }
     }
     publishSnapshot()
@@ -491,7 +487,7 @@ struct LaunchRequest: Identifiable {
         connectionID: connection?.id, name: demo ? "Demo · Sample data" : connection!.name,
         updatedAt: receivedAt,
         running: jobs.filter { $0.state == .running }.count,
-        pending: jobs.filter { $0.state == .pending }.count, attention: attentionJobs.count,
+        pending: jobs.filter { $0.state == .pending }.count,
         jobs: sortedJobs.map {
           SystemJob(
             host: $0.host, number: $0.number, name: $0.name, state: $0.state.label,

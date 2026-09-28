@@ -18,23 +18,21 @@ struct ActivityView: View {
       if store.error != nil && !store.demo { ConnectionBanner() }
       let launches = launches.prefix(5)
       if !launches.isEmpty {
-        Section("Launches") {
+        CollapsibleSection("Launches", detail: "\(launches.count)", key: "activity.launches") {
           ForEach(launches, id: \.0.id) { saved, draft in launchRow(saved, draft) }
         }
       }
-      Section {
-        ForEach(events.prefix(20)) { event in
+      CollapsibleSection("Recent events", key: "activity.events") {
+        CappedRows(items: Array(events.prefix(50)), limit: 5) { event in
           NavigationLink(value: Route.watcher(event.watcher_id)) { EventRow(event: event) }
         }
         if events.isEmpty {
           Text(eventsError ?? "No watcher events yet").font(.subheadline)
             .foregroundStyle(.secondary)
         }
-      } header: {
-        Text("Recent events")
       }
-      Section {
-        ForEach(store.watchers) { watcher in
+      CollapsibleSection("Watchers", detail: "\(store.watchers.count)", key: "activity.watchers") {
+        CappedRows(items: store.watchers) { watcher in
           NavigationLink(value: Route.watcher(watcher.id)) { WatcherRow(watcher: watcher) }
             .swipeActions {
               let paused = watcher.state == "paused"
@@ -49,8 +47,6 @@ struct ActivityView: View {
           Text(store.watcherError ?? "Add a watcher from a job to automate what happens next.")
             .font(.subheadline).foregroundStyle(.secondary)
         }
-      } header: {
-        Text("Watchers")
       }
     }
     .navigationTitle("Activity")
@@ -240,8 +236,8 @@ struct WatcherDetailView: View {
             return params?.object.isEmpty == false ? params?.pretty : nil
           }.joined(separator: "\n"))
       }
-      Section("Recent events") {
-        ForEach(events) { EventRow(event: $0) }
+      CollapsibleSection("Recent events", detail: "\(events.count)", key: "watcher.events") {
+        CappedRows(items: events, limit: 5) { EventRow(event: $0) }
         if events.isEmpty { Text("No events yet").foregroundStyle(.secondary) }
       }
     }

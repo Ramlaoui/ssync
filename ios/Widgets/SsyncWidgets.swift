@@ -41,14 +41,13 @@ struct JobsSummaryWidget: Widget {
         HStack(spacing: 20) {
           count(entry.snapshot.running, "Running", Color("Running"))
           count(entry.snapshot.pending, "Queued", Color("Warning"))
-          count(entry.snapshot.attention, "Attention", Color("Danger"))
         }
         Text(entry.snapshot.name).font(.caption2).foregroundStyle(Color("InkSecondary")).lineLimit(
           1)
       }.containerBackground(Color("Canvas"), for: .widget)
         .widgetURL(URL(string: "ssync://jobs"))
     }.configurationDisplayName("Your jobs").description(
-      "Running, queued and attention counts from your latest ssync snapshot."
+      "Running and queued counts from your latest ssync snapshot."
     )
     .supportedFamilies([.systemMedium])
   }

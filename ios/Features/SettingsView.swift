@@ -96,48 +96,18 @@ struct SettingsView: View {
                 preferences["enabled"] = .bool($0)
                 saved = false
               }))
+          NavigationLink {
+            deliveryRules
+          } label: {
+            LabeledContent("Delivery rules", value: rulesSummary)
+          }
+          if !saved {
+            Button(saving ? "Saving…" : "Save changes") { Task { await savePreferences() } }
+              .disabled(saving)
+          }
         } footer: {
           Text("Shared by every device using this server's API key.")
         }
-        Section {
-          ForEach(states, id: \.0) { code, label in
-            Toggle(label, isOn: member(code, of: $allowedStates))
-          }
-        } header: {
-          Text("Notify when a job")
-        } footer: {
-          Text("With none selected, the server notifies for finished jobs.")
-        }
-        if !store.hosts.isEmpty {
-          Section("Hosts") {
-            ForEach(store.hosts) { host in
-              Toggle(
-                host.hostname,
-                isOn: Binding(
-                  get: { !mutedHosts.contains(host.hostname) },
-                  set: {
-                    if $0 {
-                      mutedHosts.remove(host.hostname)
-                    } else {
-                      mutedHosts.insert(host.hostname)
-                    }
-                    saved = false
-                  }))
-            }
-          }
-        }
-        Section {
-          TextField("Muted job names (patterns)", text: $mutedNames)
-          TextField("Only these users", text: $allowedUsers)
-          Button(saving ? "Saving…" : saved ? "Saved" : "Save notification rules") {
-            Task { await savePreferences() }
-          }.disabled(saving || saved)
-        } footer: {
-          Text("Comma separated. Leave users empty to include everyone.")
-        }
-        .textInputAutocapitalization(.never).autocorrectionDisabled()
-        .onChange(of: mutedNames) { _, _ in saved = false }
-        .onChange(of: allowedUsers) { _, _ in saved = false }
       }
 
       Section {
@@ -185,6 +155,59 @@ struct SettingsView: View {
     .task { await load() }
   }
 
+  private var rulesSummary: String {
+    let states = allowedStates.isEmpty ? "Finished jobs" : "\(allowedStates.count) states"
+    return mutedHosts.isEmpty ? states : "\(states) · \(mutedHosts.count) muted"
+  }
+  /// Rarely changed, so kept off the main settings page.
+  private var deliveryRules: some View {
+    Form {
+      Section {
+        ForEach(states, id: \.0) { code, label in
+          Toggle(label, isOn: member(code, of: $allowedStates))
+        }
+      } header: {
+        Text("Notify when a job")
+      } footer: {
+        Text("With none selected, the server notifies for finished jobs.")
+      }
+      if !store.hosts.isEmpty {
+        Section("Hosts") {
+          ForEach(store.hosts) { host in
+            Toggle(
+              host.hostname,
+              isOn: Binding(
+                get: { !mutedHosts.contains(host.hostname) },
+                set: {
+                  if $0 {
+                    mutedHosts.remove(host.hostname)
+                  } else {
+                    mutedHosts.insert(host.hostname)
+                  }
+                  saved = false
+                }))
+          }
+        }
+      }
+      Section {
+        TextField("Muted job names (patterns)", text: $mutedNames)
+        TextField("Only these users", text: $allowedUsers)
+      } footer: {
+        Text("Comma separated. Leave users empty to include everyone.")
+      }
+      .textInputAutocapitalization(.never).autocorrectionDisabled()
+    }
+    .navigationTitle("Delivery rules").navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .confirmationAction) {
+        Button(saving ? "Saving…" : saved ? "Saved" : "Save") {
+          Task { await savePreferences() }
+        }.disabled(saving || saved)
+      }
+    }
+    .onChange(of: mutedNames) { _, _ in saved = false }
+    .onChange(of: allowedUsers) { _, _ in saved = false }
+  }
   private func member(_ code: String, of set: Binding<Set<String>>) -> Binding<Bool> {
     Binding(
       get: { set.wrappedValue.contains(code) },

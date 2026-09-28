@@ -25,19 +25,14 @@ struct JobsView: View {
             .localizedCaseInsensitiveContains(query))
     }
   }
-  private func unacknowledged(_ job: Job) -> Bool {
-    job.state.needsAttention && !store.acknowledgements.contains(job.id)
-  }
-
   var body: some View {
     let jobs = scoped
     let arrays = scopedArrays
     let pinned = jobs.filter { store.pins.contains($0.id) }
     let rest = jobs.filter { !store.pins.contains($0.id) }
-    let attention = rest.filter(unacknowledged)
     let running = rest.filter { $0.state == .running }
     let queued = rest.filter { $0.state == .pending }
-    let recent = rest.filter { !$0.state.active && !unacknowledged($0) }
+    let recent = rest.filter { !$0.state.active }
     let runningArrays = arrays.filter { $0.running_count > 0 }
     let queuedArrays = arrays.filter { $0.running_count == 0 && $0.pending_count > 0 }
     List {
@@ -49,37 +44,36 @@ struct JobsView: View {
       }
       if let filter {
         let filtered = jobs.filter { matches($0, filter) }
+        let filteredArrays =
+          filter == .running ? runningArrays : filter == .queued ? queuedArrays : []
         Section {
-          if filter == .running { ForEach(runningArrays) { arrayLink($0) } }
-          if filter == .queued { ForEach(queuedArrays) { arrayLink($0) } }
-          ForEach(filtered) { jobLink($0) }
+          CappedRows(items: entries(filteredArrays, filtered), limit: 25) { row($0) }
         }
       } else {
         if !pinned.isEmpty {
-          Section("Pinned") { ForEach(pinned) { jobLink($0) } }
-        }
-        if !attention.isEmpty {
-          Section("Needs attention") { ForEach(attention) { jobLink($0) } }
+          CollapsibleSection("Pinned", detail: "\(pinned.count)", key: "jobs.pinned") {
+            CappedRows(items: entries([], pinned)) { row($0) }
+          }
         }
         if !running.isEmpty || !runningArrays.isEmpty {
-          Section("Running") {
-            ForEach(runningArrays) { arrayLink($0) }
-            ForEach(running) { jobLink($0) }
+          CollapsibleSection(
+            "Running", detail: "\(running.count + runningArrays.count)", key: "jobs.running"
+          ) {
+            CappedRows(items: entries(runningArrays, running)) { row($0) }
           }
         }
         if !queued.isEmpty || !queuedArrays.isEmpty {
-          Section("Queued") {
-            ForEach(queuedArrays) { arrayLink($0) }
-            ForEach(queued) { jobLink($0) }
+          CollapsibleSection(
+            "Queued", detail: "\(queued.count + queuedArrays.count)", key: "jobs.queued"
+          ) {
+            CappedRows(items: entries(queuedArrays, queued), limit: 5) { row($0) }
           }
         }
-        Section {
+        CollapsibleSection("Recent", key: "jobs.recent") {
           ForEach(recent.prefix(recentLimit)) { jobLink($0) }
           NavigationLink(value: Route.history) {
             Label("All history", systemImage: "clock.arrow.circlepath")
           }
-        } header: {
-          Text("Recent")
         } footer: {
           Text(
             "Last 7 days · up to 1,000 jobs per host · updated \(Format.age(store.receivedAt).lowercased())"
@@ -135,7 +129,7 @@ struct JobsView: View {
           count: jobs.filter { $0.state == .pending }.count
             + arrays.filter { $0.running_count == 0 && $0.pending_count > 0 }.count,
           color: Theme.amber)
-        chip("Failed", .failed, count: jobs.filter(unacknowledged).count, color: Theme.red)
+        chip("Failed", .failed, count: jobs.filter(\.state.isFailure).count, color: Theme.red)
       }.padding(.horizontal, 20)
     }.scrollIndicators(.hidden)
   }
@@ -148,7 +142,16 @@ struct JobsView: View {
     switch filter {
     case .running: job.state == .running
     case .queued: job.state == .pending
-    case .failed: job.state.needsAttention
+    case .failed: job.state.isFailure
+    }
+  }
+  private func entries(_ arrays: [ArrayGroup], _ jobs: [Job]) -> [JobListEntry] {
+    arrays.map(JobListEntry.array) + jobs.map(JobListEntry.job)
+  }
+  @ViewBuilder private func row(_ entry: JobListEntry) -> some View {
+    switch entry {
+    case .array(let group): arrayLink(group)
+    case .job(let job): jobLink(job)
     }
   }
   private func arrayLink(_ group: ArrayGroup) -> some View {
@@ -163,6 +166,18 @@ struct JobsView: View {
   }
 }
 
+/// Jobs and arrays share a section, so rows are drawn from one list.
+enum JobListEntry: Identifiable {
+  case array(ArrayGroup)
+  case job(Job)
+  var id: String {
+    switch self {
+    case .array(let group): "array:\(group.id.id)"
+    case .job(let job): job.id.id
+    }
+  }
+}
+
 extension View {
   /// Swipe and context actions shared by every job list.
   func jobActions(_ job: Job) -> some View { modifier(JobActions(job: job)) }
@@ -170,32 +185,123 @@ extension View {
 private struct JobActions: ViewModifier {
   var job: Job
   @Environment(AppStore.self) private var store
+  @State private var confirmCancel = false
+  @State private var error: String?
   func body(content: Content) -> some View {
     let pinned = store.pins.contains(job.id)
-    let reviewable = job.state.needsAttention && !store.acknowledgements.contains(job.id)
     content
-      .swipeActions(edge: .trailing) {
+      .swipeActions(edge: .leading, allowsFullSwipe: true) {
+        Button("Output", systemImage: "terminal") { store.push(.output(job.id)) }
+          .tint(Theme.accent)
+      }
+      .swipeActions(edge: .trailing, allowsFullSwipe: true) {
         Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
           store.togglePin(job.id)
-        }.tint(Theme.accent)
-      }
-      .swipeActions(edge: .leading) {
-        if reviewable {
-          Button("Reviewed", systemImage: "checkmark") { store.acknowledge(job.id) }
-            .tint(Theme.green)
+        }.tint(Theme.amber)
+        if job.state.active {
+          Button("Cancel", systemImage: "stop.circle") { confirmCancel = true }.tint(Theme.red)
         }
       }
       .contextMenu {
+        Button("Output", systemImage: "terminal") { store.push(.output(job.id)) }
         Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
           store.togglePin(job.id)
         }
-        if reviewable {
-          Button("Mark reviewed", systemImage: "checkmark") { store.acknowledge(job.id) }
+        Button("Relaunch…", systemImage: "arrow.clockwise") { relaunch() }
+        Section {
+          Button("Copy job ID", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = job.number
+          }
+          if let workDir = job.value("work_dir") {
+            Button("Copy working directory", systemImage: "folder") {
+              UIPasteboard.general.string = workDir
+            }
+          }
         }
-        Button("Copy job ID", systemImage: "doc.on.doc") {
-          UIPasteboard.general.string = job.number
+        if job.state.active {
+          Button("Cancel job…", systemImage: "stop.circle", role: .destructive) {
+            confirmCancel = true
+          }
+        }
+      } preview: {
+        JobPreview(job: job).environment(store)
+      }
+      .confirmationDialog(
+        "Cancel #\(job.number) on \(job.host)?", isPresented: $confirmCancel,
+        titleVisibility: .visible
+      ) {
+        Button("Cancel job", role: .destructive) {
+          Task {
+            do { try await store.cancel(job.id) } catch { self.error = error.localizedDescription }
+          }
+        }
+        Button("Keep running", role: .cancel) {}
+      } message: {
+        Text("The scheduler will stop \(job.name). Unsaved work is lost.")
+      }
+      .alert(
+        "Couldn’t complete the action",
+        isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })
+      ) {
+        Button("OK") {}
+      } message: {
+        Text(error ?? "")
+      }
+  }
+  private func relaunch() {
+    Task {
+      do { store.openDraft(try await store.relaunchDraft(for: job)) } catch {
+        self.error = error.localizedDescription
+      }
+    }
+  }
+}
+
+/// The card shown while pressing a job: enough to decide without opening it.
+struct JobPreview: View {
+  var job: Job
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        StatePill(state: job.state)
+        Spacer()
+        Text("\(job.host) · #\(job.number)").font(.caption.monospaced()).foregroundStyle(.secondary)
+      }
+      Text(job.name).font(.title3.weight(.semibold)).lineLimit(2)
+      if job.state == .pending {
+        Text(job.value("reason") ?? "Waiting for resources").font(.subheadline)
+        if let position = job.queuePosition {
+          Text(
+            "\(position.ahead) ahead · \(position.rank) of \(position.size) in \(position.partition)"
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      } else {
+        HStack(alignment: .firstTextBaseline) {
+          Text(Format.duration(job.runtime)).font(.title2.weight(.semibold).monospacedDigit())
+          if !job.limit.isEmpty {
+            Text("of \(Format.duration(job.limit))").foregroundStyle(.secondary)
+          }
+          Spacer()
+          if !job.state.active, let code = job.exitCode {
+            Text("Exit \(code)").font(.subheadline.monospacedDigit())
+              .foregroundStyle(job.succeeded ? Theme.green : Theme.red)
+          }
+        }
+        if let fraction = job.timeFraction, job.state.active {
+          ProgressView(value: fraction).tint(Theme.accent)
         }
       }
+      let resources = [
+        job.value("cpus").map { "\($0) CPU" }, job.value("memory"), job.value("node_list"),
+      ].compactMap { $0 }
+      if !resources.isEmpty {
+        Text(resources.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+    .padding(20)
+    .frame(width: 320, alignment: .leading)
   }
 }
 
@@ -302,47 +408,47 @@ struct JobDetailView: View {
         NavigationLink(value: Route.output(id)) { OutputTail(id: id, active: job.state.active) }
           .accessibilityIdentifier("watchOutput")
       }
-      Section("Watchers") {
+      CollapsibleSection("Watchers", detail: "\(watchers.count)", key: "job.watchers") {
         ForEach(watchers) { watcher in
           NavigationLink(value: Route.watcher(watcher.id)) { WatcherRow(watcher: watcher) }
         }
         Button("Add watcher", systemImage: "plus") { addingWatcher = true }
       }
-      let resources = [
-        ("CPUs", job.fields.text("cpus")), ("Memory", job.fields.text("memory")),
-        ("Nodes", job.fields.text("nodes")), ("Allocation", job.fields.text("alloc_tres")),
-      ].filter { !$0.1.isEmpty }
-      if !resources.isEmpty {
-        Section("Resources") {
-          ForEach(resources, id: \.0) { DetailRow(name: $0.0, value: $0.1) }
+      let timeline = job.timeline()
+      if !timeline.isEmpty {
+        CollapsibleSection("Timeline", key: "job.timeline") { facts(timeline) }
+      }
+      if job.state == .pending, !job.queue.isEmpty {
+        CollapsibleSection("Queue", key: "job.queue") { facts(job.queue) }
+      }
+      if !job.resources.isEmpty {
+        CollapsibleSection("Resources", key: "job.resources") { facts(job.resources) }
+      }
+      if !job.usage.isEmpty {
+        CollapsibleSection("Usage", key: "job.usage", collapsedByDefault: job.state.active) {
+          facts(job.usage)
         }
       }
-      Section("Details") {
-        if !job.partition.isEmpty {
-          NavigationLink(value: Route.partition(job.host, job.partition)) {
-            LabeledContent("Partition", value: job.partition)
-          }
-        }
-        ForEach(
-          [
-            ("User", job.fields.text("user")), ("Started", job.fields.text("start_time")),
-            ("Finished", job.fields.text("end_time")), ("Scheduler state", job.rawState),
-          ].filter { !$0.1.isEmpty }, id: \.0
-        ) { DetailRow(name: $0.0, value: $0.1) }
-        let workDir = job.fields.text("work_dir")
-        if !workDir.isEmpty {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Working directory").font(.subheadline).foregroundStyle(.secondary)
-            Text(workDir).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-          }
-        }
+      Section {
         Button("Submission script", systemImage: "doc.text") { fetchDocument("script") }
         Button("Launch manifest", systemImage: "list.bullet.rectangle") {
           fetchDocument("manifest")
         }
       }
+      CollapsibleSection("Details", key: "job.details", collapsedByDefault: true) {
+        if !job.partition.isEmpty {
+          NavigationLink(value: Route.partition(job.host, job.partition)) {
+            LabeledContent("Partition", value: job.partition)
+          }
+        }
+        facts(job.scheduling)
+      }
     }
     .listSectionSpacing(.compact)
+  }
+
+  private func facts(_ facts: [JobFact]) -> some View {
+    ForEach(facts) { FactRow(fact: $0) }
   }
 
   private func header(_ job: Job) -> some View {
@@ -354,23 +460,32 @@ struct JobDetailView: View {
         if cancelling { ProgressView() }
       }.foregroundStyle(.secondary)
       if job.state == .pending {
-        Text(job.fields.text("reason", fallback: "Waiting for resources"))
-          .font(.title3.weight(.semibold))
-        Text("Waiting for the scheduler").font(.subheadline).foregroundStyle(.secondary)
+        Text(job.value("reason") ?? "Waiting for resources").font(.title3.weight(.semibold))
+        if let position = job.queuePosition {
+          Text(
+            position.ahead == 0
+              ? "Next in \(position.partition) queue"
+              : "\(position.ahead) \(position.ahead == 1 ? "job" : "jobs") ahead in \(position.partition) · \(position.rank) of \(position.size)"
+          ).font(.subheadline).foregroundStyle(.secondary)
+        } else if let submitted = job.submitted {
+          Text("Queued \(Format.age(submitted).lowercased())").font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
       } else {
         HStack(alignment: .firstTextBaseline) {
           Text(Format.duration(job.runtime)).font(.title.weight(.semibold).monospacedDigit())
           if !job.limit.isEmpty {
             Text("of \(Format.duration(job.limit))").foregroundStyle(.secondary)
           }
+          Spacer()
+          if !job.state.active, let code = job.exitCode {
+            Text("Exit \(code)").font(.subheadline.monospacedDigit().weight(.medium))
+              .foregroundStyle(job.succeeded ? Theme.green : Theme.red)
+          }
         }
         if let fraction = job.timeFraction, job.state.active {
           ProgressView(value: fraction).tint(fraction > 0.9 ? Theme.amber : Theme.accent)
         }
-      }
-      if job.state.needsAttention && !store.acknowledgements.contains(id) {
-        Button("Mark reviewed", systemImage: "checkmark.circle") { store.acknowledge(id) }
-          .buttonStyle(.bordered).controlSize(.small)
       }
     }.padding(.vertical, 4)
   }
@@ -557,10 +672,15 @@ struct ArrayDetailView: View {
             }
             .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
           }
-          Section("\(group.total_tasks) tasks") {
-            ForEach(group.tasks) { task in
-              let taskID = JobID(host: id.host, number: task.number)
-              NavigationLink(value: Route.job(taskID)) { JobRow(job: task, showHost: false) }
+          ForEach(taskGroups(group.tasks), id: \.title) { title, tasks, collapsed in
+            CollapsibleSection(
+              title, detail: "\(tasks.count)", key: "array.\(title)", collapsedByDefault: collapsed
+            ) {
+              CappedRows(items: tasks, limit: 10) { task in
+                NavigationLink(value: Route.job(JobID(host: id.host, number: task.number))) {
+                  JobRow(job: task, showHost: false)
+                }
+              }
             }
           }
         }
@@ -572,6 +692,16 @@ struct ArrayDetailView: View {
       }
     }
     .navigationSubtitle("\(id.host) · #\(id.number)")
+  }
+  /// Tasks split by outcome; finished work starts collapsed.
+  private func taskGroups(_ tasks: [Job]) -> [(title: String, tasks: [Job], collapsed: Bool)] {
+    [
+      ("Running", tasks.filter { $0.state == .running }, false),
+      ("Queued", tasks.filter { $0.state == .pending }, false),
+      ("Failed", tasks.filter(\.state.isFailure), false),
+      ("Completed", tasks.filter { $0.state == .completed }, true),
+      ("Other", tasks.filter { $0.state == .cancelled || $0.state == .unknown }, true),
+    ].filter { !$0.1.isEmpty }
   }
   private func count(_ value: Int, _ label: String, _ color: Color) -> some View {
     VStack(spacing: 2) {

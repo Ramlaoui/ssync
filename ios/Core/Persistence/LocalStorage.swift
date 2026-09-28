@@ -74,7 +74,6 @@ struct SavedSession: Codable {
   var arrays: [ArrayGroup]
   var receivedAt: Date?
   var pins: Set<JobID>
-  var acknowledgements: Set<JobID>
 }
 
 @MainActor final class LocalStorage {

@@ -8,10 +8,12 @@ struct ClusterView: View {
       if store.error != nil && !store.demo { ConnectionBanner() }
       ForEach(store.hosts) { host in
         let snapshot = store.partitions.first { $0.hostname == host.hostname }
-        Section {
+        CollapsibleSection(
+          host.hostname, detail: summary(host.hostname), key: "cluster.\(host.hostname)"
+        ) {
           NavigationLink(value: Route.host(host.hostname)) { HostRow(host: host.hostname) }
             .accessibilityIdentifier("host-\(host.hostname)")
-          ForEach(snapshot?.partitions ?? []) { partition in
+          CappedRows(items: snapshot?.partitions ?? [], limit: 4) { partition in
             NavigationLink(value: Route.partition(host.hostname, partition.partition)) {
               PartitionRow(partition: partition)
             }
@@ -50,22 +52,26 @@ struct ClusterView: View {
     }
     .refreshable { await store.refresh(force: true) }
   }
+  private func summary(_ host: String) -> String {
+    let jobs = store.jobs.filter { $0.host == host }
+    let running = jobs.filter { $0.state == .running }.count
+    let queued = jobs.filter { $0.state == .pending }.count
+    return running + queued == 0 ? "idle" : "\(running) running · \(queued) queued"
+  }
 }
 
+/// The host's overview link: reachability and a pointer to its jobs and partitions.
 struct HostRow: View {
   var host: String
   @Environment(AppStore.self) private var store
   var body: some View {
-    let jobs = store.jobs.filter { $0.host == host }
-    let running = jobs.filter { $0.state == .running }.count
-    let queued = jobs.filter { $0.state == .pending }.count
     HStack(spacing: 12) {
       Image(systemName: store.hostErrors[host] == nil ? "server.rack" : "exclamationmark.triangle")
         .foregroundStyle(store.hostErrors[host] == nil ? Theme.accent : Theme.amber)
         .frame(width: 22)
       VStack(alignment: .leading, spacing: 2) {
-        Text(host).font(.headline)
-        Text(store.hostErrors[host] ?? "\(running) running · \(queued) queued")
+        Text("Overview").font(.body.weight(.medium))
+        Text(store.hostErrors[host] ?? "Your jobs and all partitions")
           .font(.caption).foregroundStyle(.secondary).lineLimit(1)
       }
     }
@@ -115,14 +121,14 @@ struct HostDetailView: View {
         Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.amber)
           .font(.subheadline)
       }
-      Section {
-        ForEach(snapshot?.partitions ?? []) { partition in
+      CollapsibleSection(
+        "Partitions", detail: "\(snapshot?.partitions.count ?? 0)", key: "host.partitions"
+      ) {
+        CappedRows(items: snapshot?.partitions ?? [], limit: 6) { partition in
           NavigationLink(value: Route.partition(host, partition.partition)) {
             PartitionRow(partition: partition)
           }
         }
-      } header: {
-        Text("Partitions")
       } footer: {
         if let snapshot {
           Text("Sampled \(Format.age(snapshot.observedAt).lowercased())")
@@ -130,8 +136,8 @@ struct HostDetailView: View {
           Text("No capacity snapshot. Pull to refresh when the host is reachable.")
         }
       }
-      Section("Your active jobs") {
-        ForEach(jobs) { job in
+      CollapsibleSection("Your active jobs", detail: "\(jobs.count)", key: "host.jobs") {
+        CappedRows(items: jobs) { job in
           NavigationLink(value: Route.job(job.id)) {
             JobRow(job: job, pinned: store.pins.contains(job.id), showHost: false)
           }.jobActions(job)
@@ -213,7 +219,7 @@ struct PartitionDetailView: View {
         Picker("Show", selection: $scope) {
           ForEach(["Active", "Running", "Queued", "All"], id: \.self) { Text($0) }
         }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
-        ForEach(jobs) { job in
+        CappedRows(items: jobs) { job in
           NavigationLink(value: Route.job(job.id)) {
             JobRow(job: job, pinned: store.pins.contains(job.id), showHost: false)
           }.jobActions(job)
