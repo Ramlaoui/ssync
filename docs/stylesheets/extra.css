@@ -52,7 +52,12 @@
   margin: 0.25rem;
 }
 
-/* Screenshots: soft frame, rounded, with a gentle shadow. */
+/* A wider layout gives screenshots room; text keeps a readable measure. */
+.md-grid {
+  max-width: 76rem;
+}
+
+/* Screenshots: soft frame, rounded, with a gentle shadow. Click to zoom. */
 .md-typeset .ss-shot img,
 .md-typeset img.ss-shot {
   border-radius: 12px;
@@ -61,16 +66,22 @@
 }
 
 .md-typeset .ss-phones {
+  margin: 1.5rem 0;
+}
+
+/* Markdown wraps the phones in one paragraph, so lay out that paragraph. */
+.md-typeset .ss-phones > p {
   display: flex;
   justify-content: center;
   gap: 1.25rem;
   flex-wrap: wrap;
-  margin: 1.5rem 0;
+  margin: 0;
 }
 
 .md-typeset .ss-phones img {
-  width: 200px;
-  max-width: 30%;
+  width: 250px;
+  max-width: calc(33% - 1rem);
+  min-width: 150px;
   border-radius: 28px;
   box-shadow: 0 16px 48px -20px rgba(12, 22, 52, 0.45);
 }
@@ -101,4 +112,29 @@
   .ss-hero h1 {
     font-size: 1.9rem;
   }
+}
+
+.md-typeset .ss-shot img,
+.md-typeset img.ss-shot,
+.md-typeset .ss-phones img {
+  cursor: zoom-in;
+}
+
+.ss-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vmin;
+  background: rgba(8, 12, 24, 0.82);
+  cursor: zoom-out;
+}
+
+.ss-zoom img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }

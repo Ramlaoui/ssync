@@ -87,13 +87,9 @@ Write or paste a script, choose the host and source directory, adjust resources,
 
 Press ++cmd+k++ to jump to any job or page. The app follows your system appearance, or you can pick light or dark in Settings.
 
-<div class="grid" markdown>
-
 ![Quick find](../assets/screenshots/web-quick-find.webp){ .ss-shot }
 
 ![Dark mode](../assets/screenshots/web-jobs-dark.webp){ .ss-shot }
-
-</div>
 
 ## On a phone browser
 
