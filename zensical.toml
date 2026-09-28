@@ -1,7 +1,7 @@
 [project]
 site_name = "ssync"
 site_description = "Run, watch, and relaunch Slurm jobs across all your HPC clusters from one place: CLI, web app, and iPhone."
-site_url = "https://ssync-slurm.readthedocs.io/"
+site_url = "https://ssync.ramlaoui.org/"
 site_author = "Ali Ramlaoui"
 repo_url = "https://github.com/Ramlaoui/ssync"
 repo_name = "Ramlaoui/ssync"
