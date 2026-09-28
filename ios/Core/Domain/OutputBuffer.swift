@@ -37,6 +37,26 @@ struct OutputBookmark: Codable, Identifiable {
   var createdAt = Date.now
 }
 
+/// Splits a byte stream into lines, keeping the empty lines that end SSE events.
+/// `URLSession.AsyncBytes.lines` drops empty lines, so events would never dispatch.
+struct SSELineSplitter {
+  private var pending: [UInt8] = []
+  private var sawCarriageReturn = false
+  mutating func feed(_ byte: UInt8) -> String? {
+    if byte == 0x0A, sawCarriageReturn {
+      sawCarriageReturn = false
+      return nil
+    }
+    sawCarriageReturn = byte == 0x0D
+    guard byte == 0x0A || byte == 0x0D else {
+      pending.append(byte)
+      return nil
+    }
+    defer { pending.removeAll(keepingCapacity: true) }
+    return String(decoding: pending, as: UTF8.self)
+  }
+}
+
 struct SSEParser {
   private var data: [String] = []
   mutating func consume(_ line: String) -> String? {

@@ -175,4 +175,15 @@ struct OutputTests {
     #expect(parser.consume("data:{\"type\":\"complete\"}") == nil)
     #expect(parser.consume("") == #"{"type":"complete"}"#)
   }
+
+  @Test func sseEventsDispatchFromRawBytesWithAnyLineEnding() {
+    var splitter = SSELineSplitter()
+    var parser = SSEParser()
+    var events: [String] = []
+    let stream = "data: {\"a\":1}\n\ndata: é\r\n\r\ndata: last\r\r"
+    for byte in Array(stream.utf8) {
+      if let line = splitter.feed(byte), let event = parser.consume(line) { events.append(event) }
+    }
+    #expect(events == [#"{"a":1}"#, "é", "last"])
+  }
 }

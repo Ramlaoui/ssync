@@ -65,13 +65,15 @@ import SwiftUI
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         let (bytes, response) = try await api.session.bytes(for: request)
         try api.validate(response)
+        var splitter = SSELineSplitter()
         var parser = SSEParser()
         var firstChunk = true
         var truncated = false
         connected = true
         loading = false
         error = nil
-        for try await line in bytes.lines {
+        for try await byte in bytes {
+          guard let line = splitter.feed(byte) else { continue }
           try Task.checkCancellation()
           guard let event = parser.consume(line), let data = event.data(using: .utf8),
             let json = try? JSONDecoder().decode(JSONValue.self, from: data)
