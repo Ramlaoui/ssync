@@ -62,8 +62,8 @@
 | Signature components | Host overview, bold job summary, execution path, watcher rule diagram, output dock, submission handoff. |
 | Signature motion | Event-driven arrival traces, numeric transitions, rule-stage handoffs, and a confirmed-launch resolution. |
 | Material | Solid content surfaces. Native Liquid Glass belongs to navigation and transient controls. |
-| Navigation | Four tabs: **Jobs**, **Hosts**, **Watchers**, **Launch**. Each owns its navigation history. |
-| Settings | A gear in every root toolbar opens one settings sheet with its own navigation stack. |
+| Navigation | Three tabs: **Jobs**, **Cluster**, **Activity**. Each owns its navigation history. Launch is a modal task opened with + from any root. |
+| Settings | The account menu in every root toolbar switches or adds servers and opens one settings sheet. |
 | Job hierarchy | Host groups; running jobs first, pending jobs next; historical jobs have a deliberate view and time window. |
 | Main job actions | View output, Follow live, job alerts; manual relaunch and cancellation remain explicit actions. |
 | Notification transport | Native APNs, preserving the existing ssync server notification pipeline. |
@@ -427,17 +427,17 @@ No downloadable icon pack, licensed bitmap stock, or third-party font is require
 
 ![Selected screen concepts](design/boards/04-screen-overview.png)
 
-### 8.1 The four tabs
+### 8.1 The three tabs
 
-**Jobs** is the default landing destination. It answers what is running, what is waiting, and what happened to historical work.
+**Jobs** is the default landing destination. It answers what needs attention, what is running, what is waiting, and what finished recently. Pinned jobs come first; history is one link away.
 
-**Hosts** is the capacity and cluster-situation workspace. It compares host reachability, partition availability and allocation, and jobs within a selected user scope. Host and partition views link directly to relevant jobs and output. This is a first-class destination because cluster context is a frequent mobile need.
+**Cluster** is the capacity workspace. It compares host reachability, partition availability and allocation, and jobs within a selected user scope. Host and partition views link directly to relevant jobs and output.
 
-**Watchers** is the durable rules workspace. It contains active/paused/completed rules and their event histories. It remains a top-level destination because automation can span many jobs.
+**Activity** answers what happened: launches in flight, recent watcher events across all jobs, and the watcher rules that produce them. Watchers are created and edited from their job, where their context lives.
 
-**Launch** is a useful library, not an empty form. It opens with drafts, templates, recent jobs available for relaunch, and recipe catalog entries when supported. “New job” starts a deliberate editor.
+**Launch** is not a tab. It is a modal task opened with + from any root (or from a job, host, or partition with the destination prefilled). It starts from reuse—recent jobs to relaunch, recipes, drafts—before a blank script, and it closes back to wherever the user was.
 
-Settings, connection management, notification preferences, and diagnostics are not full-time tabs. They are available from each root toolbar. A user should not have to leave the current job to understand its related watchers.
+Settings, connection management, notification preferences, and diagnostics are not full-time tabs. The account menu in each root toolbar switches servers and opens Settings. A user should not have to leave the current job to understand its related watchers.
 
 ### 8.2 Destination tree
 
@@ -456,19 +456,20 @@ App
     │   │   └── Alerts / Follow live / action menu
     │   ├── Array → task Job Detail
     │   └── Host → partitions and connection status
-    ├── Hosts
+    ├── Cluster
     │   ├── Host overview → partitions
     │   ├── Partition → capacity / pending reasons / scoped jobs
     │   └── Job Detail → output
-    ├── Watchers
-    │   ├── Watcher Detail → events → event detail
-    │   └── New / edit watcher
-    └── Launch
-        ├── Drafts
-        ├── Templates / template detail
-        ├── Recent jobs → prefilled draft
-        ├── Recipe catalog, capability gated
-        └── Editor → review → submission progress → Job Detail
+    └── Activity
+        ├── Launches in flight → submission status
+        ├── Recent watcher events → Watcher Detail
+        └── Watchers → Watcher Detail → edit (sheet)
+
+Launch sheet (from + on any root, or prefilled from a job/host/partition)
+├── Recent jobs → prefilled draft
+├── Recipes
+├── Drafts
+└── Editor → review → submission progress → Job Detail
 
 Shared settings sheet
 ├── ssync Connection

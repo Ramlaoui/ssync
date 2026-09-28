@@ -19,6 +19,7 @@
 		6086F059E25B7C3F4CC6E8B4 /* CoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDD9454D114F75CFB7DF8C04 /* CoreTests.swift */; };
 		7150758D9F4DF67BB365C71E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220A6BB5473076389A71D05B /* SettingsView.swift */; };
 		741F850C2941C5BB8236548B /* JobLiveActivities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61DF2A91E283C651A9C4E06C /* JobLiveActivities.swift */; };
+		81D8BBDC2C1E31EC1E624CD1 /* JobFacts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5326AB1DECB9C022D9A6B89B /* JobFacts.swift */; };
 		845DAA4EF0EE37F429DFDAC4 /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030360975968AAF22175B631 /* ConnectionView.swift */; };
 		84F1D2D88E793EAD71B3F134 /* HostsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D99227A7E2E3E35BA682A788 /* HostsView.swift */; };
 		85C5ABC3F4BD8E7D4504BDFE /* LaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFE7DD1A3203AE5942414B8 /* LaunchView.swift */; };
@@ -94,6 +95,7 @@
 		27113AEE9714164DD6044218 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		391801F20133082D5E695102 /* LiveActivityControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityControlTests.swift; sourceTree = "<group>"; };
 		40748672872E0F181589CFC2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		5326AB1DECB9C022D9A6B89B /* JobFacts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobFacts.swift; sourceTree = "<group>"; };
 		53AF536374E97C8E162C7892 /* OutputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputView.swift; sourceTree = "<group>"; };
 		5628E6AE06EC646E7A3EEC8B /* WatchersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchersView.swift; sourceTree = "<group>"; };
 		5B65E7405AED6E517CF8DFAA /* OutputBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputBuffer.swift; sourceTree = "<group>"; };
@@ -216,6 +218,7 @@
 			isa = PBXGroup;
 			children = (
 				DF8D898AE19891CFF0ED9FC7 /* DemoData.swift */,
+				5326AB1DECB9C022D9A6B89B /* JobFacts.swift */,
 				6AAF3E20489A3F94F6C7AC69 /* JSONValue.swift */,
 				7995550561F67DDD2F4F302B /* LaunchDraft.swift */,
 				40748672872E0F181589CFC2 /* Models.swift */,
@@ -457,6 +460,7 @@
 				84F1D2D88E793EAD71B3F134 /* HostsView.swift in Sources */,
 				B6693F61512A319FEDC95283 /* InteractionComponents.swift in Sources */,
 				E8B23662AEC9F91B9E5CBEDB /* JSONValue.swift in Sources */,
+				81D8BBDC2C1E31EC1E624CD1 /* JobFacts.swift in Sources */,
 				DCD9B4281A258D815B331F86 /* JobLiveActivities.swift in Sources */,
 				BA1BB48F3537849DBF9EC7B7 /* JobsView.swift in Sources */,
 				2651566776474E04A0590898 /* LaunchDraft.swift in Sources */,

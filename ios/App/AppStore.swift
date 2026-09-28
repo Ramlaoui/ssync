@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WidgetKit
 
-enum AppTab: String, CaseIterable { case jobs, hosts, watchers, launch }
+enum AppTab: String, CaseIterable { case jobs, cluster, activity }
 enum Route: Hashable {
   case job(JobID)
   case output(JobID)
@@ -10,6 +10,12 @@ enum Route: Hashable {
   case partition(String, String)
   case watcher(Int)
   case array(JobID)
+  case history
+}
+/// Launches are modal tasks presented over whichever tab the user is in.
+struct LaunchRequest: Identifiable {
+  let id = UUID()
+  var draft: LaunchDraft?
 }
 
 @MainActor @Observable final class AppStore {
@@ -22,7 +28,6 @@ enum Route: Hashable {
   var partitions: [PartitionSnapshot] = []
   var watchers: [Watcher] = []
   var pins: Set<JobID> = []
-  var acknowledgements: Set<JobID> = []
   var hostErrors: [String: String] = [:]
   var error: String?
   var watcherError: String?
@@ -31,12 +36,12 @@ enum Route: Hashable {
   var socketConnected = false
   var tab: AppTab = .jobs
   var jobPath: [Route] = []
-  var hostPath: [Route] = []
-  var watcherPath: [Route] = []
-  var launchPath: [Route] = []
+  var clusterPath: [Route] = []
+  var activityPath: [Route] = []
   var showSettings = false
+  var addingConnection = false
   var notificationJob: JobID?
-  var draftToOpen: LaunchDraft?
+  var launch: LaunchRequest?
   var drafts: [SavedDraft] = []
   var refreshRevision = 0
   var widgetPrivacy = UserDefaults.standard.bool(forKey: "widgetPrivacy") {
@@ -64,8 +69,13 @@ enum Route: Hashable {
         : $0.state.order < $1.state.order
     }
   }
-  var attentionJobs: [Job] {
-    sortedJobs.filter { $0.state.needsAttention && !acknowledgements.contains($0.id) }
+  /// Array tasks are reached through their array row rather than listed individually.
+  var listedJobs: [Job] {
+    let arrayIDs = Set(arrays.map(\.id))
+    return sortedJobs.filter { job in
+      guard let parent = job.arrayParent else { return !arrayIDs.contains(job.id) }
+      return !arrayIDs.contains(JobID(host: job.host, number: parent))
+    }
   }
 
   init(inMemory: Bool = false, demo: Bool = false) {
@@ -114,15 +124,11 @@ enum Route: Hashable {
     arrays = []
     hostErrors = [:]
     pins = []
-    acknowledgements = []
     receivedAt = nil
     error = nil
     watcherError = nil
-    jobPath = []
-    hostPath = []
-    watcherPath = []
-    launchPath = []
-    draftToOpen = nil
+    resetPaths()
+    launch = nil
     if selected.demo {
       hosts = DemoData.hosts
       jobs = DemoData.jobs
@@ -138,7 +144,6 @@ enum Route: Hashable {
       arrays = saved.arrays
       receivedAt = saved.receivedAt
       pins = saved.pins
-      acknowledgements = saved.acknowledgements
     }
     reloadDrafts()
     publishSnapshot()
@@ -157,10 +162,8 @@ enum Route: Hashable {
     drafts = []
     pins = []
     receivedAt = nil
-    jobPath = []
-    hostPath = []
-    watcherPath = []
-    launchPath = []
+    resetPaths()
+    launch = nil
     publishSnapshot()
   }
 
@@ -338,10 +341,6 @@ enum Route: Hashable {
     if pins.contains(id) { pins.remove(id) } else { pins.insert(id) }
     save()
   }
-  func acknowledge(_ id: JobID) {
-    acknowledgements.insert(id)
-    save()
-  }
 
   func cancel(_ id: JobID) async throws {
     if demo {
@@ -376,9 +375,45 @@ enum Route: Hashable {
     try storage.saveDraft(draft, connectionID: id, template: template)
     reloadDrafts()
   }
-  func openDraft(_ draft: LaunchDraft) {
-    draftToOpen = draft
-    tab = .launch
+  func openDraft(_ draft: LaunchDraft? = nil) {
+    showSettings = false
+    launch = LaunchRequest(draft: draft)
+  }
+  /// Builds a draft from a job's stored script and manifest. Nothing is saved or submitted.
+  func relaunchDraft(for job: Job) async throws -> LaunchDraft {
+    var draft = LaunchDraft()
+    draft.host = job.host
+    draft.name = job.name
+    draft.partition = job.partition
+    if demo {
+      draft.script = LaunchDraft.sample.script
+    } else {
+      guard let api = client else {
+        throw APIError(status: 0, message: "Not connected to a server.")
+      }
+      draft.script = try await api.document(job.id, kind: "script").object.text("script_content")
+      if let manifest = try? await api.document(job.id, kind: "manifest") {
+        draft.extraFields["launch_manifest"] = manifest
+      }
+    }
+    guard !draft.script.isEmpty else {
+      throw APIError(status: 0, message: "The submission script is unavailable.")
+    }
+    draft.provenance = "Relaunch of \(job.host) / #\(job.number)"
+    return draft
+  }
+  /// Pushes onto the stack of the tab the user is currently in.
+  func push(_ route: Route) {
+    switch tab {
+    case .jobs: jobPath.append(route)
+    case .cluster: clusterPath.append(route)
+    case .activity: activityPath.append(route)
+    }
+  }
+  private func resetPaths() {
+    jobPath = []
+    clusterPath = []
+    activityPath = []
   }
   func handleNotification(_ url: URL) {
     guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -416,14 +451,18 @@ enum Route: Hashable {
     case "job":
       guard let host = query["host"], let number = query["id"], !host.isEmpty, !number.isEmpty
       else { return }
+      showSettings = false
+      launch = nil
       tab = .jobs
-      jobPath = [.job(JobID(host: host, number: number))]
+      // Keep the user's place: push onto the stack unless the job is already on top.
+      let route = Route.job(JobID(host: host, number: number))
+      if jobPath.last != route { jobPath.append(route) }
     case "host":
       if let host = query["name"] {
-        tab = .hosts
-        hostPath = [.host(host)]
+        tab = .cluster
+        if clusterPath.last != .host(host) { clusterPath.append(.host(host)) }
       }
-    case "launch": tab = .launch
+    case "launch": openDraft()
     default: tab = .jobs
     }
   }
@@ -434,8 +473,7 @@ enum Route: Hashable {
         try storage.save(
           SavedSession(
             connection: connection, hosts: hosts, jobs: jobs, partitions: partitions,
-            watchers: watchers, arrays: arrays, receivedAt: receivedAt, pins: pins,
-            acknowledgements: acknowledgements))
+            watchers: watchers, arrays: arrays, receivedAt: receivedAt, pins: pins))
       } catch { self.error = "Could not save the offline snapshot: \(error.localizedDescription)" }
     }
     publishSnapshot()
@@ -449,7 +487,7 @@ enum Route: Hashable {
         connectionID: connection?.id, name: demo ? "Demo · Sample data" : connection!.name,
         updatedAt: receivedAt,
         running: jobs.filter { $0.state == .running }.count,
-        pending: jobs.filter { $0.state == .pending }.count, attention: attentionJobs.count,
+        pending: jobs.filter { $0.state == .pending }.count,
         jobs: sortedJobs.map {
           SystemJob(
             host: $0.host, number: $0.number, name: $0.name, state: $0.state.label,

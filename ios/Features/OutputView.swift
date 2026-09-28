@@ -2,14 +2,17 @@ import Observation
 import SwiftUI
 
 @MainActor @Observable final class OutputModel {
-  var buffer = OutputBuffer()
+  var buffer = OutputBuffer() {
+    didSet { lines = buffer.text.components(separatedBy: "\n") }
+  }
+  /// Split once per change rather than on every render.
+  private(set) var lines: [String] = [""]
   var connected = false
   var loading = true
   var error: String?
   var revision = 0
   var updatedAt: Date?
   var complete = false
-  var lines: [String] { buffer.text.components(separatedBy: "\n") }
 
   func watch(api: APIClient?, id: JobID, source: String, demo: Bool, snapshotURL: URL?) async {
     buffer.replace("")
@@ -62,13 +65,15 @@ import SwiftUI
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         let (bytes, response) = try await api.session.bytes(for: request)
         try api.validate(response)
+        var splitter = SSELineSplitter()
         var parser = SSEParser()
         var firstChunk = true
         var truncated = false
         connected = true
         loading = false
         error = nil
-        for try await line in bytes.lines {
+        for try await byte in bytes {
+          guard let line = splitter.feed(byte) else { continue }
           try Task.checkCancellation()
           guard let event = parser.consume(line), let data = event.data(using: .utf8),
             let json = try? JSONDecoder().decode(JSONValue.self, from: data)
@@ -134,204 +139,258 @@ struct OutputView: View {
   @Environment(\.scenePhase) private var phase
   @State private var model = OutputModel()
   @State private var source = "stdout"
+  @State private var searching = false
   @State private var query = ""
-  @State private var follow = true
-  @State private var wrap = true
+  @State private var matches: [Int] = []
   @State private var matchIndex = 0
+  @State private var follow = true
+  @State private var pausedAt = 0
+  @State private var wrap = true
   @State private var showBookmarks = false
   @State private var bookmarks: [OutputBookmark] = []
   @State private var exportURL: URL?
   @State private var exporting = false
   @State private var exportError: String?
+  @FocusState private var findFocused: Bool
   var bookmarkKey: String { "bookmarks.\(store.connection?.id.uuidString ?? "").\(id.id)" }
-  var matches: [Int] { model.buffer.matchingLines(query) }
+  var unseen: Int { max(0, model.lines.count - pausedAt) }
+  var status: String {
+    let live = model.complete ? "Finished" : model.connected ? "Live" : "Snapshot"
+    return "\(source) · \(live) · \(Format.age(model.updatedAt).lowercased())"
+  }
+
   var body: some View {
-    VStack(spacing: 0) {
-      VStack(alignment: .leading, spacing: 12) {
-        HStack {
-          Text(store.job(id)?.name ?? "#\(id.number)").font(.headline).lineLimit(1)
-          Spacer()
-          Circle().fill(model.connected ? Theme.green : Theme.secondary).frame(width: 6, height: 6)
-          Text(model.complete ? "Finished" : model.connected ? "Streaming" : "Snapshot").font(
-            .caption
-          ).foregroundStyle(Theme.secondary)
+    ScrollViewReader { proxy in
+      VStack(spacing: 0) {
+        if let notice {
+          Label(notice.text, systemImage: notice.symbol).font(.caption)
+            .foregroundStyle(notice.warning ? Theme.amber : .secondary).lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16).padding(.vertical, 8).background(.bar)
         }
-        HStack {
-          Text("\(id.host) / #\(id.number)").font(.system(.caption, design: .monospaced))
-          Spacer()
-          Text(Format.age(model.updatedAt)).font(.caption)
-        }.foregroundStyle(Theme.secondary)
-        Picker("Output source", selection: $source) {
-          Text("stdout").tag("stdout")
-          Text("stderr").tag("stderr")
-        }.pickerStyle(.segmented)
-      }.padding(16).background(Theme.canvas)
-      ScrollViewReader { proxy in
-        VStack(spacing: 0) {
-          if let error = model.error {
-            HStack {
-              Image(systemName: "wifi.exclamationmark")
-              Text(error).lineLimit(2)
-            }.font(.caption).foregroundStyle(Theme.amber).padding(10).frame(
-              maxWidth: .infinity, alignment: .leading
-            ).background(Theme.canvas)
+        if searching { findBar(proxy) }
+        log
+          .onScrollPhaseChange { _, new in
+            if new == .interacting && follow {
+              follow = false
+              pausedAt = model.lines.count
+            }
           }
-          if model.buffer.trimmed {
-            Text(
-              "Showing a bounded window. Search covers loaded text only; download for the complete file."
-            )
-            .font(.caption2).foregroundStyle(Theme.secondary).padding(10).frame(
-              maxWidth: .infinity, alignment: .leading
-            ).background(Theme.canvas)
+          .onChange(of: model.revision) { _, _ in
+            if follow { proxy.scrollTo("tail", anchor: .bottom) }
+            if !query.isEmpty { matches = model.buffer.matchingLines(query) }
           }
-          HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondary)
-            TextField("Find in loaded output", text: $query).textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .accessibilityIdentifier("outputSearch")
-            if !query.isEmpty {
-              Text("\(matches.isEmpty ? 0 : min(matchIndex + 1, matches.count))/\(matches.count)")
-                .font(.caption.monospacedDigit())
-              Button("Previous match", systemImage: "chevron.up") { jump(-1, proxy: proxy) }
-                .disabled(matches.isEmpty)
-              Button("Next match", systemImage: "chevron.down") { jump(1, proxy: proxy) }.disabled(
-                matches.isEmpty)
-              Button("Clear", systemImage: "xmark.circle.fill") { query = "" }
+          .onChange(of: query) { _, _ in
+            matches = query.isEmpty ? [] : model.buffer.matchingLines(query)
+            matchIndex = 0
+            if let first = matches.first {
+              follow = false
+              pausedAt = model.lines.count
+              proxy.scrollTo(first, anchor: .center)
             }
-          }.font(.subheadline).padding(12).background(Theme.surface)
-          ScrollView(wrap ? .vertical : [.vertical, .horizontal]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-              ForEach(Array(model.lines.enumerated()), id: \.offset) { index, line in
-                HStack(alignment: .top, spacing: 12) {
-                  Text("\(index + 1)").foregroundStyle(Color.white.opacity(0.3)).frame(
-                    width: 38, alignment: .trailing
-                  ).accessibilityHidden(true)
-                  Text(line.isEmpty ? " " : line)
-                    .foregroundStyle(
-                      line.localizedCaseInsensitiveContains("error")
-                        ? Color(red: 1, green: 0.60, blue: 0.55)
-                        : Color(red: 0.80, green: 0.86, blue: 0.95)
-                    )
-                    .fixedSize(horizontal: !wrap, vertical: true).frame(
-                      maxWidth: .infinity, alignment: .leading
-                    )
-                    .textSelection(.enabled)
-                }.font(.system(size: 12, design: .monospaced)).padding(.vertical, 4).padding(
-                  .trailing, 12
-                )
-                .background(
-                  !query.isEmpty && line.localizedCaseInsensitiveContains(query)
-                    ? Color.yellow.opacity(0.17) : Color.clear
-                )
-                .id(index).contextMenu {
-                  Button("Bookmark line", systemImage: "bookmark") { addBookmark(line) }
-                  Button("Copy line", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = line
-                  }
-                }
-              }
-              Color.clear.frame(height: 1).id("tail")
-            }.padding(.vertical, 12)
-          }.background(Color("CodeCanvas")).scrollDismissesKeyboard(.interactively)
-            .onScrollPhaseChange { _, new in if new == .interacting { follow = false } }
-            .onChange(of: model.revision) { _, _ in
-              if follow { proxy.scrollTo("tail", anchor: .bottom) }
+          }
+      }
+      .toolbar {
+        ToolbarItem(placement: .bottomBar) {
+          Picker("Output source", selection: $source) {
+            Text("stdout").tag("stdout")
+            Text("stderr").tag("stderr")
+          }.pickerStyle(.segmented).fixedSize()
+        }
+        ToolbarSpacer(.flexible, placement: .bottomBar)
+        ToolbarItem(placement: .bottomBar) {
+          Button {
+            follow.toggle()
+            if follow {
+              proxy.scrollTo("tail", anchor: .bottom)
+            } else {
+              pausedAt = model.lines.count
             }
-            .overlay {
-              if model.loading {
-                ProgressView("Opening output…").padding().background(
-                  Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-              }
-            }
-          HStack(spacing: 20) {
-            Button {
-              follow.toggle()
-              if follow { proxy.scrollTo("tail", anchor: .bottom) }
-            } label: {
+          } label: {
+            if follow {
+              Label("Following", systemImage: "arrow.down.to.line")
+            } else {
               Label(
-                follow ? "Following" : "Jump to latest",
-                systemImage: follow ? "arrow.down.to.line.compact" : "arrow.down")
-            }.font(.subheadline.weight(.semibold))
-              .accessibilityIdentifier("outputFollow")
-            Spacer(minLength: 0)
-            Button("Bookmarks", systemImage: "bookmark") { showBookmarks = true }
-            Menu {
-              Toggle("Wrap lines", isOn: $wrap)
-              Button("Add local marker", systemImage: "flag") {
-                addBookmark(
-                  "Marker at \(Date.now.formatted(date: .omitted, time: .standard)): \(model.lines.last ?? "")"
-                )
-              }
-              Button("Download full \(source)", systemImage: "square.and.arrow.up") { export() }
-                .disabled(exporting)
-            } label: {
-              Image(systemName: "ellipsis.circle")
-            }.accessibilityLabel("Output options")
-          }.padding(17).background(Theme.surface)
-        }.onChange(of: query) { _, _ in
-          matchIndex = 0
-          follow = false
-          if let first = matches.first { proxy.scrollTo(first, anchor: .center) }
+                unseen > 0 ? "\(unseen) new lines" : "Jump to latest", systemImage: "arrow.down")
+            }
+          }
+          .labelStyle(.titleAndIcon)
+          .accessibilityIdentifier("outputFollow")
         }
       }
-    }.background(Theme.canvas).navigationTitle("Output").navigationBarTitleDisplayMode(.inline)
-      .task(id: "\(source)-\(phase == .active)") {
-        guard phase == .active else { return }
-        let file = store.connection.map {
-          store.storage.outputURL(connectionID: $0.id, job: id, source: source)
+    }
+    .toolbar(.hidden, for: .tabBar)
+    .navigationTitle(store.job(id)?.name ?? "#\(id.number)")
+    .navigationSubtitle(status)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Find", systemImage: "magnifyingglass") {
+          searching.toggle()
+          findFocused = searching
+          if !searching { query = "" }
+        }.accessibilityIdentifier("outputFind")
+      }
+      ToolbarItem(placement: .topBarTrailing) { optionsMenu }
+    }
+    .task(id: "\(source)-\(phase == .active)") {
+      guard phase == .active else { return }
+      let file = store.connection.map {
+        store.storage.outputURL(connectionID: $0.id, job: id, source: source)
+      }
+      await model.watch(
+        api: store.client, id: id, source: source, demo: store.demo, snapshotURL: file)
+    }
+    .onAppear {
+      if let data = UserDefaults.standard.data(forKey: bookmarkKey),
+        let saved = try? JSONDecoder().decode([OutputBookmark].self, from: data)
+      {
+        bookmarks = saved
+      }
+    }
+    .onChange(of: source) { _, _ in
+      follow = true
+      query = ""
+    }
+    .sheet(isPresented: $showBookmarks) { bookmarkSheet }
+    .sheet(isPresented: Binding(get: { exportURL != nil }, set: { if !$0 { exportURL = nil } })) {
+      if let exportURL { ShareSheet(url: exportURL) }
+    }
+    .alert(
+      "Download failed",
+      isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })
+    ) {
+      Button("OK") {}
+    } message: {
+      Text(exportError ?? "")
+    }
+  }
+
+  private var notice: (text: String, symbol: String, warning: Bool)? {
+    if let error = model.error { return (error, "wifi.exclamationmark", true) }
+    if model.buffer.trimmed {
+      return (
+        "Showing the latest part of the file. Download for the full output.", "scissors", false
+      )
+    }
+    return nil
+  }
+
+  private var log: some View {
+    ScrollView(wrap ? .vertical : [.vertical, .horizontal]) {
+      LazyVStack(alignment: .leading, spacing: 0) {
+        ForEach(model.lines.indices, id: \.self) { index in
+          let line = model.lines[index]
+          HStack(alignment: .top, spacing: 10) {
+            Text("\(index + 1)").foregroundStyle(.tertiary)
+              .frame(minWidth: 30, alignment: .trailing).accessibilityHidden(true)
+            Text(line.isEmpty ? " " : line)
+              .foregroundStyle(tone(line))
+              .fixedSize(horizontal: !wrap, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .textSelection(.enabled)
+          }
+          .font(.system(size: 12, design: .monospaced)).padding(.vertical, 2).padding(.trailing, 12)
+          .background(highlight(index))
+          .id(index)
+          .contextMenu {
+            Button("Copy line", systemImage: "doc.on.doc") { UIPasteboard.general.string = line }
+            Button("Bookmark line", systemImage: "bookmark") { addBookmark(line) }
+          }
         }
-        await model.watch(
-          api: store.client, id: id, source: source, demo: store.demo, snapshotURL: file)
+        Color.clear.frame(height: 1).id("tail")
+      }.padding(.vertical, 10)
+    }
+    .background(Theme.code)
+    .scrollDismissesKeyboard(.interactively)
+    .overlay {
+      if model.loading { ProgressView() }
+    }
+  }
+  private func tone(_ line: String) -> Color {
+    let lower = line.lowercased()
+    if lower.contains("error") || lower.contains("traceback") { return Theme.red }
+    if lower.contains("warn") { return Theme.amber }
+    return .primary
+  }
+  private func highlight(_ index: Int) -> Color {
+    guard !matches.isEmpty else { return .clear }
+    if matches.indices.contains(matchIndex), matches[matchIndex] == index {
+      return Color.yellow.opacity(0.35)
+    }
+    return matches.contains(index) ? Color.yellow.opacity(0.14) : .clear
+  }
+
+  private func findBar(_ proxy: ScrollViewProxy) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+      TextField("Find in output", text: $query).textInputAutocapitalization(.never)
+        .autocorrectionDisabled().focused($findFocused).submitLabel(.search)
+        .onSubmit { jump(1, proxy: proxy) }
+        .accessibilityIdentifier("outputSearch")
+      if !query.isEmpty {
+        Text("\(matches.isEmpty ? 0 : matchIndex + 1)/\(matches.count)")
+          .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        Button("Previous match", systemImage: "chevron.up") { jump(-1, proxy: proxy) }
+          .disabled(matches.isEmpty)
+        Button("Next match", systemImage: "chevron.down") { jump(1, proxy: proxy) }
+          .disabled(matches.isEmpty)
       }
-      .onAppear {
-        if let data = UserDefaults.standard.data(forKey: bookmarkKey),
-          let saved = try? JSONDecoder().decode([OutputBookmark].self, from: data)
-        {
-          bookmarks = saved
-        }
+    }
+    .labelStyle(.iconOnly).font(.subheadline)
+    .padding(.horizontal, 16).padding(.vertical, 10).background(.bar)
+  }
+
+  private var optionsMenu: some View {
+    Menu {
+      Toggle("Wrap lines", systemImage: "text.alignleft", isOn: $wrap)
+      Button("Bookmarks", systemImage: "bookmark") { showBookmarks = true }
+      Button("Add marker at end", systemImage: "flag") {
+        addBookmark(
+          "Marker at \(Date.now.formatted(date: .omitted, time: .standard)): \(model.lines.last ?? "")"
+        )
       }
-      .onChange(of: source) { _, _ in
-        follow = true
-        query = ""
-      }
-      .sheet(isPresented: $showBookmarks) {
-        NavigationStack {
-          List {
-            if bookmarks.isEmpty {
-              Text("Long-press a line to bookmark it, or add a local marker from Output options.")
+      Divider()
+      Button("Download full \(source)", systemImage: "square.and.arrow.down") { export() }
+        .disabled(exporting)
+    } label: {
+      Label("Output options", systemImage: "ellipsis")
+    }
+  }
+
+  private var bookmarkSheet: some View {
+    NavigationStack {
+      List {
+        ForEach(bookmarks) { bookmark in
+          Button {
+            source = bookmark.source
+            searching = true
+            query = String(bookmark.excerpt.prefix(80))
+            showBookmarks = false
+          } label: {
+            VStack(alignment: .leading, spacing: 6) {
+              Text(bookmark.excerpt).font(.system(.caption, design: .monospaced)).lineLimit(4)
+              Text("\(bookmark.source) · \(bookmark.createdAt.formatted())").font(.caption2)
                 .foregroundStyle(.secondary)
             }
-            ForEach(bookmarks) { bookmark in
-              Button {
-                source = bookmark.source
-                query = String(bookmark.excerpt.prefix(80))
-                showBookmarks = false
-              } label: {
-                VStack(alignment: .leading, spacing: 7) {
-                  Text(bookmark.excerpt).font(.system(.caption, design: .monospaced)).lineLimit(4)
-                  Text("\(bookmark.source) · \(bookmark.createdAt.formatted())").font(.caption2)
-                    .foregroundStyle(.secondary)
-                }
-              }
-            }.onDelete {
-              bookmarks.remove(atOffsets: $0)
-              saveBookmarks()
-            }
-          }.navigationTitle("Local bookmarks").toolbar { Button("Done") { showBookmarks = false } }
+          }.tint(.primary)
+        }.onDelete {
+          bookmarks.remove(atOffsets: $0)
+          saveBookmarks()
         }
       }
-      .sheet(isPresented: Binding(get: { exportURL != nil }, set: { if !$0 { exportURL = nil } })) {
-        if let exportURL { ShareSheet(url: exportURL) }
+      .overlay {
+        if bookmarks.isEmpty {
+          ContentUnavailableView(
+            "No bookmarks", systemImage: "bookmark",
+            description: Text("Long-press a line to bookmark it."))
+        }
       }
-      .alert(
-        "Download failed",
-        isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })
-      ) {
-        Button("OK") {}
-      } message: {
-        Text(exportError ?? "")
-      }
+      .navigationTitle("Bookmarks").navigationBarTitleDisplayMode(.inline)
+      .toolbar { Button("Done") { showBookmarks = false } }
+    }.presentationDetents([.medium, .large])
   }
+
   private func jump(_ delta: Int, proxy: ScrollViewProxy) {
     guard !matches.isEmpty else { return }
     matchIndex = (matchIndex + delta + matches.count) % matches.count

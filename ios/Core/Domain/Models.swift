@@ -40,7 +40,7 @@ enum JobState: String, CaseIterable, Sendable {
     }
   }
   var active: Bool { self == .running || self == .pending }
-  var needsAttention: Bool { self == .failed || self == .timedOut }
+  var isFailure: Bool { self == .failed || self == .timedOut }
   var order: Int { Self.allCases.firstIndex(of: self) ?? 6 }
 }
 

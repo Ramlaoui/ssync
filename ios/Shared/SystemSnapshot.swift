@@ -7,11 +7,10 @@ struct SystemSnapshot: Codable, Sendable {
   var updatedAt: Date?
   var running: Int
   var pending: Int
-  var attention: Int
   var jobs: [SystemJob]
   var partitions: [SystemPartition]
   static let empty = SystemSnapshot(
-    name: "Open ssync to connect", running: 0, pending: 0, attention: 0, jobs: [], partitions: [])
+    name: "Open ssync to connect", running: 0, pending: 0, jobs: [], partitions: [])
   static let group = "group.com.ssync.mobile"
   static var fileURL: URL? {
     FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)?.appending(

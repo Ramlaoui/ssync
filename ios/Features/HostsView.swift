@@ -1,249 +1,262 @@
 import SwiftUI
 
-struct HostsView: View {
+struct ClusterView: View {
   @Environment(AppStore.self) private var store
+  @State private var explaining = false
   var body: some View {
-    Screen {
-      ConnectionStatus()
+    List {
+      if store.error != nil && !store.demo { ConnectionBanner() }
       ForEach(store.hosts) { host in
-        NavigationLink(value: Route.host(host.hostname)) { HostCard(host: host.hostname) }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("host-\(host.hostname)")
+        let snapshot = store.partitions.first { $0.hostname == host.hostname }
+        CollapsibleSection(
+          host.hostname, detail: summary(host.hostname), key: "cluster.\(host.hostname)"
+        ) {
+          NavigationLink(value: Route.host(host.hostname)) { HostRow(host: host.hostname) }
+            .accessibilityIdentifier("host-\(host.hostname)")
+          CappedRows(items: snapshot?.partitions ?? [], limit: 4) { partition in
+            NavigationLink(value: Route.partition(host.hostname, partition.partition)) {
+              PartitionRow(partition: partition)
+            }
+          }
+        } footer: {
+          if let snapshot {
+            Text(
+              snapshot.error.map { "Capacity may be out of date: \($0)" }
+                ?? "Capacity sampled \(Format.age(snapshot.observedAt).lowercased())")
+          } else {
+            Text("Capacity unavailable")
+          }
+        }
       }
+    }
+    .overlay {
       if store.hosts.isEmpty {
-        EmptyState(
-          title: "No hosts yet", detail: "Configure a host on your ssync server, then refresh.",
-          symbol: "server.rack")
+        ContentUnavailableView(
+          "No hosts", systemImage: "server.rack",
+          description: Text("Configure a host on your ssync server, then refresh."))
       }
-      Notice(
-        title: "Allocation, not utilization",
-        detail:
-          "These are scheduler resource counts. Partitions can share nodes, so their capacities are not added together.",
-        symbol: "chart.bar.xaxis")
-    }.navigationTitle("Hosts").navigationBarTitleDisplayMode(.inline).rootToolbar()
-      .refreshable { await store.refresh(force: true) }
+    }
+    .navigationTitle("Cluster")
+    .rootToolbar()
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("About capacity", systemImage: "info.circle") { explaining = true }
+      }
+    }
+    .alert("Allocation, not utilization", isPresented: $explaining) {
+      Button("OK") {}
+    } message: {
+      Text(
+        "Bars show what the scheduler has allocated. Partitions can share nodes, so their capacities don't add up, and idle resources may still be limited by policy or reservations."
+      )
+    }
+    .refreshable { await store.refresh(force: true) }
+  }
+  private func summary(_ host: String) -> String {
+    let jobs = store.jobs.filter { $0.host == host }
+    let running = jobs.filter { $0.state == .running }.count
+    let queued = jobs.filter { $0.state == .pending }.count
+    return running + queued == 0 ? "idle" : "\(running) running · \(queued) queued"
   }
 }
-struct HostCard: View {
+
+/// The host's overview link: reachability and a pointer to its jobs and partitions.
+struct HostRow: View {
   var host: String
   @Environment(AppStore.self) private var store
-  var snapshot: PartitionSnapshot? { store.partitions.first { $0.hostname == host } }
-  var jobs: [Job] { store.jobs.filter { $0.host == host } }
   var body: some View {
-    Paper {
-      VStack(alignment: .leading, spacing: 18) {
-        HStack {
-          Image(systemName: "server.rack").foregroundStyle(Theme.accent)
-          Text(host).font(.title2.weight(.semibold))
-          Spacer()
-          Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.secondary)
-        }
-        HStack(spacing: 18) {
-          Label("\(jobs.filter { $0.state == .running }.count) running", systemImage: "play.circle")
-            .foregroundStyle(Theme.green)
-          Label("\(jobs.filter { $0.state == .pending }.count) queued", systemImage: "clock")
-            .foregroundStyle(Theme.amber)
-        }.font(.caption.weight(.medium))
-        if let snapshot {
-          if snapshot.stale == true || snapshot.error != nil {
-            Notice(title: "Capacity may be out of date", detail: snapshot.error, warning: true)
-          }
-          ForEach(snapshot.partitions.prefix(3)) { partition in
-            PartitionSummary(partition: partition)
-          }
-          Text("Capacity · \(Format.age(snapshot.observedAt))").font(.caption2).foregroundStyle(
-            Theme.secondary)
-        } else {
-          Text("Capacity unavailable").font(.caption).foregroundStyle(Theme.secondary)
-        }
+    HStack(spacing: 12) {
+      Image(systemName: store.hostErrors[host] == nil ? "server.rack" : "exclamationmark.triangle")
+        .foregroundStyle(store.hostErrors[host] == nil ? Theme.accent : Theme.amber)
+        .frame(width: 22)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Overview").font(.body.weight(.medium))
+        Text(store.hostErrors[host] ?? "Your jobs and all partitions")
+          .font(.caption).foregroundStyle(.secondary).lineLimit(1)
       }
     }
+    .accessibilityElement(children: .combine)
   }
 }
-struct PartitionSummary: View {
+
+struct PartitionRow: View {
   var partition: Partition
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 6) {
       HStack {
-        Text(partition.partition).font(.subheadline.weight(.semibold))
+        Circle().fill(partition.availability?.lowercased() == "up" ? Theme.green : Theme.amber)
+          .frame(width: 6, height: 6)
+        Text(partition.partition).font(.subheadline.weight(.medium))
         Spacer()
-        Text(
-          partition.hasGPUs
-            ? "\(partition.gpus_idle.map(String.init) ?? "—") GPU idle"
-            : "\(partition.cpus_idle) CPU idle"
-        ).font(.caption).foregroundStyle(Theme.secondary)
+        Text(usage).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
       }
-      CapacityBar(
-        allocated: partition.cpus_alloc, idle: partition.cpus_idle, other: partition.cpus_other,
-        total: partition.cpus_total)
-      HStack {
-        Text("\(partition.cpus_alloc)/\(partition.cpus_total) CPUs allocated")
-        Spacer()
-        Text(partition.availability ?? "Unknown")
-      }.font(.caption2).foregroundStyle(Theme.secondary)
+      if partition.hasGPUs, let used = partition.gpus_used, let idle = partition.gpus_idle {
+        CapacityBar(allocated: used, idle: idle, total: partition.gpus_total ?? 0)
+      } else {
+        CapacityBar(
+          allocated: partition.cpus_alloc, idle: partition.cpus_idle,
+          other: partition.cpus_other, total: partition.cpus_total)
+      }
     }
+    .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
+  }
+  private var usage: String {
+    if partition.hasGPUs {
+      return
+        "\(partition.gpus_idle.map(String.init) ?? "—") of \(partition.gpus_total ?? 0) GPUs idle"
+    }
+    return "\(partition.cpus_idle) of \(partition.cpus_total) CPUs idle"
   }
 }
+
 struct HostDetailView: View {
   var host: String
   @Environment(AppStore.self) private var store
   var snapshot: PartitionSnapshot? { store.partitions.first { $0.hostname == host } }
-  var jobs: [Job] { store.sortedJobs.filter { $0.host == host && $0.state.active } }
+  var jobs: [Job] { store.listedJobs.filter { $0.host == host && $0.state.active } }
   var body: some View {
-    Screen {
-      Eyebrow(title: "Cluster overview")
-      Text(host).font(.system(.largeTitle, design: .rounded).weight(.bold))
+    List {
       if let error = store.hostErrors[host] {
-        Notice(title: "Host unavailable", detail: error, warning: true)
+        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.amber)
+          .font(.subheadline)
       }
-      if let snapshot {
-        Notice(
-          title: "Capacity sampled \(Format.age(snapshot.observedAt).lowercased())",
-          detail: snapshot.error
-            ?? "\(snapshot.partitions.count) partitions · Counts may overlap between partitions.",
-          symbol: snapshot.stale == true ? "clock.badge.exclamationmark" : "chart.bar",
-          warning: snapshot.stale == true || snapshot.error != nil)
-        SectionHeading(title: "Partitions")
-        ForEach(snapshot.partitions) { partition in
+      CollapsibleSection(
+        "Partitions", detail: "\(snapshot?.partitions.count ?? 0)", key: "host.partitions"
+      ) {
+        CappedRows(items: snapshot?.partitions ?? [], limit: 6) { partition in
           NavigationLink(value: Route.partition(host, partition.partition)) {
-            Paper { PartitionSummary(partition: partition) }
-          }.buttonStyle(.plain)
+            PartitionRow(partition: partition)
+          }
         }
-      } else {
-        Notice(
-          title: "No capacity snapshot", detail: "Pull to refresh when the host is reachable.",
-          warning: true)
+      } footer: {
+        if let snapshot {
+          Text("Sampled \(Format.age(snapshot.observedAt).lowercased())")
+        } else {
+          Text("No capacity snapshot. Pull to refresh when the host is reachable.")
+        }
       }
-      SectionHeading(title: "Active jobs", detail: "\(jobs.count) loaded")
-      Text(
-        "Job data · \(Format.age(store.receivedAt)). Counts include jobs visible to this server, within the loaded scope."
-      )
-      .font(.caption).foregroundStyle(Theme.secondary)
-      ForEach(jobs) { job in
-        NavigationLink(value: Route.job(job.id)) { JobRow(job: job) }.buttonStyle(.plain)
+      CollapsibleSection("Your active jobs", detail: "\(jobs.count)", key: "host.jobs") {
+        CappedRows(items: jobs) { job in
+          NavigationLink(value: Route.job(job.id)) {
+            JobRow(job: job, pinned: store.pins.contains(job.id), showHost: false)
+          }.jobActions(job)
+        }
+        if jobs.isEmpty {
+          Text("Nothing running or queued").foregroundStyle(.secondary)
+        }
       }
-      if jobs.isEmpty {
-        EmptyState(
-          title: "No active jobs",
-          detail: "There are no running or pending jobs in the loaded scope.")
-      }
-    }.navigationTitle(host).navigationBarTitleDisplayMode(.inline).refreshable {
-      await store.refresh(force: true)
     }
+    .navigationTitle(host)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Launch on \(host)", systemImage: "plus") {
+          var draft = LaunchDraft()
+          draft.host = host
+          store.openDraft(draft)
+        }
+      }
+    }
+    .refreshable { await store.refresh(force: true) }
   }
 }
+
 struct PartitionDetailView: View {
   var host: String
   var name: String
   @Environment(AppStore.self) private var store
   @State private var scope = "Active"
   var snapshot: PartitionSnapshot? { store.partitions.first { $0.hostname == host } }
+  var cleanName: String { name.trimmingCharacters(in: CharacterSet(charactersIn: "*")) }
   var partition: Partition? {
     snapshot?.partitions.first {
-      $0.partition.trimmingCharacters(in: CharacterSet(charactersIn: "*"))
-        == name.trimmingCharacters(in: CharacterSet(charactersIn: "*"))
+      $0.partition.trimmingCharacters(in: CharacterSet(charactersIn: "*")) == cleanName
     }
   }
   var jobs: [Job] {
-    store.sortedJobs.filter {
+    store.listedJobs.filter {
       $0.host == host
-        && $0.partition.split(separator: ",").contains(
-          Substring(name.trimmingCharacters(in: CharacterSet(charactersIn: "*"))))
+        && $0.partition.split(separator: ",").contains(Substring(cleanName))
         && (scope != "Active" || $0.state.active)
         && (scope != "Queued" || $0.state == .pending)
         && (scope != "Running" || $0.state == .running)
     }
   }
   var body: some View {
-    Screen {
-      Eyebrow(title: host)
-      Text(name).font(.system(.largeTitle, design: .rounded).weight(.bold))
+    List {
       if let partition {
-        HStack {
-          Label(partition.availability ?? "Unknown", systemImage: "circle.fill").font(.caption)
-            .foregroundStyle(Theme.green)
-          Spacer()
-          Text("\(partition.nodes_total) nodes").font(.subheadline)
-        }
-        Notice(
-          title: "Capacity · \(Format.age(snapshot?.observedAt))",
-          detail: snapshot?.error
-            ?? "Scheduler allocation snapshot. Idle resources may still be constrained by policy or reservations.",
-          warning: snapshot?.stale == true)
-        Paper {
-          VStack(alignment: .leading, spacing: 16) {
-            Eyebrow(title: "CPUs")
-            HStack(alignment: .firstTextBaseline) {
-              Text("\(partition.cpus_alloc)").font(
-                .system(size: 44, weight: .medium, design: .rounded))
-              Text("/ \(partition.cpus_total) allocated").foregroundStyle(Theme.secondary)
-            }
-            CapacityBar(
-              allocated: partition.cpus_alloc, idle: partition.cpus_idle,
-              other: partition.cpus_other, total: partition.cpus_total)
-            HStack {
-              Label("\(partition.cpus_idle) idle", systemImage: "circle.fill").foregroundStyle(
-                Theme.green)
-              Spacer()
-              Label("\(partition.cpus_other) other", systemImage: "circle.fill").foregroundStyle(
-                Theme.amber)
-            }.font(.caption)
-          }
-        }
-        if partition.hasGPUs {
-          Paper {
-            VStack(alignment: .leading, spacing: 15) {
-              Eyebrow(title: "GPUs")
-              Text(
-                "\(partition.gpus_used.map(String.init) ?? "—") / \(partition.gpus_total ?? 0) allocated"
-              ).font(.title2.weight(.semibold))
-              if let used = partition.gpus_used, let idle = partition.gpus_idle {
-                CapacityBar(allocated: used, idle: idle, total: partition.gpus_total ?? 0)
-              }
-              ForEach((partition.gpu_types ?? [:]).keys.sorted(), id: \.self) { type in
-                if let counts = partition.gpu_types?[type] {
-                  DetailRow(
-                    name: type,
-                    value: "\(counts.used) allocated · \(max(0, counts.total - counts.used)) idle")
-                }
+        Section {
+          metric(
+            "CPUs", allocated: partition.cpus_alloc, idle: partition.cpus_idle,
+            other: partition.cpus_other, total: partition.cpus_total)
+          if partition.hasGPUs, let used = partition.gpus_used, let idle = partition.gpus_idle {
+            metric("GPUs", allocated: used, idle: idle, other: 0, total: partition.gpus_total ?? 0)
+            ForEach((partition.gpu_types ?? [:]).keys.sorted(), id: \.self) { type in
+              if let counts = partition.gpu_types?[type] {
+                DetailRow(
+                  name: type, value: "\(max(0, counts.total - counts.used)) of \(counts.total) idle"
+                )
               }
             }
           }
+        } footer: {
+          Text(
+            "Scheduler allocation, sampled \(Format.age(snapshot?.observedAt).lowercased())."
+          )
         }
-        Paper {
-          VStack(alignment: .leading, spacing: 10) {
-            Eyebrow(title: "Node states")
-            Text(partition.states.joined(separator: " · ")).font(.subheadline)
-            Text("Aggregate states; individual node health is not reported by this API.").font(
-              .caption
-            ).foregroundStyle(Theme.secondary)
-          }
+        Section {
+          DetailRow(name: "Availability", value: partition.availability ?? "Unknown")
+          DetailRow(name: "Nodes", value: "\(partition.nodes_total)")
+          DetailRow(name: "Node states", value: partition.states.joined(separator: ", "))
         }
       } else {
-        Notice(
-          title: "Capacity unavailable",
-          detail: "The partition may have changed or the host could be offline.", warning: true)
+        Label(
+          "Capacity unavailable. The partition may have changed or the host is offline.",
+          systemImage: "exclamationmark.triangle"
+        ).foregroundStyle(Theme.amber).font(.subheadline)
       }
-      SectionHeading(title: "Jobs in this partition")
-      Picker("Job state", selection: $scope) {
-        ForEach(["Active", "Running", "Queued", "All"], id: \.self) { Text($0) }
-      }.pickerStyle(.segmented)
-      ForEach(jobs) { job in
-        NavigationLink(value: Route.job(job.id)) { JobRow(job: job) }.buttonStyle(.plain)
+      Section {
+        Picker("Show", selection: $scope) {
+          ForEach(["Active", "Running", "Queued", "All"], id: \.self) { Text($0) }
+        }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+        CappedRows(items: jobs) { job in
+          NavigationLink(value: Route.job(job.id)) {
+            JobRow(job: job, pinned: store.pins.contains(job.id), showHost: false)
+          }.jobActions(job)
+        }
+        if jobs.isEmpty { Text("No matching jobs").foregroundStyle(.secondary) }
+      } header: {
+        Text("Your jobs")
       }
-      if jobs.isEmpty {
-        EmptyState(
-          title: "No matching jobs",
-          detail: "Try a different filter. Jobs are scoped to the last 7 days.")
-      }
-      Button("Prepare launch here", systemImage: "arrow.up.right") {
-        var draft = LaunchDraft()
-        draft.host = host
-        draft.partition = name.trimmingCharacters(in: CharacterSet(charactersIn: "*"))
-        store.openDraft(draft)
-      }.buttonStyle(PrimaryButtonStyle())
-    }.navigationTitle("Partition").navigationBarTitleDisplayMode(.inline).refreshable {
-      await store.refresh(force: true)
     }
+    .navigationTitle(cleanName)
+    .navigationSubtitle(host)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Launch here", systemImage: "plus") {
+          var draft = LaunchDraft()
+          draft.host = host
+          draft.partition = cleanName
+          store.openDraft(draft)
+        }
+      }
+    }
+    .refreshable { await store.refresh(force: true) }
+  }
+  private func metric(_ title: String, allocated: Int, idle: Int, other: Int, total: Int)
+    -> some View
+  {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .firstTextBaseline) {
+        Text(title).font(.subheadline.weight(.semibold))
+        Spacer()
+        Text("\(idle)").font(.title2.weight(.semibold).monospacedDigit())
+          .foregroundStyle(Theme.green)
+        Text("idle of \(total)").font(.subheadline).foregroundStyle(.secondary)
+      }
+      CapacityBar(allocated: allocated, idle: idle, other: other, total: total)
+      Text("\(allocated) allocated" + (other > 0 ? " · \(other) other" : ""))
+        .font(.caption).foregroundStyle(.secondary)
+    }.padding(.vertical, 4)
   }
 }

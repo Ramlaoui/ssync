@@ -29,20 +29,23 @@ struct AppRoot: View {
         ConnectionView()
       } else {
         TabView(selection: $store.tab) {
-          Tab("Jobs", systemImage: "square.stack.3d.up", value: .jobs) {
+          Tab("Jobs", systemImage: "list.bullet.rectangle", value: .jobs) {
             NavigationStack(path: $store.jobPath) { JobsView().appDestinations() }
           }
-          Tab("Hosts", systemImage: "server.rack", value: .hosts) {
-            NavigationStack(path: $store.hostPath) { HostsView().appDestinations() }
+          Tab("Cluster", systemImage: "server.rack", value: .cluster) {
+            NavigationStack(path: $store.clusterPath) { ClusterView().appDestinations() }
           }
-          Tab("Watchers", systemImage: "eye", value: .watchers) {
-            NavigationStack(path: $store.watcherPath) { WatchersView().appDestinations() }
-          }
-          Tab("Launch", systemImage: "arrow.up.right", value: .launch) {
-            NavigationStack(path: $store.launchPath) { LaunchLibraryView().appDestinations() }
+          Tab("Activity", systemImage: "bolt.horizontal", value: .activity) {
+            NavigationStack(path: $store.activityPath) { ActivityView().appDestinations() }
           }
         }
         .sheet(isPresented: $store.showSettings) { NavigationStack { SettingsView() } }
+        .sheet(isPresented: $store.addingConnection) { ConnectionView(adding: true) }
+        .sheet(item: $store.launch) { request in
+          if let connection = store.connection {
+            LaunchFlow(initial: request.draft, connectionID: connection.id)
+          }
+        }
       }
     }
     .onChange(of: notifications.pendingURL) { _, url in
@@ -95,51 +98,74 @@ extension View {
       case .partition(let host, let name): PartitionDetailView(host: host, name: name)
       case .watcher(let id): WatcherDetailView(id: id)
       case .array(let id): ArrayDetailView(id: id)
+      case .history: JobHistoryView()
       }
     }
   }
   func rootToolbar() -> some View { modifier(RootToolbar()) }
 }
+/// Every root screen shares the server menu (switch, add, settings) and the launch entry point.
 struct RootToolbar: ViewModifier {
   @Environment(AppStore.self) private var store
   func body(content: Content) -> some View {
-    content.toolbar {
-      ToolbarItem(placement: .topBarLeading) {
-        HStack(spacing: 5) {
-          RelayMark(size: 27)
-          Text("ssync").font(.system(.title3, design: .rounded).weight(.bold))
+    content
+      .navigationSubtitle(subtitle)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) { ServerMenu() }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("New launch", systemImage: "plus") { store.openDraft() }
+            .accessibilityIdentifier("newLaunch")
         }
-        .fixedSize()
-        .padding(.horizontal, 4)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("ssync")
       }
-      .sharedBackgroundVisibility(.hidden)
-      ToolbarItem(placement: .topBarTrailing) {
-        Button("Settings", systemImage: "gearshape") { store.showSettings = true }
-          .accessibilityIdentifier("settings")
-      }
-    }
+  }
+  private var subtitle: String {
+    guard let connection = store.connection else { return "" }
+    if connection.demo { return "Demo · sample data" }
+    if store.error != nil { return "\(connection.name) · offline" }
+    return connection.name
   }
 }
-struct ConnectionStatus: View {
+struct ServerMenu: View {
   @Environment(AppStore.self) private var store
   var body: some View {
-    if store.demo {
-      Notice(
-        title: "Demo workspace",
-        detail: "Sample jobs and capacity. Actions here do not affect a cluster.",
-        symbol: "sparkles")
-    } else if let error = store.error {
-      Notice(title: "Showing saved data", detail: error, symbol: "wifi.slash", warning: true)
-    } else {
-      HStack(spacing: 6) {
-        Circle().fill(store.socketConnected ? Theme.green : Theme.secondary).frame(
-          width: 6, height: 6)
-        Text(store.socketConnected ? "Connected" : "Checking every 30 seconds")
-        Spacer()
-        TimelineView(.periodic(from: .now, by: 30)) { _ in Text(Format.age(store.receivedAt)) }
-      }.font(.caption).foregroundStyle(Theme.secondary)
+    Menu {
+      Section(store.connection?.demo == true ? "Demo workspace" : "Servers") {
+        ForEach(store.connections) { connection in
+          Button {
+            guard connection.id != store.connection?.id else { return }
+            store.select(connection)
+            store.startMonitoring()
+          } label: {
+            if connection.id == store.connection?.id {
+              Label(connection.name, systemImage: "checkmark")
+            } else {
+              Text(connection.name)
+            }
+          }
+        }
+        Button("Add server…", systemImage: "plus") { store.addingConnection = true }
+      }
+      Button("Settings", systemImage: "gearshape") { store.showSettings = true }
+    } label: {
+      Label("Servers and settings", systemImage: "person.crop.circle")
+    }
+    .accessibilityIdentifier("settings")
+  }
+}
+/// A single, quiet line that only appears when the data is not live.
+struct ConnectionBanner: View {
+  @Environment(AppStore.self) private var store
+  var body: some View {
+    if let error = store.error, !store.demo {
+      Label {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Showing saved data · \(Format.age(store.receivedAt).lowercased())")
+            .font(.subheadline.weight(.semibold))
+          Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+      } icon: {
+        Image(systemName: "wifi.slash").foregroundStyle(Theme.amber)
+      }
     }
   }
 }

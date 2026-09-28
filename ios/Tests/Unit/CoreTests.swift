@@ -175,4 +175,35 @@ struct OutputTests {
     #expect(parser.consume("data:{\"type\":\"complete\"}") == nil)
     #expect(parser.consume("") == #"{"type":"complete"}"#)
   }
+
+  @Test func jobFactsDropPlaceholdersAndDeriveWaitAndQueue() {
+    let job = Job([
+      "job_id": .string("7"), "hostname": .string("Atlas"), "state": .string("PD"),
+      "partition": .string("gpu"), "submit_time": .string("2026-01-01T10:00:00"),
+      "start_time": .string("Unknown"), "account": .string("(null)"), "qos": .string("high"),
+      "priority_rank": .number(3), "priority_queue_size": .number(10),
+    ])
+    #expect(job.queuePosition == QueuePosition(rank: 3, ahead: 2, size: 10, partition: "gpu"))
+    #expect(!job.timeline().contains { $0.label == "Started" })
+    #expect(job.timeline().contains { $0.label == "Waited" })
+    #expect(job.scheduling.map(\.label).contains("QoS"))
+    #expect(!job.scheduling.map(\.label).contains("Account"))
+    let finished = Job([
+      "state": .string("CD"), "exit_code": .string("0:0"), "runtime": .string("01:00:00"),
+      "submit_time": .string("2026-01-01T10:00:00"), "start_time": .string("2026-01-01T10:30:00"),
+    ])
+    #expect(finished.succeeded)
+    #expect(finished.timeline().first { $0.label == "Waited" }?.value == "30 m")
+  }
+
+  @Test func sseEventsDispatchFromRawBytesWithAnyLineEnding() {
+    var splitter = SSELineSplitter()
+    var parser = SSEParser()
+    var events: [String] = []
+    let stream = "data: {\"a\":1}\n\ndata: é\r\n\r\ndata: last\r\r"
+    for byte in Array(stream.utf8) {
+      if let line = splitter.feed(byte), let event = parser.consume(line) { events.append(event) }
+    }
+    #expect(events == [#"{"a":1}"#, "é", "last"])
+  }
 }
