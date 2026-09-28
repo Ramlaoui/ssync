@@ -59,11 +59,12 @@
     const states = (entry.kind === 'job' ? [entry.job] : entry.tasks).map(job => jobStatus(job.state).category);
     return states.includes('active') ? 'active' : states.includes('pending') ? 'pending' : 'historical';
   };
-  const entryJobs = (entry: JobListEntry) => entry.kind === 'job' ? 1 : entry.tasks.length;
+  // Count the jobs in a section; an array row counts only its tasks in that state.
+  const entryJobs = (entry: JobListEntry, category: string) => entry.kind === 'job' ? 1 : entry.tasks.filter(task => jobStatus(task.state).category === category).length;
   // Running and queued work is always shown in full; finished work is paged.
   const sectioned = $derived(sections.map(section => {
     const all = entries.filter(entry => entryCategory(entry) === section.id);
-    return { ...section, entries: section.id === 'historical' ? all.slice(0, visibleLimit) : all, total: all.reduce((sum, entry) => sum + entryJobs(entry), 0), hidden: section.id === 'historical' ? Math.max(0, all.length - visibleLimit) : 0 };
+    return { ...section, entries: section.id === 'historical' ? all.slice(0, visibleLimit) : all, total: all.reduce((sum, entry) => sum + entryJobs(entry, section.id), 0), hidden: section.id === 'historical' ? Math.max(0, all.length - visibleLimit) : 0 };
   }).filter(section => section.total));
   const finishedTotal = $derived(entries.filter(entry => entryCategory(entry) === 'historical').length);
   const loadingHosts = $derived(Array.from($hostStates.values()).filter(host => host.status === 'loading').map(host => host.hostname));
