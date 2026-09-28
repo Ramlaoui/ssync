@@ -17,6 +17,7 @@
     zIndex?: number;
     lockScroll?: boolean;
     trapFocus?: boolean;
+    initialFocus?: HTMLElement | string | null;
     children?: import('svelte').Snippet;
   }
 
@@ -29,6 +30,7 @@
     zIndex = 50,
     lockScroll = true,
     trapFocus = true,
+    initialFocus = null,
     children
   }: Props = $props();
 
@@ -66,6 +68,8 @@
   // Keyboard navigation handlers
   const keyHandlers = $derived({
     onEscape: closeOnEscape ? handleClose : undefined,
+    preventDefault: true,
+    stopPropagation: true,
   });
 </script>
 
@@ -74,7 +78,7 @@
     bind:this={overlayElement}
     use:portal={{ target: 'body', zIndex }}
     use:keyboardNav={keyHandlers}
-    use:focusTrap={{ enabled: trapFocus }}
+    use:focusTrap={{ enabled: trapFocus, initialFocus }}
     class="overlay-container"
     transition:fade={{ duration: 200 }}
   >

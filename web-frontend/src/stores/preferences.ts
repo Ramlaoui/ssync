@@ -11,6 +11,8 @@ interface WebSocketConfig {
 
 interface UIPreferences {
   groupArrayJobs: boolean;
+  /** Show the tasks of an array job as one expandable row. */
+  collapseArrayTasks: boolean;
   autoRefresh: boolean;
   refreshInterval: number;
   showMetrics: boolean;
@@ -20,7 +22,8 @@ interface UIPreferences {
 }
 
 const defaultPreferences: UIPreferences = {
-  groupArrayJobs: false,  // Default to ungrouped, user can enable after data loads
+  groupArrayJobs: false,  // Server-side grouping; the jobs list groups tasks itself
+  collapseArrayTasks: true,
   autoRefresh: true,
   refreshInterval: 30000,  // 30 seconds
   showMetrics: false,
@@ -76,11 +79,11 @@ preferences.subscribe((value) => {
 // Export helper functions
 export const preferencesActions = {
   toggleArrayGrouping: () => {
-    preferences.update(p => ({ ...p, groupArrayJobs: !p.groupArrayJobs }));
+    preferences.update(p => ({ ...p, collapseArrayTasks: !p.collapseArrayTasks }));
   },
 
   setArrayGrouping: (enabled: boolean) => {
-    preferences.update(p => ({ ...p, groupArrayJobs: enabled }));
+    preferences.update(p => ({ ...p, collapseArrayTasks: enabled }));
   },
 
   toggleAutoRefresh: () => {

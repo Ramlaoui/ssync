@@ -5,7 +5,7 @@
   import type { WatcherEvent, WatcherEventsResponse } from '../../types/watchers';
   import { api } from '../../services/api';
   import WatcherEvents from '../WatcherEvents.svelte';
-  import { jobStatus } from '../../lib/jobsPresentation';
+  import { jobStatus, jobDate } from '../../lib/jobsPresentation';
   let { job }: {
     job: JobInfo;
   } = $props();
@@ -23,7 +23,16 @@
     loading = false;
   } }
   onMount(() => { void load(); });
-  const milestones = $derived([{ label: 'Submitted', time: job.submit_time, icon: Rocket }, { label: 'Started', time: job.start_time, icon: Play }, { label: jobStatus(job.state).label, time: job.end_time, icon: jobStatus(job.state).attention ? TriangleAlert : CircleCheck }].filter(item => item.time).reverse());
+  // Only real timestamps: Slurm reports "Unknown" end times for running jobs and estimated start times for queued ones.
+  const milestones = $derived.by(() => {
+    const category = jobStatus(job.state).category;
+    const started = jobDate(job.start_time);
+    return [
+      { label: 'Submitted', time: jobDate(job.submit_time), icon: Rocket },
+      { label: category === 'pending' ? 'Expected start' : 'Started', time: started, icon: Play },
+      { label: jobStatus(job.state).label, time: category === 'historical' ? jobDate(job.end_time) : null, icon: jobStatus(job.state).attention ? TriangleAlert : CircleCheck },
+    ].filter((item): item is typeof item & { time: Date } => item.time !== null).reverse();
+  });
 </script>
 
 <div class="job-activity">
@@ -36,7 +45,7 @@
         </span>
         <section>
           <strong>{item.label}</strong>
-          <time>{new Date(item.time!).toLocaleString()}</time>
+          <time>{item.time.toLocaleString()}</time>
         </section>
       </div>
     {/each}

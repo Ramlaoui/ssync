@@ -9,7 +9,7 @@
   import Watchers from './components/Watchers.svelte';
   import Hosts from './components/Hosts.svelte';
   import Settings from './components/Settings.svelte';
-  import {initialJobs,initialWatchers,needsAttention,keyFor,draftFromJob,readPreference,savePreference,type LaunchDraft,type Job,type View} from './data';
+  import {initialJobs,initialWatchers,keyFor,draftFromJob,readPreference,savePreference,type LaunchDraft,type Job,type View} from './data';
   let view=$state<View>('jobs');
   let jobs=$state<Job[]>(structuredClone(initialJobs));
   let watchers=$state(structuredClone(initialWatchers));
@@ -42,7 +42,7 @@
     <div class="workspace-label"><span class="workspace-avatar">R</span><div><strong>Research workspace</strong><small>Personal</small></div></div>
     <button class="command-trigger" aria-label="Quick find" title="Quick find · ⌘K" onclick={()=>{commandOpen=true;commandSearch='';}}><Icon name="Search" size={16}/><span>Quick find</span><kbd>⌘ K</kbd></button>
     <nav>{#each navigation as item}<a href={`#/${item.id}`} class:active={view===item.id} aria-label={item.name} title={item.name} aria-current={view===item.id?'page':undefined} onclick={()=>navigate(item.id as View)}><Icon name={item.icon} size={19}/><span>{item.name}</span>{#if item.id==='jobs'}<span class="nav-count">{jobs.filter(j=>['Running','Pending'].includes(j.state)).length}</span>{/if}</a>{/each}</nav>
-    <div class="sidebar-section"><div class="sidebar-label">SAVED VIEWS</div><button class:chosen={view==='jobs'&&filter==='Needs attention'} onclick={()=>{filter='Needs attention';search='';host='All hosts';selected='';navigate('jobs');}}><Icon name="TriangleAlert" size={16}/><span>Needs attention</span><span class="attention-count">{jobs.filter(needsAttention).length}</span></button><button onclick={()=>{filter='Running';host='atlas';search='';navigate('jobs');}}><Icon name="Zap" size={16}/><span>Atlas · running</span></button></div>
+    <div class="sidebar-section"><div class="sidebar-label">SAVED VIEWS</div><button onclick={()=>{filter='Running';host='atlas';search='';navigate('jobs');}}><Icon name="Zap" size={16}/><span>Atlas · running</span></button></div>
     <div class="sidebar-section projects"><div class="sidebar-label">PROJECTS</div>{#each ['Potential v4','Crystal screening'] as project}<button onclick={()=>{search=project;filter='All jobs';host='All hosts';navigate('jobs');}}><Icon name="Folder" size={16}/><span>{project}</span></button>{/each}</div>
     <div class="sidebar-bottom"><div class="connection-summary"><span class="connection-dot"></span><span>2 hosts connected</span><button class="icon-button" aria-label="View host connections" onclick={()=>navigate('hosts')}><Icon name="ArrowUpRight" size={14}/></button></div><button class:chosen={view==='settings'} class="settings-link" aria-label="Settings" title="Settings" onclick={()=>navigate('settings')}><Icon name="Settings2" size={19}/><span>Settings</span></button><div class="profile"><span class="avatar">AL</span><span><strong>Researcher</strong><small>Local workspace</small></span><button class="icon-button" aria-label="Toggle light and dark theme" title="Switch appearance" onclick={()=>toggleTheme()}><Icon name={theme==='dark'?'Sun':'Moon'} size={17}/></button></div></div>
   </aside>

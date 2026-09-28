@@ -1,254 +1,280 @@
 <script lang="ts">
-  import { stopPropagation } from 'svelte/legacy';
-
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, tick } from 'svelte';
   import { push, location } from 'svelte-spa-router';
+  import {
+    Copy,
+    ExternalLink,
+    MoreHorizontal,
+    Pause,
+    Pencil,
+    Play,
+    Search,
+    Trash2,
+  } from 'lucide-svelte';
   import { navigationActions } from '../stores/navigation';
-  import type { Watcher } from '../types/watchers';
-  import { pauseWatcher, resumeWatcher } from '../stores/watchers';
+  import type { Watcher, WatcherEvent } from '../types/watchers';
+  import { pauseWatcher, resumeWatcher, deleteWatcher as removeWatcher } from '../stores/watchers';
   import { api } from '../services/api';
   import WatcherDetailDialog from './WatcherDetailDialog.svelte';
   import { portal } from '../lib/actions/portal';
-  
+
   interface Props {
     watcher: Watcher;
-    jobInfo?: any;
-    showJobLink?: boolean;
-    lastEvent?: any; // Latest event for this watcher
-    class?: string;
+    lastEvent?: WatcherEvent | null;
+    selected?: boolean;
   }
 
-  let {
-    watcher,
-    jobInfo = null,
-    showJobLink = true,
-    lastEvent = null,
-    class: className = ''
-  }: Props = $props();
-  
+  let { watcher, lastEvent = null, selected = false }: Props = $props();
+
   const dispatch = createEventDispatcher();
-  
-  // State management
-  let isExpanded = $state(false);
+
   let isPausing = $state(false);
   let isTriggering = $state(false);
-  let triggerMessage = $state('');
-  let stateMessage = $state('');
-  let showDetailDialog = $state(false);
+  let isDeleting = $state(false);
   let isDiscoveringTasks = $state(false);
-  let discoveryMessage = $state('');
-  
-  // Real-time pulse animation for active watchers
-  let isActive = $derived(watcher.state === 'active');
-  let pulseClass = $derived(isActive ? 'pulse' : '');
-  
-  // Format time like JobList component
-  function formatTime(timeStr: string | null | undefined): string {
-    if (!timeStr) return 'Never';
-    try {
-      const date = new Date(timeStr);
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMinutes = Math.floor(diffMs / (1000 * 60));
-      const diffHours = Math.floor(diffMinutes / 60);
-      
-      if (diffMinutes < 1) return 'Just now';
-      if (diffMinutes < 60) return `${diffMinutes}m ago`;
-      if (diffHours < 24) return `${diffHours}h ago`;
-      
-      return date.toLocaleDateString('en-US', { 
-        month: 'short', 
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return 'Invalid date';
+  let statusMessage = $state('');
+  let statusTone = $state<'success' | 'error' | 'neutral'>('neutral');
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  let showDetailDialog = $state(false);
+
+  let menuOpen = $state(false);
+  let menuPosition = $state({ top: 0, right: 0 });
+  let menuButton: HTMLButtonElement | undefined = $state();
+  let menuElement: HTMLDivElement | undefined = $state();
+
+  const canToggle = $derived(watcher.state === 'active' || watcher.state === 'paused');
+  const canRun = $derived(watcher.state === 'active' || watcher.state === 'static');
+  const intervalSeconds = $derived(
+    watcher.timer_mode_enabled
+      ? watcher.timer_interval_seconds || watcher.interval_seconds
+      : watcher.interval_seconds,
+  );
+  const lastActivity = $derived(lastEvent?.timestamp || watcher.last_check || null);
+  const trigger = $derived(describeTrigger(watcher));
+  const jobName = $derived(
+    watcher.job_name && watcher.job_name !== 'N/A' ? watcher.job_name : '',
+  );
+  const actionSummary = $derived(
+    (watcher.actions || []).map((action) => action.type.replace(/_/g, ' ')).join(', '),
+  );
+
+  function describeTrigger(item: Watcher): { label: string; mono: boolean; title: string } {
+    const endStates = item.trigger_job_states?.length
+      ? item.trigger_job_states.join(', ')
+      : 'any end state';
+    const jobEnd = item.trigger_on_job_end ? `Job ends: ${endStates}` : '';
+    if (item.pattern) {
+      return {
+        label: item.pattern,
+        mono: true,
+        title: [`Pattern: ${item.pattern}`, jobEnd, item.timer_mode_enabled ? 'Timer mode' : '']
+          .filter(Boolean)
+          .join('\n'),
+      };
     }
-  }
-  
-  function getStateIcon(state: string): string {
-    switch (state) {
-      case 'active': return '●';
-      case 'paused': return '||';
-      case 'static': return '▶';  // Play icon for static watchers
-      case 'completed': return '✓';
-      case 'failed': return '×';
-      default: return '○';
-    }
+    if (jobEnd) return { label: jobEnd, mono: false, title: jobEnd };
+    if (item.state === 'static') return { label: 'Manual run only', mono: false, title: '' };
+    return { label: 'No pattern', mono: false, title: '' };
   }
 
-  function getStateColor(state: string): string {
-    switch (state) {
-      case 'active': return 'var(--accent)';
-      case 'paused': return 'var(--warning)';
-      case 'static': return 'var(--accent)';  // Purple for static watchers
-      case 'completed': return 'var(--success)';
-      case 'failed': return 'var(--destructive)';
-      default: return 'var(--muted-foreground)';
-    }
+  function formatInterval(seconds?: number | null): string {
+    if (!seconds) return '—';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    return `${Math.round((seconds / 3600) * 10) / 10}h`;
   }
 
-  function getStateColorClass(state: string): string {
-    switch (state) {
-      case 'active': return 'text-[var(--accent)]';
-      case 'paused': return 'text-[var(--warning)]';
-      case 'static': return 'text-[var(--muted-foreground)]';
-      case 'completed': return 'text-[var(--success)]';
-      case 'failed': return 'text-[var(--error)]';
-      default: return 'text-gray-400';
-    }
-  }
-  
-  function getActionIcon(actionType: string): string {
-    if (actionType.includes('metric')) return 'M';
-    if (actionType.includes('email')) return '@';
-    if (actionType.includes('log')) return 'L';
-    if (actionType.includes('command')) return '>';
-    if (actionType.includes('checkpoint')) return '*';
-    return '+';
+  function formatRelative(timestamp?: string | null): string {
+    if (!timestamp) return 'Never';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '—';
+    const minutes = Math.floor((Date.now() - date.getTime()) / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
-  function getActionTypeDisplay(action: any): string {
-    if (!action.type) return 'Unknown';
-    const type = action.type.toLowerCase();
-    if (type.includes('metric')) return 'Metrics';
-    if (type.includes('email')) return 'Email';
-    if (type.includes('log')) return 'Log';
-    if (type.includes('command')) return 'Command';
-    if (type.includes('checkpoint')) return 'Checkpoint';
-    return action.type;
+  function formatAbsolute(timestamp?: string | null): string {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
   }
 
-  function getActionDescription(action: any): string {
-    if (!action.params) return '';
-    const params = action.params;
-
-    if (action.type.includes('email') && params.subject) {
-      return `"${params.subject}"`;
-    }
-    if (action.type.includes('command') && params.command) {
-      return `${params.command.substring(0, 40)}...`;
-    }
-    if (action.type.includes('log') && params.message) {
-      return `"${params.message.substring(0, 40)}..."`;
-    }
-    if (action.type.includes('metric') && params.name) {
-      return params.name;
-    }
-    return '';
-  }
-
-  function showTransientMessage(
-    setter: (value: string) => void,
-    value: string,
-    timeoutMs = 4000,
-  ) {
-    setter(value);
-    setTimeout(() => {
-      setter('');
+  function showStatus(message: string, tone: 'success' | 'error' | 'neutral', timeoutMs = 4000) {
+    statusMessage = message;
+    statusTone = tone;
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => {
+      statusMessage = '';
+      statusTimer = null;
     }, timeoutMs);
   }
-  
+
+  function errorDetail(error: any, fallback: string): string {
+    return error?.response?.data?.detail || error?.message || fallback;
+  }
+
+  function inspect() {
+    dispatch('inspect', { watcherId: watcher.id });
+  }
+
+  async function openMenu() {
+    if (!menuButton) return;
+    const rect = menuButton.getBoundingClientRect();
+    menuPosition = {
+      top: Math.round(rect.bottom + 4),
+      right: Math.max(8, Math.round(window.innerWidth - rect.right)),
+    };
+    menuOpen = true;
+    await tick();
+    const menuRect = menuElement?.getBoundingClientRect();
+    if (menuRect && menuRect.bottom > window.innerHeight - 8) {
+      menuPosition = { ...menuPosition, top: Math.max(8, Math.round(rect.top - menuRect.height - 4)) };
+    }
+    menuElement?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }
+
+  function closeMenu(restoreFocus = true) {
+    if (!menuOpen) return;
+    menuOpen = false;
+    if (restoreFocus) menuButton?.focus();
+  }
+
+  function runFromMenu(action: () => void | Promise<void>) {
+    closeMenu();
+    void action();
+  }
+
+  function handleMenuKeydown(event: KeyboardEvent) {
+    const items = Array.from(
+      menuElement?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [],
+    );
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      items[(index + 1) % items.length]?.focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      items[(index - 1 + items.length) % items.length]?.focus();
+    } else if (event.key === 'Tab') {
+      closeMenu(false);
+    }
+  }
+
+  function handleWindowPointer(event: PointerEvent) {
+    if (!menuOpen) return;
+    const target = event.target as Node;
+    if (menuElement?.contains(target) || menuButton?.contains(target)) return;
+    closeMenu(false);
+  }
+
   async function togglePause() {
-    if (isPausing) return;
+    if (isPausing || !canToggle) return;
     isPausing = true;
-    
     try {
       if (watcher.state === 'active') {
         await pauseWatcher(watcher.id);
-        showTransientMessage((value) => (stateMessage = value), 'Watcher paused');
-      } else if (watcher.state === 'paused') {
+        showStatus('Watcher paused', 'success');
+      } else {
         await resumeWatcher(watcher.id);
-        showTransientMessage((value) => (stateMessage = value), 'Watcher resumed');
+        showStatus('Watcher resumed', 'success');
       }
     } catch (error: any) {
       console.error('Failed to toggle watcher state:', error);
-      showTransientMessage(
-        (value) => (stateMessage = value),
-        `Failed to change watcher state: ${
-          error?.response?.data?.detail || error?.message || 'Unknown error'
-        }`,
-        5000,
-      );
+      showStatus(`Failed to change watcher state: ${errorDetail(error, 'Unknown error')}`, 'error', 5000);
     } finally {
       isPausing = false;
     }
   }
-  
+
   async function triggerManually() {
-    // Allow triggering for both ACTIVE and STATIC watchers
-    if (isTriggering || (watcher.state !== 'active' && watcher.state !== 'static')) return;
+    if (isTriggering || !canRun) return;
     isTriggering = true;
-    triggerMessage = '';
-    
     try {
       const response = await api.post(`/api/watchers/${watcher.id}/trigger`, null);
-      
-      // Handle timer mode response
       if (response.data.timer_mode) {
-        if (response.data.success) {
-          triggerMessage = '⏱️ Timer actions executed: ' + (response.data.message || 'Success');
-        } else {
-          triggerMessage = '⏱️ Timer execution failed: ' + (response.data.message || 'Unknown error');
-        }
+        showStatus(
+          response.data.success
+            ? `Timer actions executed: ${response.data.message || 'Success'}`
+            : `Timer execution failed: ${response.data.message || 'Unknown error'}`,
+          response.data.success ? 'success' : 'error',
+          5000,
+        );
       } else {
-        // Regular pattern matching response
-        if (response.data.matches) {
-          triggerMessage = '✓ Pattern matched and actions executed';
-        } else {
-          triggerMessage = '○ No pattern matches found';
-        }
+        showStatus(
+          response.data.matches ? 'Pattern matched and actions executed' : 'No pattern matches found',
+          response.data.matches ? 'success' : 'neutral',
+        );
       }
-      
-      // Clear message after 3 seconds (or 5 for longer messages)
-      const clearDelay = response.data.message && response.data.message.length > 50 ? 5000 : 3000;
-      setTimeout(() => {
-        triggerMessage = '';
-      }, clearDelay);
-      
-      // Refresh events if matches were found or timer actions executed
       if (response.data.matches || response.data.timer_mode) {
         dispatch('refresh', { scope: 'events' });
       }
     } catch (error: any) {
       console.error('Failed to trigger watcher:', error);
-      let errorMessage = '✗ Failed to trigger';
-      
-      // Extract more specific error information
-      if (error.response?.data?.detail) {
-        errorMessage = `✗ ${error.response.data.detail}`;
-      } else if (error.response?.status === 404) {
-        errorMessage = '✗ Watcher not found';
-      } else if (error.response?.status === 400) {
-        errorMessage = '✗ Watcher not active';
-      } else if (error.message) {
-        errorMessage = `✗ ${error.message}`;
-      }
-      
-      triggerMessage = errorMessage;
-      setTimeout(() => {
-        triggerMessage = '';
-      }, 5000); // Longer timeout for error messages
+      const fallback =
+        error?.response?.status === 404
+          ? 'Watcher not found'
+          : error?.response?.status === 400
+            ? 'Watcher not active'
+            : 'Failed to trigger';
+      showStatus(errorDetail(error, fallback), 'error', 5000);
     } finally {
       isTriggering = false;
     }
   }
-  
-  function navigateToJob() {
-    // Track where we're coming from for smart back navigation
-    navigationActions.setPreviousRoute($location);
-    // Navigate to the job details page with URL encoding
-    const encodedJobId = encodeURIComponent(watcher.job_id);
-    push(`/jobs/${encodedJobId}/${watcher.hostname}`);
+
+  async function discoverArrayTasks() {
+    if (isDiscoveringTasks) return;
+    isDiscoveringTasks = true;
+    try {
+      const response = await api.post(`/api/watchers/${watcher.id}/discover-array-tasks`);
+      if (response.data.success) {
+        const newTasks = response.data.new_tasks_discovered || 0;
+        const total = response.data.total_discovered || 0;
+        const expected = response.data.expected_tasks || '?';
+        showStatus(
+          newTasks > 0
+            ? `Discovered ${newTasks} new task(s) (${total}/${expected} total)`
+            : `No new tasks found (${total}/${expected} discovered)`,
+          newTasks > 0 ? 'success' : 'neutral',
+          5000,
+        );
+        dispatch('refresh', { scope: 'all' });
+      } else {
+        showStatus(response.data.message || 'Not an array template', 'neutral', 5000);
+      }
+    } catch (error) {
+      console.error('Failed to discover array tasks:', error);
+      showStatus('Failed to discover tasks', 'error', 5000);
+    } finally {
+      isDiscoveringTasks = false;
+    }
   }
-  
-  function viewDetails() {
-    dispatch('inspect', { watcherId: watcher.id, scrollToActivity: true });
+
+  async function deleteWatcher() {
+    if (isDeleting) return;
+    if (!confirm(`Are you sure you want to delete the watcher "${watcher.name}"?`)) return;
+    isDeleting = true;
+    try {
+      await removeWatcher(watcher.id);
+      dispatch('refresh', { scope: 'all' });
+    } catch (error: any) {
+      console.error('Failed to delete watcher:', error);
+      showStatus(errorDetail(error, 'Failed to delete watcher'), 'error', 5000);
+    } finally {
+      isDeleting = false;
+    }
   }
-  
+
   function copyWatcher() {
-    // Create watcher config including job info
     const watcherConfig = {
       name: watcher.name,
       pattern: watcher.pattern,
@@ -258,377 +284,152 @@
       actions: watcher.actions || [],
       timer_mode_enabled: watcher.timer_mode_enabled || false,
       timer_interval_seconds: watcher.timer_interval_seconds || 30,
-      // Include original job info for better copy experience
       job_id: watcher.job_id,
-      hostname: watcher.hostname
+      hostname: watcher.hostname,
     };
-    
-    // Store in localStorage as backup
-    localStorage.setItem('copiedWatcher', JSON.stringify(watcherConfig));
-    
-    // Dispatch event to parent to trigger attach workflow
-    dispatch('copy', watcherConfig);
-    
-    // Show confirmation
-    const copyBtn = document.querySelector(`#copy-btn-${watcher.id} span`);
-    if (copyBtn) {
-      copyBtn.textContent = 'Opening...';
-      setTimeout(() => {
-        copyBtn.textContent = 'Copy';
-      }, 1000);
-    }
-  }
-  
-  // Calculate activity percentage for visualization
-  let activityPercentage = $derived(Math.min((watcher.trigger_count / 100) * 100, 100));
-  
-  function openDetailDialog() {
-    showDetailDialog = true;
-  }
-  
-  function handleDetailClose() {
-    showDetailDialog = false;
-  }
-  
-  function handleDetailUpdate(event: CustomEvent) {
-    // Update the watcher with new data
-    dispatch('refresh', { scope: 'all' });
-    showDetailDialog = false;
-  }
-  
-  function handleDetailDelete(event: CustomEvent) {
-    dispatch('refresh', { scope: 'all' });
-    showDetailDialog = false;
-  }
-
-  async function discoverArrayTasks() {
-    if (isDiscoveringTasks) return;
-    isDiscoveringTasks = true;
-    discoveryMessage = '';
-
     try {
-      const response = await api.post(`/api/watchers/${watcher.id}/discover-array-tasks`);
-
-      if (response.data.success) {
-        const newTasks = response.data.new_tasks_discovered || 0;
-        const total = response.data.total_discovered || 0;
-        const expected = response.data.expected_tasks;
-
-        if (newTasks > 0) {
-          discoveryMessage = `✓ Discovered ${newTasks} new task(s) (${total}/${expected || '?'} total)`;
-        } else {
-          discoveryMessage = `○ No new tasks found (${total}/${expected || '?'} discovered)`;
-        }
-
-        // Refresh to show new watchers
-        dispatch('refresh', { scope: 'all' });
-      } else {
-        discoveryMessage = '○ ' + (response.data.message || 'Not an array template');
-      }
-
-      setTimeout(() => {
-        discoveryMessage = '';
-      }, 5000);
-
-    } catch (error) {
-      console.error('Failed to discover array tasks:', error);
-      discoveryMessage = '✗ Failed to discover tasks';
-      setTimeout(() => {
-        discoveryMessage = '';
-      }, 5000);
-    } finally {
-      isDiscoveringTasks = false;
+      localStorage.setItem('copiedWatcher', JSON.stringify(watcherConfig));
+    } catch {
+      // Storage is only a convenience backup for the copy workflow.
     }
+    dispatch('copy', watcherConfig);
+  }
+
+  function navigateToJob() {
+    navigationActions.setPreviousRoute($location);
+    push(`/jobs/${encodeURIComponent(watcher.job_id)}/${watcher.hostname}`);
+  }
+
+  function handleDetailChange() {
+    dispatch('refresh', { scope: 'all' });
+    showDetailDialog = false;
   }
 </script>
 
-<div class="bg-[var(--card)] border border-[var(--border)] rounded-md p-2.5 mb-2 transition-all duration-150 relative overflow-hidden cursor-pointer hover:border-[var(--accent)] w-full {pulseClass} {isExpanded ? 'expanded' : ''} {className}" onclick={() => isExpanded = !isExpanded} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') isExpanded = !isExpanded; }}>
-  {#if triggerMessage}
-    <div 
-      class="trigger-message" 
-      class:success={triggerMessage.includes('✓')}
-      class:error={triggerMessage.includes('✗')}
+<svelte:window
+  onpointerdown={handleWindowPointer}
+  onresize={() => closeMenu(false)}
+/>
+
+<div
+  id={'watcher-card-' + watcher.id}
+  class="watcher-row"
+  class:selected
+  data-state={watcher.state}
+>
+  <span class="w-dot" title={watcher.state} aria-hidden="true"></span>
+
+  <div class="w-main">
+    <button
+      type="button"
+      class="w-open"
+      aria-pressed={selected}
+      aria-label={`Show activity for ${watcher.name}, job ${watcher.job_id} on ${watcher.hostname}, ${watcher.state}`}
+      title={watcher.name}
+      onclick={inspect}
     >
-      {triggerMessage}
-    </div>
-  {/if}
-
-  {#if stateMessage}
-    <div class="trigger-message success">
-      {stateMessage}
-    </div>
-  {/if}
-  
-  <!-- Header with state indicator -->
-  <div class="flex justify-between items-start mb-1.5 gap-2">
-    <div class="flex items-start gap-2 flex-1 min-w-0">
-      <span class="text-xl leading-none mt-0.5 flex-shrink-0 {getStateColorClass(watcher.state)}">
-        {getStateIcon(watcher.state)}
-      </span>
-      <div class="flex flex-col gap-0.5 min-w-0 flex-1">
-        <div class="flex items-center gap-2 min-w-0 w-full">
-          <h3 class="m-0 text-sm font-semibold text-[var(--foreground)] overflow-hidden text-ellipsis whitespace-nowrap flex-1 min-w-0">{watcher.name}</h3>
-        </div>
-{#if showJobLink && jobInfo}
-          <button class="job-link" onclick={navigateToJob}>
-            {#if watcher.job_name && watcher.job_name !== 'N/A'}
-              Job #{watcher.job_id} - {watcher.job_name}
-            {:else}
-              Job #{watcher.job_id}
-            {/if}
-          </button>
-        {:else if watcher.job_name && watcher.job_name !== 'N/A'}
-          <span class="job-id" title="{watcher.job_name}">Job #{watcher.job_id} - {watcher.job_name}</span>
-        {:else}
-          <span class="job-id">Job #{watcher.job_id}</span>
-        {/if}
-      </div>
-    </div>
-    
-    <div class="flex items-start gap-2 flex-shrink-0">
-      {#if watcher.state === 'static'}
-        <div class="static-indicator" title="Static watcher - runs on manual trigger only (for completed/canceled jobs)">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M9.5 6.5v11l8-5.5-8-5.5z"/>
-          </svg>
-          <span class="text-xs">Static</span>
-        </div>
-      {/if}
-      {#if watcher.timer_mode_enabled}
-        <div class="timer-indicator" class:active={watcher.timer_mode_active} title="Timer Mode {watcher.timer_mode_active ? 'Active' : 'Enabled'}">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M15,1H9V3H15M11,14H13V8H11M19.03,7.39L20.45,5.97C20,5.46 19.55,5 19.04,4.56L17.62,6C16.07,4.74 14.12,4 12,4A9,9 0 0,0 3,13A9,9 0 0,0 12,22C17,22 21,17.97 21,13C21,10.88 20.26,8.93 19.03,7.39Z"/>
-          </svg>
-        </div>
-      {/if}
-
-      {#if watcher.is_array_template}
-        <div class="array-indicator" title="Array Job Template - Discovers tasks like {watcher.job_id}_0, {watcher.job_id}_1, etc. ({watcher.discovered_task_count || 0}/{watcher.expected_task_count || '?'} discovered)">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M3,3H9V9H3V3M15,3H21V9H15V3M3,15H9V21H3V15M15,15H21V21H15V15M11,5H13V7H11V5M11,11H13V13H11V11M5,11H7V13H5V11M11,17H13V19H11V17Z"/>
-          </svg>
-          <span class="text-xs">{watcher.discovered_task_count || 0}/{watcher.expected_task_count || '?'}</span>
-        </div>
-        <button
-          class="control-btn discover-btn"
-          class:discovering={isDiscoveringTasks}
-          onclick={stopPropagation(discoverArrayTasks)}
-          disabled={isDiscoveringTasks}
-          title="Discover new array tasks">
-          {#if isDiscoveringTasks}
-            <svg class="spinner-icon" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.4" stroke-dashoffset="10"/>
-            </svg>
-          {:else}
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
-            </svg>
-          {/if}
-        </button>
-      {/if}
-
-      {#if discoveryMessage}
-        <div
-          class="discovery-message"
-          class:success={discoveryMessage.includes('✓')}
-          class:error={discoveryMessage.includes('✗')}
-        >
-          {discoveryMessage}
-        </div>
-      {/if}
-
-      <button
-        id="copy-btn-{watcher.id}"
-        class="copy-btn"
-        onclick={stopPropagation(copyWatcher)}
-        title="Copy this watcher configuration"
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/>
-        </svg>
-        <span>Copy</span>
-      </button>
-      
-      {#if watcher.state === 'active' || watcher.state === 'paused'}
-        <button
-          class="control-btn {watcher.state === 'paused' ? 'resume' : ''}"
-          class:pausing={isPausing}
-          onclick={stopPropagation(togglePause)}
-          disabled={isPausing}
-          title={watcher.state === 'active' ? 'Pause watcher' : 'Resume watcher'}
-        >
-          {#if isPausing}
-            <svg class="spinner-icon" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.4" stroke-dashoffset="10"/>
-            </svg>
-          {:else if watcher.state === 'active'}
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <rect x="8" y="8" width="2.5" height="8" rx="0.5" />
-              <rect x="13.5" y="8" width="2.5" height="8" rx="0.5" />
-            </svg>
-          {:else}
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M9.5 6.5v11l8-5.5-8-5.5z"/>
-            </svg>
-          {/if}
-        </button>
-      {/if}
-      
-      {#if watcher.state === 'active' || watcher.state === 'static'}
-        <button
-          class="control-btn"
-          class:triggering={isTriggering}
-          onclick={stopPropagation(triggerManually)}
-          disabled={isTriggering}
-          title={watcher.state === 'static' ? 'Run watcher (static mode - runs on trigger only)' : 'Manually trigger watcher'}>
-          {#if isTriggering}
-            <svg class="spinner-icon" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.4" stroke-dashoffset="10"/>
-            </svg>
-          {:else}
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M9.5 6.5v11l8-5.5-8-5.5z"/>
-            </svg>
-          {/if}
-        </button>
-      {/if}
-      
-      <button
-        class="edit-btn"
-        onclick={stopPropagation(openDetailDialog)}
-        title="Edit watcher"
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-        </svg>
-      </button>
-    </div>
+      {watcher.name}
+    </button>
+    <span class="w-sub" title={[`#${watcher.job_id}`, watcher.hostname, jobName].filter(Boolean).join(' · ')}>
+      <span class="mono">#{watcher.job_id}</span> · {watcher.hostname}{jobName ? ` · ${jobName}` : ''}
+    </span>
   </div>
-  
-  <!-- Compact info row -->
-  <div class="compact-info">
-    <div class="info-item">
-      <span class="trigger-count">{watcher.trigger_count}</span>
-      <span class="info-label">triggers</span>
-    </div>
-    <div class="info-item">
-      <span class="info-value">{watcher.hostname}</span>
-    </div>
-    <div class="info-item">
-      <span class="info-value">
-        {#if watcher.timer_mode_enabled}
-          {watcher.timer_interval_seconds || watcher.interval_seconds}s
-        {:else}
-          {watcher.interval_seconds}s
-        {/if}
-      </span>
-    </div>
-    <div class="info-item">
-      <span class="info-value">{formatTime(watcher.last_check)}</span>
-    </div>
-  </div>
-  
-  <!-- Pattern (compact) -->
-  <div class="pattern-compact">
-    <code class="pattern-text">{watcher.pattern}</code>
-    {#if watcher.actions && watcher.actions.length > 0}
-      <span class="actions-count">→ {watcher.actions.length} action{watcher.actions.length > 1 ? 's' : ''}</span>
-    {/if}
-  </div>
-  
-  <!-- Expanded details -->
-  {#if isExpanded}
-    <div class="expanded-content">
-      {#if watcher.captures && watcher.captures.length > 0}
-        <div class="captures-section">
-          <span class="section-label">Capture Groups</span>
-          <div class="captures-list">
-            {#each watcher.captures as capture, i}
-              <span class="capture-item">
-                ${i + 1}: {capture || `group_${i + 1}`}
-              </span>
-            {/each}
-          </div>
-        </div>
-      {/if}
-      
-      {#if watcher.condition}
-        <div class="condition-section">
-          <span class="section-label">Condition</span>
-          <code class="condition-code">{watcher.condition}</code>
-        </div>
-      {/if}
-      
-      <!-- Actions Preview -->
-      {#if watcher.actions && watcher.actions.length > 0}
-        <div class="actions-section">
-          <span class="section-label">Actions ({watcher.actions.length})</span>
-          <div class="actions-preview">
-            {#each watcher.actions as action, i}
-              <div class="action-item">
-                <span class="action-icon">{getActionIcon(action.type)}</span>
-                <div class="action-details">
-                  <span class="action-type">{getActionTypeDisplay(action)}</span>
-                  {#if getActionDescription(action)}
-                    <span class="action-desc">{getActionDescription(action)}</span>
-                  {/if}
-                </div>
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
 
-      <!-- Last Trigger Result -->
-      {#if lastEvent}
-        <div class="last-trigger-section">
-          <span class="section-label">Last Trigger</span>
-          <div class="trigger-result">
-            <div class="trigger-header">
-              <span class="trigger-time">{formatTime(lastEvent.timestamp)}</span>
-              <span class="trigger-status {lastEvent.success ? 'success' : 'failed'}">
-                {lastEvent.success ? '✓ Success' : '✗ Failed'}
-              </span>
-            </div>
-            {#if lastEvent.matched_text}
-              <div class="matched-text">
-                <span class="label">Match:</span>
-                <code>{lastEvent.matched_text.length > 100 ? lastEvent.matched_text.substring(0, 100) + '...' : lastEvent.matched_text}</code>
-              </div>
-            {/if}
-            {#if lastEvent.action_result}
-              <div class="action-result">
-                <span class="label">Result:</span>
-                <code>{lastEvent.action_result.length > 150 ? lastEvent.action_result.substring(0, 150) + '...' : lastEvent.action_result}</code>
-              </div>
-            {/if}
-            {#if lastEvent.captured_vars && Object.keys(lastEvent.captured_vars).length > 0}
-              <div class="captured-vars">
-                <span class="label">Variables:</span>
-                <div class="vars-list">
-                  {#each Object.entries(lastEvent.captured_vars) as [key, value]}
-                    <span class="var-item">${key}: {value}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          </div>
-        </div>
-      {/if}
+  <span class="w-job" title={[`#${watcher.job_id}`, jobName, watcher.hostname].filter(Boolean).join(' · ')}>
+    <span class="mono">#{watcher.job_id}</span>
+    <small>{watcher.hostname}{jobName ? ` · ${jobName}` : ''}</small>
+  </span>
 
-      <div class="details-actions">
-        <button class="detail-btn" onclick={viewDetails}>
-          Inspect Activity
-        </button>
-        {#if showJobLink}
-          <button class="detail-btn" onclick={navigateToJob}>
-            View Job Output
-          </button>
-        {/if}
-      </div>
-    </div>
+  <span
+    class="w-trigger"
+    class:mono={trigger.mono}
+    title={[trigger.title, actionSummary ? `Actions: ${actionSummary}` : ''].filter(Boolean).join('\n')}
+  >{trigger.label}</span>
+
+  <span class="w-count" title={`${watcher.trigger_count} trigger${watcher.trigger_count === 1 ? '' : 's'}`}>
+    {watcher.trigger_count.toLocaleString()}
+  </span>
+
+  <span class="w-interval" title={watcher.timer_mode_enabled ? 'Timer interval' : 'Check interval'}>
+    {formatInterval(intervalSeconds)}
+  </span>
+
+  <time class="w-last" datetime={lastActivity || undefined} title={formatAbsolute(lastActivity)}>
+    {formatRelative(lastActivity)}
+  </time>
+
+  <button
+    bind:this={menuButton}
+    type="button"
+    class="relay-icon-button w-menu-button"
+    aria-label={`Actions for ${watcher.name}`}
+    title="Actions"
+    aria-haspopup="menu"
+    aria-expanded={menuOpen}
+    onclick={() => (menuOpen ? closeMenu() : void openMenu())}
+  >
+    <MoreHorizontal size={16} />
+  </button>
+
+  {#if statusMessage}
+    <div class="w-status" data-tone={statusTone} role="status">{statusMessage}</div>
   {/if}
 </div>
+
+{#if menuOpen}
+  <div use:portal={{ zIndex: 60 }}>
+    <div
+      bind:this={menuElement}
+      class="w-menu"
+      role="menu"
+      tabindex="-1"
+      aria-label={`Actions for ${watcher.name}`}
+      style={`top:${menuPosition.top}px;right:${menuPosition.right}px`}
+      onkeydown={handleMenuKeydown}
+    >
+      {#if canRun}
+        <button type="button" role="menuitem" disabled={isTriggering} onclick={() => runFromMenu(triggerManually)}>
+          <Play size={14} />
+          {isTriggering ? 'Running…' : 'Run now'}
+        </button>
+      {/if}
+      {#if canToggle}
+        <button type="button" role="menuitem" disabled={isPausing} onclick={() => runFromMenu(togglePause)}>
+          {#if watcher.state === 'active'}
+            <Pause size={14} />
+            Pause
+          {:else}
+            <Play size={14} />
+            Resume
+          {/if}
+        </button>
+      {/if}
+      <button type="button" role="menuitem" onclick={() => runFromMenu(() => { showDetailDialog = true; })}>
+        <Pencil size={14} />
+        Edit…
+      </button>
+      <button type="button" role="menuitem" onclick={() => runFromMenu(copyWatcher)}>
+        <Copy size={14} />
+        Copy to jobs…
+      </button>
+      {#if watcher.is_array_template}
+        <button type="button" role="menuitem" disabled={isDiscoveringTasks} onclick={() => runFromMenu(discoverArrayTasks)}>
+          <Search size={14} />
+          Discover array tasks
+        </button>
+      {/if}
+      <button type="button" role="menuitem" onclick={() => runFromMenu(navigateToJob)}>
+        <ExternalLink size={14} />
+        Open job
+      </button>
+      <div class="w-menu-separator" role="separator"></div>
+      <button type="button" role="menuitem" class="danger" disabled={isDeleting} onclick={() => runFromMenu(deleteWatcher)}>
+        <Trash2 size={14} />
+        Delete…
+      </button>
+    </div>
+  </div>
+{/if}
 
 {#if showDetailDialog}
   <div use:portal>
@@ -636,936 +437,278 @@
       {watcher}
       jobId={watcher.job_id}
       hostname={watcher.hostname}
-      on:close={handleDetailClose}
-      on:updated={handleDetailUpdate}
-      on:deleted={handleDetailDelete}
+      on:close={() => (showDetailDialog = false)}
+      on:updated={handleDetailChange}
+      on:deleted={handleDetailChange}
     />
   </div>
 {/if}
 
 <style>
-  .watcher-card {
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.625rem;
-    margin-bottom: 0.5rem;
-    transition: all 0.3s ease;
+  /* Columns come from --watcher-cols, set by the list container per width.
+     Cell visibility below mirrors the same container breakpoints (720px / 520px) in WatchersPage. */
+  .watcher-row {
+    display: grid;
+    grid-template-columns: var(
+      --watcher-cols,
+      10px minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 1.3fr) 44px 44px 64px 30px
+    );
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 4px 6px 4px 14px;
+    border-bottom: 1px solid var(--border-soft);
     position: relative;
-    overflow: hidden;
-    cursor: pointer;
+    font-size: 0.8125rem;
+    transition: background var(--motion-state);
   }
-  
-  .watcher-card:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    transform: translateY(-2px);
+
+  .watcher-row:last-child {
+    border-bottom: 0;
   }
-  
-  .watcher-card.pulse::before {
+
+  .watcher-row:hover {
+    background: var(--hover);
+  }
+
+  .watcher-row.selected {
+    background: var(--accent-soft);
+  }
+
+  .watcher-row.selected::before {
     content: '';
     position: absolute;
-    top: 0;
+    top: 8px;
+    bottom: 8px;
     left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, 
-      transparent, 
-      var(--success), 
-      transparent
-    );
-    animation: pulse-slide 2s infinite;
+    width: 3px;
+    border-radius: 0 4px 4px 0;
+    background: var(--accent);
   }
-  
-  @keyframes pulse-slide {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
+
+  .w-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted-foreground);
   }
-  
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 0.375rem;
-    gap: 0.5rem;
+
+  [data-state='active'] .w-dot {
+    background: var(--success);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
   }
-  
-  .header-left {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    flex: 1;
-    min-width: 0;
+
+  [data-state='paused'] .w-dot {
+    background: transparent;
+    border: 2px solid var(--warning);
   }
-  
-  .state-indicator {
-    font-size: 1.25rem;
-    line-height: 1;
-    margin-top: 0.125rem;
-    flex-shrink: 0;
+
+  [data-state='static'] .w-dot {
+    background: var(--accent);
   }
-  
-  .watcher-info {
+
+  [data-state='failed'] .w-dot {
+    background: var(--error);
+  }
+
+  .w-main {
     display: flex;
     flex-direction: column;
-    gap: 0.125rem;
     min-width: 0;
-    flex: 1;
   }
-  
-  .name-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  
-  .watcher-name {
-    margin: 0;
-    font-size: 0.875rem;
-    font-weight: 600;
+
+  .w-open {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
     color: var(--foreground);
+    font: inherit;
+    font-weight: 550;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* Stretch the name button over the whole row so any cell selects it. */
+  .w-open::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
+
+  .w-open:focus-visible {
+    outline: none;
+  }
+
+  .watcher-row:has(.w-open:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .w-sub,
+  .w-job small,
+  .w-interval,
+  .w-last {
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  .w-sub {
+    display: none;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  
-  .static-indicator {
+
+  .w-job {
     display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 12px;
-    background: var(--info-bg);
-    color: var(--accent);
-    font-weight: 500;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+  }
+
+  .w-job .mono {
     font-size: 0.75rem;
-    flex-shrink: 0;
+    color: var(--foreground);
   }
 
-  .static-indicator svg {
-    width: 12px;
-    height: 12px;
+  .w-job small,
+  .w-trigger {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .timer-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: var(--secondary);
+  .w-trigger {
+    min-width: 0;
+    color: var(--foreground);
+  }
+
+  .w-trigger.mono {
+    font-size: 0.75rem;
+  }
+
+  .w-count,
+  .w-interval,
+  .w-last {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .w-menu-button {
+    position: relative;
+    z-index: 1;
+    width: 30px;
+    height: 30px;
+  }
+
+  .w-status {
+    grid-column: 2 / -1;
+    padding: 2px 0 6px;
+    font-size: 0.75rem;
     color: var(--muted-foreground);
-    transition: all 0.2s;
-    flex-shrink: 0;
+    overflow-wrap: anywhere;
   }
 
-  .timer-indicator.active {
-    background: var(--info-bg);
-    color: var(--accent);
-    animation: timer-pulse 2s infinite;
-  }
-
-  .timer-indicator svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  @keyframes timer-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
-  }
-
-  .array-indicator {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border-radius: 12px;
-    background: var(--accent-bg, rgba(99, 102, 241, 0.1));
-    color: var(--accent, #6366f1);
-    font-size: 0.75rem;
-    font-weight: 500;
-    flex-shrink: 0;
-  }
-
-  .array-indicator svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .discovery-message {
-    position: absolute;
-    top: 40px;
-    right: 10px;
-    padding: 8px 12px;
-    background: var(--popover);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 0.75rem;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    z-index: 10;
-    animation: slideDown 0.2s ease-out;
-  }
-
-  .discovery-message.success {
-    border-color: var(--success);
+  .w-status[data-tone='success'] {
     color: var(--success);
   }
 
-  .discovery-message.error {
-    border-color: var(--destructive);
-    color: var(--destructive);
-  }
-
-  .discover-btn {
-    background: var(--accent-bg, rgba(99, 102, 241, 0.1));
-    color: var(--accent, #6366f1);
-  }
-
-  .discover-btn:hover:not(:disabled) {
-    background: var(--accent, #6366f1);
-    color: white;
-  }
-
-  .discover-btn.discovering {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-  
-  .job-link {
-    background: none;
-    border: none;
-    color: var(--accent);
-    font-size: 0.75rem;
-    cursor: pointer;
-    padding: 0;
-    text-align: left;
-    text-decoration: underline;
-    text-decoration-style: dotted;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-  }
-  
-  .job-link:hover {
-    text-decoration-style: solid;
-  }
-  
-  .job-id {
-    color: var(--muted-foreground);
-    font-size: 0.75rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  
-  .header-actions {
-    display: flex;
-    gap: 0.25rem;
-    flex-shrink: 0;
-    align-items: flex-start;
-  }
-  
-  .control-btn,
-  .expand-btn,
-  .edit-btn,
-  .detail-btn,
-  .copy-btn {
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 0;
-    width: 24px;
-    height: 24px;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted-foreground);
-    font-size: 0;
-  }
-  
-  .detail-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-  }
-  
-  .detail-btn:hover {
-    background: var(--info-bg);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  
-  .copy-btn span {
-    display: none !important; /* Hide text in compact mode */
-  }
-  
-  .control-btn svg,
-  .expand-btn svg,
-  .detail-btn svg {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-  }
-
-  .copy-btn svg {
-    width: 12px;
-    height: 12px;
-  }
-  
-  .control-btn:hover:not(:disabled) {
-    background: var(--error-bg);
-    border-color: var(--error);
+  .w-status[data-tone='error'] {
     color: var(--error);
   }
-  
-  .control-btn.resume:hover:not(:disabled) {
-    background: var(--success-bg);
-    border-color: var(--success);
-    color: var(--success);
+
+  @container watcher-list (max-width: 720px) {
+    .w-job,
+    .w-interval {
+      display: none;
+    }
+    .w-sub {
+      display: block;
+    }
   }
-  
-  .control-btn.triggering {
-    opacity: 0.6;
+
+  @container watcher-list (max-width: 520px) {
+    .w-trigger,
+    .w-count {
+      display: none;
+    }
+    .watcher-row {
+      min-height: 52px;
+    }
+    /* Narrow rows have room for two lines of name rather than a hard cut. */
+    .w-open {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.3;
+    }
   }
-  
-  .trigger-message {
+
+  .w-menu {
     position: fixed;
-    top: 5rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--background);
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--foreground) 10%, transparent);
-    font-size: 0.875rem;
-    z-index: 1000;
-    animation: slideInMessage 0.3s ease-out;
-    color: var(--muted-foreground);
-  }
-  
-  .trigger-message.success {
-    color: var(--success);
-    background: var(--success-bg);
-  }
-
-  .trigger-message.error {
-    color: var(--destructive);
-    background: var(--error-bg);
-    border: 1px solid var(--error-bg);
-  }
-  
-  @keyframes slideInMessage {
-    from {
-      opacity: 0;
-      transform: translateX(-50%) translateY(-10px);
-    }
-    to {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-  }
-  
-
-  .edit-btn {
-    background: var(--background);
+    min-width: 188px;
+    padding: 5px;
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 0;
-    width: 24px;
-    height: 24px;
-    cursor: pointer;
-    transition: all 0.2s;
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 16%, transparent);
+  }
+
+  .w-menu button {
     display: flex;
     align-items: center;
-    justify-content: center;
-    color: var(--muted-foreground);
-    font-size: 0;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: inherit;
+    font-size: 0.8125rem;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
   }
 
-  .edit-btn svg {
-    width: 13px;
-    height: 13px;
+  .w-menu button:hover:not(:disabled),
+  .w-menu button:focus-visible {
+    background: var(--hover);
+    outline: none;
+  }
+
+  .w-menu button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .w-menu button :global(svg) {
+    color: var(--muted-foreground);
     flex-shrink: 0;
   }
 
-  .edit-btn:hover {
-    background: var(--info-bg);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  
-  .control-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  
-  .copy-btn {
-    padding: 0.25rem 0.5rem;
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--muted-foreground);
-    font-size: 0.75rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    transition: all 0.2s;
-  }
-  
-  .copy-btn:hover {
-    background: var(--secondary);
-    color: var(--foreground);
-    border-color: var(--muted-foreground);
-  }
-  
-  .copy-btn svg {
-    width: 14px;
-    height: 14px;
-  }
-  
-  .spinner-icon {
-    animation: spin 1s linear infinite;
-  }
-  
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  
-  
-  .compact-info {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 0.5rem;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  
-  .info-item {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-  
-  .trigger-count {
-    font-weight: 600;
-    font-size: 0.875rem;
-    color: var(--accent);
-  }
-  
-  .info-label {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-  }
-  
-  .info-value {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    font-weight: 500;
+  .w-menu button.danger,
+  .w-menu button.danger :global(svg) {
+    color: var(--error);
   }
 
-  .job-name-truncated {
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-style: italic;
-    color: var(--accent) !important;
-  }
-  
-  .pattern-compact {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    background: var(--secondary);
-    padding: 0.5rem 0.75rem;
-    border-radius: 6px;
-    margin-bottom: 0.5rem;
-  }
-  
-  .pattern-text {
-    font-family: monospace;
-    font-size: 0.75rem;
-    color: var(--foreground);
-    flex: 1;
-    word-break: break-all;
-  }
-  
-  .actions-count {
-    font-size: 0.625rem;
-    color: var(--muted-foreground);
-    white-space: nowrap;
-    font-weight: 500;
-  }
-  
-  .captures-section,
-  .condition-section {
-    margin-bottom: 1rem;
-  }
-
-  .captures-section .section-label,
-  .condition-section .section-label {
-    display: block;
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    margin-bottom: 0.5rem;
-  }
-  
-  .condition-code {
-    display: block;
-    background: var(--secondary);
-    padding: 0.75rem;
-    border-radius: 8px;
-    font-family: monospace;
-    font-size: 0.875rem;
-    word-break: break-all;
-    border: 1px solid var(--border);
-  }
-  
-  .expanded-content {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
-    animation: slideDown 0.3s ease;
-  }
-  
-  @keyframes slideDown {
-    from {
-      opacity: 0;
-      transform: translateY(-10px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-  
-  .captures-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  
-  .capture-item {
-    background: var(--info-bg);
-    color: var(--info);
-    padding: 0.25rem 0.5rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    font-family: monospace;
-  }
-  
-  .details-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 1rem;
-  }
-  
-  .detail-btn {
-    flex: 1;
-    background: var(--accent);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 0.75rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-  }
-  
-  .detail-btn:hover {
-    background: var(--accent);
-    transform: translateY(-2px);
-  }
-  
-  @media (max-width: 768px) {
-    .watcher-card {
-      padding: 0.625rem;
-      border-radius: 6px;
-      margin-bottom: 0.625rem;
-    }
-    
-    .card-header {
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-bottom: 0.375rem;
-    }
-    
-    .header-left {
-      flex: 1;
-      min-width: 0;
-    }
-    
-    .watcher-name {
-      font-size: 0.875rem;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    
-    .name-row {
-      flex-wrap: wrap;
-      gap: 0.375rem;
-    }
-    
-    .timer-indicator {
-      width: 22px;
-      height: 22px;
-    }
-
-    .timer-indicator svg {
-      width: 14px;
-      height: 14px;
-    }
-    
-    .job-link,
-    .job-id {
-      font-size: 0.75rem;
-    }
-    
-    .header-actions {
-      gap: 0.375rem;
-    }
-    
-    .control-btn,
-    .expand-btn,
-    .edit-btn {
-      width: 28px;
-      height: 28px;
-      min-width: 28px;
-      min-height: 28px;
-    }
-
-    .edit-btn svg {
-      width: 14px;
-      height: 14px;
-    }
-
-    .copy-btn {
-      padding: 0;
-      width: 28px;
-      height: 28px;
-      min-width: 28px;
-      min-height: 28px;
-      font-size: 0.625rem;
-    }
-
-    .copy-btn span {
-      display: none; /* Hide text on mobile, icon only */
-    }
-
-    .copy-btn svg {
-      width: 12px;
-      height: 12px;
-    }
-    
-    
-    .compact-info {
-      gap: 0.75rem;
-      margin-bottom: 0.375rem;
-    }
-    
-    .trigger-count {
-      font-size: 0.875rem;
-    }
-    
-    .info-label,
-    .info-value {
-      font-size: 0.625rem;
-    }
-    
-    .pattern-compact {
-      padding: 0.375rem 0.5rem;
-      margin-bottom: 0.375rem;
-    }
-    
-    .pattern-text {
-      font-size: 0.625rem;
-    }
-    
-    .actions-count {
-      font-size: 0.5rem;
-    }
-    
-    .captures-section,
-    .condition-section {
-      margin-bottom: 0.75rem;
-    }
-
-    .captures-section .section-label,
-    .condition-section .section-label {
-      font-size: 0.625rem;
-      margin-bottom: 0.375rem;
-    }
-    
-    .condition-code {
-      padding: 0.5rem;
-      font-size: 0.75rem;
-      border-radius: 6px;
-      word-break: break-word;
-      overflow-wrap: break-word;
-    }
-    
-    .expanded-content {
-      margin-top: 0.75rem;
-      padding-top: 0.75rem;
-    }
-    
-    .captures-list {
-      gap: 0.375rem;
-    }
-    
-    .capture-item {
-      padding: 0.1875rem 0.375rem;
-      font-size: 0.625rem;
-      border-radius: 4px;
-    }
-    
-    .details-actions {
-      flex-direction: row;
-      gap: 0.5rem;
-      margin-top: 0.75rem;
-    }
-    
-    .detail-btn {
-      padding: 0.625rem 0.75rem;
-      font-size: 0.75rem;
-      border-radius: 6px;
-      gap: 0.375rem;
-    }
-    
-    /* Touch optimization */
-    .control-btn,
-    .expand-btn,
-    .edit-btn,
-    .copy-btn,
-    .detail-btn {
-      -webkit-tap-highlight-color: transparent;
-      touch-action: manipulation;
-    }
-    
-    /* Improve performance */
-    .watcher-card {
-      will-change: auto;
-      transform: translateZ(0);
-    }
-    
-    .watcher-card:hover {
-      transform: none;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-    }
-    
-    .watcher-card.pulse::before {
-      animation: none;
-      display: none;
-    }
-    
-    /* Trigger message positioning */
-    .trigger-message {
-      top: 4rem;
-      font-size: 0.75rem;
-      padding: 0.375rem 0.75rem;
-      border-radius: 4px;
-    }
-  }
-  
-  @media (max-width: 480px) {
-    .compact-info {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.5rem;
-    }
-    
-    .watcher-card {
-      padding: 0.5rem;
-    }
-    
-    .watcher-name {
-      font-size: 0.75rem;
-    }
-    
-    .pattern-compact {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.5rem;
-    }
-    
-    .details-actions {
-      flex-direction: column;
-    }
-    
-    .detail-btn {
-      width: 100%;
-      justify-content: center;
-    }
-  }
-
-  /* Actions Preview Styles */
-  .actions-section {
-    margin: 1rem 0;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .actions-section .section-label {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--foreground);
-    margin-bottom: 0.5rem;
-  }
-
-  .actions-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .action-item {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 0.75rem;
-    background: var(--secondary);
-    border-radius: 6px;
-    border: 1px solid var(--border);
-  }
-
-  .action-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.5rem;
-    height: 1.5rem;
-    background: var(--accent);
-    color: white;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-  }
-
-  .action-details {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    flex: 1;
-  }
-
-  .action-type {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--foreground);
-  }
-
-  .action-desc {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
-  }
-
-  /* Last Trigger Result Styles */
-  .last-trigger-section {
-    margin: 1rem 0;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .last-trigger-section .section-label {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--foreground);
-    margin-bottom: 0.5rem;
-  }
-
-  .trigger-result {
-    background: var(--secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.75rem;
-  }
-
-  .trigger-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-  }
-
-  .trigger-time {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-  }
-
-  .trigger-status {
-    font-size: 0.75rem;
-    font-weight: 500;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-  }
-
-  .trigger-status.success {
-    color: var(--success);
-    background: var(--success-bg);
-  }
-
-  .trigger-status.failed {
-    color: var(--destructive);
+  .w-menu button.danger:hover:not(:disabled),
+  .w-menu button.danger:focus-visible {
     background: var(--error-bg);
   }
 
-  .matched-text, .action-result, .captured-vars {
-    margin-bottom: 0.5rem;
-  }
-
-  .matched-text:last-child, .action-result:last-child, .captured-vars:last-child {
-    margin-bottom: 0;
-  }
-
-  .label {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--foreground);
-    margin-right: 0.5rem;
-  }
-
-  .matched-text code, .action-result code {
-    font-size: 0.75rem;
-    background: var(--secondary);
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    word-break: break-all;
-    display: inline-block;
-    max-width: 100%;
-  }
-
-  .vars-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    margin-top: 0.25rem;
-  }
-
-  .var-item {
-    font-size: 0.75rem;
-    background: var(--info-bg);
-    color: var(--accent);
-    padding: 0.125rem 0.375rem;
-    border-radius: 4px;
-    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+  .w-menu-separator {
+    height: 1px;
+    margin: 5px 4px;
+    background: var(--border);
   }
 </style>

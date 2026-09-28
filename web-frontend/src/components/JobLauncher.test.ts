@@ -39,3 +39,20 @@ it('updates resource directives, restores the draft, and submits only after revi
   await waitFor(() => expect(mocks.launch).toHaveBeenCalledWith(expect.objectContaining({ host: 'cluster.test', source_dir: '/work/training', cpus: 8, script_content: expect.stringContaining('#SBATCH --cpus-per-task=8') })));
   expect(mocks.launch).toHaveBeenCalledTimes(1);
 });
+
+it('hides the missing source directory error until the user tries to review', async () => {
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  Element.prototype.animate = vi.fn(() => ({ cancel: vi.fn(), finish: vi.fn(), finished: Promise.resolve(), effect: null, currentTime: 0 })) as never;
+  vi.mocked(localStorage.getItem).mockImplementation(() => null);
+  const { default: JobLauncher } = await import('./JobLauncher.svelte');
+  render(JobLauncher);
+  const review = screen.getByRole('button', { name: 'Review job' });
+  await waitFor(() => expect(review).toBeEnabled());
+  expect(screen.queryAllByText(/Missing: Source Directory/)).toHaveLength(0);
+  expect(screen.getByRole('textbox', { name: 'Source directory' })).toHaveAttribute('aria-invalid', 'false');
+  await fireEvent.click(review);
+  expect((await screen.findAllByText(/Missing: Source Directory/)).length).toBeGreaterThan(0);
+  expect(screen.getByRole('textbox', { name: 'Source directory' })).toHaveAttribute('aria-invalid', 'true');
+  expect(screen.queryByRole('dialog', { name: 'Review job' })).toBeNull();
+  expect(mocks.launch).not.toHaveBeenCalled();
+});

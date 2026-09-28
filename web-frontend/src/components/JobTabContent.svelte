@@ -3,6 +3,8 @@
   import OutputViewer from "./OutputViewer.svelte";
   import ScriptViewer from "./ScriptViewer.svelte";
   import WatchersTab from "./WatchersTab.svelte";
+  import Dialog from '../lib/components/ui/Dialog.svelte';
+  import { Info, Download } from 'lucide-svelte';
 
 
   interface Props {
@@ -23,6 +25,7 @@
     onDownloadScript?: () => void;
     onRefreshOutput?: () => void;
     refreshingOutput?: boolean;
+    onOutputTypeChange?: (type: 'stdout' | 'stderr') => void;
   }
 
   let {
@@ -42,8 +45,13 @@
     onRetryLoadScript = () => {},
     onDownloadScript = () => {},
     onRefreshOutput = () => {},
-    refreshingOutput = false
+    refreshingOutput = false,
+    onOutputTypeChange = () => {}
   }: Props = $props();
+
+  let fileDetailsOpen = $state(false);
+  const outputType = $derived(activeTab === 'errors' ? 'stderr' : 'stdout');
+  const outputMetadata = $derived(outputType === 'stdout' ? outputData?.stdout_metadata : outputData?.stderr_metadata);
 
   function formatBytes(bytes: number | null | undefined): string {
     if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return 'N/A';
@@ -79,122 +87,49 @@
 
   function existsLabel(exists: boolean | null | undefined, pending: boolean): string {
     if (pending && !exists) return 'Checking';
+    if (exists === null || exists === undefined) return 'Unknown';
     return exists ? 'Yes' : 'No';
   }
 </script>
 
-{#if activeTab === 'output'}
+{#if activeTab === 'output' || activeTab === 'errors'}
   <div class="output-section">
     {#if outputError}
-      <div class="error-state">
+      <div class="output-error" role="alert">
         <span>{outputError}</span>
-        <button class="retry-btn" onclick={onRetryLoadOutput}>Retry</button>
+        <button class="relay-text-button" onclick={onRetryLoadOutput}>Retry</button>
       </div>
-    {:else}
-      {@const outputPending = isOutputPending('stdout')}
-      {#if outputData?.stdout_metadata}
-        <div class="metadata-strip">
-          <div class="metadata-row">
-            <span class="metadata-label">File</span>
-            <code class="metadata-value">{outputData.stdout_metadata.path || 'N/A'}</code>
-          </div>
-          <div class="metadata-row">
-            <span class="metadata-label">Exists</span>
-            <span class="metadata-value">{existsLabel(outputData.stdout_metadata.exists, outputPending)}</span>
-          </div>
-          <div class="metadata-row">
-            <span class="metadata-label">Size</span>
-            <span class="metadata-value">{formatBytes(outputData.stdout_metadata.size_bytes)}</span>
-          </div>
-          <div class="metadata-row">
-            <span class="metadata-label">Updated</span>
-            <span class="metadata-value">{formatTime(outputData.stdout_metadata.last_modified)}</span>
-          </div>
-          {#if outputData.stdout_metadata.access_path}
-            <div class="metadata-row">
-              <span class="metadata-label">Open</span>
-              <a class="metadata-link" href={outputData.stdout_metadata.access_path} target="_blank" rel="noopener noreferrer">raw file</a>
-            </div>
-          {/if}
-        </div>
-      {/if}
-      {#if outputData?.content_truncated}
-        <div class="output-notice">
-          Showing the beginning and latest output for speed. Use the raw file link for the full log.
-        </div>
-      {/if}
-      <OutputViewer
-        content={streamContent('stdout')}
-        isLoading={loadingOutput}
-        isPending={outputPending}
-        pendingMessage="Retrieving output from cluster..."
-        hasMoreContent={loadingMoreOutput}
-        onLoadMore={onLoadMoreOutput}
-        onScrollToTop={onScrollToTop}
-        onScrollToBottom={onScrollToBottom}
-        type="output"
-        isStreaming={job?.state === 'R'}
-        onRefresh={onRefreshOutput}
-        refreshing={refreshingOutput}
-      />
     {/if}
-  </div>
-
-{:else if activeTab === 'errors'}
-  <div class="output-section">
-    {#if outputError}
-      <div class="error-state">
-        <span>{outputError}</span>
-        <button class="retry-btn" onclick={onRetryLoadOutput}>Retry</button>
-      </div>
-    {:else}
-      {@const errorPending = isOutputPending('stderr')}
-      {#if outputData?.stderr_metadata}
-        <div class="metadata-strip">
-          <div class="metadata-row">
-            <span class="metadata-label">File</span>
-            <code class="metadata-value">{outputData.stderr_metadata.path || 'N/A'}</code>
-          </div>
-          <div class="metadata-row">
-            <span class="metadata-label">Exists</span>
-            <span class="metadata-value">{existsLabel(outputData.stderr_metadata.exists, errorPending)}</span>
-          </div>
-          <div class="metadata-row">
-            <span class="metadata-label">Size</span>
-            <span class="metadata-value">{formatBytes(outputData.stderr_metadata.size_bytes)}</span>
-          </div>
-          <div class="metadata-row">
-            <span class="metadata-label">Updated</span>
-            <span class="metadata-value">{formatTime(outputData.stderr_metadata.last_modified)}</span>
-          </div>
-          {#if outputData.stderr_metadata.access_path}
-            <div class="metadata-row">
-              <span class="metadata-label">Open</span>
-              <a class="metadata-link" href={outputData.stderr_metadata.access_path} target="_blank" rel="noopener noreferrer">raw file</a>
-            </div>
-          {/if}
-        </div>
-      {/if}
-      {#if outputData?.content_truncated}
-        <div class="output-notice">
-          Showing the beginning and latest output for speed. Use the raw file link for the full log.
-        </div>
-      {/if}
-      <OutputViewer
-        content={streamContent('stderr')}
-        isLoading={loadingOutput}
-        isPending={errorPending}
-        pendingMessage="Retrieving error output from cluster..."
-        hasMoreContent={loadingMoreOutput}
-        onLoadMore={onLoadMoreOutput}
-        onScrollToTop={onScrollToTop}
-        onScrollToBottom={onScrollToBottom}
-        type="error"
-        isStreaming={job?.state === 'R'}
-        onRefresh={onRefreshOutput}
-        refreshing={refreshingOutput}
-      />
-    {/if}
+    <OutputViewer
+      content={streamContent(outputType)}
+      isLoading={loadingOutput}
+      isPending={isOutputPending(outputType)}
+      pendingMessage="Retrieving output…"
+      hasMoreContent={loadingMoreOutput}
+      onLoadMore={onLoadMoreOutput}
+      onScrollToTop={onScrollToTop}
+      onScrollToBottom={onScrollToBottom}
+      type={outputType === 'stdout' ? 'output' : 'error'}
+      isStreaming={job?.state === 'R'}
+      onRefresh={onRefreshOutput}
+      refreshing={refreshingOutput}
+    >
+      {#snippet toolbarStart()}
+        <select class="output-stream-select" aria-label="Output stream" value={outputType} onchange={event=>onOutputTypeChange(event.currentTarget.value as 'stdout' | 'stderr')}>
+          <option value="stdout">stdout</option>
+          <option value="stderr">stderr</option>
+        </select>
+        {#if outputData?.content_truncated}
+          <button class="output-preview" title="Showing the beginning and latest output. Open the full log for all lines." onclick={()=>fileDetailsOpen=true}>Preview</button>
+        {/if}
+      {/snippet}
+      {#snippet toolbarEnd()}
+        <button class="output-tool" aria-label="File details" title="File details" onclick={()=>fileDetailsOpen=true}><Info size={16}/></button>
+        {#if outputMetadata?.access_path}
+          <a class="output-tool" href={outputMetadata.access_path} target="_blank" rel="noopener noreferrer" aria-label={`Open full ${outputType} log`} title={`Open full ${outputType} log`}><Download size={16}/></a>
+        {/if}
+      {/snippet}
+    </OutputViewer>
   </div>
 
 {:else if activeTab === 'script'}
@@ -242,6 +177,25 @@
   </div>
 {/if}
 
+<Dialog bind:open={fileDetailsOpen} title={`${outputType} file`} size="sm">
+  <dl class="file-details">
+    <dt>Path</dt>
+    <dd class="font-mono break-all">{outputMetadata?.path || (outputType === 'stdout' ? job?.stdout_file : job?.stderr_file) || 'Not available'}</dd>
+    <dt>Exists</dt>
+    <dd>{existsLabel(outputMetadata?.exists, isOutputPending(outputType))}</dd>
+    <dt>Size</dt>
+    <dd>{formatBytes(outputMetadata?.size_bytes)}</dd>
+    <dt>Updated</dt>
+    <dd>{formatTime(outputMetadata?.last_modified)}</dd>
+  </dl>
+  {#if outputData?.content_truncated}
+    <p class="mt-4 text-sm text-muted-foreground">This preview contains the beginning and latest output. Open the full log to see all lines.</p>
+  {/if}
+  {#if outputMetadata?.access_path}
+    <a class="relay-button mt-4" href={outputMetadata.access_path} target="_blank" rel="noopener noreferrer"><Download size={16}/>Open full log</a>
+  {/if}
+</Dialog>
+
 <style>
   .output-section {
     flex: 1;
@@ -249,6 +203,8 @@
     flex-direction: column;
     overflow: hidden;
     height: 100%;
+    min-height: 0;
+    min-width: 0;
   }
 
   .metadata-strip {
@@ -262,14 +218,74 @@
     background: var(--secondary);
   }
 
-  .output-notice {
-    margin-bottom: 0.5rem;
-    padding: 0.55rem 0.75rem;
-    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
-    border-radius: 0.625rem;
-    background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  .output-stream-select {
+    width: 88px;
+    min-height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--foreground);
+    padding: 3px 22px 3px 8px;
+    font-size: .8125rem;
+    flex-shrink: 0;
+  }
+
+  .output-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 30px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
     color: var(--muted-foreground);
-    font-size: 0.78rem;
+    flex-shrink: 0;
+  }
+
+  .output-tool:hover,.output-preview:hover {
+    color: var(--foreground);
+    background: var(--hover);
+  }
+
+  .output-preview {
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 0;
+    color: var(--muted-foreground);
+    background: var(--secondary);
+    font-size: .6875rem;
+  }
+
+  @container (max-width:350px) {
+    .output-stream-select { width: 72px; }
+    .output-preview { width: 22px; height: 24px; padding: 0; font-size: 0; }
+    .output-preview::after { content: '…'; font-size: .875rem; }
+  }
+
+  .file-details {
+    display: grid;
+    gap: 6px;
+    font-size: .8125rem;
+  }
+
+  .file-details dt {
+    margin-top: 8px;
+    color: var(--muted-foreground);
+  }
+
+  .file-details dd {
+    margin: 0;
+  }
+
+  .output-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    color: var(--destructive);
+    font-size: .8125rem;
   }
 
   .metadata-row {
@@ -295,12 +311,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  }
-
-  .metadata-link {
-    color: var(--accent);
-    text-decoration: underline;
-    font-weight: 600;
   }
 
   .error-state {

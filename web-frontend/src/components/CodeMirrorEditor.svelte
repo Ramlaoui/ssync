@@ -71,11 +71,24 @@
   // Create the bash language support using legacy modes
   const bashLanguage = StreamLanguage.define(shell);
 
+  function isDarkTheme(name: string) {
+    return name === 'dark' || name === 'dracula';
+  }
+
+  // The container paints the editor canvas (the CodeMirror background itself is
+  // transparent), so it must follow the same theme as the text colours.
+  function getCanvasColor(name: string) {
+    if (name === 'dracula') return '#282a36';
+    return relayTokens.colors.CodeCanvas[isDarkTheme(name) ? 'dark' : 'light'];
+  }
+
+  let canvasColor = $derived(getCanvasColor(theme));
+
   function getThemeExtension() {
-    const isDark = theme === 'dark' || theme === 'dracula';
+    const isDark = isDarkTheme(theme);
     const palette = Object.fromEntries(Object.entries(relayTokens.colors).map(([name, values]) => [name, values[isDark ? 'dark' : 'light']]));
     // Softer, more consistent colors with the page theme
-    const backgroundColor = theme === 'dracula' ? '#282a36' : palette.CodeCanvas;
+    const backgroundColor = getCanvasColor(theme);
     const foregroundColor = theme === 'dracula' ? '#f8f8f2' : palette.Ink;
     const mobileFont = '"SF Mono", "Monaco", "Menlo", "Consolas", "Courier New", monospace';
     const desktopFont = '"JetBrains Mono", "Monaco", "Menlo", "Ubuntu Mono", monospace';
@@ -141,7 +154,6 @@
         borderRight: isDark ? '1px solid rgba(255, 255, 255, 0.05)' : 'none',
         minWidth: isMobile ? '2.5rem' : '3rem',
         lineHeight: lineHeight,
-        paddingTop: isMobile ? '1rem' : '1.5rem',
       },
       '.cm-lineNumbers': {
         color: palette.InkSecondary,
@@ -447,7 +459,7 @@
   });
 </script>
 
-<div class="codemirror-container">
+<div class="codemirror-container" style:background={canvasColor}>
   <div class={`codemirror-editor ${className}`.trim()} bind:this={editorElement}></div>
 </div>
 
@@ -456,10 +468,9 @@
     position: relative;
     height: 100%;
     width: 100%;
-    background: linear-gradient(135deg, #1a1f2e 0%, #232937 100%);
     border-radius: 12px;
     overflow: hidden;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.08);
   }
 
   .codemirror-editor {

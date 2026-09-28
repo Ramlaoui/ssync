@@ -457,15 +457,6 @@ kbd {
   color: var(--muted);
 }
 
-.attention-count {
-  color: var(--red)!important;
-  font-size: .8rem;
-  margin-left: auto;
-  background: var(--red-soft);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-
 .sidebar-section button.chosen,.settings-link.chosen {
   background: var(--hover);
   color: var(--text);

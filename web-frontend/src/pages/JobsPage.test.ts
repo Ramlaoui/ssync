@@ -40,6 +40,11 @@ beforeEach(() => {
   setJobView('all');
   preferences.update(value => ({ ...value, autoRefresh: false }));
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  vi.stubGlobal('ResizeObserver', class {
+    observe() { }
+    unobserve() { }
+    disconnect() { }
+  });
   mocks.fetchJob.mockImplementation((id, host) => Promise.resolve(get(jobStateManager.getAllJobs()).find(job => job.job_id === id && job.hostname === host)));
   mocks.get.mockImplementation((url: string) => Promise.resolve({ data: url === '/api/hosts' ? [] : { watchers: [], events: [] } }));
   mocks.post.mockResolvedValue({ data: { success: true } });
@@ -88,11 +93,81 @@ describe('Job inspector interactions', () => {
   it('only cancels the selected host/job after confirmation', async () => {
     render(JobsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Inspect First training/ }));
-    await fireEvent.click(await screen.findByRole('button', { name: 'Cancel job' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Job actions' }));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: /Cancel job/ }));
     expect(mocks.post).not.toHaveBeenCalled();
     const dialog = await screen.findByRole('dialog', { name: 'Cancel this job?' });
     expect(dialog).toHaveTextContent('Cancel #111 on alpha');
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel job' }));
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/api/jobs/111/cancel', null, { params: { host: 'alpha' } }));
+  });
+
+  it('keeps the job open when Escape dismisses its dialog', async () => {
+    render(JobsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Inspect First training/ }));
+    const actions = await screen.findByRole('button', { name: 'Job actions' });
+    await fireEvent.click(actions);
+    await fireEvent.click(await screen.findByRole('menuitem', { name: /Cancel job/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cancel this job?' });
+
+    // A key arriving before focus moves into the dialog must not close the job.
+    await fireEvent.keyDown(actions, { key: 'Escape' });
+    expect(get(jobsWorkspace).selection).toEqual({ id: '111', host: 'alpha' });
+    await fireEvent.keyDown(within(dialog).getByRole('button', { name: 'Close dialog' }), { key: 'Escape' });
+    // The animation stub leaves the closing dialog mounted but inert.
+    await waitFor(() => expect(dialog).toHaveProperty('inert', true));
+    expect(screen.getByRole('region', { name: 'Job detail' })).toBeInTheDocument();
+  });
+});
+
+describe('Jobs list resizing', () => {
+  let clientWidthSpy: { mockRestore: () => void } | undefined;
+
+  beforeEach(() => {
+    clientWidthSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1000);
+  });
+
+  afterEach(() => {
+    clientWidthSpy?.mockRestore();
+    clientWidthSpy = undefined;
+  });
+
+  async function openInspector() {
+    render(JobsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Inspect First training/ }));
+    return screen.findByRole('separator', { name: 'Resize jobs list' });
+  }
+
+  it('restores a valid stored list width and exposes the available bounds', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation(key => key === 'ssync-jobs-list-width' ? '480' : null);
+
+    const separator = await openInspector();
+
+    expect(separator).toHaveAttribute('aria-valuemin', '280');
+    expect(separator).toHaveAttribute('aria-valuemax', '616');
+    expect(separator).toHaveAttribute('aria-valuenow', '480');
+  });
+
+  it('uses the default width when the stored preference is malformed', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation(key => key === 'ssync-jobs-list-width' ? 'not-a-width' : null);
+
+    const separator = await openInspector();
+
+    expect(separator).toHaveAttribute('aria-valuenow', '280');
+  });
+
+  it('clamps keyboard resizing to the minimum and maximum widths', async () => {
+    const separator = await openInspector();
+
+    await fireEvent.keyDown(separator, { key: 'ArrowLeft' });
+    expect(separator).toHaveAttribute('aria-valuenow', '280');
+    await fireEvent.keyDown(separator, { key: 'ArrowRight' });
+    expect(separator).toHaveAttribute('aria-valuenow', '296');
+    await fireEvent.keyDown(separator, { key: 'Home' });
+    expect(separator).toHaveAttribute('aria-valuenow', '280');
+    await fireEvent.keyDown(separator, { key: 'End' });
+    expect(separator).toHaveAttribute('aria-valuenow', '616');
+    await fireEvent.keyDown(separator, { key: 'ArrowRight' });
+    expect(separator).toHaveAttribute('aria-valuenow', '616');
   });
 });

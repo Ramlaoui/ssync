@@ -35,17 +35,6 @@
   flex-shrink: 0;
 }
 
-.relay-brand small {
-  margin-left: auto;
-  font-size: .75rem;
-  font-weight: 450;
-  letter-spacing: 0;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1px 5px;
-}
-
 .relay-quick-find {
   display: flex;
   align-items: center;
@@ -71,7 +60,7 @@
   gap: 5px;
 }
 
-.relay-sidebar nav a,.relay-settings-link,.relay-saved-views button {
+.relay-sidebar nav a,.relay-settings-link {
   display: flex;
   align-items: center;
   gap: 11px;
@@ -88,7 +77,7 @@
   text-align: left;
 }
 
-.relay-sidebar nav a > svg,.relay-saved-views button > svg {
+.relay-sidebar nav a > svg {
   flex-shrink: 0;
 }
 
@@ -103,18 +92,14 @@
   background: var(--accent-soft);
 }
 
-.relay-sidebar nav a:hover,.relay-settings-link:hover,.relay-saved-views button:hover,.relay-quick-find:hover {
+.relay-sidebar nav a:hover,.relay-settings-link:hover,.relay-quick-find:hover {
   color: var(--foreground);
   background: var(--hover);
 }
 
-.relay-settings-link.active,.relay-saved-views button.active {
+.relay-settings-link.active {
   background: var(--secondary);
   color: var(--foreground);
-}
-
-.relay-saved-views {
-  margin-top: 32px;
 }
 
 .relay-section-label {
@@ -125,19 +110,6 @@
   text-transform: uppercase;
   padding: 0 12px;
   margin-bottom: 10px;
-}
-
-.relay-saved-views button {
-  font-size: .875rem;
-}
-
-.relay-attention-count {
-  font-size: .75rem;
-  margin-left: auto;
-  color: var(--error);
-  background: var(--error-bg);
-  padding: 1px 5px;
-  border-radius: 5px;
 }
 
 .relay-sidebar-bottom {
@@ -175,15 +147,24 @@
   margin-left: auto;
 }
 
-.relay-appearance {
+.relay-settings-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  border-top: 1px solid var(--border);
-  margin-top: 12px;
-  padding: 15px 10px 0;
-  font-size: .8125rem;
+  gap: 4px;
+}
+
+.relay-settings-row .relay-settings-link {
+  flex: 1;
+}
+
+.relay-topbar-meta {
   color: var(--muted-foreground);
+  font-size: .8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-icon-button.relay-mobile-only {
+  display: none;
 }
 
 .relay-main {
@@ -214,10 +195,6 @@
 .relay-breadcrumb strong {
   font-weight: 500;
   color: var(--foreground);
-}
-
-.relay-slash {
-  color: var(--border);
 }
 
 .relay-topbar-actions {
@@ -603,7 +580,7 @@
   justify-content: center;
 }
 
-.relay-focused .relay-brand > span,.relay-focused .relay-brand small,.relay-focused .relay-quick-find > span,.relay-focused .relay-quick-find kbd,.relay-focused .relay-sidebar nav a > span,.relay-focused .relay-sidebar nav a > small,.relay-focused .relay-saved-views,.relay-focused .relay-connection,.relay-focused .relay-settings-link > span,.relay-focused .relay-appearance > span {
+.relay-focused .relay-brand > span,.relay-focused .relay-quick-find > span,.relay-focused .relay-quick-find kbd,.relay-focused .relay-sidebar nav a > span,.relay-focused .relay-sidebar nav a > small,.relay-focused .relay-connection,.relay-focused .relay-settings-link > span {
   display: none;
 }
 
@@ -614,10 +591,8 @@
   margin-right: 0;
 }
 
-.relay-focused .relay-appearance {
-  justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
+.relay-focused .relay-settings-row {
+  flex-direction: column;
 }
 
 .relay-focused .relay-topbar {
@@ -637,9 +612,6 @@
   }
   .relay-topbar {
     padding: 0 24px;
-  }
-  .relay-saved-views button {
-    font-size: .8125rem;
   }
 }
 
@@ -661,10 +633,7 @@
   .relay-sidebar.mobile-open {
     left: 0;
   }
-  .relay-focused .relay-sidebar .relay-brand > span,.relay-focused .relay-sidebar .relay-brand small,.relay-focused .relay-sidebar .relay-quick-find > span,.relay-focused .relay-sidebar .relay-quick-find kbd,.relay-focused .relay-sidebar nav a > span,.relay-focused .relay-sidebar nav a > small,.relay-focused .relay-sidebar .relay-settings-link > span,.relay-focused .relay-sidebar .relay-appearance > span {
-    display: block;
-  }
-  .relay-focused .relay-sidebar .relay-saved-views {
+  .relay-focused .relay-sidebar .relay-brand > span,.relay-focused .relay-sidebar .relay-quick-find > span,.relay-focused .relay-sidebar .relay-quick-find kbd,.relay-focused .relay-sidebar nav a > span,.relay-focused .relay-sidebar nav a > small,.relay-focused .relay-sidebar .relay-settings-link > span {
     display: block;
   }
   .relay-focused .relay-sidebar .relay-connection {
@@ -673,8 +642,11 @@
   .relay-focused .relay-sidebar nav a,.relay-focused .relay-sidebar .relay-brand,.relay-focused .relay-sidebar .relay-quick-find,.relay-focused .relay-sidebar .relay-settings-link {
     justify-content: flex-start;
   }
-  .relay-focused .relay-sidebar .relay-appearance {
-    justify-content: space-between;
+  .relay-focused .relay-sidebar .relay-settings-row {
+    flex-direction: row;
+  }
+  .relay-icon-button.relay-mobile-only {
+    display: inline-flex;
   }
   .relay-nav-backdrop {
     display: block;
@@ -694,7 +666,7 @@
   .relay-breadcrumb {
     gap: 8px;
   }
-  .relay-breadcrumb > span:first-of-type,.relay-slash {
+  .relay-topbar-meta {
     display: none;
   }
   .relay-topbar-actions {

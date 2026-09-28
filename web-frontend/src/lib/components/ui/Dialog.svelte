@@ -17,6 +17,7 @@
     open?: boolean;
     closeOnBackdropClick?: boolean;
     closeOnEscape?: boolean;
+    initialFocus?: HTMLElement | string | null;
     // Dialog-specific props
     title?: string;
     description?: string;
@@ -34,6 +35,7 @@
     open = $bindable(false),
     closeOnBackdropClick = true,
     closeOnEscape = true,
+    initialFocus = null,
     title = '',
     description = '',
     size = 'md',
@@ -65,6 +67,7 @@
   {open}
   {closeOnBackdropClick}
   {closeOnEscape}
+  {initialFocus}
   on:close={handleClose}
 >
   <div

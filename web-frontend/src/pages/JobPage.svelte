@@ -17,9 +17,12 @@
   import { jobUtils } from '../lib/jobUtils';
   import { prepareRelaunch } from '../lib/relaunch';
   import JobTabContent from "../components/JobTabContent.svelte";
+  import Dropdown from "../lib/components/ui/Dropdown.svelte";
+  import DropdownItem from "../lib/components/ui/DropdownItem.svelte";
+  import DropdownDivider from "../lib/components/ui/DropdownDivider.svelte";
   import WatcherAttachmentDialog from "../components/WatcherAttachmentDialog.svelte";
   import LoadingSpinner from "../components/LoadingSpinner.svelte";
-  import { ArrowLeft, Server, Eye, Maximize2, Minimize2, X, Copy, RefreshCw, Square, RotateCcw } from 'lucide-svelte';
+  import { ArrowLeft, Eye, Maximize2, Minimize2, X, Copy, RefreshCw, Square, RotateCcw, MoreHorizontal } from 'lucide-svelte';
   import { navigationActions } from '../stores/navigation';
   import { fetchJobWatchers, prefetchJobWatchers } from '../stores/watchers';
   interface Props {
@@ -33,6 +36,8 @@
   }
   let { params = {}, embedded = false, onclose = closeJob, onexpand = () => { } }: Props = $props();
   let cancelOpen = $state(false);
+  let jobActionsOpen = $state(false);
+  let actionsAnchor: HTMLElement | null = $state(null);
   let canceling = $state(false);
   let relaunching = $state(false);
   let notice = $state('');
@@ -545,13 +550,28 @@
       {/if}
       {#if job}
         <JobStatus state={job.state}/>
-        <span class="mono">#{job.job_id}</span>
+        <div class="job-panel-compact-identity">
+          <h1 title={job.name||job.job_id}>{job.name||job.job_id}</h1>
+          <span title={`#${job.job_id} · ${job.hostname}`}>#{job.job_id} · {job.hostname}</span>
+        </div>
       {/if}
     </div>
     <div class="job-panel-controls">
-      <IconButton label="Refresh job" disabled={loading} onclick={()=>void loadJob(true)}>
-        <RefreshCw size={16} class={loading?'animate-spin':''}/>
-      </IconButton>
+      <span class="job-actions-anchor" bind:this={actionsAnchor}>
+        <IconButton label="Job actions" disabled={!job} onclick={()=>jobActionsOpen=!jobActionsOpen}>
+          <MoreHorizontal size={18}/>
+        </IconButton>
+      </span>
+      <Dropdown bind:open={jobActionsOpen} triggerRef={actionsAnchor} align="end" width="220px" maxHeight="360px">
+        <DropdownItem disabled={loading} on:click={()=>{jobActionsOpen=false;void loadJob(true);}}><RefreshCw size={15}/>Refresh job</DropdownItem>
+        <DropdownItem disabled={relaunching} on:click={()=>{jobActionsOpen=false;void relaunch();}}><RotateCcw size={15}/>{relaunching?'Preparing…':'Relaunch…'}</DropdownItem>
+        <DropdownItem on:click={()=>{jobActionsOpen=false;handleAttachWatchers();}}><Eye size={15}/>Attach watchers…</DropdownItem>
+        <DropdownItem on:click={()=>{jobActionsOpen=false;handleShareJob();}}><Copy size={15}/>Copy job link</DropdownItem>
+        {#if job&&jobUtils.canCancelJob(job.state)}
+          <DropdownDivider/>
+          <DropdownItem danger on:click={()=>{jobActionsOpen=false;cancelOpen=true;}}><Square size={15}/>Cancel job…</DropdownItem>
+        {/if}
+      </Dropdown>
       {#if embedded}
         <IconButton label="Maximize job" onclick={onexpand}>
           <Maximize2 size={16}/>
@@ -566,23 +586,6 @@
       </IconButton>
     </div>
   </div>
-  {#if job}
-    <div class="job-panel-heading">
-      <h1>{job.name||job.job_id}</h1>
-      <div>
-        <Server size={14}/>
-        {job.hostname}
-        {#if job.user}
-          <span>·</span>
-          {job.user}
-        {/if}
-        {#if job.partition}
-          <span>·</span>
-          {job.partition}
-        {/if}
-      </div>
-    </div>
-  {/if}
   {#if error}
     <div class="relay-banner error" role="alert">
       <span>{error}</span>
@@ -602,43 +605,20 @@
     {:else if job}
       <nav class="relay-tabs job-panel-tabs" aria-label="Job sections">
         {#each [{id:'details',label:'Overview'},{id:'output',label:'Output'},{id:'script',label:'Script'},{id:'watchers',label:'Watchers'},{id:'activity',label:'Activity'}] as tab}
-          <button class:active={activeTab===tab.id||(tab.id==='output'&&activeTab==='errors')} onclick={()=>handleTabClick(tab.id as JobTab)} aria-current={activeTab===tab.id?'page':undefined}>{tab.label}</button>
+          <button class:active={activeTab===tab.id||(tab.id==='output'&&activeTab==='errors')} onclick={()=>handleTabClick(tab.id as JobTab)} aria-current={activeTab===tab.id||(tab.id==='output'&&activeTab==='errors')?'page':undefined}>{tab.label}</button>
         {/each}
       </nav>
-      {#if activeTab==='output'||activeTab==='errors'}
-        <div class="job-output-streams" aria-label="Output stream">
-          <button class:active={activeTab==='output'} onclick={()=>handleTabClick('output')}>stdout</button>
-          <button class:active={activeTab==='errors'} onclick={()=>handleTabClick('errors')}>stderr</button>
-        </div>
-      {/if}
       <div class="job-panel-body" class:scrollable={activeTab==='details'||activeTab==='activity'}>
         {#if activeTab==='details'}
-          <JobOverview {job} onwatchers={()=>handleTabClick('watchers')} oncopy={value=>void copy(value)}/>
+          <JobOverview {job} onwatchers={()=>handleTabClick('watchers')} oncopy={value=>void copy(value)} onoutput={()=>handleTabClick('output')}/>
           {:else if activeTab==='activity'}
             {#key job.hostname+':'+job.job_id}
               <JobActivity {job}/>
             {/key}
           {:else}
-            <JobTabContent {job} {activeTab} {outputData} {outputError} {loadingOutput} {loadingMoreOutput} {scriptData} {scriptError} {loadingScript} onRetryLoadOutput={()=>{const type=getActiveOutputType();if(type)void loadOutput(type);}} onRetryLoadScript={loadScript} onDownloadScript={downloadScript} onRefreshOutput={refreshOutput} {refreshingOutput}/>
+            <JobTabContent {job} {activeTab} {outputData} {outputError} {loadingOutput} {loadingMoreOutput} {scriptData} {scriptError} {loadingScript} onRetryLoadOutput={()=>{const type=getActiveOutputType();if(type)void loadOutput(type);}} onRetryLoadScript={loadScript} onDownloadScript={downloadScript} onRefreshOutput={refreshOutput} {refreshingOutput} onOutputTypeChange={type=>handleTabClick(type==='stdout'?'output':'errors')}/>
           {/if}
       </div>
-      <footer class="job-panel-footer">
-        <button class="relay-button" disabled={relaunching} onclick={()=>void relaunch()}>
-          <RotateCcw size={15}/>
-          {relaunching?'Preparing…':'Relaunch'}
-        </button>
-        <IconButton label="Attach watchers" onclick={handleAttachWatchers}>
-          <Eye size={17}/>
-        </IconButton>
-        <IconButton label="Copy job link" onclick={handleShareJob}>
-          <Copy size={17}/>
-        </IconButton>
-        {#if jobUtils.canCancelJob(job.state)}
-          <IconButton label="Cancel job" onclick={()=>cancelOpen=true}>
-            <Square size={16}/>
-          </IconButton>
-        {/if}
-      </footer>
     {/if}
 </section>
 
@@ -678,7 +658,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 13px 24px 0;
+    padding: 8px 12px;
+    flex-shrink: 0;
   }
 
   .job-panel-meta,.job-panel-controls {
@@ -693,41 +674,47 @@
     min-width: 0;
   }
 
-  .job-panel-meta>.relay-text-button {
-    margin-right: 13px;
+  .job-panel-controls {
+    flex-shrink: 0;
   }
 
-  .job-panel-meta>.mono {
+  .job-panel-compact-identity {
+    min-width: 0;
+  }
+
+  .job-panel-compact-identity h1,.job-panel-compact-identity span {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .job-panel-heading {
-    padding: 12px 24px 23px;
-  }
-
-  .job-panel-heading h1 {
-    font-size: clamp(1.5rem,2.2vw,2rem);
-    line-height: 1.25;
-    letter-spacing: -.03em;
-    font-weight: 600;
-    margin: 0 0 10px;
-    overflow-wrap: anywhere;
-  }
-
-  .job-panel-heading>div {
-    display: flex;
-    gap: 9px;
-    align-items: center;
-    flex-wrap: wrap;
-    color: var(--muted-foreground);
+  .job-panel-compact-identity h1 {
+    margin: 0;
     font-size: .875rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--foreground);
+  }
+
+  .job-panel-compact-identity span {
+    font-size: .6875rem;
+    line-height: 1.5;
+    color: var(--muted-foreground);
+  }
+
+  .job-panel-tabs button {
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+
+  .job-panel-meta>.relay-text-button {
+    margin-right: 13px;
   }
 
   .job-panel-tabs {
-    padding: 0 24px;
-    gap: 28px;
+    padding: 0 12px;
+    gap: 20px;
     flex-shrink: 0;
   }
 
@@ -744,19 +731,6 @@
     display: block;
   }
 
-  .job-panel-footer {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    border-top: 1px solid var(--border);
-    padding: 12px 24px;
-    flex-shrink: 0;
-  }
-
-  .job-panel-footer>.relay-button {
-    margin-right: auto;
-  }
-
   .job-panel-notice {
     display: flex;
     align-items: center;
@@ -768,36 +742,6 @@
     font-size: .8125rem;
   }
 
-  .job-output-streams {
-    display: flex;
-    gap: 4px;
-    padding: 12px 24px;
-    flex-shrink: 0;
-  }
-
-  .job-output-streams>button {
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 5px 12px;
-    font-size: .8125rem;
-    background: transparent;
-    color: var(--muted-foreground);
-  }
-
-  .job-output-streams>button.active {
-    background: var(--secondary);
-    color: var(--foreground);
-    border-color: var(--border);
-  }
-
-  .job-output-streams>button:hover {
-    background: var(--hover);
-  }
-
-  .embedded .job-panel-toolbar {
-    padding: 12px 14px 0;
-  }
-
   .embedded .job-panel-meta {
     gap: 7px;
     font-size: .75rem;
@@ -807,29 +751,8 @@
     gap: 0;
   }
 
-  .embedded .job-panel-heading {
-    padding: 10px 20px 20px;
-  }
-
-  .embedded .job-panel-heading h1 {
-    font-size: 1.2rem;
-  }
-
-  .embedded .job-panel-heading>div {
-    font-size: .8125rem;
-  }
-
-  .embedded .job-panel-tabs {
-    padding: 0 20px;
-    gap: 20px;
-  }
-
   .embedded .job-panel-tabs button {
     font-size: .8125rem;
-  }
-
-  .embedded .job-panel-footer {
-    padding: 12px 18px;
   }
 
   .cancel-copy {
@@ -841,27 +764,11 @@
     .job-panel {
       margin: 10px;
     }
-    .job-panel-toolbar {
-      padding: 10px 14px 0;
-    }
-    .job-panel-heading {
-      padding: 12px 18px 20px;
-    }
-    .job-panel-tabs {
-      padding: 0 18px;
-      gap: 22px;
-    }
-    .job-panel-heading h1 {
-      font-size: 1.4rem;
-    }
     .job-panel-meta>.relay-text-button {
       margin-right: 2px;
     }
     .job-panel-controls {
       gap: 0;
-    }
-    .job-panel-footer {
-      padding: 12px 18px;
     }
   }
 </style>
