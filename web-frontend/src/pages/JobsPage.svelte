@@ -15,6 +15,7 @@
   import { preferences, preferencesActions } from '../stores/preferences';
   import { fetchAllWatchers } from '../stores/watchers';
   import { focusTrap } from '../lib/actions';
+  import { safeGetItem, safeSetItem, safeRemoveItem } from '../lib/safeStorage';
   import type { JobInfo, HostInfo } from '../types/api';
   const jobs = jobStateManager.getAllJobs();
   const groups = jobStateManager.getArrayJobGroups();
@@ -23,7 +24,7 @@
   const tabs: {
     id: JobView;
     label: string;
-  }[] = [{ id: 'all', label: 'All jobs' }, { id: 'running', label: 'Running' }, { id: 'pending', label: 'Pending' }, { id: 'attention', label: 'Needs attention' }, { id: 'historical', label: 'Historical' }];
+  }[] = [{ id: 'all', label: 'All jobs' }, { id: 'running', label: 'Running' }, { id: 'pending', label: 'Pending' }, { id: 'historical', label: 'Historical' }];
   let hosts = $state<HostInfo[]>([]);
   let refreshing = $state(false);
   let error = $state('');
@@ -32,6 +33,15 @@
   let scrollElement: HTMLDivElement;
   let focusedRow: HTMLButtonElement | undefined;
   let narrow = $state(false);
+  const minListWidth = 280;
+  const minDetailWidth = 360;
+  const dividerWidth = 24;
+  const listWidthStorageKey = 'ssync-jobs-list-width';
+  let workspaceWidth = $state(0);
+  let preferredListWidth = $state<number | null>(null);
+  let resizing = $state<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  const maxListWidth = $derived(Math.max(minListWidth, workspaceWidth - minDetailWidth - dividerWidth));
+  const listWidth = $derived(Math.max(minListWidth, Math.min(maxListWidth, preferredListWidth ?? Math.min(360, workspaceWidth * .28))));
   const loading = $derived(refreshing || Array.from($hostStates.values()).some(h => h.status === 'loading'));
   const historyJobs = $derived($jobs.filter(job => withinHistoryWindow(job, $preferences.defaultSince)));
   const filtered = $derived(filterJobs(historyJobs, $jobsWorkspace));
@@ -41,6 +51,7 @@
   const visibleHosts = $derived([...new Set([...rows.map(job => job.hostname), ...arrayGroups.map(group => group.hostname)])]);
   const hostNames = $derived([...new Set([...hosts.map(host => host.hostname), ...$hostStates.keys()])]);
   const selected = $derived($jobsWorkspace.selection);
+  $effect(() => { if (!selected || narrow) finishResize(); });
   const hostErrors = $derived(Array.from($hostStates.values()).filter(host => host.status === 'error'));
   const running = $derived($jobs.filter(job => matchesJobView(job, 'running')).length);
   const pending = $derived($jobs.filter(job => matchesJobView(job, 'pending')).length);
@@ -77,7 +88,45 @@
   async function close() { jobsWorkspace.update(state => ({ ...state, selection: null })); await tick(); focusedRow?.focus(); }
   function setTab(view: JobView) { jobsWorkspace.update(state => ({ ...state, view, selection: null, scrollTop: 0 })); }
   function clearFilters() { jobsWorkspace.update(state => ({ ...state, query: '', host: '', user: '', view: 'all' })); }
+  function setListWidth(width: number) {
+    preferredListWidth = Math.round(Math.max(minListWidth, Math.min(maxListWidth, width)));
+  }
+  function startResize(event: PointerEvent) {
+    if (event.button !== 0 || !event.isPrimary || resizing)
+      return;
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLDivElement;
+    handle.focus();
+    handle.setPointerCapture(event.pointerId);
+    resizing = { pointerId: event.pointerId, startX: event.clientX, startWidth: listWidth };
+  }
+  function moveResize(event: PointerEvent) {
+    if (resizing?.pointerId === event.pointerId)
+      setListWidth(resizing.startWidth + event.clientX - resizing.startX);
+  }
+  function finishResize(event?: PointerEvent) {
+    if (!resizing || (event && event.pointerId !== resizing.pointerId))
+      return;
+    resizing = null;
+    safeSetItem(listWidthStorageKey, String(listWidth));
+  }
+  function resizeWithKeyboard(event: KeyboardEvent) {
+    const step = event.shiftKey ? 48 : 16;
+    const nextWidth = event.key === 'ArrowLeft' ? listWidth - step : event.key === 'ArrowRight' ? listWidth + step : event.key === 'Home' ? minListWidth : event.key === 'End' ? maxListWidth : null;
+    if (nextWidth === null)
+      return;
+    event.preventDefault();
+    setListWidth(nextWidth);
+    safeSetItem(listWidthStorageKey, String(listWidth));
+  }
+  function resetListWidth() {
+    preferredListWidth = null;
+    safeRemoveItem(listWidthStorageKey);
+  }
   onMount(() => {
+    const savedWidth = Number(safeGetItem(listWidthStorageKey));
+    if (Number.isFinite(savedWidth) && savedWidth >= minListWidth)
+      preferredListWidth = savedWidth;
     const media = matchMedia('(max-width: 1050px)');
     const resize = () => narrow = media.matches;
     resize();
@@ -88,7 +137,7 @@
     void fetchAllWatchers().catch(() => { });
     return () => { media.removeEventListener('change', resize); };
   });
-  function keydown(event: KeyboardEvent) { if (event.key === 'Escape' && selected && !(event.target as Element)?.closest('[aria-modal="true"]')) {
+  function keydown(event: KeyboardEvent) { if (event.key === 'Escape' && !event.defaultPrevented && selected && !document.querySelector('[aria-modal="true"]')) {
     void close();
   } }
 </script>
@@ -125,8 +174,8 @@
       unavailable. Showing the last received jobs.
     </div>
   {/if}
-  <div class="jobs-workspace" class:has-inspector={selected!==null}>
-    <section class="jobs-list" aria-label="Jobs">
+  <div class="jobs-workspace" class:has-inspector={selected!==null} class:resizing={resizing!==null} bind:clientWidth={workspaceWidth} style:--jobs-list-width={`${listWidth}px`} style:--jobs-divider-width={`${dividerWidth}px`}>
+    <section id="jobs-list" class="jobs-list" aria-label="Jobs">
       <div class="relay-tabs">
         {#each tabs as tab}
           <button class:active={$jobsWorkspace.view===tab.id} aria-pressed={$jobsWorkspace.view===tab.id} onclick={()=>setTab(tab.id)}>
@@ -275,6 +324,28 @@
     {#if selected}
       {#if narrow}
         <button class="inspector-backdrop" aria-label="Close job inspector" onclick={()=>void close()}></button>
+      {:else}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (A focusable ARIA window splitter supports both pointer and keyboard resizing.) -->
+        <div
+          class="jobs-resizer"
+          role="separator"
+          tabindex="0"
+          aria-label="Resize jobs list"
+          aria-controls="jobs-list"
+          aria-orientation="vertical"
+          aria-valuemin={minListWidth}
+          aria-valuemax={Math.round(maxListWidth)}
+          aria-valuenow={Math.round(listWidth)}
+          aria-valuetext={`${Math.round(listWidth)} pixels for the jobs list`}
+          title="Drag to resize. Arrow keys adjust width; double-click to reset."
+          onpointerdown={startResize}
+          onpointermove={moveResize}
+          onpointerup={finishResize}
+          onpointercancel={finishResize}
+          onlostpointercapture={finishResize}
+          onkeydown={resizeWithKeyboard}
+          ondblclick={resetListWidth}
+        ></div>
       {/if}
       <aside class="jobs-inspector" class:mobile-inspector={narrow} aria-label="Selected job" use:focusTrap={{enabled:narrow}}>
         <JobPage embedded params={selected} onclose={()=>void close()} onexpand={()=>void push(jobRoute(selected.id,selected.host,$jobsWorkspace.tab))}/>
@@ -304,7 +375,37 @@
   }
 
   .jobs-workspace.has-inspector {
-    grid-template-columns: minmax(0,1fr) 390px;
+    grid-template-columns: var(--jobs-list-width) var(--jobs-divider-width) minmax(0,1fr);
+    gap: 0;
+  }
+
+  .jobs-resizer {
+    position: sticky;
+    top: 0;
+    display: grid;
+    place-items: center;
+    height: calc(100dvh - 210px);
+    min-height: 420px;
+    cursor: col-resize;
+    touch-action: none;
+    outline-offset: -3px;
+  }
+
+  .jobs-resizer::before {
+    content: '';
+    width: 3px;
+    height: 48px;
+    border-radius: 3px;
+    background: var(--border);
+  }
+
+  .jobs-resizer:hover::before,.jobs-resizer:focus-visible::before,.resizing .jobs-resizer::before {
+    background: var(--accent);
+  }
+
+  .resizing,.resizing :global(*) {
+    cursor: col-resize !important;
+    user-select: none;
   }
 
   .jobs-list {
@@ -565,25 +666,32 @@
     padding-bottom: 8px;
   }
 
-  @container (min-width:1450px) {
-    .jobs-workspace.has-inspector {
-      grid-template-columns: minmax(0,1fr) 440px;
-    }
+  .has-inspector .jobs-filters {
+    flex-wrap: wrap;
+  }
+
+  .has-inspector .jobs-filters .relay-search {
+    flex-basis: 100%;
+  }
+
+  .has-inspector .jobs-filters>.relay-select {
+    max-width: none;
+    flex: 1;
+  }
+
+  .has-inspector .jobs-table-head,.has-inspector .jobs-row {
+    grid-template-columns: minmax(0,1fr) 108px 12px;
+    gap: 8px;
+    padding-left: 11px;
+    padding-right: 11px;
+  }
+
+  .has-inspector .jobs-resources,.has-inspector .jobs-runtime,
+  .has-inspector .jobs-table-head>span:nth-child(3),.has-inspector .jobs-table-head>span:nth-child(4) {
+    display: none;
   }
 
   @container (max-width:1050px) {
-    .jobs-workspace.has-inspector {
-      grid-template-columns: minmax(0,1fr) 350px;
-    }
-    .has-inspector .jobs-table-head,.has-inspector .jobs-row {
-      grid-template-columns: minmax(115px,1fr) 108px 66px 12px;
-      gap: 8px;
-      padding-left: 11px;
-      padding-right: 11px;
-    }
-    .has-inspector .jobs-resources,.has-inspector .jobs-table-head>span:nth-child(3) {
-      display: none;
-    }
     .jobs-filters>.relay-select {
       max-width: 125px;
     }
@@ -592,6 +700,9 @@
   @media (max-width:1050px) {
     .jobs-workspace.has-inspector {
       grid-template-columns: minmax(0,1fr);
+    }
+    .jobs-resizer {
+      display: none;
     }
   }
 

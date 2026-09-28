@@ -52,7 +52,6 @@
   const activePath = $derived(path === '/jobs' || maximized ? '/' : path);
   const title = $derived(activePath === '/launch' ? 'Launch job' : activePath === '/watchers' ? 'Watchers' : activePath === '/hosts' ? 'Hosts' : activePath === '/settings' ? 'Settings' : 'Jobs');
   const runningCount = $derived($jobs.filter(j => jobStatus(j.state).category === 'active').length);
-  const attentionCount = $derived($jobs.filter(j => jobStatus(j.state).attention).length);
   const commandJobs = $derived($jobs.filter(j => [j.name, j.job_id, j.hostname].some(v => v.toLowerCase().includes(commandQuery.toLowerCase()))).slice(0, 8));
   const commandActions = $derived(navigation.filter(item => item.label.toLowerCase().includes(commandQuery.toLowerCase())));
   $effect(() => {
@@ -137,13 +136,6 @@
       </nav>
       <div class="relay-saved-views">
         <span class="relay-section-label">Saved views</span>
-        <button class:active={$jobsWorkspace.view==='attention'&&activePath==='/'} onclick={()=>{setJobView('attention');navigate('/');}}>
-          <TriangleAlert size={16}/>
-          <span>Needs attention</span>
-          {#if attentionCount}
-            <small class="relay-attention-count">{attentionCount}</small>
-          {/if}
-        </button>
         <button onclick={()=>{setJobView('running');navigate('/');}}>
           <Layers size={16}/>
           <span>Running jobs</span>
@@ -214,7 +206,7 @@
   {/if}
 </ErrorBoundary>
 
-<Dialog bind:open={commandOpen} title="Quick find" size="lg" contentClass="relay-command-content">
+<Dialog bind:open={commandOpen} title="Quick find" size="lg" contentClass="relay-command-content" initialFocus="input">
   <label class="relay-search">
     <Search size={18}/>
     <input aria-label="Find jobs and pages" placeholder="Search jobs, hosts, or pages…" bind:value={commandQuery}/>

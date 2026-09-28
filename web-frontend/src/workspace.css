@@ -131,15 +131,6 @@
   font-size: .875rem;
 }
 
-.relay-attention-count {
-  font-size: .75rem;
-  margin-left: auto;
-  color: var(--error);
-  background: var(--error-bg);
-  padding: 1px 5px;
-  border-radius: 5px;
-}
-
 .relay-sidebar-bottom {
   margin-top: auto;
   padding-top: 35px;

@@ -22,8 +22,8 @@ export interface FocusTrapOptions {
   enabled?: boolean;
   /** Whether to focus the first element on mount */
   autoFocus?: boolean;
-  /** Element to focus initially (overrides autoFocus) */
-  initialFocus?: HTMLElement | null;
+  /** Element or selector inside the trap to focus initially (overrides autoFocus) */
+  initialFocus?: HTMLElement | string | null;
   /** Element to restore focus to when trap is disabled */
   restoreFocus?: HTMLElement | null;
 }
@@ -67,6 +67,7 @@ export function focusTrap(node: HTMLElement, options: FocusTrapOptions = {}) {
 
   let currentEnabled = enabled;
   let previousActiveElement: Element | null = null;
+  let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (!currentEnabled || event.key !== 'Tab') return;
@@ -100,16 +101,14 @@ export function focusTrap(node: HTMLElement, options: FocusTrapOptions = {}) {
     previousActiveElement = document.activeElement;
 
     // Focus initial element
-    if (initialFocus && initialFocus.focus) {
-      initialFocus.focus();
-    } else if (autoFocus) {
-      const focusableElements = getFocusableElements(node);
-      if (focusableElements.length > 0) {
-        // Small delay to ensure element is mounted
-        setTimeout(() => {
-          focusableElements[0].focus();
-        }, 0);
-      }
+    if (initialFocus || autoFocus) {
+      // Wait for the portal and its contents to mount before choosing a target.
+      focusTimer = setTimeout(() => {
+        focusTimer = undefined;
+        if (!currentEnabled || !node.isConnected) return;
+        const target = typeof initialFocus === 'string' ? node.querySelector<HTMLElement>(initialFocus) : initialFocus;
+        (target ?? (autoFocus ? getFocusableElements(node)[0] : null))?.focus({ preventScroll: true });
+      }, 0);
     }
 
     // Add keyboard listener
@@ -117,6 +116,7 @@ export function focusTrap(node: HTMLElement, options: FocusTrapOptions = {}) {
   }
 
   function deactivate() {
+    clearTimeout(focusTimer);
     // Remove keyboard listener
     node.removeEventListener('keydown', handleKeyDown);
 

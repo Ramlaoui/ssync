@@ -1,11 +1,13 @@
 <script lang="ts">
   import { run } from 'svelte/legacy';
   import { tick, untrack } from 'svelte';
+  import type { Snippet } from 'svelte';
 
   import { onMount, onDestroy } from 'svelte';
   import LoadingSpinner from './LoadingSpinner.svelte';
-  import { Settings, Type, Hash, WrapText, RefreshCw } from 'lucide-svelte';
+  import { Settings, Type, Hash, WrapText, RefreshCw, Search, X } from 'lucide-svelte';
   import { debounce } from '../lib/debounce';
+  import { keyboardNav } from '../lib/actions/keyboardNav';
   import {
     resolveActiveSearchIndex,
     updateActiveSearchHighlight,
@@ -24,6 +26,8 @@
     refreshing?: boolean;
     isPending?: boolean;
     pendingMessage?: string;
+    toolbarStart?: Snippet;
+    toolbarEnd?: Snippet;
   }
 
   let {
@@ -38,11 +42,16 @@
     onRefresh = null,
     refreshing = false,
     isPending = false,
-    pendingMessage = ''
+    pendingMessage = '',
+    toolbarStart,
+    toolbarEnd
   }: Props = $props();
 
   let outputElement: HTMLPreElement | null = $state(null);
   let lineNumbersElement: HTMLDivElement | null = $state(null);
+  let searchInputElement: HTMLInputElement | null = $state(null);
+  let searchButtonElement: HTMLButtonElement | null = $state(null);
+  let settingsButtonElement: HTMLButtonElement | null = $state(null);
   let searchQuery: string = $state('');
   let searchResults: number[] = $state([]);
   let currentSearchIndex: number = $state(-1);
@@ -50,6 +59,7 @@
   let autoScroll: boolean = true;
   let isAtBottom: boolean = $state(true);
   let highlightedContent: string = $state('');
+  let showSearch: boolean = $state(false);
   let showSettingsMenu: boolean = $state(false);
   let fontSize: 'small' | 'medium' | 'large' = $state('medium');
   let wordWrap: boolean = $state(true);
@@ -59,7 +69,7 @@
   const CHUNK_SIZE = 500 * 1024; // 500KB per chunk
   const WINDOW_SIZE = 3 * 1024 * 1024; // 3MB window in DOM
   const BUFFER_SIZE = 500 * 1024; // 500KB buffer before/after viewport
-  const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // 5MB for warnings
+  const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // 5MB for windowing
   const DISABLE_HIGHLIGHTING_THRESHOLD = 1 * 1024 * 1024; // 1MB
 
   // Progressive loading state
@@ -70,9 +80,6 @@
   let isLargeFile: boolean = $state(false);
   let loadingMore: boolean = $state(false);
   let disableHighlighting: boolean = $state(false);
-  let showSizeWarning: boolean = $state(false);
-  let warningDismissTimer: NodeJS.Timeout | null = null;
-  let userInteractionCount: number = $state(0);
   let loadingMessage = $derived(pendingMessage || `Loading ${type}...`);
   
   // Line processing
@@ -82,17 +89,7 @@
   function initializeContent() {
     totalContentSize = content.length;
     isLargeFile = totalContentSize > LARGE_FILE_THRESHOLD;
-    showSizeWarning = totalContentSize > LARGE_FILE_THRESHOLD;
     disableHighlighting = totalContentSize > DISABLE_HIGHLIGHTING_THRESHOLD;
-    userInteractionCount = 0;
-
-    // Auto-dismiss warning after 8 seconds
-    if (showSizeWarning) {
-      if (warningDismissTimer) clearTimeout(warningDismissTimer);
-      warningDismissTimer = setTimeout(() => {
-        showSizeWarning = false;
-      }, 8000);
-    }
 
     // Load initial chunk
     if (totalContentSize > MAX_INITIAL_SIZE) {
@@ -134,16 +131,6 @@
   }
 
   function highlightSearchResults() {
-    // Dismiss warning on search (shows user is actively working)
-    // Use untrack to prevent infinite loop from reading/writing showSizeWarning
-    if (searchQuery) {
-      untrack(() => {
-        if (showSizeWarning) {
-          dismissWarning();
-        }
-      });
-    }
-
     if (!searchQuery) {
       highlightedContent = escapeHtml(renderedContent);
       searchResults = [];
@@ -219,14 +206,6 @@
 
     const { scrollTop, scrollHeight, clientHeight } = outputElement;
     isAtBottom = scrollTop + clientHeight >= scrollHeight - 5;
-
-    // Track user interaction for auto-dismissing warning
-    if (showSizeWarning && scrollTop > 100) {
-      userInteractionCount++;
-      if (userInteractionCount >= 3) {
-        dismissWarning();
-      }
-    }
 
     // Sync line numbers scroll position
     if (lineNumbersElement && showLineNumbers) {
@@ -310,14 +289,6 @@
     loadingMore = false;
   }
 
-  function dismissWarning() {
-    showSizeWarning = false;
-    if (warningDismissTimer) {
-      clearTimeout(warningDismissTimer);
-      warningDismissTimer = null;
-    }
-  }
-
   async function loadMoreContentChunk() {
     if (loadingMore || windowEnd >= totalContentSize) return;
 
@@ -365,6 +336,29 @@
     }
     onScrollToBottom?.();
   }
+
+  async function openSearch() {
+    showSearch = true;
+    await tick();
+    searchInputElement?.focus();
+  }
+
+  function closeSearch() {
+    showSearch = false;
+    searchQuery = '';
+    searchResults = [];
+    currentSearchIndex = -1;
+    searchButtonElement?.focus();
+  }
+
+  function dismissControls() {
+    if (showSettingsMenu) {
+      showSettingsMenu = false;
+      settingsButtonElement?.focus();
+    } else {
+      closeSearch();
+    }
+  }
   
   
   onMount(() => {
@@ -378,9 +372,6 @@
   onDestroy(() => {
     if (outputElement) {
       outputElement.removeEventListener('scroll', checkScrollPosition);
-    }
-    if (warningDismissTimer) {
-      clearTimeout(warningDismissTimer);
     }
   });
 
@@ -421,7 +412,7 @@
   run(() => {
     const currentContent = content; // Track content changes
     // Use untrack to prevent tracking nested state reads in initializeContent.
-    // This prevents circular dependencies with searchQuery, showSizeWarning, etc.
+    // This prevents circular dependencies with searchQuery and other presentation state.
     untrack(() => initializeContent());
   });
 
@@ -435,7 +426,7 @@
     const query = searchQuery; // Track only searchQuery
     if (query) {
       // Use untrack to prevent tracking any state reads inside the debounced function
-      // This prevents the effect from tracking renderedContent, showSizeWarning, etc.
+      // This prevents the effect from tracking renderedContent and other presentation state.
       untrack(() => debouncedHighlightSearch());
     } else {
       // Clear search immediately when query is empty
@@ -472,55 +463,28 @@
   }[fontSize]);
 </script>
 
-<div class="enhanced-output-viewer" onclick={handleClickOutside} role="presentation">
-  <!-- Search and Controls Header -->
+<div class="enhanced-output-viewer" onclick={handleClickOutside} role="presentation" use:keyboardNav={{ onEscape: showSearch || showSettingsMenu ? dismissControls : undefined, preventDefault: true, stopPropagation: true }}>
+  <!-- Compact toolbar -->
   <div class="viewer-header">
-    <div class="search-controls">
-      <div class="search-input-group">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
-        </svg>
-        <input
-          type="text"
-          placeholder="Search in output..."
-          bind:value={searchQuery}
-          class="search-input"
-        />
-        {#if searchQuery && searchResults.length > 0}
-          <div class="search-results-info">
-            {currentSearchIndex + 1} of {searchResults.length}
-          </div>
-        {/if}
-      </div>
-      
-      {#if searchQuery}
-        <div class="search-navigation">
-          <button 
-            class="search-nav-btn" 
-            onclick={prevSearchResult}
-            disabled={searchResults.length === 0}
-            title="Previous result"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/>
-            </svg>
-          </button>
-          <button 
-            class="search-nav-btn" 
-            onclick={nextSearchResult}
-            disabled={searchResults.length === 0}
-            title="Next result"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/>
-            </svg>
-          </button>
+    <div class="viewer-toolbar">
+      {#if toolbarStart}
+        <div class="toolbar-slot toolbar-start">
+          {@render toolbarStart()}
         </div>
       {/if}
-    </div>
-    
-    <div class="viewer-controls">
-      <!-- Streaming Indicator (removed) -->
+
+      <div class="viewer-controls">
+        <button
+          class="control-btn"
+          bind:this={searchButtonElement}
+          class:active={showSearch}
+          onclick={() => void openSearch()}
+          aria-label="Search output"
+          aria-expanded={showSearch}
+          title="Search output"
+        >
+          <Search size={15} aria-hidden="true" />
+        </button>
 
       <!-- Refresh Button -->
       {#if onRefresh}
@@ -528,55 +492,83 @@
           class="control-btn"
           onclick={onRefresh}
           disabled={refreshing}
+          aria-label="Refresh {type}"
           title="Refresh {type}"
         >
-          <RefreshCw class="w-3.5 h-3.5 {refreshing ? 'animate-spin' : ''}" />
+          <RefreshCw class="w-3.5 h-3.5 {refreshing ? 'animate-spin' : ''}" aria-hidden="true" />
         </button>
       {/if}
 
-      <!-- Scroll Controls -->
-      <button class="control-btn" onclick={handleScrollToTop} title="Scroll to top">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"/>
-        </svg>
-      </button>
-
-      <button class="control-btn" onclick={handleScrollToBottom} title="Scroll to bottom">
-        <svg viewBox="0 0 24 24" fill="currentColor">
+      <button class="control-btn" onclick={handleScrollToBottom} aria-label="Scroll to bottom" title="Scroll to bottom">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"/>
         </svg>
       </button>
 
+      {#if renderedContent}
+        <span class="toolbar-line-count">{lines.length} lines</span>
+      {/if}
+
+      {#if isLargeFile && (windowStart > 0 || windowEnd < totalContentSize)}
+        <span
+          class="partial-output-badge"
+          role="status"
+          title={`Showing ${formatBytes(Math.min(windowEnd, totalContentSize))} of ${formatBytes(totalContentSize)}; more content loads as you scroll`}
+        >
+          Partial
+        </span>
+      {/if}
+
+      </div>
+
+      {#if toolbarEnd}
+        <div class="toolbar-slot toolbar-end">
+          {@render toolbarEnd()}
+        </div>
+      {/if}
+
       <!-- Settings Menu -->
       <div class="settings-dropdown relative">
-        <button class="control-btn" onclick={() => showSettingsMenu = !showSettingsMenu} title="View settings">
-          <Settings class="w-3.5 h-3.5" />
+        <button class="control-btn" bind:this={settingsButtonElement} onclick={() => showSettingsMenu = !showSettingsMenu} aria-label="Output settings" aria-expanded={showSettingsMenu} title="Output settings">
+          <Settings class="w-3.5 h-3.5" aria-hidden="true" />
         </button>
 
         {#if showSettingsMenu}
           <div class="settings-menu absolute right-0 top-full mt-2 w-48 bg-popover rounded-md shadow-lg border border-border z-50">
             <div class="py-1">
+              <button
+                class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary"
+                onclick={handleScrollToTop}
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z"/>
+                </svg>
+                Scroll to top
+              </button>
+
+              <div class="border-t border-border my-1"></div>
+
               <!-- Text Size -->
               <div class="px-4 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Text Size</div>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {fontSize === 'small' ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={() => setFontSize('small')}
               >
-                <Type class="w-3 h-3" />
+                <Type class="w-3 h-3" aria-hidden="true" />
                 Small
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {fontSize === 'medium' ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={() => setFontSize('medium')}
               >
-                <Type class="w-4 h-4" />
+                <Type class="w-4 h-4" aria-hidden="true" />
                 Medium
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {fontSize === 'large' ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={() => setFontSize('large')}
               >
-                <Type class="w-5 h-5" />
+                <Type class="w-5 h-5" aria-hidden="true" />
                 Large
               </button>
 
@@ -587,14 +579,14 @@
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {showLineNumbers ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={toggleLineNumbers}
               >
-                <Hash class="w-4 h-4" />
+                <Hash class="w-4 h-4" aria-hidden="true" />
                 {showLineNumbers ? 'Hide' : 'Show'} Line Numbers
               </button>
               <button
                 class="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-secondary {wordWrap ? 'text-accent bg-accent/10' : 'text-foreground'}"
                 onclick={toggleWordWrap}
               >
-                <WrapText class="w-4 h-4" />
+                <WrapText class="w-4 h-4" aria-hidden="true" />
                 {wordWrap ? 'Disable' : 'Enable'} Word Wrap
               </button>
             </div>
@@ -603,42 +595,57 @@
       </div>
       
     </div>
-  </div>
-  
-  <!-- Floating Size Warning -->
-  {#if showSizeWarning && !isLoading}
-    <div class="size-warning-floating" class:fade-out={userInteractionCount > 1}>
-      <div class="warning-inner bg-gradient-to-br from-amber-50 to-amber-100">
-        <svg class="warning-icon text-amber-600" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-        </svg>
-        <div class="warning-content">
-          <span class="warning-text text-amber-800">
-            Large file: {formatBytes(totalContentSize)}
-            {#if disableHighlighting}
-              • Highlighting disabled
-            {/if}
-          </span>
-          {#if windowEnd < totalContentSize}
-            <span class="warning-subtext text-amber-900">
-              Loading progressively as you scroll
-            </span>
+
+    {#if showSearch}
+      <div class="search-row" role="search">
+        <div class="search-input-group">
+          <Search class="search-icon" size={15} aria-hidden="true" />
+          <input
+            type="text"
+            placeholder="Search in output..."
+            aria-label="Search in output"
+            bind:this={searchInputElement}
+            bind:value={searchQuery}
+            class="search-input"
+          />
+          {#if searchQuery}
+            <div class="search-results-info" aria-live="polite">
+              {searchResults.length > 0 ? `${currentSearchIndex + 1} of ${searchResults.length}` : 'No matches'}
+            </div>
           {/if}
         </div>
-        <button
-          class="dismiss-btn text-amber-800 hover:bg-amber-600/10"
-          onclick={dismissWarning}
-          title="Dismiss"
-        >
-          <svg viewBox="0 0 20 20" fill="currentColor">
-            <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"/>
-          </svg>
-        </button>
-      </div>
-      <div class="warning-progress bg-gradient-to-r from-amber-500 to-amber-600" style="width: {Math.min(100, (windowEnd / totalContentSize) * 100)}%"></div>
-    </div>
-  {/if}
 
+        <div class="search-navigation">
+          <button
+            class="search-nav-btn"
+            onclick={prevSearchResult}
+            disabled={searchResults.length === 0}
+            aria-label="Previous search result"
+            title="Previous result"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/>
+            </svg>
+          </button>
+          <button
+            class="search-nav-btn"
+            onclick={nextSearchResult}
+            disabled={searchResults.length === 0}
+            aria-label="Next search result"
+            title="Next result"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/>
+            </svg>
+          </button>
+          <button class="search-nav-btn" onclick={closeSearch} aria-label="Close search" title="Close search">
+            <X size={15} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+    {/if}
+  </div>
   <!-- Output Content -->
   <div class="output-container">
     {#if windowStart > 0 && isLargeFile}
@@ -657,7 +664,7 @@
         <LoadingSpinner message={loadingMessage} />
       </div>
     {:else if renderedContent}
-      <div class="output-wrapper" class:with-line-numbers={showLineNumbers} class:error-type={type === 'error'}>
+      <div class="output-wrapper {fontSizeClass}">
         {#if showLineNumbers}
           <div class="line-numbers" bind:this={lineNumbersElement}>
             {#each lines as _, index}
@@ -667,7 +674,6 @@
         {/if}
         <pre
           class="output-content {fontSizeClass}"
-          class:error-type={type === 'error'}
           class:wrap={wordWrap}
           bind:this={outputElement}
           onscroll={() => checkScrollPosition()}
@@ -701,24 +707,6 @@
     {/if}
   </div>
   
-  <!-- Bottom Status Bar -->
-  <div class="status-bar">
-    <div class="status-info">
-      {#if renderedContent}
-        <span class="line-count">{lines.length} lines</span>
-        {#if totalContentSize > 0}
-          <span class="size-info bg-sky-100 text-sky-700">{formatBytes(Math.min(windowEnd, totalContentSize))} / {formatBytes(totalContentSize)}</span>
-        {/if}
-        {#if searchQuery && searchResults.length > 0}
-          <span class="search-status">{searchResults.length} matches found</span>
-        {/if}
-      {/if}
-    </div>
-
-    <div class="status-controls">
-      <!-- Removed scroll-to-bottom button as requested -->
-    </div>
-  </div>
 </div>
 
 <style>
@@ -727,643 +715,147 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
     overflow: hidden;
+    container-type: inline-size;
   }
 
   .viewer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1rem;
-    background: var(--secondary);
+    flex-shrink: 0;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--border);
-    gap: 1rem;
+    background: var(--card);
   }
 
-  .search-controls {
+  .viewer-toolbar,.viewer-controls,.toolbar-slot,.search-row,.search-navigation {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-    max-width: 400px;
+    gap: 4px;
+    min-width: 0;
   }
 
-  .search-input-group {
-    position: relative;
-    flex: 1;
-    display: flex;
-    align-items: center;
-  }
+  .viewer-toolbar { min-height: 30px; }
+  .viewer-controls { margin-left: auto; }
+  .toolbar-slot { flex-shrink: 0; }
+  .toolbar-start { gap: 6px; }
+  .toolbar-end { gap: 2px; }
 
-  .search-icon {
-    position: absolute;
-    left: 0.75rem;
-    width: 16px;
-    height: 16px;
-    color: var(--muted-foreground);
-    z-index: 1;
-  }
-
-  .search-input {
-    width: 100%;
-    padding: 0.5rem 0.75rem 0.5rem 2.5rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font-size: 0.875rem;
-    background: var(--input);
-    color: var(--foreground);
-    transition: border-color 0.2s;
-  }
-
-  .search-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  }
-
-  .search-results-info {
-    position: absolute;
-    right: 0.75rem;
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    background: var(--card);
-    padding: 0.125rem 0.5rem;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-  }
-
-  .search-navigation {
-    display: flex;
-    gap: 0.25rem;
-  }
-
-  .search-nav-btn {
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-    display: flex;
+  .control-btn,.search-nav-btn {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--muted-foreground);
-    transition: all 0.2s;
-  }
-
-  .search-nav-btn:hover:not(:disabled) {
-    background: var(--secondary);
-    border-color: var(--muted);
-  }
-
-  .search-nav-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .search-nav-btn svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .viewer-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  /* Streaming indicator styles removed */
-  /* .streaming-indicator {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.75rem;
-    background: var(--warning-bg);
-    border: 1px solid var(--warning);
+    width: 28px;
+    height: 30px;
+    padding: 0;
+    border: 0;
     border-radius: 6px;
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--warning);
+    background: transparent;
+    color: var(--muted-foreground);
+    flex-shrink: 0;
   }
 
-  .streaming-dot {
-    width: 8px;
-    height: 8px;
-    background: var(--warning);
-    border-radius: 50%;
-    animation: pulse 2s infinite;
+  .control-btn:hover,.search-nav-btn:hover:not(:disabled) {
+    background: var(--hover);
+    color: var(--foreground);
   }
+  .control-btn.active { background: var(--accent-soft); color: var(--accent); }
+  .control-btn:disabled,.search-nav-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .control-btn svg,.search-nav-btn svg { width: 15px; height: 15px; }
+  .toolbar-line-count,.partial-output-badge { font-size: .6875rem; white-space: nowrap; color: var(--muted-foreground); }
+  .toolbar-line-count { padding: 0 6px; }
+  .partial-output-badge { padding: 3px 5px; background: var(--secondary); border-radius: 4px; }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  } */
-
-  .control-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.375rem 0.5rem;
+  .search-row { padding-top: 6px; gap: 6px; }
+  .search-input-group { display: flex; align-items: center; flex: 1; min-width: 0; position: relative; }
+  .search-input-group :global(.search-icon) { position: absolute; left: 8px; color: var(--muted-foreground); pointer-events: none; }
+  .search-input {
+    width: 100%;
+    min-width: 0;
+    height: 30px;
+    padding: 4px 80px 4px 29px;
     border: 1px solid var(--border);
     border-radius: 6px;
-    background: var(--card);
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    transition: all 0.2s;
+    font-size: .8125rem;
+    background: var(--background);
+    color: var(--foreground);
   }
+  .search-input:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .search-results-info { position: absolute; right: 6px; font-size: .6875rem; color: var(--muted-foreground); pointer-events: none; }
 
-  .control-btn:hover {
-    background: var(--secondary);
-    border-color: var(--muted);
-  }
+  .settings-dropdown { position: relative; flex-shrink: 0; }
+  .settings-menu { min-width: 200px; }
 
-  .control-btn.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-foreground);
-  }
+  .output-container { flex: 1; min-height: 0; min-width: 0; position: relative; display: flex; flex-direction: column; overflow: hidden; }
+  .output-wrapper { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+  .output-wrapper.text-xs { font-size: .75rem; }
+  .output-wrapper.text-sm { font-size: .875rem; }
+  .output-wrapper.text-base { font-size: 1rem; }
 
-  .control-btn svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .control-label {
-    font-weight: 500;
-  }
-
-  .output-container {
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .output-wrapper {
-    flex: 1;
-    display: flex;
-    overflow: hidden;
-    background: var(--card);
-  }
-
-  .output-wrapper.error-type {
-    background: var(--error-bg);
-  }
-
-  .output-wrapper.with-line-numbers {
-    background: linear-gradient(to right, var(--secondary) 60px, var(--card) 60px);
-  }
-
-  .output-wrapper.with-line-numbers.error-type {
-    background: linear-gradient(to right, var(--secondary) 60px, var(--error-bg) 60px);
-  }
-
-  .line-numbers {
-    width: 60px;
-    background: var(--secondary);
-    border-right: 1px solid var(--border);
-    padding: 1rem 0.75rem;
-    overflow-y: hidden;
-    overflow-x: hidden;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    font-size: 0.75rem;
+  .line-numbers,.output-content {
+    padding-top: 12px;
+    padding-bottom: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: inherit;
     line-height: 1.5;
+  }
+  .line-numbers {
+    width: 48px;
+    padding-left: 8px;
+    padding-right: 8px;
+    border-right: 1px solid var(--border-soft);
     color: var(--muted-foreground);
     text-align: right;
     user-select: none;
+    overflow: hidden;
     flex-shrink: 0;
     pointer-events: none;
   }
-
-  .line-number {
-    height: 1.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-  }
-
+  .line-number { height: 1.5em; }
   .output-content {
     flex: 1;
-    padding: 1rem;
+    min-width: 0;
     margin: 0;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    line-height: 1.5;
+    padding-left: 12px;
+    padding-right: 12px;
     white-space: pre;
     overflow: auto;
+    overscroll-behavior: contain;
     background: transparent;
     color: var(--foreground);
-    border: none;
-    outline: none;
+    border: 0;
   }
+  .output-content.wrap { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; }
 
-  .output-content.wrap {
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
+  .loading-state,.empty-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted-foreground); }
+  .empty-icon { width: 32px; height: 32px; opacity: .5; }
+  .loading-more { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px; color: var(--muted-foreground); font-size: .75rem; }
+  .loading-spinner.small { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .content-indicator { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; font-size: .6875rem; color: var(--muted-foreground); z-index: 1; }
+  .top-indicator { top: 4px; }
+  .bottom-indicator { bottom: 4px; }
+  .indicator-dots { display: flex; gap: 2px; }
+  .dot { width: 3px; height: 3px; background: currentColor; border-radius: 50%; }
+  .indicator-text { white-space: nowrap; }
+
+  :global(.search-highlight) { background: var(--warning-bg); color: var(--warning); border-radius: 2px; }
+  :global(.search-highlight-active) { background: var(--warning); color: var(--background); }
+
+  @container (max-width:600px) {
+    .toolbar-line-count { display: none; }
   }
-
-  .output-content.text-xs {
-    font-size: 0.75rem;
+  @container (max-width:350px) {
+    .viewer-header { padding-left: 6px; padding-right: 6px; }
+    .toolbar-start { gap: 2px; }
+    .viewer-toolbar { gap: 2px; }
+    .partial-output-badge { max-width: 24px; overflow: hidden; }
   }
-
-  .output-content.text-sm {
-    font-size: 0.875rem;
-  }
-
-  .output-content.text-base {
-    font-size: 1rem;
-  }
-
-  .settings-menu {
-    min-width: 200px;
-  }
-
-  .relative {
-    position: relative;
-  }
-
-  .output-content.error-type {
-    color: var(--error);
-  }
-
-  .loading-state,
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    color: var(--muted-foreground);
-    gap: 1rem;
-  }
-
-  .loading-spinner.small {
-    width: 16px;
-    height: 16px;
-    border-width: 2px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .loading-more {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 1rem;
-    background: var(--secondary);
-    border-top: 1px solid var(--border);
-    font-size: 0.875rem;
-    color: var(--muted-foreground);
-  }
-
-  .load-more-indicator {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
-    background: var(--accent-soft);
-    border-top: 1px solid var(--border);
-    font-size: 0.875rem;
-  }
-
-  .indicator-text {
-    color: var(--accent);
-    font-weight: 500;
-  }
-
-  .indicator-subtext {
-    color: var(--accent);
-    font-size: 0.75rem;
-    margin-top: 0.25rem;
-  }
-
-  .size-warning-floating {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    z-index: 100;
-    background: var(--card);
-    border-radius: 12px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 6px 10px rgba(0, 0, 0, 0.08);
-    overflow: hidden;
-    animation: slideIn 0.3s ease-out;
-    transition: all 0.3s ease;
-    max-width: 320px;
-  }
-
-  .size-warning-floating.fade-out {
-    opacity: 0.7;
-    transform: scale(0.95);
-  }
-
-  @keyframes slideIn {
-    from {
-      transform: translateY(-100%);
-      opacity: 0;
-    }
-    to {
-      transform: translateY(0);
-      opacity: 1;
-    }
-  }
-
-  .warning-inner {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.875rem 1rem;
-  }
-
-  .warning-icon {
-    width: 20px;
-    height: 20px;
-    flex-shrink: 0;
-  }
-
-  .warning-content {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    gap: 0.125rem;
-  }
-
-  .warning-text {
-    font-weight: 600;
-    font-size: 0.8125rem;
-    line-height: 1.2;
-  }
-
-  .warning-subtext {
-    font-size: 0.6875rem;
-    opacity: 0.9;
-  }
-
-  .dismiss-btn {
-    padding: 0.125rem;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s;
-    border-radius: 4px;
-    opacity: 0.6;
-  }
-
-  .dismiss-btn:hover {
-    opacity: 1;
-  }
-
-  .dismiss-btn svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .warning-progress {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    height: 2px;
-    transition: width 0.3s ease;
-  }
-
-  .size-info {
-    padding: 0.125rem 0.5rem;
-    border-radius: 4px;
-    font-weight: 500;
-  }
-
-  .content-indicator {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.625rem;
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(229, 231, 235, 0.8);
-    border-radius: 9999px;
-    font-size: 0.6875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    z-index: 10;
-    transition: all 0.2s ease;
-    opacity: 0.8;
-  }
-
-  .content-indicator:hover {
-    opacity: 1;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-  }
-
-  .top-indicator {
-    top: 0.5rem;
-  }
-
-  .bottom-indicator {
-    bottom: 0.5rem;
-  }
-
-  .indicator-dots {
-    display: flex;
-    gap: 2px;
-    align-items: center;
-  }
-
-  .dot {
-    width: 3px;
-    height: 3px;
-    background: var(--muted-foreground);
-    border-radius: 50%;
-    animation: pulse 1.5s ease-in-out infinite;
-  }
-
-  .dot:nth-child(1) {
-    animation-delay: 0s;
-  }
-
-  .dot:nth-child(2) {
-    animation-delay: 0.2s;
-  }
-
-  .dot:nth-child(3) {
-    animation-delay: 0.4s;
-  }
-
-  @keyframes pulse {
-    0%, 80%, 100% {
-      opacity: 0.3;
-    }
-    40% {
-      opacity: 1;
-    }
-  }
-
-  .indicator-text {
-    color: var(--muted-foreground);
-    white-space: nowrap;
-  }
-
-  .empty-icon {
-    width: 48px;
-    height: 48px;
-    opacity: 0.5;
-  }
-
-  .status-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.5rem 1rem;
-    background: var(--secondary);
-    border-top: 1px solid var(--border);
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-  }
-
-  .status-info {
-    display: flex;
-    gap: 1rem;
-  }
-
-  .status-controls {
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  :global(.search-highlight) {
-    background: var(--warning-bg);
-    color: var(--warning);
-    padding: 0.125rem 0.25rem;
-    border-radius: 3px;
-    font-weight: 600;
-    transition: background-color 0.15s ease, color 0.15s ease;
-  }
-
-  :global(.search-highlight-active) {
-    background: var(--warning-bg);
-    color: var(--warning);
-  }
-
-  @media (max-width: 768px) {
-    .size-warning-floating {
-      top: 0.5rem;
-      right: 0.5rem;
-      left: 0.5rem;
-      max-width: none;
-    }
-
-    .warning-inner {
-      padding: 0.625rem 0.75rem;
-    }
-
-    .warning-text {
-      font-size: 0.75rem;
-    }
-
-    .warning-subtext {
-      font-size: 0.625rem;
-    }
-
-    .viewer-header {
-      padding: 0.5rem;
-      gap: 0.5rem;
-    }
-
-    .search-controls {
-      max-width: none;
-      flex: 1;
-    }
-
-    .search-input-group {
-      min-width: 0;
-    }
-
-    .search-input {
-      padding: 0.375rem 0.5rem 0.375rem 2rem;
-      font-size: 0.75rem;
-    }
-
-    .search-icon {
-      left: 0.5rem;
-      width: 14px;
-      height: 14px;
-    }
-
-    .search-results-info {
-      display: none;
-    }
-
-    .search-navigation {
-      /* Keep visible on mobile when searching */
-      display: flex;
-    }
-
-    .search-nav-btn {
-      width: 28px;
-      height: 28px;
-    }
-
-    .search-nav-btn svg {
-      width: 14px;
-      height: 14px;
-    }
-
-    .viewer-controls {
-      gap: 0.25rem;
-    }
-
-    .control-btn {
-      padding: 0.25rem;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 26px;
-      height: 26px;
-    }
-
-    .control-btn svg {
-      width: 14px;
-      height: 14px;
-    }
-
-    /* .streaming-indicator {
-      display: none;
-    } */
-
-    .control-label {
-      display: none;
-    }
-
-    .status-bar {
-      flex-direction: column;
-      gap: 0.5rem;
-      align-items: flex-start;
-    }
-
-    .output-content.text-xs {
-      font-size: 0.625rem;
-    }
-
-    .output-content.text-sm {
-      font-size: 0.6875rem;
-    }
-
-    .output-content.text-base {
-      font-size: 0.75rem;
-    }
+  @container (max-width:500px) {
+    .output-wrapper.text-sm { font-size: .75rem; }
+    .output-wrapper.text-base { font-size: .875rem; }
+    .line-numbers { width: 38px; }
+    .output-content { padding-left: 8px; padding-right: 8px; }
   }
 </style>

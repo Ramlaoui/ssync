@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import type { JobInfo } from '../types/api';
-export type JobView = 'all' | 'running' | 'pending' | 'attention' | 'historical';
+export type JobView = 'all' | 'running' | 'pending' | 'historical';
 export interface JobsWorkspace {
     query: string;
     host: string;

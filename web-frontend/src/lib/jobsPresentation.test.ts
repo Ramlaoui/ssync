@@ -32,7 +32,7 @@ describe('Jobs workspace', () => {
     expect(jobStatus('CANCELLED by 1001').label).toBe('Cancelled');
     expect(jobStatus('OUT_OF_MEMORY+').attention).toBe(true);
     expect(jobStatus('unrecognized').label).toBe('Unknown');
-    expect(filterJobs([createMockJob({ state: 'TO' }), createMockJob({ state: 'CD' })], { ...filters, view: 'attention' })).toHaveLength(1);
+    expect(filterJobs([createMockJob({ state: 'TO' }), createMockJob({ state: 'CD' })], { ...filters, view: 'historical' })).toHaveLength(2);
   });
 
   it('narrows cached history while keeping active and recently finished long jobs', () => {
@@ -45,7 +45,7 @@ describe('Jobs workspace', () => {
   });
 
   it('preserves list context when selecting and expanding a failed job', () => {
-    setJobView('attention', 'cluster.test');
+    setJobView('historical', 'cluster.test');
     jobsWorkspace.update(state => ({ ...state, query: 'train', scrollTop: 640 }));
     selectJob(createMockJob({ job_id: '42_3', hostname: 'cluster.test', state: 'F' }));
     const state = get(jobsWorkspace);

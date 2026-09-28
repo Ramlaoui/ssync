@@ -29,7 +29,7 @@ export function jobStatus(state: string) {
 }
 export function matchesJobView(job: JobInfo, view: JobView): boolean {
     const status = jobStatus(job.state);
-    return view === 'all' || (view === 'running' ? status.category === 'active' : view === 'pending' ? status.category === 'pending' : view === 'attention' ? Boolean(status.attention) : status.category === 'historical');
+    return view === 'all' || (view === 'running' ? status.category === 'active' : view === 'pending' ? status.category === 'pending' : status.category === 'historical');
 }
 // Active jobs stay visible even when they started before the history window.
 export function withinHistoryWindow(job: JobInfo, since: string, now = Date.now()): boolean {
