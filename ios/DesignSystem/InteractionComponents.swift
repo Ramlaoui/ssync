@@ -72,35 +72,3 @@ struct WatcherActionFields: View {
     (try? JSONDecoder().decode(JSONValue.self, from: Data(parameters.utf8)))?.object ?? [:]
   }
 }
-
-struct RelayHandoff: View {
-  var revision: Int
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var progress: CGFloat = 1
-  var body: some View {
-    HandoffPath().stroke(Theme.line, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-      .overlay {
-        HandoffPath().trim(from: max(0, progress - 0.45), to: progress)
-          .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-      }
-      .frame(width: 54, height: 26)
-      .onChange(of: revision) { _, _ in
-        guard !reduceMotion else { return }
-        progress = 0
-        withAnimation(.easeInOut(duration: 0.45)) { progress = 1 }
-      }
-      .accessibilityHidden(true)
-  }
-}
-private struct HandoffPath: Shape {
-  func path(in rect: CGRect) -> Path {
-    var path = Path()
-    path.move(to: CGPoint(x: 2, y: rect.midY))
-    path.addLine(to: CGPoint(x: rect.width * 0.35, y: rect.midY))
-    path.addCurve(
-      to: CGPoint(x: rect.width * 0.65, y: rect.midY), control1: CGPoint(x: rect.midX, y: -8),
-      control2: CGPoint(x: rect.midX, y: rect.height + 8))
-    path.addLine(to: CGPoint(x: rect.width - 2, y: rect.midY))
-    return path
-  }
-}

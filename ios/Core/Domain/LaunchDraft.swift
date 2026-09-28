@@ -1,6 +1,6 @@
 import Foundation
 
-struct LaunchDraft: Codable, Identifiable, Equatable, Sendable {
+struct LaunchDraft: Codable, Identifiable, Hashable, Sendable {
   var id = UUID()
   var name = ""
   var host = ""

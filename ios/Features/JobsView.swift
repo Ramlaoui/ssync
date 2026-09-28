@@ -1,295 +1,429 @@
 import SwiftUI
 
+enum JobFilter: Hashable { case running, queued, failed }
+
 struct JobsView: View {
   @Environment(AppStore.self) private var store
   @State private var query = ""
-  @State private var filter = "Active"
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  private let filters = ["Active", "All", "Pinned", "History"]
-  private var visible: [Job] {
-    store.sortedJobs.filter { job in
-      (filter != "Active" || job.state.active)
-        && (filter != "Pinned" || store.pins.contains(job.id))
-        && (filter != "History" || !job.state.active)
+  @State private var filter: JobFilter?
+  @State private var host: String?
+  private let recentLimit = 8
+
+  private var scoped: [Job] {
+    store.listedJobs.filter { job in
+      (host == nil || job.host == host)
         && (query.isEmpty
           || "\(job.name) \(job.number) \(job.host) \(job.partition) \(job.user)"
             .localizedCaseInsensitiveContains(query))
     }
   }
+  private var scopedArrays: [ArrayGroup] {
+    store.arrays.filter { group in
+      (host == nil || group.hostname == host)
+        && (query.isEmpty
+          || "\(group.job_name) \(group.array_job_id) \(group.hostname)"
+            .localizedCaseInsensitiveContains(query))
+    }
+  }
+  private func unacknowledged(_ job: Job) -> Bool {
+    job.state.needsAttention && !store.acknowledgements.contains(job.id)
+  }
+
   var body: some View {
-    Screen {
-      ConnectionStatus()
-      HStack(spacing: 0) {
-        summary(
-          "Running", count: store.jobs.filter { $0.state == .running }.count,
-          color: Color(red: 0.50, green: 0.87, blue: 0.72))
-        Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 40)
-        summary(
-          "Queued", count: store.jobs.filter { $0.state == .pending }.count,
-          color: Color(red: 0.98, green: 0.76, blue: 0.40))
-        Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 40)
-        summary(
-          "Attention", count: store.attentionJobs.count,
-          color: Color(red: 1, green: 0.57, blue: 0.53))
-      }.padding(.vertical, 23).background(Theme.panel, in: RoundedRectangle(cornerRadius: 22))
-        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: store.jobs.map(\.rawState))
-      if let attention = store.attentionJobs.first {
-        NavigationLink(value: Route.job(attention.id)) {
-          Notice(
-            title: attention.name,
-            detail: "\(attention.host) · \(attention.state.label)",
-            symbol: "exclamationmark.bubble", warning: true)
-        }.buttonStyle(.plain)
+    let jobs = scoped
+    let arrays = scopedArrays
+    let pinned = jobs.filter { store.pins.contains($0.id) }
+    let rest = jobs.filter { !store.pins.contains($0.id) }
+    let attention = rest.filter(unacknowledged)
+    let running = rest.filter { $0.state == .running }
+    let queued = rest.filter { $0.state == .pending }
+    let recent = rest.filter { !$0.state.active && !unacknowledged($0) }
+    let runningArrays = arrays.filter { $0.running_count > 0 }
+    let queuedArrays = arrays.filter { $0.running_count == 0 && $0.pending_count > 0 }
+    List {
+      if store.error != nil && !store.demo { ConnectionBanner() }
+      Section {
+        chips(jobs: jobs, arrays: arrays)
+          .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+          .listRowBackground(Color.clear)
       }
-      Picker("Job filter", selection: $filter) { ForEach(filters, id: \.self) { Text($0) } }
-        .pickerStyle(.segmented)
-      if !store.arrays.isEmpty && query.isEmpty && filter != "History" {
-        SectionHeading(title: "Job arrays", detail: "\(store.arrays.count)")
-        ForEach(store.arrays) { group in
-          NavigationLink(value: Route.array(group.id)) {
-            Paper {
-              HStack {
-                Image("job-array").foregroundStyle(Theme.accent)
-                VStack(alignment: .leading, spacing: 5) {
-                  Text(group.job_name).font(.headline)
-                  Text(
-                    "\(group.hostname) · \(group.total_tasks) tasks · \(group.running_count) running"
-                  ).font(.caption).foregroundStyle(Theme.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").font(.caption)
-              }
-            }
-          }.buttonStyle(.plain)
+      if let filter {
+        let filtered = jobs.filter { matches($0, filter) }
+        Section {
+          if filter == .running { ForEach(runningArrays) { arrayLink($0) } }
+          if filter == .queued { ForEach(queuedArrays) { arrayLink($0) } }
+          ForEach(filtered) { jobLink($0) }
+        }
+      } else {
+        if !pinned.isEmpty {
+          Section("Pinned") { ForEach(pinned) { jobLink($0) } }
+        }
+        if !attention.isEmpty {
+          Section("Needs attention") { ForEach(attention) { jobLink($0) } }
+        }
+        if !running.isEmpty || !runningArrays.isEmpty {
+          Section("Running") {
+            ForEach(runningArrays) { arrayLink($0) }
+            ForEach(running) { jobLink($0) }
+          }
+        }
+        if !queued.isEmpty || !queuedArrays.isEmpty {
+          Section("Queued") {
+            ForEach(queuedArrays) { arrayLink($0) }
+            ForEach(queued) { jobLink($0) }
+          }
+        }
+        Section {
+          ForEach(recent.prefix(recentLimit)) { jobLink($0) }
+          NavigationLink(value: Route.history) {
+            Label("All history", systemImage: "clock.arrow.circlepath")
+          }
+        } header: {
+          Text("Recent")
+        } footer: {
+          Text(
+            "Last 7 days · up to 1,000 jobs per host · updated \(Format.age(store.receivedAt).lowercased())"
+          )
         }
       }
-      if visible.isEmpty {
-        EmptyState(
-          title: query.isEmpty ? "No jobs" : "No matching jobs",
-          detail: query.isEmpty
-            ? "Jobs appear here when they are submitted to a connected host."
-            : "Try a job name, ID, user or partition.", symbol: "square.stack.3d.up")
-      }
-      ForEach(Array(Set(visible.map(\.host))).sorted(), id: \.self) { host in
-        SectionHeading(title: host, detail: "\(visible.filter { $0.host == host }.count) jobs")
-        if let error = store.hostErrors[host] {
-          Notice(title: "Host unavailable", detail: error, warning: true)
+    }
+    .overlay {
+      if jobs.isEmpty && arrays.isEmpty {
+        if query.isEmpty {
+          ContentUnavailableView(
+            "No jobs", systemImage: "list.bullet.rectangle",
+            description: Text("Jobs you submit on a connected host appear here."))
+        } else {
+          ContentUnavailableView.search(text: query)
         }
-        LazyVStack(spacing: 10) {
-          ForEach(visible.filter { $0.host == host }) { job in
-            NavigationLink(value: Route.job(job.id)) {
-              JobRow(job: job, pinned: store.pins.contains(job.id))
+      }
+    }
+    .animation(.default, value: filter)
+    .navigationTitle("Jobs")
+    .rootToolbar()
+    .toolbar {
+      if store.hosts.count > 1 {
+        ToolbarItem(placement: .topBarTrailing) {
+          Menu {
+            Picker("Host", selection: $host) {
+              Text("All hosts").tag(String?.none)
+              ForEach(store.hosts) { Text($0.hostname).tag(Optional($0.hostname)) }
             }
-            .buttonStyle(.plain).accessibilityIdentifier("job-\(job.number)")
-            .contextMenu {
-              Button(store.pins.contains(job.id) ? "Unpin" : "Pin", systemImage: "pin") {
-                store.togglePin(job.id)
-              }
-              if job.state.needsAttention {
-                Button("Mark reviewed", systemImage: "checkmark") { store.acknowledge(job.id) }
-              }
-            }
+          } label: {
+            Label(
+              host ?? "All hosts",
+              systemImage: host == nil
+                ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
           }
         }
       }
-      Text("Last 7 days · up to 1,000 jobs per host")
-        .font(.caption2).foregroundStyle(Theme.secondary)
-    }.navigationTitle("Jobs").navigationBarTitleDisplayMode(.inline).rootToolbar()
-      .searchable(text: $query, prompt: "Name, job ID, host or partition")
-      .refreshable { await store.refresh(force: true) }
+    }
+    .searchable(text: $query, prompt: "Name, ID, host or partition")
+    .searchToolbarBehavior(.minimize)
+    .refreshable { await store.refresh(force: true) }
   }
-  private func summary(_ title: String, count: Int, color: Color) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("\(count)").font(.system(size: 38, weight: .medium, design: .rounded)).contentTransition(
-        .numericText())
-      HStack(spacing: 5) {
-        Circle().fill(color).frame(width: 5, height: 5)
-        Text(title).font(.caption)
+
+  private func chips(jobs: [Job], arrays: [ArrayGroup]) -> some View {
+    ScrollView(.horizontal) {
+      HStack(spacing: 8) {
+        chip(
+          "Running", .running,
+          count: jobs.filter { $0.state == .running }.count
+            + arrays.filter { $0.running_count > 0 }.count, color: Theme.accent)
+        chip(
+          "Queued", .queued,
+          count: jobs.filter { $0.state == .pending }.count
+            + arrays.filter { $0.running_count == 0 && $0.pending_count > 0 }.count,
+          color: Theme.amber)
+        chip("Failed", .failed, count: jobs.filter(unacknowledged).count, color: Theme.red)
+      }.padding(.horizontal, 20)
+    }.scrollIndicators(.hidden)
+  }
+  private func chip(_ title: String, _ value: JobFilter, count: Int, color: Color) -> some View {
+    FilterChip(title: title, count: count, color: color, selected: filter == value) {
+      filter = filter == value ? nil : value
+    }
+  }
+  private func matches(_ job: Job, _ filter: JobFilter) -> Bool {
+    switch filter {
+    case .running: job.state == .running
+    case .queued: job.state == .pending
+    case .failed: job.state.needsAttention
+    }
+  }
+  private func arrayLink(_ group: ArrayGroup) -> some View {
+    NavigationLink(value: Route.array(group.id)) { ArrayRow(group: group) }
+  }
+  private func jobLink(_ job: Job) -> some View {
+    NavigationLink(value: Route.job(job.id)) {
+      JobRow(job: job, pinned: store.pins.contains(job.id), showHost: host == nil)
+    }
+    .accessibilityIdentifier("job-\(job.number)")
+    .jobActions(job)
+  }
+}
+
+extension View {
+  /// Swipe and context actions shared by every job list.
+  func jobActions(_ job: Job) -> some View { modifier(JobActions(job: job)) }
+}
+private struct JobActions: ViewModifier {
+  var job: Job
+  @Environment(AppStore.self) private var store
+  func body(content: Content) -> some View {
+    let pinned = store.pins.contains(job.id)
+    let reviewable = job.state.needsAttention && !store.acknowledgements.contains(job.id)
+    content
+      .swipeActions(edge: .trailing) {
+        Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+          store.togglePin(job.id)
+        }.tint(Theme.accent)
       }
-    }.foregroundStyle(.white).frame(maxWidth: .infinity)
+      .swipeActions(edge: .leading) {
+        if reviewable {
+          Button("Reviewed", systemImage: "checkmark") { store.acknowledge(job.id) }
+            .tint(Theme.green)
+        }
+      }
+      .contextMenu {
+        Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+          store.togglePin(job.id)
+        }
+        if reviewable {
+          Button("Mark reviewed", systemImage: "checkmark") { store.acknowledge(job.id) }
+        }
+        Button("Copy job ID", systemImage: "doc.on.doc") {
+          UIPasteboard.general.string = job.number
+        }
+      }
+  }
+}
+
+struct JobHistoryView: View {
+  @Environment(AppStore.self) private var store
+  @State private var query = ""
+  var jobs: [Job] {
+    store.listedJobs.filter {
+      !$0.state.active
+        && (query.isEmpty
+          || "\($0.name) \($0.number) \($0.host) \($0.partition)"
+            .localizedCaseInsensitiveContains(query))
+    }.sorted { $0.number.localizedStandardCompare($1.number) == .orderedDescending }
+  }
+  var body: some View {
+    List {
+      Section {
+        ForEach(jobs) { job in
+          NavigationLink(value: Route.job(job.id)) {
+            JobRow(job: job, pinned: store.pins.contains(job.id))
+          }.jobActions(job)
+        }
+      } footer: {
+        Text("Finished jobs from the last 7 days.")
+      }
+    }
+    .overlay {
+      if jobs.isEmpty {
+        ContentUnavailableView(
+          query.isEmpty ? "No finished jobs" : "No matches", systemImage: "clock.arrow.circlepath")
+      }
+    }
+    .navigationTitle("History")
+    .searchable(text: $query)
   }
 }
 
 struct JobDetailView: View {
   let id: JobID
   @Environment(AppStore.self) private var store
+  @Environment(\.scenePhase) private var scenePhase
   @State private var error: String?
   @State private var cancelling = false
   @State private var confirmCancel = false
   @State private var document: DocumentItem?
   @State private var liveActivities = JobLiveActivities.shared
   @State private var changingFollow = false
-  @Environment(\.scenePhase) private var scenePhase
   @State private var loading = false
+  @State private var preparingRelaunch = false
+  @State private var addingWatcher = false
   var job: Job? { store.job(id) }
+  var watchers: [Watcher] { store.watchers.filter { $0.jobID == id } }
+
   var body: some View {
-    Screen {
+    Group {
       if let job {
-        HStack {
-          StatePill(state: job.state)
-          Spacer()
-          Text("\(job.host) / #\(job.number)").font(.system(.caption, design: .monospaced))
-            .foregroundStyle(Theme.secondary)
-        }
-        Text(job.name).font(.system(.largeTitle, design: .rounded).weight(.bold)).tracking(-1)
-          .textSelection(.enabled)
-        if let error {
-          Notice(title: "Couldn’t complete the request", detail: error, warning: true)
-        }
-        if store.error != nil || job.stale {
-          Notice(
-            title: "Saved job state", detail: "Refresh before acting on this job.",
-            symbol: "wifi.slash", warning: true)
-        }
-        VStack(alignment: .leading, spacing: 16) {
-          Eyebrow(
-            title: job.state == .pending ? "Waiting for scheduling" : "Elapsed time",
-            color: Theme.onAccent)
-          Text(
-            job.state == .pending
-              ? job.fields.text("reason", fallback: "Pending") : Format.duration(job.runtime)
-          )
-          .font(.system(size: 42, weight: .medium, design: .rounded)).minimumScaleFactor(0.6)
-          .foregroundStyle(Theme.onAccent)
-          if let fraction = job.timeFraction, job.state != .pending {
-            ProgressView(value: fraction).tint(Theme.onAccent)
-            Text(
-              "of \(Format.duration(job.limit)) wall-time limit"
-            )
-            .font(.caption)
-          }
-        }.foregroundStyle(Theme.onAccent).padding(24).frame(
-          maxWidth: .infinity, alignment: .leading
-        )
-        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 22))
-        HStack(spacing: 12) {
-          NavigationLink(value: Route.output(id)) {
-            Label("Watch output", systemImage: "terminal").frame(maxWidth: .infinity)
-          }
-          .buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("watchOutput")
-          Button {
-            store.togglePin(id)
-          } label: {
-            Image(systemName: store.pins.contains(id) ? "pin.fill" : "pin").frame(
-              width: 52, height: 52
-            ).background(Theme.soft, in: RoundedRectangle(cornerRadius: 15))
-          }.accessibilityLabel(store.pins.contains(id) ? "Unpin job" : "Pin job")
-        }
-        if let connection = store.connection {
-          let activityID = liveActivities.activityID(
-            host: id.host, number: id.number, connectionID: connection.id)
-          if job.state.active || activityID != nil {
-            Button {
-              changingFollow = true
-              Task {
-                defer { changingFollow = false }
-                if let activityID {
-                  await liveActivities.stop(activityID: activityID)
-                } else {
-                  do {
-                    try await LiveActivityService.shared.follow(job: job, connection: connection)
-                  } catch { self.error = error.localizedDescription }
-                }
-              }
-            } label: {
-              HStack {
-                Label(
-                  activityID == nil ? "Follow on Lock Screen" : "Stop following",
-                  systemImage: activityID == nil ? "waveform.path" : "xmark.circle")
-                Spacer()
-                if changingFollow { ProgressView() }
-              }
-              .font(.subheadline.weight(.semibold))
-              .frame(minHeight: 44)
-            }
-            .disabled(changingFollow)
-            .accessibilityIdentifier(activityID == nil ? "followJob" : "stopFollowingJob")
-            .accessibilityHint(activityID == nil ? "Show a Live Activity" : "The job keeps running")
-          }
-        }
-        SectionHeading(title: "Allocation")
-        Paper {
-          VStack(spacing: 14) {
-            DetailRow(name: "Host", value: job.host)
-            NavigationLink(value: Route.partition(job.host, job.partition)) {
-              DetailRow(name: "Partition", value: job.partition)
-            }
-            Divider()
-            DetailRow(name: "CPUs", value: job.fields.text("cpus"))
-            DetailRow(name: "Memory requested", value: job.fields.text("memory"))
-            DetailRow(name: "Nodes", value: job.fields.text("nodes"))
-            DetailRow(name: "Allocated resources", value: job.fields.text("alloc_tres"))
-            DetailRow(name: "User", value: job.user)
-          }
-        }
-        SectionHeading(
-          title: "Watchers", detail: "\(store.watchers.filter { $0.jobID == id }.count)")
-        ForEach(store.watchers.filter { $0.jobID == id }) { watcher in
-          NavigationLink(value: Route.watcher(watcher.id)) { WatcherCard(watcher: watcher) }
-            .buttonStyle(.plain)
-        }
-        NavigationLink {
-          WatcherEditor(jobID: id)
-        } label: {
-          Label("Add watcher", systemImage: "plus.circle")
-        }
-        SectionHeading(title: "Files & details")
-        Paper {
-          VStack(alignment: .leading, spacing: 18) {
-            Button("View submission script", systemImage: "doc.text") { fetchDocument("script") }
-            Button("View launch manifest", systemImage: "list.bullet.rectangle") {
-              fetchDocument("manifest")
-            }
-            Divider()
-            DetailRow(
-              name: "Working directory", value: job.fields.text("work_dir"), monospaced: true)
-            DetailRow(name: "Started", value: job.fields.text("start_time"))
-            DetailRow(name: "Finished", value: job.fields.text("end_time"))
-            DetailRow(name: "Raw scheduler state", value: job.rawState)
-          }
-        }
-        Button("Prepare a relaunch", systemImage: "arrow.uturn.up") { prepareRelaunch(job) }
-          .disabled(loading)
-        if job.state.needsAttention {
-          Button("Mark reviewed", systemImage: "checkmark.circle") { store.acknowledge(id) }
-        }
-        if job.state.active {
-          Button(
-            cancelling ? "Cancelling…" : "Cancel job", systemImage: "stop.circle",
-            role: .destructive
-          ) { confirmCancel = true }
-          .disabled(cancelling).padding(.top, 8)
-        }
+        content(job)
       } else if loading {
-        ProgressView("Loading job…").frame(maxWidth: .infinity).padding(50)
+        ProgressView()
       } else {
-        EmptyState(
-          title: "Job unavailable", detail: error ?? "Pull to refresh or check the connection.",
-          symbol: "questionmark.folder")
+        ContentUnavailableView(
+          "Job unavailable", systemImage: "questionmark.folder",
+          description: Text(error ?? "Pull to refresh or check the connection."))
       }
-    }.navigationTitle("Job").navigationBarTitleDisplayMode(.inline)
-      .task {
-        liveActivities.refresh()
-        await load()
-      }.refreshable { await load() }
-      .onChange(of: scenePhase) { _, phase in
-        if phase == .active { liveActivities.refresh() }
+    }
+    .navigationTitle(job?.name ?? "#\(id.number)")
+    .navigationSubtitle("\(id.host) · #\(id.number)")
+    .toolbar { if let job { ToolbarItem(placement: .topBarTrailing) { actions(job) } } }
+    .task {
+      liveActivities.refresh()
+      await load()
+    }
+    .refreshable { await load() }
+    .onChange(of: scenePhase) { _, phase in if phase == .active { liveActivities.refresh() } }
+    .confirmationDialog(
+      "Cancel #\(id.number) on \(id.host)?", isPresented: $confirmCancel, titleVisibility: .visible
+    ) {
+      Button("Cancel job", role: .destructive) {
+        cancelling = true
+        Task {
+          do { try await store.cancel(id) } catch { self.error = error.localizedDescription }
+          cancelling = false
+        }
       }
-      .confirmationDialog(
-        "Cancel #\(id.number) on \(id.host)?", isPresented: $confirmCancel,
-        titleVisibility: .visible
-      ) {
-        Button("Cancel job", role: .destructive) {
-          cancelling = true
-          Task {
-            do { try await store.cancel(id) } catch { self.error = error.localizedDescription }
-            cancelling = false
+      Button("Keep running", role: .cancel) {}
+    } message: {
+      Text("The scheduler will stop this job. Unsaved work is lost.")
+    }
+    .sheet(item: $document) { item in NavigationStack { DocumentView(item: item) } }
+    .sheet(isPresented: $addingWatcher) { NavigationStack { WatcherEditor(jobID: id) } }
+  }
+
+  @ViewBuilder private func content(_ job: Job) -> some View {
+    List {
+      Section { header(job) }
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.amber)
+          .font(.subheadline)
+      } else if store.error != nil || job.stale {
+        Label("Saved state — refresh before acting on this job.", systemImage: "wifi.slash")
+          .foregroundStyle(Theme.amber).font(.subheadline)
+      }
+      Section("Output") {
+        NavigationLink(value: Route.output(id)) { OutputTail(id: id, active: job.state.active) }
+          .accessibilityIdentifier("watchOutput")
+      }
+      Section("Watchers") {
+        ForEach(watchers) { watcher in
+          NavigationLink(value: Route.watcher(watcher.id)) { WatcherRow(watcher: watcher) }
+        }
+        Button("Add watcher", systemImage: "plus") { addingWatcher = true }
+      }
+      let resources = [
+        ("CPUs", job.fields.text("cpus")), ("Memory", job.fields.text("memory")),
+        ("Nodes", job.fields.text("nodes")), ("Allocation", job.fields.text("alloc_tres")),
+      ].filter { !$0.1.isEmpty }
+      if !resources.isEmpty {
+        Section("Resources") {
+          ForEach(resources, id: \.0) { DetailRow(name: $0.0, value: $0.1) }
+        }
+      }
+      Section("Details") {
+        if !job.partition.isEmpty {
+          NavigationLink(value: Route.partition(job.host, job.partition)) {
+            LabeledContent("Partition", value: job.partition)
           }
         }
-      } message: {
-        Text("The scheduler will stop this job. Its work may not have been saved.")
+        ForEach(
+          [
+            ("User", job.fields.text("user")), ("Started", job.fields.text("start_time")),
+            ("Finished", job.fields.text("end_time")), ("Scheduler state", job.rawState),
+          ].filter { !$0.1.isEmpty }, id: \.0
+        ) { DetailRow(name: $0.0, value: $0.1) }
+        let workDir = job.fields.text("work_dir")
+        if !workDir.isEmpty {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Working directory").font(.subheadline).foregroundStyle(.secondary)
+            Text(workDir).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+          }
+        }
+        Button("Submission script", systemImage: "doc.text") { fetchDocument("script") }
+        Button("Launch manifest", systemImage: "list.bullet.rectangle") {
+          fetchDocument("manifest")
+        }
       }
-      .sheet(item: $document) { item in NavigationStack { DocumentView(item: item) } }
+    }
+    .listSectionSpacing(.compact)
+  }
+
+  private func header(_ job: Job) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        StatePill(state: job.state)
+        if following { Label("On Lock Screen", systemImage: "waveform.path").font(.caption) }
+        Spacer()
+        if cancelling { ProgressView() }
+      }.foregroundStyle(.secondary)
+      if job.state == .pending {
+        Text(job.fields.text("reason", fallback: "Waiting for resources"))
+          .font(.title3.weight(.semibold))
+        Text("Waiting for the scheduler").font(.subheadline).foregroundStyle(.secondary)
+      } else {
+        HStack(alignment: .firstTextBaseline) {
+          Text(Format.duration(job.runtime)).font(.title.weight(.semibold).monospacedDigit())
+          if !job.limit.isEmpty {
+            Text("of \(Format.duration(job.limit))").foregroundStyle(.secondary)
+          }
+        }
+        if let fraction = job.timeFraction, job.state.active {
+          ProgressView(value: fraction).tint(fraction > 0.9 ? Theme.amber : Theme.accent)
+        }
+      }
+      if job.state.needsAttention && !store.acknowledgements.contains(id) {
+        Button("Mark reviewed", systemImage: "checkmark.circle") { store.acknowledge(id) }
+          .buttonStyle(.bordered).controlSize(.small)
+      }
+    }.padding(.vertical, 4)
+  }
+
+  private var following: Bool {
+    guard let connection = store.connection else { return false }
+    return liveActivities.activityID(host: id.host, number: id.number, connectionID: connection.id)
+      != nil
+  }
+
+  private func actions(_ job: Job) -> some View {
+    Menu {
+      let pinned = store.pins.contains(id)
+      Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+        store.togglePin(id)
+      }
+      if job.state.active || following {
+        Button(
+          following ? "Stop following" : "Follow on Lock Screen",
+          systemImage: following ? "xmark.circle" : "waveform.path"
+        ) { toggleFollow(job) }
+        .disabled(changingFollow)
+        .accessibilityIdentifier(following ? "stopFollowingJob" : "followJob")
+      }
+      Button("Relaunch…", systemImage: "arrow.clockwise") { prepareRelaunch(job) }
+        .disabled(preparingRelaunch)
+      Button("Copy job ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = id.number }
+      if job.state.active {
+        Divider()
+        Button("Cancel job…", systemImage: "stop.circle", role: .destructive) {
+          confirmCancel = true
+        }.disabled(cancelling)
+      }
+    } label: {
+      Label("Job actions", systemImage: "ellipsis")
+    }
+  }
+
+  private func toggleFollow(_ job: Job) {
+    guard let connection = store.connection else { return }
+    changingFollow = true
+    Task {
+      defer { changingFollow = false }
+      if let activityID = liveActivities.activityID(
+        host: id.host, number: id.number, connectionID: connection.id)
+      {
+        await liveActivities.stop(activityID: activityID)
+      } else {
+        do {
+          try await LiveActivityService.shared.follow(job: job, connection: connection)
+        } catch { self.error = error.localizedDescription }
+      }
+    }
   }
   private func load() async {
     guard let api = store.client else { return }
@@ -302,45 +436,87 @@ struct JobDetailView: View {
       error = nil
     } catch { self.error = error.localizedDescription }
   }
+  private func script() async throws -> String {
+    let value =
+      store.demo
+      ? JSONValue.object(["script_content": .string(LaunchDraft.sample.script)])
+      : try await store.client.orThrow().document(id, kind: "script")
+    return value.object.text("script_content")
+  }
   private func fetchDocument(_ kind: String) {
     Task {
       do {
-        let value =
-          store.demo
-          ? JSONValue.object(["script_content": .string(LaunchDraft.sample.script)])
-          : try await store.client!.document(id, kind: kind)
+        let text: String
+        if kind == "script" {
+          text = try await script()
+        } else if store.demo {
+          text = JSONValue.object(["job_id": .string(id.number)]).pretty
+        } else {
+          text = try await store.client.orThrow().document(id, kind: kind).pretty
+        }
         document = DocumentItem(
-          title: kind.capitalized,
-          text: kind == "script" ? value.object.text("script_content") : value.pretty)
+          title: kind == "script" ? "Submission script" : "Launch manifest", text: text)
       } catch { self.error = error.localizedDescription }
     }
   }
   private func prepareRelaunch(_ job: Job) {
-    loading = true
+    preparingRelaunch = true
     Task {
-      defer { loading = false }
-      do {
-        let script =
-          store.demo
-          ? JSONValue.object(["script_content": .string(LaunchDraft.sample.script)])
-          : try await store.client!.document(id, kind: "script")
-        var draft = LaunchDraft()
-        draft.host = id.host
-        draft.name = job.name
-        draft.partition = job.partition
-        draft.script = script.object.text("script_content")
-        guard !draft.script.isEmpty else {
-          throw APIError(status: 0, message: "The submission script is unavailable.")
-        }
-        draft.provenance =
-          "Prepared from \(id.host) / #\(id.number). Review resource and sync settings before launching."
-        if let api = store.client, let manifest = try? await api.document(id, kind: "manifest") {
-          draft.extraFields["launch_manifest"] = manifest
-        }
-        try store.saveDraft(draft)
-        store.openDraft(draft)
-      } catch { self.error = error.localizedDescription }
+      defer { preparingRelaunch = false }
+      do { store.openDraft(try await store.relaunchDraft(for: job)) } catch {
+        self.error = error.localizedDescription
+      }
     }
+  }
+}
+
+extension Optional where Wrapped == APIClient {
+  func orThrow() throws -> APIClient {
+    guard let self else { throw APIError(status: 0, message: "Not connected to a server.") }
+    return self
+  }
+}
+
+/// The last few lines of stdout, so a job's progress is visible without opening the viewer.
+struct OutputTail: View {
+  var id: JobID
+  var active: Bool
+  @Environment(AppStore.self) private var store
+  @State private var lines: [String] = []
+  @State private var state = "Loading…"
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if lines.isEmpty {
+        Text(state).font(.subheadline).foregroundStyle(.secondary)
+      } else {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+            Text(line.isEmpty ? " " : line).lineLimit(1).truncationMode(.tail)
+          }
+        }
+        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.primary.opacity(0.85))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10).background(Theme.code, in: RoundedRectangle(cornerRadius: 8))
+      }
+    }
+    .padding(.vertical, 4)
+    .task(id: active ? store.refreshRevision : 0) { await load() }
+  }
+  private func load() async {
+    let text: String
+    if store.demo {
+      text = DemoData.output("stdout")
+    } else if let api = store.client {
+      do { text = try await api.output(id, source: "stdout").stdout ?? "" } catch {
+        state = "Output unavailable"
+        return
+      }
+    } else {
+      return
+    }
+    let all = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    lines = Array(all.reversed().drop(while: \.isEmpty).prefix(6).reversed())
+    if lines.isEmpty { state = "No output yet" }
   }
 }
 
@@ -354,38 +530,55 @@ struct DocumentView: View {
   @Environment(\.dismiss) private var dismiss
   var body: some View {
     ScrollView([.horizontal, .vertical]) {
-      Text(item.text).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(
-        20)
+      Text(item.text).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+        .padding(16)
     }
-    .background(Theme.canvas).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline)
+    .background(Theme.code).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
       ToolbarItem(placement: .topBarLeading) { ShareLink(item: item.text) }
     }
   }
 }
+
 struct ArrayDetailView: View {
   var id: JobID
   @Environment(AppStore.self) private var store
   var body: some View {
-    Screen {
+    Group {
       if let group = store.arrays.first(where: { $0.id == id }) {
-        Text(group.job_name).font(.largeTitle.bold())
-        Notice(
-          title: "\(group.total_tasks) tasks",
-          detail:
-            "\(group.running_count) running · \(group.pending_count) pending · \(group.completed_count) completed · \(group.failed_count) failed"
-        )
-        ForEach(group.tasks) { task in
-          NavigationLink(value: Route.job(JobID(host: id.host, number: task.number))) {
-            JobRow(job: task)
-          }.buttonStyle(.plain)
+        List {
+          Section {
+            HStack(spacing: 8) {
+              count(group.running_count, "running", Theme.accent)
+              count(group.pending_count, "queued", Theme.amber)
+              count(group.completed_count, "done", Theme.green)
+              count(group.failed_count, "failed", Theme.red)
+            }
+            .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+          }
+          Section("\(group.total_tasks) tasks") {
+            ForEach(group.tasks) { task in
+              let taskID = JobID(host: id.host, number: task.number)
+              NavigationLink(value: Route.job(taskID)) { JobRow(job: task, showHost: false) }
+            }
+          }
         }
+        .navigationTitle(group.job_name)
       } else {
-        EmptyState(
-          title: "Array unavailable", detail: "Refresh jobs to load this array.",
-          symbol: "square.grid.3x3")
+        ContentUnavailableView(
+          "Array unavailable", systemImage: "square.grid.3x3",
+          description: Text("Refresh jobs to load this array."))
       }
-    }.navigationTitle("Job array").navigationBarTitleDisplayMode(.inline)
+    }
+    .navigationSubtitle("\(id.host) · #\(id.number)")
+  }
+  private func count(_ value: Int, _ label: String, _ color: Color) -> some View {
+    VStack(spacing: 2) {
+      Text("\(value)").font(.title2.weight(.semibold).monospacedDigit()).foregroundStyle(color)
+      Text(label).font(.caption).foregroundStyle(.secondary)
+    }
+    .frame(maxWidth: .infinity).padding(.vertical, 10)
+    .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
   }
 }

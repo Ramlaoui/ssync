@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WidgetKit
 
-enum AppTab: String, CaseIterable { case jobs, hosts, watchers, launch }
+enum AppTab: String, CaseIterable { case jobs, cluster, activity }
 enum Route: Hashable {
   case job(JobID)
   case output(JobID)
@@ -10,6 +10,12 @@ enum Route: Hashable {
   case partition(String, String)
   case watcher(Int)
   case array(JobID)
+  case history
+}
+/// Launches are modal tasks presented over whichever tab the user is in.
+struct LaunchRequest: Identifiable {
+  let id = UUID()
+  var draft: LaunchDraft?
 }
 
 @MainActor @Observable final class AppStore {
@@ -31,12 +37,12 @@ enum Route: Hashable {
   var socketConnected = false
   var tab: AppTab = .jobs
   var jobPath: [Route] = []
-  var hostPath: [Route] = []
-  var watcherPath: [Route] = []
-  var launchPath: [Route] = []
+  var clusterPath: [Route] = []
+  var activityPath: [Route] = []
   var showSettings = false
+  var addingConnection = false
   var notificationJob: JobID?
-  var draftToOpen: LaunchDraft?
+  var launch: LaunchRequest?
   var drafts: [SavedDraft] = []
   var refreshRevision = 0
   var widgetPrivacy = UserDefaults.standard.bool(forKey: "widgetPrivacy") {
@@ -62,6 +68,14 @@ enum Route: Hashable {
       $0.state.order == $1.state.order
         ? $0.number.localizedStandardCompare($1.number) == .orderedDescending
         : $0.state.order < $1.state.order
+    }
+  }
+  /// Array tasks are reached through their array row rather than listed individually.
+  var listedJobs: [Job] {
+    let arrayIDs = Set(arrays.map(\.id))
+    return sortedJobs.filter { job in
+      guard let parent = job.arrayParent else { return !arrayIDs.contains(job.id) }
+      return !arrayIDs.contains(JobID(host: job.host, number: parent))
     }
   }
   var attentionJobs: [Job] {
@@ -118,11 +132,8 @@ enum Route: Hashable {
     receivedAt = nil
     error = nil
     watcherError = nil
-    jobPath = []
-    hostPath = []
-    watcherPath = []
-    launchPath = []
-    draftToOpen = nil
+    resetPaths()
+    launch = nil
     if selected.demo {
       hosts = DemoData.hosts
       jobs = DemoData.jobs
@@ -156,11 +167,10 @@ enum Route: Hashable {
     arrays = []
     drafts = []
     pins = []
+    acknowledgements = []
     receivedAt = nil
-    jobPath = []
-    hostPath = []
-    watcherPath = []
-    launchPath = []
+    resetPaths()
+    launch = nil
     publishSnapshot()
   }
 
@@ -376,9 +386,37 @@ enum Route: Hashable {
     try storage.saveDraft(draft, connectionID: id, template: template)
     reloadDrafts()
   }
-  func openDraft(_ draft: LaunchDraft) {
-    draftToOpen = draft
-    tab = .launch
+  func openDraft(_ draft: LaunchDraft? = nil) {
+    showSettings = false
+    launch = LaunchRequest(draft: draft)
+  }
+  /// Builds a draft from a job's stored script and manifest. Nothing is saved or submitted.
+  func relaunchDraft(for job: Job) async throws -> LaunchDraft {
+    var draft = LaunchDraft()
+    draft.host = job.host
+    draft.name = job.name
+    draft.partition = job.partition
+    if demo {
+      draft.script = LaunchDraft.sample.script
+    } else {
+      guard let api = client else {
+        throw APIError(status: 0, message: "Not connected to a server.")
+      }
+      draft.script = try await api.document(job.id, kind: "script").object.text("script_content")
+      if let manifest = try? await api.document(job.id, kind: "manifest") {
+        draft.extraFields["launch_manifest"] = manifest
+      }
+    }
+    guard !draft.script.isEmpty else {
+      throw APIError(status: 0, message: "The submission script is unavailable.")
+    }
+    draft.provenance = "Relaunch of \(job.host) / #\(job.number)"
+    return draft
+  }
+  private func resetPaths() {
+    jobPath = []
+    clusterPath = []
+    activityPath = []
   }
   func handleNotification(_ url: URL) {
     guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -416,14 +454,18 @@ enum Route: Hashable {
     case "job":
       guard let host = query["host"], let number = query["id"], !host.isEmpty, !number.isEmpty
       else { return }
+      showSettings = false
+      launch = nil
       tab = .jobs
-      jobPath = [.job(JobID(host: host, number: number))]
+      // Keep the user's place: push onto the stack unless the job is already on top.
+      let route = Route.job(JobID(host: host, number: number))
+      if jobPath.last != route { jobPath.append(route) }
     case "host":
       if let host = query["name"] {
-        tab = .hosts
-        hostPath = [.host(host)]
+        tab = .cluster
+        if clusterPath.last != .host(host) { clusterPath.append(.host(host)) }
       }
-    case "launch": tab = .launch
+    case "launch": openDraft()
     default: tab = .jobs
     }
   }

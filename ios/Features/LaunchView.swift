@@ -1,258 +1,392 @@
 import SwiftUI
 
-struct LaunchLibraryView: View {
+/// The modal launch task. It opens over any tab and closes back to where the user was.
+struct LaunchFlow: View {
+  var initial: LaunchDraft?
+  let connectionID: UUID
+  var body: some View {
+    NavigationStack {
+      if let initial {
+        if initial.launchID != nil || initial.submittedJobID != nil || initial.submissionUnknown {
+          LaunchStatusRoot(draft: initial, connectionID: connectionID)
+        } else {
+          LaunchEditor(initial: initial, connectionID: connectionID)
+        }
+      } else {
+        LaunchStart(connectionID: connectionID)
+      }
+    }
+    .interactiveDismissDisabled()
+  }
+}
+
+private struct LaunchStatusRoot: View {
+  @State var draft: LaunchDraft
+  let connectionID: UUID
+  var body: some View { LaunchReview(draft: $draft, connectionID: connectionID) }
+}
+
+struct LaunchStart: View {
+  let connectionID: UUID
   @Environment(AppStore.self) private var store
   @State private var editing: LaunchDraft?
+  @State private var loadingJob: JobID?
   @State private var error: String?
-  var body: some View {
-    Screen {
-      ConnectionStatus()
-      Button {
-        var draft = LaunchDraft()
-        draft.host = store.hosts.first?.hostname ?? ""
-        editing = draft
-      } label: {
-        Label("New launch", systemImage: "plus")
-      }.buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("newLaunch")
-      if let error { Notice(title: "Draft storage", detail: error, warning: true) }
-      SectionHeading(title: "Drafts", detail: "Saved on this device")
-      let drafts = store.drafts.filter { !$0.isTemplate }
-      if drafts.isEmpty {
-        EmptyState(
-          title: "No drafts",
-          detail: "Start a new launch or prepare a relaunch from a job.", symbol: "arrow.up.right")
-      }
-      ForEach(drafts) { saved in draftRow(saved, template: false) }
-      SectionHeading(title: "Your recipes")
-      ForEach(store.drafts.filter(\.isTemplate)) { saved in draftRow(saved, template: true) }
-      if store.demo {
-        Button {
-          editing = .sample
-        } label: {
-          Paper {
-            HStack {
-              Image("launch-recipe").foregroundStyle(Theme.accent)
-              VStack(alignment: .leading, spacing: 5) {
-                Text("Protein folding").font(.headline)
-                Text("4 GPUs · 32 CPUs · 8 hours").font(.caption).foregroundStyle(Theme.secondary)
-              }
-              Spacer()
-              Image(systemName: "arrow.up.right")
-            }
-          }
-        }.buttonStyle(.plain)
-      }
-    }.navigationTitle("Launch").navigationBarTitleDisplayMode(.inline).rootToolbar()
-      .sheet(item: $editing, onDismiss: { store.reloadDrafts() }) { draft in
-        if let connection = store.connection {
-          NavigationStack { LaunchEditor(initial: draft, connectionID: connection.id) }
-        }
-      }
-      .onAppear {
-        store.reloadDrafts()
-        openPending()
-      }
-      .onChange(of: store.draftToOpen?.id) { _, _ in openPending() }
+  private func decode(_ saved: SavedDraft) -> LaunchDraft? {
+    try? JSONDecoder().decode(LaunchDraft.self, from: saved.payload)
   }
-  private func openPending() {
-    if let draft = store.draftToOpen {
-      editing = draft
-      store.draftToOpen = nil
+  var recipes: [SavedDraft] { store.drafts.filter(\.isTemplate) }
+  var drafts: [(SavedDraft, LaunchDraft)] {
+    store.drafts.filter { !$0.isTemplate }.compactMap { saved in
+      guard let draft = decode(saved), draft.launchID == nil, draft.submittedJobID == nil,
+        !draft.submissionUnknown
+      else { return nil }
+      return (saved, draft)
     }
   }
-  private func draftRow(_ saved: SavedDraft, template: Bool) -> some View {
-    Button {
-      guard var draft = try? JSONDecoder().decode(LaunchDraft.self, from: saved.payload) else {
-        error = "This draft couldn’t be read."
-        return
-      }
-      if template {
-        draft.id = UUID()
-        draft.launchID = nil
-        draft.submittedJobID = nil
-        draft.submissionUnknown = false
-      }
-      editing = draft
-    } label: {
-      Paper {
-        HStack(spacing: 12) {
-          Image(systemName: template ? "square.stack" : "doc.text").foregroundStyle(Theme.accent)
-          VStack(alignment: .leading, spacing: 6) {
-            Text(saved.name.isEmpty ? "Untitled launch" : saved.name).font(.headline)
-            Text("Edited \(Format.age(saved.updatedAt).lowercased())").font(.caption)
-              .foregroundStyle(Theme.secondary)
+  var recentJobs: [Job] {
+    Array(
+      store.listedJobs.sorted {
+        $0.number.localizedStandardCompare($1.number) == .orderedDescending
+      }.prefix(5))
+  }
+  var body: some View {
+    List {
+      Section {
+        Button {
+          var draft = LaunchDraft()
+          draft.host = store.hosts.first?.hostname ?? ""
+          editing = draft
+        } label: {
+          Label("Blank script", systemImage: "doc.badge.plus")
+        }.accessibilityIdentifier("blankLaunch")
+        if store.demo {
+          Button {
+            editing = .sample
+          } label: {
+            Label("protein-fold recipe (sample)", systemImage: "square.stack")
           }
-          Spacer()
-          Image(systemName: "chevron.right").font(.caption)
         }
       }
-    }.buttonStyle(.plain).contextMenu {
-      Button("Delete \(template ? "recipe" : "draft")", role: .destructive) {
-        do {
-          if let connection = store.connection {
-            try store.storage.deleteDraft(saved.id, connectionID: connection.id)
-            store.reloadDrafts()
-          }
-        } catch { self.error = error.localizedDescription }
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.amber)
+          .font(.subheadline)
       }
+      if !recentJobs.isEmpty {
+        Section("Relaunch a recent job") {
+          ForEach(recentJobs) { job in
+            Button {
+              relaunch(job)
+            } label: {
+              HStack {
+                JobRow(job: job)
+                if loadingJob == job.id { ProgressView() }
+              }
+            }.tint(.primary).disabled(loadingJob != nil)
+          }
+        }
+      }
+      if !recipes.isEmpty {
+        Section("Recipes") {
+          ForEach(recipes) { saved in
+            Button {
+              guard var draft = decode(saved) else { return }
+              draft.id = UUID()
+              draft.launchID = nil
+              draft.submittedJobID = nil
+              draft.submissionUnknown = false
+              editing = draft
+            } label: {
+              Label(
+                saved.name.isEmpty ? "Untitled recipe" : saved.name, systemImage: "square.stack")
+            }.tint(.primary)
+              .swipeActions { deleteButton(saved) }
+          }
+        }
+      }
+      if !drafts.isEmpty {
+        Section("Drafts") {
+          ForEach(drafts, id: \.0.id) { saved, draft in
+            Button {
+              editing = draft
+            } label: {
+              LabeledContent {
+                Text(Format.age(saved.updatedAt)).font(.caption)
+              } label: {
+                Label(draft.name.isEmpty ? "Untitled launch" : draft.name, systemImage: "doc.text")
+              }
+            }.tint(.primary)
+              .swipeActions { deleteButton(saved) }
+          }
+        }
+      }
+    }
+    .navigationTitle("New launch")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) { Button("Cancel") { store.launch = nil } }
+    }
+    .navigationDestination(item: $editing) { draft in
+      LaunchEditor(initial: draft, connectionID: connectionID)
+    }
+    .onAppear { store.reloadDrafts() }
+  }
+  private func deleteButton(_ saved: SavedDraft) -> some View {
+    Button("Delete", systemImage: "trash", role: .destructive) {
+      do {
+        try store.storage.deleteDraft(saved.id, connectionID: connectionID)
+        store.reloadDrafts()
+      } catch { self.error = error.localizedDescription }
+    }
+  }
+  private func relaunch(_ job: Job) {
+    loadingJob = job.id
+    Task {
+      defer { loadingJob = nil }
+      do {
+        editing = try await store.relaunchDraft(for: job)
+        error = nil
+      } catch { self.error = error.localizedDescription }
     }
   }
 }
+
 struct LaunchEditor: View {
   var initial: LaunchDraft
   let connectionID: UUID
   @Environment(AppStore.self) private var store
-  @Environment(\.dismiss) private var dismiss
   @State private var draft: LaunchDraft
-  @State private var showBrowser = false
   @State private var review = false
   @State private var error: String?
+  @State private var confirmClose = false
   @State private var recipeSaved = false
   init(initial: LaunchDraft, connectionID: UUID) {
     self.initial = initial
     self.connectionID = connectionID
     _draft = State(initialValue: initial)
   }
+  var partitions: [String] {
+    let known =
+      store.partitions.first { $0.hostname == draft.host }?.partitions.map {
+        $0.partition.trimmingCharacters(in: CharacterSet(charactersIn: "*"))
+      } ?? []
+    return draft.partition.isEmpty || known.contains(draft.partition)
+      ? known : known + [draft.partition]
+  }
   var body: some View {
     Form {
-      if let provenance = draft.provenance {
-        Section { Text(provenance).font(.caption).foregroundStyle(.secondary) }
-      }
       if draft.submissionUnknown {
         Section {
-          Text(
-            "Submission result unknown. Check recent jobs before launching again. This draft is locked to prevent an accidental duplicate."
+          Label(
+            "The last submission's result is unknown. Check recent jobs before launching again.",
+            systemImage: "exclamationmark.triangle"
           ).foregroundStyle(Theme.amber)
         }
       }
-      Section("Destination") {
+      Section {
         TextField("Job name", text: $draft.name).accessibilityIdentifier("launchName")
+          .textInputAutocapitalization(.never).autocorrectionDisabled()
         Picker("Host", selection: $draft.host) {
-          Text("Choose host").tag("")
+          if draft.host.isEmpty { Text("Choose").tag("") }
           ForEach(store.hosts) { Text($0.hostname).tag($0.hostname) }
         }
-        TextField("Partition (server default if blank)", text: $draft.partition)
-          .textInputAutocapitalization(.never)
-      }
-      Section {
-        Toggle("Sync a source directory", isOn: $draft.syncSource)
-        if draft.syncSource {
-          TextField("Directory on the API server", text: $draft.source).textInputAutocapitalization(
-            .never
-          ).autocorrectionDisabled()
-          Button("Browse server directories", systemImage: "folder") { showBrowser = true }
-          Toggle("Respect .gitignore", isOn: $draft.useGitignore)
-          TextField(
-            "Additional include patterns (one per line)", text: $draft.include, axis: .vertical
-          ).textInputAutocapitalization(.never)
-          TextField("Exclude patterns (one per line)", text: $draft.exclude, axis: .vertical)
-            .textInputAutocapitalization(.never)
+        Picker("Partition", selection: $draft.partition) {
+          Text("Default").tag("")
+          ForEach(partitions, id: \.self) { Text($0).tag($0) }
         }
-      } header: {
-        Text("Source")
       } footer: {
-        Text(
-          "The source belongs to the ssync API server, not this iPhone. Leave sync off to submit a script without copying a source directory."
-        )
+        if let provenance = draft.provenance { Text(provenance) }
       }
-      Section("Submission script") {
-        TextEditor(text: $draft.script).font(.system(.caption, design: .monospaced))
-          .frame(minHeight: 220).textInputAutocapitalization(.never).autocorrectionDisabled()
-          .accessibilityIdentifier("launchScript")
-      }
-      Section {
+      Section("Resources") {
         numberField("CPUs", text: $draft.cpus)
-        numberField("Memory (GB)", text: $draft.memory)
-        numberField("Time limit (minutes)", text: $draft.minutes)
-        numberField("Nodes", text: $draft.nodes)
+        numberField("Memory", unit: "GB", text: $draft.memory)
         numberField("GPUs per node", text: $draft.gpus)
-        numberField("Tasks per node", text: $draft.tasksPerNode)
-      } header: {
-        Text("Resources")
-      } footer: {
-        Text(
-          "Blank values retain the script or server defaults. Explicit values override script directives. Review final scheduler requests before submitting."
-        )
+        numberField("Nodes", text: $draft.nodes)
+        numberField(
+          "Time limit", unit: Int(draft.minutes).map { Format.duration("\($0):00") } ?? "min",
+          text: $draft.minutes)
       }
-      Section("Advanced") {
-        TextField("Account", text: $draft.account)
-        TextField("Quality of service", text: $draft.qos)
-        TextField("Constraint", text: $draft.constraint)
-        TextField("GRES", text: $draft.gres)
-        TextField("stdout path", text: $draft.output)
-        TextField("stderr path", text: $draft.errorOutput)
-        TextField("Python environment", text: $draft.pythonEnvironment)
-        Toggle("Stop if environment setup fails", isOn: $draft.abortOnSetupFailure)
-      }.textInputAutocapitalization(.never).autocorrectionDisabled()
-      if let error { Section { Text(error).foregroundStyle(Theme.red) } }
       Section {
-        Button("Review launch", systemImage: "arrow.up.right") {
+        NavigationLink {
+          ScriptEditor(script: $draft.script)
+        } label: {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Script")
+            Text(scriptPreview).font(.system(.caption2, design: .monospaced))
+              .foregroundStyle(.secondary).lineLimit(4)
+          }
+        }
+        NavigationLink {
+          SourceSyncForm(draft: $draft)
+        } label: {
+          LabeledContent(
+            "Source sync",
+            value: draft.syncSource ? (draft.source.isEmpty ? "On" : draft.source) : "Off")
+        }
+        NavigationLink {
+          AdvancedLaunchForm(draft: $draft)
+        } label: {
+          LabeledContent("Advanced", value: advancedSummary)
+        }
+      }
+      if let error { Section { Text(error).foregroundStyle(Theme.red) } }
+    }
+    .navigationTitle(draft.name.isEmpty ? "New launch" : draft.name)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button("Cancel") {
+          if draft == initial { store.launch = nil } else { confirmClose = true }
+        }
+      }
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          Button("Save draft", systemImage: "square.and.arrow.down") {
+            if persist() { store.launch = nil }
+          }
+          Button(recipeSaved ? "Saved as recipe" : "Save as recipe", systemImage: "square.stack") {
+            saveRecipe()
+          }
+        } label: {
+          Label("Save", systemImage: "ellipsis")
+        }
+      }
+      ToolbarItem(placement: .confirmationAction) {
+        Button("Review") {
           if let validation = draft.validation {
             error = validation
           } else {
-            persist()
+            error = nil
             review = true
           }
-        }.disabled(draft.submissionUnknown || draft.submittedJobID != nil || draft.launchID != nil)
-          .accessibilityIdentifier("reviewLaunch")
-        if draft.launchID != nil || draft.submittedJobID != nil {
-          Button("View submission status") { review = true }
         }
-        Button(
-          recipeSaved ? "Recipe saved" : "Save a copy as a recipe", systemImage: "square.stack"
-        ) {
-          var recipe = draft
-          recipe.id = UUID()
-          recipe.launchID = nil
-          recipe.submittedJobID = nil
-          recipe.submissionUnknown = false
-          do {
-            try store.saveDraft(recipe, for: connectionID, template: true)
-            recipeSaved = true
-          } catch { self.error = error.localizedDescription }
-        }
+        .disabled(draft.submissionUnknown)
+        .accessibilityIdentifier("reviewLaunch")
       }
-    }.navigationTitle(draft.name.isEmpty ? "New launch" : draft.name).navigationBarTitleDisplayMode(
-      .inline
-    )
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        Button("Save & close") {
-          persist()
-          dismiss()
-        }
-      }
+    }
+    .confirmationDialog("Keep this launch?", isPresented: $confirmClose) {
+      Button("Save draft") { if persist() { store.launch = nil } }
+      Button("Discard", role: .destructive) { store.launch = nil }
     }
     .navigationDestination(isPresented: $review) {
       LaunchReview(draft: $draft, connectionID: connectionID)
     }
-    .sheet(isPresented: $showBrowser) {
-      NavigationStack { ServerDirectoryBrowser(selected: $draft.source) }
-    }
-    .task(id: draft) {
-      do {
-        try await Task.sleep(for: .milliseconds(600))
-        persist()
-      } catch {}
-    }
-    .onDisappear { persist() }
-    .onChange(of: store.tab) { _, tab in if tab != .launch { dismiss() } }
-    .onChange(of: store.connection?.id) { _, id in if id != connectionID { dismiss() } }
+    .onChange(of: store.connection?.id) { _, id in if id != connectionID { store.launch = nil } }
   }
-  private func numberField(_ title: String, text: Binding<String>) -> some View {
-    HStack {
-      Text(title)
-      Spacer()
-      TextField("Default", text: text).keyboardType(.numberPad).multilineTextAlignment(.trailing)
-        .frame(maxWidth: 120)
+  private var scriptPreview: String {
+    draft.script.split(separator: "\n").filter {
+      !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("#!")
+    }.prefix(4).joined(separator: "\n")
+  }
+  private var advancedSummary: String {
+    let set = [
+      draft.account, draft.qos, draft.constraint, draft.gres, draft.output, draft.errorOutput,
+      draft.pythonEnvironment, draft.tasksPerNode,
+    ].filter { !$0.isEmpty }.count
+    return set == 0 ? "Defaults" : "\(set) set"
+  }
+  private func numberField(_ title: String, unit: String? = nil, text: Binding<String>)
+    -> some View
+  {
+    LabeledContent(title) {
+      HStack(spacing: 6) {
+        TextField("Default", text: text).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+        if let unit, !text.wrappedValue.isEmpty {
+          Text(unit).foregroundStyle(.secondary)
+        }
+      }.frame(maxWidth: 160)
     }
   }
-  private func persist() {
-    do { try store.saveDraft(draft, for: connectionID) } catch {
+  @discardableResult private func persist() -> Bool {
+    do {
+      try store.saveDraft(draft, for: connectionID)
+      return true
+    } catch {
       self.error = error.localizedDescription
+      return false
+    }
+  }
+  private func saveRecipe() {
+    var recipe = draft
+    recipe.id = UUID()
+    recipe.launchID = nil
+    recipe.submittedJobID = nil
+    recipe.submissionUnknown = false
+    recipe.provenance = nil
+    do {
+      try store.saveDraft(recipe, for: connectionID, template: true)
+      recipeSaved = true
+    } catch { self.error = error.localizedDescription }
+  }
+}
+
+struct ScriptEditor: View {
+  @Binding var script: String
+  var body: some View {
+    TextEditor(text: $script)
+      .font(.system(.footnote, design: .monospaced))
+      .textInputAutocapitalization(.never).autocorrectionDisabled()
+      .scrollContentBackground(.hidden).background(Theme.code)
+      .accessibilityIdentifier("launchScript")
+      .navigationTitle("Script").navigationBarTitleDisplayMode(.inline)
+  }
+}
+
+struct SourceSyncForm: View {
+  @Binding var draft: LaunchDraft
+  @State private var browsing = false
+  var body: some View {
+    Form {
+      Section {
+        Toggle("Sync a source directory", isOn: $draft.syncSource)
+      } footer: {
+        Text("Copies a directory from the ssync API server (not this iPhone) before submitting.")
+      }
+      if draft.syncSource {
+        Section("Directory") {
+          TextField("Path on the API server", text: $draft.source)
+          Button("Browse…", systemImage: "folder") { browsing = true }
+        }
+        Section("Filters") {
+          Toggle("Respect .gitignore", isOn: $draft.useGitignore)
+          TextField("Include patterns, one per line", text: $draft.include, axis: .vertical)
+          TextField("Exclude patterns, one per line", text: $draft.exclude, axis: .vertical)
+        }
+      }
+    }
+    .textInputAutocapitalization(.never).autocorrectionDisabled()
+    .navigationTitle("Source sync").navigationBarTitleDisplayMode(.inline)
+    .sheet(isPresented: $browsing) {
+      NavigationStack { ServerDirectoryBrowser(selected: $draft.source) }
     }
   }
 }
+
+struct AdvancedLaunchForm: View {
+  @Binding var draft: LaunchDraft
+  var body: some View {
+    Form {
+      Section("Scheduler") {
+        TextField("Account", text: $draft.account)
+        TextField("Quality of service", text: $draft.qos)
+        TextField("Constraint", text: $draft.constraint)
+        TextField("GRES", text: $draft.gres)
+        TextField("Tasks per node", text: $draft.tasksPerNode).keyboardType(.numberPad)
+      }
+      Section("Output files") {
+        TextField("stdout path", text: $draft.output)
+        TextField("stderr path", text: $draft.errorOutput)
+      }
+      Section("Environment") {
+        TextField("Python environment", text: $draft.pythonEnvironment)
+        Toggle("Stop if setup fails", isOn: $draft.abortOnSetupFailure)
+      }
+    }
+    .textInputAutocapitalization(.never).autocorrectionDisabled()
+    .navigationTitle("Advanced").navigationBarTitleDisplayMode(.inline)
+  }
+}
+
 struct LaunchReview: View {
   @Binding var draft: LaunchDraft
   let connectionID: UUID
@@ -260,102 +394,104 @@ struct LaunchReview: View {
   @State private var submitting = false
   @State private var status: JSONValue?
   @State private var error: String?
-  @State private var confirmed = false
   var body: some View {
-    Screen {
-      Text(draft.name.isEmpty ? "Untitled launch" : draft.name).font(
-        .system(.largeTitle, design: .rounded).weight(.bold))
-      Paper {
-        VStack(spacing: 16) {
-          DetailRow(name: "Host", value: draft.host)
-          DetailRow(
-            name: "Partition",
-            value: draft.partition.isEmpty ? "Script / server default" : draft.partition)
-          DetailRow(name: "Source sync", value: draft.syncSource ? draft.source : "Off")
-          Divider()
-          DetailRow(name: "CPUs", value: defaultText(draft.cpus))
-          DetailRow(
-            name: "Memory",
-            value: draft.memory.isEmpty ? "Script / server default" : "\(draft.memory) GB")
-          DetailRow(
-            name: "Wall time",
-            value: draft.minutes.isEmpty ? "Script / server default" : "\(draft.minutes) minutes")
-          DetailRow(name: "GPUs per node", value: defaultText(draft.gpus))
-          DetailRow(name: "Nodes", value: defaultText(draft.nodes))
-          DetailRow(name: "Account", value: defaultText(draft.account))
+    List {
+      Section {
+        LabeledContent("Host", value: draft.host)
+        LabeledContent("Partition", value: draft.partition.isEmpty ? "Default" : draft.partition)
+        LabeledContent("Resources", value: resources)
+        LabeledContent(
+          "Time limit",
+          value: draft.minutes.isEmpty ? "Default" : Format.duration("\(draft.minutes):00"))
+        LabeledContent("Source sync", value: draft.syncSource ? draft.source : "Off")
+      } footer: {
+        Text("Values left as default come from the script's #SBATCH lines or the server.")
+      }
+      Section {
+        DisclosureGroup("Script") {
+          Text(draft.script).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+        }
+        DisclosureGroup("Exact request") {
+          Text(draft.requestBody.pretty).font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
         }
       }
-      DisclosureGroup("Submission script") {
-        Text(draft.script).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading).padding(.top)
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.amber)
       }
-      DisclosureGroup("Exact request") {
-        Text(draft.requestBody.pretty).font(.system(.caption, design: .monospaced)).textSelection(
-          .enabled
-        ).frame(maxWidth: .infinity, alignment: .leading).padding(.top)
+      if let status { statusSection(status.object) }
+      Section { footer }
+        .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+    }
+    .navigationTitle(draft.name.isEmpty ? "Review" : draft.name)
+    .navigationSubtitle("Review before submitting")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      if draft.launchID != nil || draft.submittedJobID != nil || draft.submissionUnknown {
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { store.launch = nil } }
       }
-      if let error { Notice(title: "Launch status", detail: error, warning: true) }
-      if let status {
-        let fields = status.object
-        Notice(
-          title: fields.text("stage", fallback: "Submitting").replacingOccurrences(
-            of: "_", with: " "
-          ).capitalized, detail: fields.text("message"),
-          symbol: fields.flag("terminal")
-            ? "checkmark.circle" : "arrow.trianglehead.2.clockwise.rotate.90")
-        ForEach(Array((fields["events"]?.array ?? []).enumerated()), id: \.offset) { _, event in
-          Text(event.object.text("message", fallback: event.pretty)).font(.caption).foregroundStyle(
-            Theme.secondary)
-        }
+    }
+    .task(id: draft.launchID) { await watchStatus() }
+  }
+  private var resources: String {
+    let parts = [
+      draft.cpus.isEmpty ? nil : "\(draft.cpus) CPU",
+      draft.memory.isEmpty ? nil : "\(draft.memory) GB",
+      draft.gpus.isEmpty ? nil : "\(draft.gpus) GPU/node",
+      draft.nodes.isEmpty ? nil : "\(draft.nodes) node",
+    ].compactMap { $0 }
+    return parts.isEmpty ? "Default" : parts.joined(separator: " · ")
+  }
+  private func statusSection(_ fields: [String: JSONValue]) -> some View {
+    Section("Status") {
+      Label(
+        fields.text("stage", fallback: "Submitting").replacingOccurrences(of: "_", with: " ")
+          .capitalized,
+        systemImage: fields.flag("terminal")
+          ? "checkmark.circle" : "arrow.trianglehead.2.clockwise.rotate.90")
+      ForEach(Array((fields["events"]?.array ?? []).enumerated()), id: \.offset) { _, event in
+        Text(event.object.text("message", fallback: event.pretty)).font(.caption)
+          .foregroundStyle(.secondary)
       }
+    }
+  }
+  @ViewBuilder private var footer: some View {
+    VStack(spacing: 10) {
       if let number = draft.submittedJobID {
-        Notice(
-          title: "Job #\(number) submitted", detail: "\(draft.host) has received this job.",
-          symbol: "checkmark.circle")
-        Button("Open job", systemImage: "arrow.up.right") {
-          store.showSettings = false
-          store.handle(
-            SystemJob(
-              host: draft.host, number: number, name: draft.name, state: "", runtime: "",
-              pinned: false
-            ).url(connection: store.connection?.id))
-        }.buttonStyle(PrimaryButtonStyle())
-      } else if submitting {
-        ProgressView("Submitting to \(draft.host)…").frame(maxWidth: .infinity).padding()
+        Label("Submitted as #\(number) on \(draft.host)", systemImage: "checkmark.circle.fill")
+          .foregroundStyle(Theme.green).font(.headline)
+        Button {
+          store.launch = nil
+          store.tab = .jobs
+          store.jobPath.append(.job(JobID(host: draft.host, number: number)))
+        } label: {
+          Text("Open job").frame(maxWidth: .infinity)
+        }.buttonStyle(.borderedProminent).controlSize(.large)
       } else if draft.submissionUnknown {
-        Notice(
-          title: "Result not yet known",
-          detail:
-            "A connection failure does not mean submission failed. Check recent jobs on \(draft.host) before preparing another launch.",
-          warning: true)
-      } else if draft.launchID == nil {
-        Toggle("I have reviewed the script and resource request", isOn: $confirmed).font(
-          .subheadline)
+        Text(
+          "The connection dropped during submission, so the result is unknown. Check recent jobs on \(draft.host) before launching again."
+        ).font(.subheadline).foregroundStyle(Theme.amber)
+      } else if draft.launchID != nil {
+        ProgressView("Waiting for \(draft.host)…")
+      } else {
         Button {
           Task { await submit() }
         } label: {
           HStack {
-            if submitting { ProgressView().tint(Theme.onAccent) }
-            Text(store.demo ? "Simulate launch" : "Submit to \(draft.host)")
-            Image(systemName: "arrow.up.right")
-          }
+            if submitting { ProgressView().tint(.white) }
+            Text(store.demo ? "Simulate launch on \(draft.host)" : "Submit to \(draft.host)")
+          }.frame(maxWidth: .infinity)
         }
-        .buttonStyle(PrimaryButtonStyle()).disabled(
-          !confirmed || submitting || draft.validation != nil
-        )
+        .buttonStyle(.borderedProminent).controlSize(.large)
+        .disabled(submitting || draft.validation != nil)
         .accessibilityIdentifier("submitLaunch")
         Text(
           store.demo
-            ? "This demo creates a sample job only."
-            : "Submission can consume cluster resources. ssync will keep the operation ID so you can return to its status."
-        )
-        .font(.caption).foregroundStyle(Theme.secondary)
+            ? "Demo: this creates a sample job only."
+            : "This uses cluster resources. You can close this sheet; progress is kept in Activity."
+        ).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
       }
-    }.navigationTitle("Review launch").navigationBarTitleDisplayMode(.inline)
-      .task(id: draft.launchID) { await watchStatus() }
-  }
-  private func defaultText(_ text: String) -> String {
-    text.isEmpty ? "Script / server default" : text
+    }.frame(maxWidth: .infinity).padding(.vertical, 8)
   }
   private func submit() async {
     guard store.connection?.id == connectionID, !submitting, draft.validation == nil,
@@ -424,6 +560,7 @@ struct LaunchReview: View {
     }
   }
 }
+
 struct ServerDirectoryBrowser: View {
   @Binding var selected: String
   @Environment(AppStore.self) private var store
@@ -437,30 +574,42 @@ struct ServerDirectoryBrowser: View {
       Section {
         TextField("Directory path", text: $path).textInputAutocapitalization(.never)
           .autocorrectionDisabled().onSubmit { Task { await load(path) } }
-        Button("Open path") { Task { await load(path) } }
-        Button("Use this directory") {
+          .font(.system(.body, design: .monospaced))
+      } footer: {
+        Text("Folders on the ssync API server.")
+      }
+      if let error { Text(error).foregroundStyle(Theme.red) }
+      Section {
+        if !path.isEmpty && path != "/" {
+          Button("Parent folder", systemImage: "arrow.turn.left.up") {
+            Task { await load((path as NSString).deletingLastPathComponent) }
+          }
+        }
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+          Button {
+            Task { await load(entry.object.text("path")) }
+          } label: {
+            Label(entry.object.text("name"), systemImage: "folder")
+          }.tint(.primary)
+        }
+      }
+    }
+    .overlay { if loading { ProgressView() } }
+    .navigationTitle(
+      (path as NSString).lastPathComponent.isEmpty
+        ? "Choose folder" : (path as NSString).lastPathComponent
+    )
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+      ToolbarItem(placement: .confirmationAction) {
+        Button("Use folder") {
           selected = path
           dismiss()
         }.disabled(path.isEmpty)
-      } header: {
-        Text("On the ssync API server")
       }
-      if let error { Text(error).foregroundStyle(Theme.red) }
-      if loading { ProgressView() }
-      if !path.isEmpty {
-        Button("Parent directory", systemImage: "arrow.up") {
-          Task { await load((path as NSString).deletingLastPathComponent) }
-        }
-      }
-      ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-        Button {
-          Task { await load(entry.object.text("path")) }
-        } label: {
-          Label(entry.object.text("name"), systemImage: "folder")
-        }
-      }
-    }.navigationTitle("Choose source").toolbar { Button("Cancel") { dismiss() } }
-      .task { await load(selected) }
+    }
+    .task { await load(selected) }
   }
   private func load(_ target: String) async {
     loading = true
@@ -474,7 +623,7 @@ struct ServerDirectoryBrowser: View {
       return
     }
     do {
-      let value: JSONValue = try await store.client!.send(
+      let value: JSONValue = try await store.client.orThrow().send(
         "api/local/list", query: ["path": target, "dirs_only": "true", "limit": "300"])
       path = value.object.text("path")
       entries = value.object["entries"]?.array ?? []

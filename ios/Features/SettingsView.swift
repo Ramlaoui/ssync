@@ -3,144 +3,229 @@ import SwiftUI
 struct SettingsView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
-  @State private var adding = false
   @State private var error: String?
   @State private var forget: Connection?
   @State private var notifications = NotificationService.shared
   @State private var preferences: [String: JSONValue] = [:]
   @State private var providers: JSONValue?
   @State private var saving = false
-  @State private var allowedStates = ""
-  @State private var mutedHosts = ""
+  @State private var saved = false
+  @State private var testSent = false
+  @State private var allowedStates: Set<String> = []
+  @State private var mutedHosts: Set<String> = []
   @State private var mutedNames = ""
   @State private var allowedUsers = ""
-  @State private var toast: String?
+  private let states = [
+    ("R", "Started running"), ("PD", "Queued"), ("CD", "Completed"), ("F", "Failed"),
+    ("TO", "Timed out"), ("CA", "Cancelled"),
+  ]
+  private var version: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+  }
+
   var body: some View {
     @Bindable var store = store
     Form {
-      Section("Connection") {
-        if let connection = store.connection {
-          LabeledContent("Workspace", value: connection.demo ? "Demo workspace" : connection.name)
-          if !connection.demo { Text(connection.baseURL).font(.caption).textSelection(.enabled) }
-        }
-        Button("Add or switch connection", systemImage: "server.rack") { adding = true }
-        Button("Disconnect", role: .destructive) {
-          store.disconnect()
-          dismiss()
-        }
-        ForEach(store.connections) { connection in
-          Button("Forget \(connection.name)", role: .destructive) { forget = connection }
-        }
-      }
       Section {
-        LabeledContent("Permission", value: notifications.status)
-        LabeledContent(
-          "Device", value: store.demo ? "Demo — no registration" : notifications.registration)
-        Button("Enable notifications") { Task { await notifications.enable(api: store.client) } }
-          .disabled(store.demo)
-        Button("Open iOS notification settings") {
-          if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
-            UIApplication.shared.open(url)
-          }
-        }
-        if let error = notifications.error { Text(error).foregroundStyle(Theme.red).font(.caption) }
-        if let providers {
-          LabeledContent(
-            "Server push delivery",
-            value: providers.object["providers"]?.object["apns"]?.bool == true
-              ? "Configured" : "Not configured")
-        }
-        Button("Send a test notification") {
-          Task {
-            do {
-              guard let token = UserDefaults.standard.string(forKey: "apnsToken"),
-                let api = store.client
-              else {
-                throw APIError(
-                  status: 0, message: "Enable notifications and register this device first.")
+        ForEach(store.connections) { connection in
+          Button {
+            store.select(connection)
+            store.startMonitoring()
+          } label: {
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(connection.name).foregroundStyle(.primary)
+                Text(connection.baseURL).font(.caption).foregroundStyle(.secondary)
               }
-              try await api.perform(
-                "api/notifications/test",
-                body: .object([
-                  "title": .string("ssync is connected"),
-                  "body": .string("Your job updates will arrive here."), "token": .string(token),
-                  "token_type": .string("apns"),
-                ]))
-              toast = "Test notification requested."
-            } catch { self.error = error.localizedDescription }
+              Spacer()
+              if connection.id == store.connection?.id {
+                Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+              }
+            }
           }
-        }.disabled(store.demo)
+          .swipeActions {
+            Button("Forget", role: .destructive) { forget = connection }
+          }
+        }
+        Button("Add server…", systemImage: "plus") { store.addingConnection = true }
+        if store.demo {
+          Button("Leave demo", role: .destructive) {
+            store.disconnect()
+            dismiss()
+          }
+        }
       } header: {
-        Text("Notifications")
+        Text("Servers")
+      } footer: {
+        if !store.connections.isEmpty { Text("Swipe a server to forget it on this device.") }
       }
+
+      Section("Notifications") {
+        if notifications.status == "Allowed" {
+          LabeledContent("This device", value: notifications.registration)
+        } else {
+          Button("Turn on notifications") {
+            Task { await notifications.enable(api: store.client) }
+          }.disabled(store.demo)
+          if notifications.status == "Not allowed" {
+            Button("Open iOS Settings") {
+              if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                UIApplication.shared.open(url)
+              }
+            }
+          }
+        }
+        if let providers, providers.object["providers"]?.object["apns"]?.bool != true {
+          Label("Push isn't configured on the server", systemImage: "exclamationmark.triangle")
+            .foregroundStyle(Theme.amber).font(.subheadline)
+        }
+        if let error = notifications.error {
+          Text(error).foregroundStyle(Theme.red).font(.caption)
+        }
+        Button(testSent ? "Test sent" : "Send a test notification") { sendTest() }
+          .disabled(store.demo || testSent)
+      }
+
       if !store.demo && !preferences.isEmpty {
         Section {
           Toggle(
             "Job notifications",
             isOn: Binding(
               get: { preferences["enabled"]?.bool ?? true },
-              set: { preferences["enabled"] = .bool($0) }))
-          TextField("States: R, PD, CD, F, CA, TO", text: $allowedStates)
-          TextField("Muted hosts, comma separated", text: $mutedHosts)
-          TextField("Muted name patterns, comma separated", text: $mutedNames)
-          TextField("Allowed users, comma separated", text: $allowedUsers)
-          Button(saving ? "Saving…" : "Save server preferences") {
-            Task { await savePreferences() }
-          }.disabled(saving)
-        } header: {
-          Text("Server delivery rules")
+              set: {
+                preferences["enabled"] = .bool($0)
+                saved = false
+              }))
         } footer: {
-          Text(
-            "These preferences are shared by clients using this API key. Blank states use the server’s terminal-state default. A blank user list allows all users."
-          )
+          Text("Shared by every device using this server's API key.")
+        }
+        Section {
+          ForEach(states, id: \.0) { code, label in
+            Toggle(label, isOn: member(code, of: $allowedStates))
+          }
+        } header: {
+          Text("Notify when a job")
+        } footer: {
+          Text("With none selected, the server notifies for finished jobs.")
+        }
+        if !store.hosts.isEmpty {
+          Section("Hosts") {
+            ForEach(store.hosts) { host in
+              Toggle(
+                host.hostname,
+                isOn: Binding(
+                  get: { !mutedHosts.contains(host.hostname) },
+                  set: {
+                    if $0 {
+                      mutedHosts.remove(host.hostname)
+                    } else {
+                      mutedHosts.insert(host.hostname)
+                    }
+                    saved = false
+                  }))
+            }
+          }
+        }
+        Section {
+          TextField("Muted job names (patterns)", text: $mutedNames)
+          TextField("Only these users", text: $allowedUsers)
+          Button(saving ? "Saving…" : saved ? "Saved" : "Save notification rules") {
+            Task { await savePreferences() }
+          }.disabled(saving || saved)
+        } footer: {
+          Text("Comma separated. Leave users empty to include everyone.")
         }
         .textInputAutocapitalization(.never).autocorrectionDisabled()
+        .onChange(of: mutedNames) { _, _ in saved = false }
+        .onChange(of: allowedUsers) { _, _ in saved = false }
       }
-      Section("Widgets & Lock Screen") {
-        Toggle("Hide job data in widgets", isOn: $store.widgetPrivacy)
-        Button("End Live Activities") { Task { await LiveActivityService.shared.endAll() } }
-        Text(
-          "Widgets and Live Activities update while ssync is open. Check their last-update time."
-        )
-        .font(.caption).foregroundStyle(.secondary)
+
+      Section {
+        Toggle("Hide job details in widgets", isOn: $store.widgetPrivacy)
+        Button("End all Live Activities") { Task { await LiveActivityService.shared.endAll() } }
+      } header: {
+        Text("Widgets & Lock Screen")
+      } footer: {
+        Text("Widgets and Live Activities refresh while ssync is open.")
       }
-      Section("About") {
-        HStack {
-          RelayMark()
-          Text("ssync for iOS").font(.headline)
-          Spacer()
-          Text("0.1").foregroundStyle(.secondary)
-        }
+
+      Section {
+        LabeledContent("Version", value: version)
+      } footer: {
+        HStack(spacing: 6) {
+          RelayMark(size: 18)
+          Text("ssync for iOS")
+        }.frame(maxWidth: .infinity).padding(.top, 12)
       }
-      if let error { Section { Text(error).foregroundStyle(Theme.red) } }
-      if let toast { Section { Text(toast).foregroundStyle(Theme.green) } }
-    }.navigationTitle("Settings").toolbar {
+    }
+    .navigationTitle("Settings")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
       ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
     }
-    .sheet(isPresented: $adding) { ConnectionView(adding: true) }
+    .alert(
+      "Something went wrong",
+      isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })
+    ) {
+      Button("OK") {}
+    } message: {
+      Text(error ?? "")
+    }
     .confirmationDialog(
-      "Forget this connection and its local drafts?",
+      "Forget \(forget?.name ?? "this server")?",
       isPresented: Binding(get: { forget != nil }, set: { if !$0 { forget = nil } }),
       titleVisibility: .visible
     ) {
       if let forget {
-        Button("Forget connection", role: .destructive) {
-          Task {
-            do {
-              if let token = UserDefaults.standard.string(forKey: "apnsToken") {
-                let api = APIClient(connection: forget, apiKey: CredentialStore.read(forget.id))
-                try await api.perform("api/notifications/devices/\(token)", method: "DELETE")
-              }
-              try store.forget(forget)
-              self.forget = nil
-            } catch {
-              self.error = "Couldn’t remove this device registration: \(error.localizedDescription)"
-            }
-          }
-        }
+        Button("Forget server", role: .destructive) { forgetConnection(forget) }
       }
+    } message: {
+      Text("Removes its key, drafts, saved output, and this device's notification registration.")
     }
     .task { await load() }
+  }
+
+  private func member(_ code: String, of set: Binding<Set<String>>) -> Binding<Bool> {
+    Binding(
+      get: { set.wrappedValue.contains(code) },
+      set: {
+        if $0 { set.wrappedValue.insert(code) } else { set.wrappedValue.remove(code) }
+        saved = false
+      })
+  }
+  private func sendTest() {
+    Task {
+      do {
+        guard let token = UserDefaults.standard.string(forKey: "apnsToken"),
+          let api = store.client
+        else {
+          throw APIError(status: 0, message: "Turn on notifications for this device first.")
+        }
+        try await api.perform(
+          "api/notifications/test",
+          body: .object([
+            "title": .string("ssync is connected"),
+            "body": .string("Your job updates will arrive here."), "token": .string(token),
+            "token_type": .string("apns"),
+          ]))
+        testSent = true
+      } catch { self.error = error.localizedDescription }
+    }
+  }
+  private func forgetConnection(_ connection: Connection) {
+    Task {
+      do {
+        if let token = UserDefaults.standard.string(forKey: "apnsToken") {
+          let api = APIClient(connection: connection, apiKey: CredentialStore.read(connection.id))
+          try await api.perform("api/notifications/devices/\(token)", method: "DELETE")
+        }
+        try store.forget(connection)
+        forget = nil
+        if store.connection == nil { dismiss() }
+      } catch {
+        self.error = "Couldn’t remove this device registration: \(error.localizedDescription)"
+      }
+    }
   }
   private func load() async {
     await notifications.refresh()
@@ -154,33 +239,34 @@ struct SettingsView: View {
     do {
       let response: JSONValue = try await api.send("api/notifications/preferences")
       preferences = response.object
-      func list(_ name: String) -> String {
-        preferences[name]?.array.compactMap(\.string).joined(separator: ",") ?? ""
+      func list(_ name: String) -> [String] {
+        preferences[name]?.array.compactMap(\.string) ?? []
       }
-      allowedStates = list("allowed_states")
-      mutedHosts = list("muted_hosts")
-      mutedNames = list("muted_job_name_patterns")
-      allowedUsers = list("allowed_users")
+      allowedStates = Set(list("allowed_states"))
+      mutedHosts = Set(list("muted_hosts"))
+      mutedNames = list("muted_job_name_patterns").joined(separator: ", ")
+      allowedUsers = list("allowed_users").joined(separator: ", ")
       providers = try await api.send("api/notifications/status")
+      saved = true
     } catch { self.error = error.localizedDescription }
   }
   private func savePreferences() async {
     saving = true
     defer { saving = false }
-    for (key, text) in [
-      ("allowed_states", allowedStates), ("muted_hosts", mutedHosts),
-      ("muted_job_name_patterns", mutedNames), ("allowed_users", allowedUsers),
-    ] {
-      preferences[key] = .array(
-        text.split(separator: ",").map { .string($0.trimmingCharacters(in: .whitespaces)) })
+    func split(_ text: String) -> JSONValue {
+      .array(
+        text.split(separator: ",").map { .string($0.trimmingCharacters(in: .whitespaces)) }
+          .filter { $0.string?.isEmpty == false })
     }
-    if allowedStates.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      preferences["allowed_states"] = .null
-    }
+    preferences["allowed_states"] =
+      allowedStates.isEmpty ? .null : .array(allowedStates.sorted().map { .string($0) })
+    preferences["muted_hosts"] = .array(mutedHosts.sorted().map { .string($0) })
+    preferences["muted_job_name_patterns"] = split(mutedNames)
+    preferences["allowed_users"] = split(allowedUsers)
     do {
       try await store.client?.perform(
         "api/notifications/preferences", method: "PATCH", body: .object(preferences))
-      toast = "Server preferences saved."
+      saved = true
     } catch { self.error = error.localizedDescription }
   }
 }

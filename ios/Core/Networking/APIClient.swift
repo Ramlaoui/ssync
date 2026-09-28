@@ -113,6 +113,9 @@ struct APIClient: Sendable {
   func watcherEvents(_ id: Int) async throws -> WatcherEventsResponse {
     try await send("api/watchers/events", query: ["watcher_id": String(id), "limit": "200"])
   }
+  func recentWatcherEvents(limit: Int = 50) async throws -> WatcherEventsResponse {
+    try await send("api/watchers/events", query: ["limit": String(limit)])
+  }
   func cancel(_ id: JobID) async throws {
     try await perform("api/jobs/\(id.number)/cancel", query: ["host": id.host])
   }

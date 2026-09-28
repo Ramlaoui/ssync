@@ -11,78 +11,82 @@ struct ConnectionView: View {
   @State private var error: String?
   var body: some View {
     NavigationStack {
-      Screen {
-        HStack(spacing: 8) {
-          RelayMark(size: 44)
-          Text("ssync").font(.system(.largeTitle, design: .rounded).weight(.bold))
-        }.padding(.vertical, 12)
-        if !store.connections.isEmpty {
-          Eyebrow(title: "Saved connections")
-          ForEach(store.connections) { connection in
-            Button {
-              store.select(connection)
-              store.startMonitoring()
-              if adding { dismiss() }
-            } label: {
-              Paper {
-                HStack {
-                  Image(systemName: "server.rack")
-                  Text(connection.name)
-                  Spacer()
-                  Image(systemName: "arrow.right")
-                }
-              }
-            }.buttonStyle(.plain)
+      Form {
+        Section {
+          VStack(spacing: 10) {
+            RelayMark(size: 56)
+            Text("ssync").font(.largeTitle.weight(.bold))
+            Text("Your cluster work, within reach.").font(.subheadline)
+              .foregroundStyle(.secondary)
+          }
+          .frame(maxWidth: .infinity).padding(.vertical, 8)
+          .listRowBackground(Color.clear)
+        }
+        if !adding && !store.connections.isEmpty {
+          Section("Saved servers") {
+            ForEach(store.connections) { connection in
+              Button {
+                store.select(connection)
+                store.startMonitoring()
+              } label: {
+                LabeledContent(connection.name, value: URL(string: connection.baseURL)?.host ?? "")
+              }.tint(.primary)
+            }
           }
         }
-        Paper {
-          VStack(alignment: .leading, spacing: 16) {
-            Eyebrow(title: "Connect to ssync")
-            TextField("Connection name", text: $name).textContentType(.organizationName)
-            Divider()
-            TextField("https://ssync.example.com:8042", text: $address)
-              .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .accessibilityIdentifier("serverURL")
-            Divider()
-            SecureField("API key (if enabled)", text: $key).textInputAutocapitalization(.never)
-            Text(
-              "Enter your ssync server URL. HTTPS requires a certificate trusted by iOS."
-            )
-            .font(.caption).foregroundStyle(Theme.secondary)
+        Section {
+          TextField("https://ssync.example.com:8042", text: $address)
+            .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .accessibilityIdentifier("serverURL")
+          SecureField("API key (if enabled)", text: $key).textInputAutocapitalization(.never)
+          TextField("Name (optional)", text: $name)
+        } header: {
+          Text(adding ? "Add a server" : "Connect to your server")
+        } footer: {
+          Text("The address of your ssync API server. HTTPS needs a certificate trusted by iOS.")
+        }
+        if let error {
+          Section {
+            Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.amber)
           }
         }
-        if let error { Notice(title: "Couldn’t connect", detail: error, warning: true) }
-        Button {
-          busy = true
-          error = nil
-          Task {
-            do {
-              var url = address.trimmingCharacters(in: .whitespacesAndNewlines)
-              if !url.contains("://") { url = "https://" + url }
-              let connection = Connection(
-                name: name.isEmpty ? (URL(string: url)?.host ?? "ssync") : name, baseURL: url)
-              try await store.connect(connection, key: key)
-              if adding { dismiss() }
-            } catch { self.error = error.localizedDescription }
-            busy = false
+        Section {
+          Button(action: connect) {
+            HStack {
+              if busy { ProgressView() }
+              Text(busy ? "Checking…" : "Connect").frame(maxWidth: .infinity)
+            }
           }
-        } label: {
-          HStack {
-            if busy { ProgressView().tint(Theme.onAccent) }
-            Text(busy ? "Checking connection…" : "Connect")
+          .buttonStyle(.borderedProminent).controlSize(.large)
+          .disabled(busy || address.isEmpty)
+          .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+          if !adding {
+            Button("Explore the demo") { store.select(.sample) }
+              .frame(maxWidth: .infinity)
+              .listRowBackground(Color.clear)
+              .accessibilityIdentifier("exploreDemo")
           }
-        }.buttonStyle(PrimaryButtonStyle()).disabled(busy || address.isEmpty)
-        Button("Explore the demo") {
-          store.select(.sample)
-          if adding { dismiss() }
         }
-        .font(.headline).frame(maxWidth: .infinity).padding(12).accessibilityIdentifier(
-          "exploreDemo")
       }
       .toolbar {
-        if adding { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        if adding { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
       }
+    }
+  }
+  private func connect() {
+    busy = true
+    error = nil
+    Task {
+      do {
+        var url = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !url.contains("://") { url = "https://" + url }
+        let connection = Connection(
+          name: name.isEmpty ? (URL(string: url)?.host ?? "ssync") : name, baseURL: url)
+        try await store.connect(connection, key: key)
+        if adding { dismiss() }
+      } catch { self.error = error.localizedDescription }
+      busy = false
     }
   }
 }

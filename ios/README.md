@@ -45,11 +45,11 @@ Start with the [full design specification](DESIGN_SPEC.md). It covers the brand,
 
 ## Key decisions
 
-Four tabs: **Jobs · Hosts · Watchers · Launch**.
+Three tabs: **Jobs · Cluster · Activity**. Launch is a sheet opened with **+** from any tab; servers and settings live in the account menu.
 
 The main screens use custom ssync compositions and motion. Native APIs provide navigation, gestures, text behavior, accessibility, notifications, widgets, and Live Activities.
 
-Output has a dedicated reading workspace, follow dock, search, local markers, and bookmarks. Hosts shows partition allocation and job context with clear observation ages.
+Output has a dedicated reading workspace, follow dock, search, local markers, and bookmarks. Cluster shows partition allocation and job context with clear observation ages.
 
 ## Motion studies
 
