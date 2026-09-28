@@ -67,6 +67,49 @@ import XCTest
     capture("09-launch-review", app: app)
   }
 
+  /// Captures the screens used in the documentation. Skipped unless SSYNC_DOCS_SCREENSHOTS=1
+  /// (pass TEST_RUNNER_SSYNC_DOCS_SCREENSHOTS=1 to xcodebuild).
+  func testDocumentationScreenshots() throws {
+    try XCTSkipUnless(
+      ProcessInfo.processInfo.environment["SSYNC_DOCS_SCREENSHOTS"] == "1",
+      "Set SSYNC_DOCS_SCREENSHOTS=1 to capture documentation screenshots")
+    let app = XCUIApplication()
+    app.launch()
+    if app.buttons["exploreDemo"].waitForExistence(timeout: 5) { capture("ios-connect", app: app) }
+    app.terminate()
+    app.launchArguments = ["--demo"]
+    app.launch()
+    XCTAssertTrue(app.buttons["job-48192"].waitForExistence(timeout: 10))
+    capture("ios-jobs", app: app)
+    app.buttons["job-48196"].press(forDuration: 1.2)
+    XCTAssertTrue(app.buttons["Relaunch…"].waitForExistence(timeout: 3))
+    capture("ios-job-preview", app: app)
+    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
+    XCTAssertTrue(app.buttons["Relaunch…"].waitForNonExistence(timeout: 3))
+    app.buttons["job-48192"].tap()
+    XCTAssertTrue(app.buttons["watchOutput"].waitForExistence(timeout: 5))
+    capture("ios-job-detail", app: app)
+    app.swipeUp()
+    capture("ios-job-timeline", app: app)
+    app.swipeDown()
+    app.buttons["watchOutput"].tap()
+    XCTAssertTrue(app.buttons["outputFollow"].waitForExistence(timeout: 5))
+    sleep(1)
+    capture("ios-output", app: app)
+    app.navigationBars.buttons.element(boundBy: 0).tap()
+    app.navigationBars.buttons.element(boundBy: 0).tap()
+    app.tabBars.buttons["Cluster"].tap()
+    XCTAssertTrue(app.buttons["host-Atlas"].waitForExistence(timeout: 5))
+    capture("ios-cluster", app: app)
+    app.tabBars.buttons["Activity"].tap()
+    XCTAssertTrue(app.staticTexts["Resume from checkpoint"].waitForExistence(timeout: 5))
+    capture("ios-activity", app: app)
+    app.tabBars.buttons["Jobs"].tap()
+    app.buttons["newLaunch"].tap()
+    XCTAssertTrue(app.buttons["blankLaunch"].waitForExistence(timeout: 5))
+    capture("ios-launch", app: app)
+  }
+
   private func capture(_ name: String, app: XCUIApplication) {
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name

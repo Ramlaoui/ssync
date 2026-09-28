@@ -36,4 +36,4 @@ Theme, density, preferences, and the launch draft use browser-local storage unde
 
 The separate build writes to ignored `design/dist/`. It does not replace the production build. The prototype uses the frontend's token copy and can be built without the iOS project.
 
-The earlier product audit is in [`docs/web-ui-v2-audit.md`](../../docs/web-ui-v2-audit.md).
+The earlier product audit is in [`dev-notes/web-ui-v2-audit.md`](../../dev-notes/web-ui-v2-audit.md).

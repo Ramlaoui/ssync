@@ -161,8 +161,8 @@
             <thead>
               <tr>
                 <th scope="col">Partition</th>
-                <th scope="col">CPUs<span class="wide-only"> allocated</span></th>
-                {#if showGpus}<th scope="col">GPUs<span class="wide-only"> allocated</span></th>{/if}
+                <th scope="col">CPUs<span class="wide-only">&nbsp;allocated</span></th>
+                {#if showGpus}<th scope="col">GPUs<span class="wide-only">&nbsp;allocated</span></th>{/if}
                 <th scope="col" class="numeric">Nodes</th>
               </tr>
             </thead>

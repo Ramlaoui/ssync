@@ -1,272 +1,112 @@
-# ssync
+<p align="center">
+  <img src="docs/assets/brand/mark.svg" alt="ssync" width="72" height="72">
+</p>
 
-A tool for managing SLURM job workflows across multiple HPC clusters. ssync bridges local development environments with remote SLURM systems, for unified job submission, monitoring, and file synchronization capabilities.
+<h1 align="center">ssync</h1>
 
-## Overview
+<p align="center">
+  <strong>Your Slurm jobs, on every cluster, in one place.</strong><br>
+  Sync your code, submit jobs, stream their output, and relaunch them when they time out,<br>
+  across all your HPC clusters, from your terminal, your browser, or your iPhone.
+</p>
 
-ssync helps researchers and developers working with SLURM-based HPC systems by providing:
+<p align="center">
+  <a href="https://ssync.readthedocs.io/"><strong>Documentation</strong></a> ·
+  <a href="https://ssync.readthedocs.io/en/latest/getting-started/quickstart/">Quickstart</a> ·
+  <a href="https://ssync.readthedocs.io/en/latest/guides/web-app/">Web app</a> ·
+  <a href="https://ssync.readthedocs.io/en/latest/guides/ios-app/">iPhone app</a>
+</p>
 
-- **Local Development** - Maintain your development workflow on local machines
-- **Automated Deployment** - Synchronize code to multiple clusters for quick prototyping
-- **Job Management** - Submit and monitor jobs without manual SSH sessions to each cluster
-- **Monitoring** - Track job status and outputs across all configured clusters from a single interface
-- **Web Interface** - UI for job submission and monitoring
+<p align="center">
+  <img src="docs/assets/screenshots/web-jobs.webp" alt="The ssync web app showing running, queued, and finished jobs across three clusters" width="900">
+</p>
 
-## Installation
+## Why ssync
+
+Running experiments on several clusters usually means a dozen SSH sessions: `squeue` in one, `tail -f` in another, an `rsync` you hope skipped the virtualenv, and a 3 a.m. resubmit because a job hit its time limit one checkpoint short.
+
+ssync runs on your own machine, talks to your clusters over SSH, and gives you one workspace for all of it. Nothing needs to be installed on the clusters.
+
+- **Every cluster at a glance.** Running, queued, and finished jobs from all hosts in one view, with array jobs grouped and live updates.
+- **Launch from your laptop.** `ssync launch` syncs your project (respecting `.gitignore`) and submits in one command, with login-node setup for clusters without internet on compute nodes.
+- **Live output anywhere.** Stream stdout and stderr, search them, and read them from your phone.
+- **Watchers that act for you.** Cancel diverging runs, capture metrics, or resubmit from the last checkpoint when a job times out.
+- **Know where you are in the queue.** Queued jobs show their priority rank and the number of jobs ahead of them.
+- **Reproducible.** Submitted scripts and launch manifests are cached, so you can inspect or relaunch a job after Slurm has forgotten it.
+- **Where you work.** A CLI, a web app, a native iPhone app with Live Activities and widgets, and Raycast and VS Code extensions.
+
+<p align="center">
+  <img src="docs/assets/screenshots/ios-jobs.webp" alt="Jobs on iPhone" width="220">
+  &nbsp;
+  <img src="docs/assets/screenshots/ios-job-detail.webp" alt="A running job on iPhone" width="220">
+  &nbsp;
+  <img src="docs/assets/screenshots/ios-output-dark.webp" alt="Live output on iPhone" width="220">
+</p>
+
+## Quickstart
+
+> [!WARNING]
+> The `ssync` package on PyPI is an unrelated project. Install ssync from this repository.
 
 ```bash
-uv pip install git+https://github.com/Ramlaoui/ssync.git
+# Install (the editable install includes the web app)
+git clone https://github.com/Ramlaoui/ssync.git && cd ssync
+uv tool install --editable .
 ```
 
-## Configuration
-
-Create a configuration file at `~/.config/ssync/config.yaml`:
+Describe your clusters in `~/.config/ssync/config.yaml`, reusing aliases from `~/.ssh/config`:
 
 ```yaml
 hosts:
-  - name: cluster1
-    hostname: login.cluster1.edu
-    username: your_username
-    work_dir: /scratch/your_username/projects
-    
-  - name: cluster2  
-    hostname: hpc.university.edu
-    username: your_username
-    work_dir: /home/your_username/work
-
-    # Optional: Default SLURM parameters for a given cluster
-    # These can be overridden in job scripts / cli submissions
-    slurm_defaults:
-    partition: gpu
-    time: 60  # minutes
-    cpus: 4
-    mem: 16  # GB
+  - hostname: my-cluster              # an alias from ~/.ssh/config
+    work_dir: /home/your-username/work
+    scratch_dir: /scratch/your-username
 ```
 
-## Command Line Interface
-
-### Job Status Monitoring
-```bash
-# View all jobs across clusters
-ssync status
-
-# Filter by specific host
-ssync status --host cluster1
-
-# Show only running jobs
-ssync status --state R
-
-# Display recent completed jobs
-ssync status --since 1d
-```
-
-### File Synchronization
-```bash
-# Sync local directory to remote cluster
-ssync sync ./project-dir --host cluster1
-
-# Exclude specific patterns
-ssync sync ./project-dir --host cluster1 --exclude "*.log"
-```
-
-### Job Submission
-```bash
-# Submit a job script
-ssync launch job.sh ./project-dir --host cluster1
-
-# Render and launch a repo-local recipe
-ssync launch-recipe experiments/demo/launch/train.yaml
-
-# Inspect what a recipe will submit
-ssync launch-recipe experiments/demo/launch/train.yaml --dry-run
-
-# Inspect the manifest stored for a submitted recipe job
-ssync manifest 12345 --host cluster1
-```
-
-Repo-local launch recipes let a project compose host/partition profiles,
-environment setup, preparation fragments, and a project-owned run fragment from
-`.ssync/`. See [docs/recipes.md](docs/recipes.md).
-
-### Output Retrieval
-```bash
-# Print job output
-ssync output 12345
-ssync output 12345 --stderr
-ssync output 12345 --lines 200
-ssync output 12345 --all
-
-# Copy output files locally
-ssync copy-output 12345 ./outputs
-```
-
-## Web Interface
-
-Launch the complete web interface (serves both API and UI):
-```bash
-# Start in background with HTTPS (default)
-ssync web
-
-# Use HTTP instead of HTTPS
-ssync web --no-https
-
-# Stop the server
-ssync web --stop
-
-# Check if running
-ssync web --status
-
-# Run in foreground for debugging
-ssync web --foreground
-```
-
-The `ssync web` command:
-- Uses HTTPS by default with auto-generated self-signed certificates
-- Runs in the background by default (doesn't block your terminal)
-- Builds the frontend automatically if needed
-- Serves both API and UI on the same port
-- Opens your browser automatically
-
-Access at https://localhost:8042
-
-**Note on HTTPS**: The first time you access the site, your browser will warn about the self-signed certificate. This is normal for local development. Accept the certificate to proceed.
-
-For API-only mode (no UI):
-```bash
-ssync api
-```
-
-Features include:
-- Real-time job status dashboard
-- Interactive script editor with SLURM directive validation
-- Directory browser for source selection
-- Job submission interface
-- Live log streaming for running jobs
-
-## Advanced Features
-
-### Structured Script Format
-
-ssync supports a structured script format that separates login node setup from compute node execution. This is particularly useful for clusters where compute nodes lack internet access:
+Then:
 
 ```bash
-#!/bin/bash
-#SBATCH --job-name=experiment
-#SBATCH --time=2:00:00
-
-#LOGIN_SETUP_BEGIN
-# Commands executed on login node
-pip install -r requirements.txt
-module load cuda/11.4
-#LOGIN_SETUP_END
-
-# Compute node execution
-python train.py --epochs 100
+ssync status                              # every job on every cluster
+ssync launch train.sh . --host my-cluster # sync this project and submit
+ssync output 12345 --lines 50             # follow a job's output
+ssync web                                 # open the web app at https://localhost:8042
 ```
 
-### Version Control Integration
+The web app's first start builds the frontend, which needs Node.js 18 or newer. Read the [quickstart](https://ssync.readthedocs.io/en/latest/getting-started/quickstart/) for a guided tour.
 
-The synchronization process automatically respects `.gitignore` patterns, preventing unnecessary transfer of build artifacts, virtual environments, and other excluded files.
+## Documentation
 
-### Watcher-Driven Resubmission
+Full documentation lives at **[ssync.readthedocs.io](https://ssync.readthedocs.io/)**:
 
-Watchers can capture values from job output and resubmit the original script with
-those values interpolated back into the script body. See
-[`docs/watchers.md`](docs/watchers.md) for the full watcher guide and
-[`docs/watcher-resubmit.md`](docs/watcher-resubmit.md) for the recommended
-pattern for checkpoint-based continuation.
+- [Installation](https://ssync.readthedocs.io/en/latest/getting-started/installation/) and [configuration](https://ssync.readthedocs.io/en/latest/getting-started/configuration/)
+- [Web app](https://ssync.readthedocs.io/en/latest/guides/web-app/) and [iPhone app](https://ssync.readthedocs.io/en/latest/guides/ios-app/) tours
+- [Launching jobs](https://ssync.readthedocs.io/en/latest/guides/launching-jobs/), [watchers](https://ssync.readthedocs.io/en/latest/guides/watchers/), and [launch recipes](https://ssync.readthedocs.io/en/latest/guides/recipes/)
+- [CLI](https://ssync.readthedocs.io/en/latest/reference/cli/) and [API](https://ssync.readthedocs.io/en/latest/reference/api/) references, and [security](https://ssync.readthedocs.io/en/latest/reference/security/)
 
-### Persistent Job Information
-
-Job scripts and metadata are cached locally, allowing retrieval of job information even after SLURM's job history expiration.
-
-### Pending-job priority position
-
-For pending jobs, status responses include Slurm's numeric priority plus a
-partition-scoped priority rank, the number of visible pending records ahead, the
-visible queue size, and a percentile where 100% is the highest-priority record.
-Each ranked job also carries the UTC snapshot timestamp.
-The rank follows Slurm's documented pending-job priority ordering; it is not a
-start-time prediction because reservations, dependencies, limits, resource fit,
-preemption, and backfill can change which job starts next. QOS is reported as
-metadata and contributes to the composite priority only when the cluster enables
-the corresponding Slurm priority configuration.
-
-ssync obtains these values from one compact pending-queue snapshot per host and
-caches it for 60 seconds, rather than querying once per job. Set
-`SSYNC_PRIORITY_SNAPSHOT_TTL_SECONDS` to change that interval. The scope is
-reported as `visible_pending_records:partition=<name>` because Slurm privacy
-settings may prevent the current SSH identity from seeing every cluster job, and
-compact job-array ranges count as queue records rather than expanded tasks. The
-minimum accepted snapshot interval is five seconds to protect the controller.
-
-## API Usage
-
-ssync provides a REST API for programmatic access:
-
-```python
-import requests
-
-# Query job status
-response = requests.get("https://localhost:8042/api/status", verify=False)  # verify=False for self-signed cert
-jobs = response.json()
-
-# Submit a job
-response = requests.post("https://localhost:8042/api/jobs/launch", json={
-    "host": "cluster1",
-    "script_content": "#!/bin/bash\npython train.py",
-    "source_dir": "/path/to/project"
-})
-```
-
-## Security
-
-For production deployments or multi-user environments, enable API authentication:
+To preview the documentation locally:
 
 ```bash
-# Generate API key
-ssync auth setup
-
-# Enable authentication requirement
-export SSYNC_REQUIRE_API_KEY=true
-ssync api
+uvx --from zensical==0.0.65 zensical serve
 ```
-
-## System Requirements
-
-- Python 3.11 or higher
-- SSH access to target SLURM clusters
-- rsync (typically pre-installed on Unix systems)
 
 ## Development
 
-To modify the web interface:
-
 ```bash
+uv sync                          # Python environment
+uv run pytest                    # backend tests
+
 cd web-frontend
 npm install
-npm run dev  # Development server with hot reload
-npm run build  # Production build
+npm run dev                      # web app with hot reload
+npm run test:run                 # frontend tests
 ```
 
-## Troubleshooting
-
-### SSH Connectivity
-- Verify SSH access: `ssh <cluster-hostname>`
-- Configure SSH keys for passwordless access: `ssh-copy-id <cluster-hostname>`
-
-### Synchronization Performance
-- Review `.gitignore` patterns for large file exclusions
-- Use `--exclude` flag for additional pattern-based filtering
-
-### Job Output Access
-- Ensure job completion before attempting output retrieval
-- Verify `work_dir` configuration matches actual job execution directory
+The iPhone app lives in [`ios/`](ios/) and opens in Xcode 26. Documentation screenshots are generated from sample data: `web-frontend/scripts/docs-screenshots.mjs` for the web app and the `testDocumentationScreenshots` UI test for iOS.
 
 ## Contributing
 
-Contributions are welcome. Please submit issues and pull requests through the project repository.
+Issues and pull requests are welcome.
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) file for details.
+Apache 2.0. See [LICENSE](LICENSE).
