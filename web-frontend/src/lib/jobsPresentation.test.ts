@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 import { createMockJob } from '../test/utils/mockData';
 import { jobsWorkspace, selectJob, setJobView } from '../stores/workspace';
-import { durationSeconds, filterJobs, gpuCount, jobRoute, jobStatus, withinHistoryWindow } from './jobsPresentation';
+import { compactDuration, durationSeconds, filterJobs, gpuCount, groupArrayTasks, jobFacts, jobRoute, jobStatus, jobTiming, summarizeTasks, withinHistoryWindow } from './jobsPresentation';
+import type { JobInfo } from '../types/api';
 
 const filters = { query: '', host: '', user: '', view: 'all' as const, newestFirst: true };
 
@@ -65,5 +66,38 @@ describe('Reported resources', () => {
 
   it.each([['01:30:00', 5400], ['15:30', 930], ['2-01:30:00', 178200], ['1-02:30', 95400], ['60', 3600], ['UNLIMITED', null], [null, null]])('parses duration %s', (value, expected) => {
     expect(durationSeconds(value as string | null)).toBe(expected);
+  });
+});
+
+describe('list and detail formatting', () => {
+  const base = { job_id: '1', name: 'train', state: 'R', hostname: 'alpha' } as JobInfo;
+  it('uses one compact duration style', () => {
+    expect(compactDuration('11:36')).toBe('11m');
+    expect(compactDuration('01:03:00')).toBe('1h 03m');
+    expect(compactDuration('1-00:00:00')).toBe('1d 0h');
+    expect(compactDuration('0:45')).toBe('45s');
+    expect(compactDuration(null)).toBe('—');
+  });
+  it('describes timing by state', () => {
+    expect(jobTiming({ ...base, runtime: '25:00', time_limit: '1-00:00:00' })).toMatchObject({ primary: '25m', secondary: '/ 1d 0h' });
+    expect(jobTiming({ ...base, state: 'PD', priority_rank: 2028, reason: 'Priority' }).primary).toBe('#2,028 in queue');
+    expect(jobTiming({ ...base, state: 'PD', reason: 'Dependency' }).primary).toBe('Dependency');
+  });
+  it('groups tasks of the same array job per host and keeps other jobs in order', () => {
+    const task = (id: string, host = 'alpha') => ({ ...base, job_id: `9_${id}`, hostname: host, array_job_id: '9', array_task_id: id });
+    const entries = groupArrayTasks([task('1'), { ...base, job_id: '5' }, task('2'), task('3', 'beta')]);
+    expect(entries.map(entry => entry.kind === 'array' ? `${entry.key}:${entry.tasks.length}` : entry.key)).toEqual(['array:alpha:9:2', 'alpha:5', 'beta:9_3']);
+    expect(summarizeTasks([task('1'), { ...task('2'), state: 'PD' }])).toBe('1 running · 1 queued');
+  });
+  it('drops scheduler placeholders and treats a queued start time as an estimate', () => {
+    const now = new Date('2026-09-28T10:00:00Z');
+    const pending = jobFacts({ ...base, state: 'PD', submit_time: '2026-09-28T09:00:00Z', start_time: '2026-09-28T12:00:00Z', end_time: 'Unknown', node_list: '(BeginTime)', account: '(null)', reason: 'Priority', priority_rank: 3, priority_queue_size: 10 }, now);
+    expect(pending.timeline.map(fact => fact.label)).toEqual(['Submitted', 'Waited', 'Expected start']);
+    expect(pending.queue.find(fact => fact.label === 'Position')?.value).toBe('3 of 10');
+    expect(pending.resources.some(fact => fact.label === 'Node list')).toBe(false);
+    expect(pending.scheduling.some(fact => fact.label === 'Account')).toBe(false);
+    const running = jobFacts({ ...base, runtime: '01:00:00', time_limit: '02:00:00', end_time: 'Unknown' }, now);
+    expect(running.timeline.find(fact => fact.label === 'Time left')?.value).toBe('1h 00m');
+    expect(running.timeline.some(fact => fact.label === 'Ended')).toBe(false);
   });
 });

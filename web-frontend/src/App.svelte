@@ -5,7 +5,7 @@
   import { wrap } from 'svelte-spa-router/wrap';
   import LoadingSpinner from './components/LoadingSpinner.svelte';
   import { focusTrap } from './lib/actions';
-  import { Layers, Rocket, Eye, Server, Settings2, Search, Command, Menu, X, Sun, Moon, ArrowRight, TriangleAlert, RefreshCw } from 'lucide-svelte';
+  import { Layers, Rocket, Eye, Server, Settings2, Search, Menu, X, Sun, Moon, ArrowRight, TriangleAlert, RefreshCw } from 'lucide-svelte';
   import ErrorBoundary from './components/ErrorBoundary.svelte';
   import LaunchMonitor from './components/LaunchMonitor.svelte';
   import PerformanceMonitor from './components/PerformanceMonitor.svelte';
@@ -18,7 +18,6 @@
   import { apiConfig, testConnection } from './services/api';
   import { theme, resolvedTheme } from './stores/theme';
   import { navigationActions, navigationState } from './stores/navigation';
-  import { jobsWorkspace, setJobView } from './stores/workspace';
   import { jobStateManager } from './lib/JobStateManager';
   import { jobRoute, jobStatus } from './lib/jobsPresentation';
   import { safeGetItem } from './lib/safeStorage';
@@ -52,6 +51,7 @@
   const activePath = $derived(path === '/jobs' || maximized ? '/' : path);
   const title = $derived(activePath === '/launch' ? 'Launch job' : activePath === '/watchers' ? 'Watchers' : activePath === '/hosts' ? 'Hosts' : activePath === '/settings' ? 'Settings' : 'Jobs');
   const runningCount = $derived($jobs.filter(j => jobStatus(j.state).category === 'active').length);
+  const pendingCount = $derived($jobs.filter(j => jobStatus(j.state).category === 'pending').length);
   const commandJobs = $derived($jobs.filter(j => [j.name, j.job_id, j.hostname].some(v => v.toLowerCase().includes(commandQuery.toLowerCase()))).slice(0, 8));
   const commandActions = $derived(navigation.filter(item => item.label.toLowerCase().includes(commandQuery.toLowerCase())));
   $effect(() => {
@@ -115,7 +115,6 @@
       <a href="#/" class="relay-brand" aria-label="ssync jobs" title="ssync" onclick={()=>mobileOpen=false}>
         <Brand/>
         <span>ssync</span>
-        <small>v2</small>
       </a>
       <button class="relay-quick-find" aria-label="Quick find" title="Quick find · ⌘/Ctrl K" onclick={openCommands}>
         <Search size={17}/>
@@ -134,32 +133,24 @@
           </a>
         {/each}
       </nav>
-      <div class="relay-saved-views">
-        <span class="relay-section-label">Saved views</span>
-        <button onclick={()=>{setJobView('running');navigate('/');}}>
-          <Layers size={16}/>
-          <span>Running jobs</span>
-        </button>
-      </div>
       <div class="relay-sidebar-bottom">
         <a class="relay-connection" href="#/hosts" title="View hosts">
           <span class="relay-dot" class:connected={$connection.connected&&$connection.healthy}></span>
           <span>{$hostStates.size} {$hostStates.size===1?'host':'hosts'} · {$connection.connected&&$connection.healthy?'Connected':'Offline'}</span>
         </a>
-        <a class="relay-settings-link" href="#/settings" class:active={activePath==='/settings'} aria-label="Settings" title="Settings">
-          <Settings2 size={19}/>
-          <span>Settings</span>
-          {#if !$apiConfig.authenticated&&!connecting}
-            <span class="relay-auth-dot"></span>
-          {/if}
-        </a>
-        <div class="relay-appearance">
-          <span>Appearance</span>
+        <div class="relay-settings-row">
+          <a class="relay-settings-link" href="#/settings" class:active={activePath==='/settings'} aria-label="Settings" title="Settings">
+            <Settings2 size={19}/>
+            <span>Settings</span>
+            {#if !$apiConfig.authenticated&&!connecting}
+              <span class="relay-auth-dot"></span>
+            {/if}
+          </a>
           <IconButton label={$resolvedTheme==='dark'?'Switch to light appearance':'Switch to dark appearance'} onclick={()=>theme.toggle()}>
             {#if $resolvedTheme==='dark'}
-              <Sun size={18}/>
+              <Sun size={17}/>
             {:else}
-              <Moon size={18}/>
+              <Moon size={17}/>
             {/if}
           </IconButton>
         </div>
@@ -171,17 +162,18 @@
           <button class="relay-icon-button relay-mobile-menu" aria-label="Open navigation" onclick={()=>mobileOpen=true}>
             <Menu size={20}/>
           </button>
-          <span>Workspace</span>
-          <span class="relay-slash">/</span>
           <strong>{title}</strong>
+          {#if activePath==='/'&&!maximized&&(runningCount||pendingCount)}
+            <span class="relay-topbar-meta">{runningCount.toLocaleString()} running · {pendingCount.toLocaleString()} queued</span>
+          {/if}
         </div>
         <div class="relay-topbar-actions">
           <span class="relay-live" class:online={$apiConfig.authenticated&&$connection.connected}>
             <span class="relay-dot"></span>
             {connecting?'Connecting':!$apiConfig.authenticated?'Not connected':$connection.source==='websocket'&&$connection.connected?'Live':$connection.connected?'Updating':'Reconnecting'}
           </span>
-          <IconButton label="Quick find · ⌘/Ctrl K" onclick={openCommands}>
-            <Command size={18}/>
+          <IconButton label="Quick find · ⌘/Ctrl K" class="relay-mobile-only" onclick={openCommands}>
+            <Search size={18}/>
           </IconButton>
         </div>
       </header>

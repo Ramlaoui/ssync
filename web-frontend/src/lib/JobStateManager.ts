@@ -881,7 +881,8 @@ class JobStateManager {
       const params = new URLSearchParams();
       params.append('host', hostname);
       // Use the user's preference for array job grouping
-      const groupArrayJobs = filters.groupArrayJobs ?? get(this.preferences).groupArrayJobs;
+      // Array tasks are grouped in the list, so always request them individually.
+      const groupArrayJobs = filters.groupArrayJobs ?? false;
       params.append('group_array_jobs', String(groupArrayJobs));
 
       if (filters.user && filters.user.trim()) {
@@ -1529,7 +1530,7 @@ class JobStateManager {
     void this.syncAllHosts(false, false, {
       since: initialPreferences.defaultSince,
       limit: initialPreferences.jobsPerPage,
-      groupArrayJobs: initialPreferences.groupArrayJobs,
+      groupArrayJobs: false,
     });
     debugLog('[JobStateManager] ✅ Initialization complete - API sync and WebSocket are both active');
   }
