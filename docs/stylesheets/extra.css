@@ -1,0 +1,104 @@
+/* ssync brand: Relay cobalt on warm paper, matching the web and iOS apps. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #3155d9;
+  --md-primary-fg-color--light: #5a78e3;
+  --md-primary-fg-color--dark: #2440aa;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #ffffffb3;
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: #3155d9;
+  --md-accent-fg-color--transparent: #3155d91a;
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: #ffffffb3;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: #4a68e0;
+  --md-primary-fg-color--light: #6d86ea;
+  --md-primary-fg-color--dark: #3155d9;
+  --md-typeset-a-color: #9badff;
+}
+
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color: #9badff;
+  --md-accent-fg-color--transparent: #9badff1f;
+}
+
+/* Landing page hero */
+.ss-hero {
+  text-align: center;
+  margin: 1.5rem 0 2.5rem;
+}
+
+.ss-hero h1 {
+  font-size: 2.6rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin: 0 0 0.75rem;
+  color: var(--md-default-fg-color);
+}
+
+.ss-hero .ss-tagline {
+  font-size: 1.15rem;
+  color: var(--md-default-fg-color--light);
+  max-width: 38rem;
+  margin: 0 auto 1.5rem;
+}
+
+.ss-hero .md-button {
+  margin: 0.25rem;
+}
+
+/* Screenshots: soft frame, rounded, with a gentle shadow. */
+.md-typeset .ss-shot img,
+.md-typeset img.ss-shot {
+  border-radius: 12px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 0 12px 40px -18px rgba(12, 22, 52, 0.35);
+}
+
+.md-typeset .ss-phones {
+  display: flex;
+  justify-content: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin: 1.5rem 0;
+}
+
+.md-typeset .ss-phones img {
+  width: 200px;
+  max-width: 30%;
+  border-radius: 28px;
+  box-shadow: 0 16px 48px -20px rgba(12, 22, 52, 0.45);
+}
+
+.md-typeset .ss-caption {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--md-default-fg-color--light);
+  margin-top: -0.5rem;
+}
+
+/* A short strip of proof points under the hero. */
+.md-typeset .ss-points span {
+  white-space: nowrap;
+}
+
+.md-typeset .ss-points {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+  margin-bottom: 2rem;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .ss-hero h1 {
+    font-size: 1.9rem;
+  }
+}

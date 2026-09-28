@@ -2109,9 +2109,9 @@ Equally, do not sacrifice navigation reliability, text scaling, or truthful stat
 - [Watcher routes](../src/ssync/web/api/watchers.py).
 - [Launch catalog](../src/ssync/web/api/catalog.py).
 - [Host and partition routes](../src/ssync/web/api/cluster.py).
-- [Watcher guide and limitations](../docs/watchers.md).
-- [Recipes](../docs/recipes.md).
-- [Watcher resubmission](../docs/watcher-resubmit.md).
+- [Watcher guide and limitations](../docs/guides/watchers.md).
+- [Recipes](../docs/guides/recipes.md).
+- [Watcher resubmission](../docs/guides/watcher-resubmit.md).
 
 ### 32.2 Apple references consulted
 
