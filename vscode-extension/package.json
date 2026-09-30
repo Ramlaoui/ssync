@@ -1,8 +1,24 @@
 {
   "name": "ssync-vscode",
   "displayName": "ssync",
-  "description": "SLURM job management: sync, submit, and monitor HPC jobs via ssync",
-  "version": "0.1.0",
+  "description": "Your cluster workspace: submit SLURM jobs, monitor experiments, and inspect output.",
+  "version": "0.2.0",
+  "icon": "media/icon.png",
+  "publisher": "Ramlaoui",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ramlaoui/ssync.git"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Monitoring is available; submitting scripts, syncing files, and starting the server require workspace trust."
+    }
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -10,6 +26,8 @@
     "Other"
   ],
   "activationEvents": [
+    "onCommand:ssync.openDashboard",
+    "onCommand:ssync.configure",
     "onView:ssync.jobsView",
     "onCommand:ssync.syncWorkspace",
     "onCommand:ssync.submitScript",
@@ -22,6 +40,18 @@
   "contributes": {
     "commands": [
       {
+        "command": "ssync.openDashboard",
+        "title": "Open Jobs Dashboard",
+        "category": "ssync",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "ssync.configure",
+        "title": "Configure Connection",
+        "category": "ssync",
+        "icon": "$(settings-gear)"
+      },
+      {
         "command": "ssync.syncWorkspace",
         "title": "Sync Workspace to Host",
         "category": "ssync",
@@ -29,7 +59,7 @@
       },
       {
         "command": "ssync.submitScript",
-        "title": "Submit to Host",
+        "title": "Submit Script to Cluster",
         "category": "ssync",
         "icon": "$(play)"
       },
@@ -78,6 +108,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "ssync.openDashboard",
+          "when": "view == ssync.jobsView",
+          "group": "navigation@0"
+        },
+        {
           "command": "ssync.refreshJobs",
           "when": "view == ssync.jobsView",
           "group": "navigation@1"
@@ -88,7 +123,7 @@
           "group": "navigation@2"
         },
         {
-          "command": "ssync.startServer",
+          "command": "ssync.configure",
           "when": "view == ssync.jobsView",
           "group": "navigation@3"
         }
@@ -146,13 +181,15 @@
         "ssync.apiKey": {
           "type": "string",
           "default": "",
-          "description": "API key for the ssync server (also readable from ~/.config/ssync/.api_key)"
+          "description": "Legacy API key setting. Prefer ssync: Configure Connection to store keys securely.",
+          "scope": "machine",
+          "deprecationMessage": "Use ssync: Configure Connection (VS Code SecretStorage)."
         },
         "ssync.pollInterval": {
           "type": "number",
           "default": 120,
           "minimum": 30,
-          "description": "HTTP fallback polling interval in seconds (WebSocket provides real-time updates)"
+          "description": "History reconciliation and fallback polling interval in seconds. WebSocket updates arrive immediately."
         },
         "ssync.showCompletedJobs": {
           "type": "boolean",
@@ -162,12 +199,30 @@
         "ssync.completedJobsWindow": {
           "type": "string",
           "default": "3d",
+          "pattern": "^[0-9]+[hdwm]$",
           "description": "How far back to show completed jobs (e.g. 1h, 3d, 1w)"
+        },
+        "ssync.requestTimeout": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "Deadline for each server request in seconds. Launch tracking continues separately."
+        },
+        "ssync.trustLocalCertificate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow self-signed TLS certificates for localhost and loopback addresses only. Remote servers always require valid certificates."
         }
       }
     }
   },
   "scripts": {
+    "check": "tsc --noEmit && node --check media/dashboard.js && node --check media/logs.js",
+    "test": "node test/run.cjs",
+    "test:host": "npm run build && node test/host.cjs",
+    "test:package": "npm run package && node test/host.cjs --package",
+    "demo": "node test/run.cjs --demo",
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "vscode:prepublish": "node esbuild.js --minify",
@@ -178,10 +233,11 @@
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.7.1",
-    "esbuild": "^0.20.0",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^20.14.5",
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "ws": "^8.19.0"
+    "ws": "^8.22.0"
   }
 }

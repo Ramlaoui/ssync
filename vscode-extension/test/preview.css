@@ -1,0 +1,26 @@
+.demo-bar { display: flex; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.demo-bar button { padding: 3px 8px; font-size: 11px; }
+body.light {
+  color-scheme: light;
+  --vscode-editor-background: #fff;
+  --vscode-sideBar-background: #f5f6f8;
+  --vscode-foreground: #242a36;
+  --vscode-descriptionForeground: #626a78;
+  --vscode-panel-border: #dce0e7;
+  --vscode-focusBorder: #2963b3;
+  --vscode-charts-green: #19765a;
+  --vscode-charts-yellow: #8c6913;
+  --vscode-charts-red: #b83548;
+  --vscode-charts-blue: #2866ab;
+  --vscode-input-foreground: #242a36;
+  --vscode-input-background: #f5f6f8;
+  --vscode-button-background: #2963b3;
+  --vscode-button-foreground: #fff;
+  --vscode-button-secondaryBackground: #e9ecf1;
+  --vscode-button-secondaryForeground: #242a36;
+  --vscode-button-secondaryHoverBackground: #dce0e7;
+  --vscode-errorForeground: #b83548;
+}
+body.contrast { --vscode-editor-background: #000; --vscode-sideBar-background: #000; --vscode-foreground: #fff; --vscode-descriptionForeground: #fff; --vscode-panel-border: #fff; --vscode-focusBorder: #ffff00; --vscode-button-background: #000; --vscode-button-foreground: #fff; }
+.narrow { max-width: 390px; margin: auto; }
+.narrow .demo-bar { flex-wrap: wrap; }
