@@ -1,0 +1,11 @@
+<main class="workspace log-workspace">
+  <header class="page-header"><div><div class="eyebrow">SSYNC / JOB INSPECTOR</div><h1 id="job-name">Loading job…</h1><p id="identity" class="subtitle mono"></p></div><span id="job-state" class="badge">Loading</span></header>
+  <section id="details" class="details" aria-label="Job resources"></section>
+  <div id="queue-reason" class="notice" hidden></div>
+  <div id="log-error" class="notice" role="alert" hidden></div>
+  <section class="output-panel" aria-label="Job output">
+    <div class="output-toolbar"><div class="tabs" role="tablist" aria-label="Output stream"><button id="stdout-tab" role="tab" aria-controls="log-region" aria-selected="true" data-stream="stdout">stdout</button><button id="stderr-tab" role="tab" aria-controls="log-region" aria-selected="false" data-stream="stderr" tabindex="-1">stderr <span id="stderr-count" class="muted"></span></button></div><div class="output-controls"><label><input id="follow" type="checkbox" checked> Follow</label><label><input id="wrap" type="checkbox" checked> Wrap</label><button id="copy" class="quiet" data-command="copy">Copy</button><button id="log-refresh" class="quiet" data-command="refresh">↻ Refresh</button><button id="cancel" class="danger" data-command="cancel" hidden>Cancel job</button></div></div>
+    <div id="log-region" role="tabpanel" aria-labelledby="stdout-tab" tabindex="0"><pre id="output" class="log wrap"></pre><div id="log-empty" class="log-empty">Loading output…</div></div>
+    <footer class="list-footer"><span id="log-status" role="status">Waiting for output</span><span id="line-count">Latest 500 lines per stream</span></footer>
+  </section>
+</main>

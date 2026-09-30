@@ -1,8 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-  <!-- Upward arrow (sync to remote) -->
-  <path d="M12 3L7 8h3v5h4V8h3L12 3z" fill="currentColor" opacity="0.9"/>
-  <!-- Downward arrow (sync from remote) -->
-  <path d="M12 21l5-5h-3v-5H8v5H5l7 5z" fill="currentColor" opacity="0.5"/>
-  <!-- Horizontal line (connection) -->
-  <rect x="3" y="11.5" width="18" height="1" fill="currentColor" opacity="0.3"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-label="ssync Relay mark — white"><title>ssync Relay mark — white</title><g transform="translate(0 0) scale(1.0)" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"><path d="M76 22H43C30 22 22 30 22 42H55"/><path d="M24 78H57C70 78 78 70 78 58H45"/></g></svg>

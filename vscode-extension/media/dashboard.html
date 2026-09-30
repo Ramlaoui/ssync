@@ -1,0 +1,21 @@
+<main class="workspace">
+  <header class="page-header">
+    <div><div class="eyebrow">SSYNC / CLUSTER WORKSPACE</div><h1>Jobs<span class="title-dot">.</span></h1><p class="subtitle">Your experiments, across every cluster.</p></div>
+    <div class="header-actions"><button data-command="configure" class="quiet">Connection</button><button data-command="submit" class="primary">Submit script <span aria-hidden="true">↗</span></button></div>
+  </header>
+  <div class="connection-strip" role="status"><span id="connection" class="connection"><span class="dot"></span><span id="connection-label">Connecting</span></span><span id="updated" class="muted">Waiting for the first update</span><button id="refresh" data-command="refresh" class="quiet compact">↻ Refresh</button></div>
+  <section id="warning" class="notice" aria-live="polite" hidden><div><strong>Connection needs attention</strong><p id="error"></p><p id="stale-note" class="muted"></p></div><div class="notice-actions"><button data-command="configure">Configure connection</button><button data-command="startServer">Start local server</button></div></section>
+  <section class="metrics" aria-label="Job summary">
+    <button class="metric selected" data-filter="all" aria-pressed="true"><span class="metric-label">All jobs</span><strong id="count-all">0</strong><span class="metric-note">In your history window</span></button>
+    <button class="metric" data-filter="R" aria-pressed="false"><span class="metric-label"><span class="dot running"></span>Running</span><strong id="count-running">0</strong><span class="metric-note">On the cluster</span></button>
+    <button class="metric" data-filter="PD" aria-pressed="false"><span class="metric-label"><span class="dot queued"></span>Queued</span><strong id="count-queued">0</strong><span class="metric-note">Waiting for resources</span></button>
+    <button class="metric" data-filter="failed" aria-pressed="false"><span class="metric-label"><span class="dot failed"></span>Needs attention</span><strong id="count-failed">0</strong><span class="metric-note">Failed or timed out</span></button>
+  </section>
+  <section class="job-list" aria-label="Jobs">
+    <div class="list-heading"><h2>Activity</h2><button data-command="sync" class="quiet">Sync workspace ↗</button></div>
+    <div class="filters"><label class="search"><span class="sr-only">Search jobs</span><input id="search" type="search" placeholder="Search name, job ID, partition…"></label><label><span class="sr-only">Cluster</span><select id="host"><option value="">All clusters</option></select></label><label><span class="sr-only">Job state</span><select id="state"><option value="all">All states</option><option value="R">Running</option><option value="PD">Queued</option><option value="failed">Needs attention</option><option value="CD">Completed</option><option value="CA">Cancelled</option><option value="UNKNOWN">Unknown</option></select></label></div>
+    <div class="table-wrap"><table><thead><tr><th scope="col">Job</th><th scope="col">Status</th><th scope="col">Cluster / partition</th><th scope="col">Runtime / limit</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody id="jobs"></tbody></table></div>
+    <div id="empty" class="empty-state" hidden><div class="empty-symbol" aria-hidden="true">◇</div><h3 id="empty-title">No jobs yet</h3><p id="empty-description">Submit a script to start your next experiment.</p><button id="empty-action" class="primary" data-command="submit">Submit script</button></div>
+    <footer class="list-footer"><span id="results" role="status">Loading jobs…</span><span>Active jobs first · select a job to inspect output</span></footer>
+  </section>
+</main>

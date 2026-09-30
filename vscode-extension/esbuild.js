@@ -13,11 +13,11 @@ esbuild.context({
   sourcemap: !minify,
   minify,
   logLevel: 'info',
-}).then(ctx => {
+}).then(async ctx => {
   if (watch) {
-    ctx.watch();
+    await ctx.watch();
     console.log('Watching for changes...');
   } else {
-    ctx.rebuild().then(() => ctx.dispose());
+    try { await ctx.rebuild(); } finally { await ctx.dispose(); }
   }
-});
+}).catch(error => { console.error(error); process.exitCode = 1; });

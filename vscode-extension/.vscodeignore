@@ -4,3 +4,6 @@ node_modules/**
 esbuild.js
 tsconfig.json
 out/**/*.js.map
+test/**
+out/test/**
+package-lock.json

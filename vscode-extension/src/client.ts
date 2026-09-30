@@ -1,230 +1,200 @@
-import * as https from 'https';
 import * as http from 'http';
+import * as https from 'https';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { URL } from 'url';
 import WebSocket from 'ws';
+import { JobInfo, JobStatusResult, parseJob, record } from './model';
 
-// Allow self-signed certs for localhost
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-
-export interface JobInfo {
-  job_id: string;
-  name: string;
-  state: 'PD' | 'R' | 'CD' | 'F' | 'CA' | 'TO' | 'UNKNOWN';
-  hostname: string;
-  partition?: string;
-  runtime?: string;
-  time_limit?: string;
-  nodes?: string;
-  cpus?: string;
-  memory?: string;
-  reason?: string;
-  work_dir?: string;
-  submit_time?: string;
-  start_time?: string;
-  end_time?: string;
-  array_job_id?: string;
-  array_task_id?: string;
-}
-
-export interface HostInfo {
-  hostname: string;
-  work_dir: string;
-  scratch_dir?: string;
-  slurm_defaults?: {
-    partition?: string;
-    account?: string;
-    cpus?: number;
-    mem?: number;
-    time?: string;
-    nodes?: number;
-    gpus_per_node?: number;
-    gres?: string;
-    python_env?: string;
-    qos?: string;
-  };
-}
-
-export interface JobStatusResult {
-  hostname: string;
-  jobs: JobInfo[];
-  total_jobs: number;
-  cached: boolean;
-}
-
-export interface JobOutput {
-  job_id: string;
-  hostname: string;
-  stdout?: string;
-  stderr?: string;
-}
-
-export interface LaunchRequest {
-  script_content: string;
-  source_dir?: string;
-  host: string;
-  job_name?: string;
-  cpus?: number;
-  mem?: number;
-  time?: number;
-  partition?: string;
-  nodes?: number;
-  gpus_per_node?: number;
-  account?: string;
-  python_env?: string;
-}
-
+export interface HostInfo { hostname: string; work_dir?: string }
+export interface JobOutput { stdout?: string | null; stderr?: string | null }
+export interface LaunchRequest { script_content: string; source_dir?: string; host: string }
 export interface LaunchResponse {
   success: boolean;
   job_id?: string;
+  launch_id?: string;
   message: string;
   hostname: string;
   requires_confirmation?: boolean;
 }
-
+export interface LaunchStatus { stage: string; terminal: boolean; success?: boolean; job_id?: string; message?: string }
+export interface WebSocketConnection { close(): void; ping(): void }
 export interface WebSocketHandlers {
-  onInitial: (data: { jobs: Record<string, JobInfo[]>; total: number }) => void;
-  onUpdate: (updates: Array<{ type: string; job_id: string; hostname: string; job: JobInfo }>) => void;
-  onConnect: () => void;
-  onPong?: () => void;
-  onClose: () => void;
-  onError: (err: Error) => void;
+  onJobs(jobs: JobInfo[], initial: boolean, hosts: string[]): void;
+  onRefresh(): void;
+  onConnect(): void;
+  onPong(): void;
+  onClose(): void;
+  onError(error: Error): void;
 }
 
-export interface WebSocketConnection {
-  close: () => void;
-  ping: () => void;
+export function isLoopback(url: URL): boolean {
+  return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+}
+export function serverUrl(value: string): URL {
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('Use an HTTP(S) server URL without credentials, a query, or a fragment.');
+  }
+  url.pathname = url.pathname.replace(/\/+$/, '') + '/';
+  return url;
 }
 
 export class SsyncClient {
-  constructor(private apiUrl: string, private apiKey: string) {}
+  readonly url: URL;
+  private readonly requests = new Set<http.ClientRequest>();
+  private disposed = false;
+  private readonly verifyTls: boolean;
 
-  /** Try to read API key from ~/.config/ssync/.api_key if not configured */
-  static resolveApiKey(configured: string): string {
-    if (configured) return configured;
-    const keyFile = path.join(os.homedir(), '.config', 'ssync', '.api_key');
+  constructor(apiUrl: string, private readonly apiKey: string, private readonly timeoutMs = 30_000, trustLocalCertificate = true, private readonly configurationError?: string) {
+    this.url = serverUrl(apiUrl);
+    this.verifyTls = !(trustLocalCertificate && isLoopback(this.url));
+  }
+  static resolveApiKey(configured: string, keyFile = path.join(os.homedir(), '.config', 'ssync', '.api_key')): string {
+    if (configured.trim()) return configured.trim();
     try {
       const raw = fs.readFileSync(keyFile, 'utf8').trim();
-      const parsed = JSON.parse(raw);
-      return Object.keys(parsed)[0] ?? '';
-    } catch {
-      return '';
-    }
+      return raw.startsWith('{') ? Object.keys(JSON.parse(raw))[0] ?? '' : raw;
+    } catch { return ''; }
   }
-
-  private request<T>(method: string, urlPath: string, body?: unknown): Promise<T> {
+  private request<T>(method: string, endpoint: string, body?: unknown): Promise<T> {
+    if (this.configurationError) return Promise.reject(new Error(this.configurationError));
+    if (this.disposed) return Promise.reject(new Error('Connection changed. Please try again.'));
     return new Promise((resolve, reject) => {
-      const parsed = new URL(urlPath, this.apiUrl);
-      const isHttps = parsed.protocol === 'https:';
-      const options: https.RequestOptions = {
-        hostname: parsed.hostname,
-        port: parsed.port || (isHttps ? '443' : '80'),
-        path: parsed.pathname + parsed.search,
-        method,
+      const url = new URL(endpoint.replace(/^\//, ''), this.url);
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      const request = (url.protocol === 'https:' ? https : http).request(url, {
+        method, rejectUnauthorized: this.verifyTls,
         headers: {
-          'X-API-Key': this.apiKey,
-          'Content-Type': 'application/json',
+          'X-API-Key': this.apiKey, 'Content-Type': 'application/json',
+          ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
         },
-        ...(isHttps ? { agent: httpsAgent } : {}),
-      };
-
-      const mod = isHttps ? https : http;
-      const req = mod.request(options, (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          if ((res.statusCode ?? 0) >= 400) {
-            let msg = `HTTP ${res.statusCode}`;
-            try { msg += `: ${JSON.parse(data).detail ?? data.slice(0, 200)}`; } catch { msg += `: ${data.slice(0, 200)}`; }
-            reject(new Error(msg));
-            return;
+      }, response => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > 16 * 1024 * 1024) request.destroy(new Error('Server response exceeds 16 MB.'));
+          else chunks.push(chunk);
+        });
+        response.on('error', reject);
+        response.on('aborted', () => reject(new Error('Server closed the response before it finished.')));
+        response.on('end', () => {
+          const status = response.statusCode ?? 0;
+          const raw = Buffer.concat(chunks).toString('utf8');
+          let data: unknown;
+          try { data = raw ? JSON.parse(raw) : undefined; } catch {
+            reject(new Error(`Server returned invalid JSON (HTTP ${status}).`)); return;
           }
-          try {
-            resolve(JSON.parse(data) as T);
-          } catch {
-            reject(new Error(`Invalid JSON: ${data.slice(0, 100)}`));
-          }
+          if (status < 200 || status >= 300) {
+            const hint = status === 401 || status === 403 ? ' Check your API key in ssync: Configure Connection.' : '';
+            const detail = record(data) && typeof data.detail === 'string' ? ` ${data.detail.slice(0, 300)}` : '';
+            reject(new Error(`HTTP ${status}.${hint}${detail}`));
+          } else resolve(data as T);
         });
       });
-
-      req.on('error', reject);
-      if (body !== undefined) req.write(JSON.stringify(body));
-      req.end();
+      this.requests.add(request);
+      // The deadline covers DNS, TLS, and responses that trickle forever.
+      const deadline = setTimeout(() => request.destroy(new Error(`Request timed out after ${this.timeoutMs / 1000}s.`)), this.timeoutMs);
+      request.on('close', () => { clearTimeout(deadline); this.requests.delete(request); });
+      request.on('error', reject);
+      request.end(payload);
     });
   }
-
-  async health(): Promise<boolean> {
-    try {
-      const res = await this.request<{ status: string }>('GET', '/health');
-      return res.status === 'healthy';
-    } catch {
-      return false;
-    }
-  }
-
   async getHosts(): Promise<HostInfo[]> {
-    return this.request<HostInfo[]>('GET', '/api/hosts');
+    const result = await this.request<unknown>('GET', 'api/hosts');
+    if (!Array.isArray(result) || !result.every(host => record(host) && typeof host.hostname === 'string')) {
+      throw new Error('Server returned an invalid host list.');
+    }
+    return result.map(host => ({ hostname: host.hostname, work_dir: typeof host.work_dir === 'string' ? host.work_dir : undefined }));
   }
-
-  async getJobs(opts: { host?: string; activeOnly?: boolean; since?: string } = {}): Promise<JobStatusResult[]> {
-    const params = new URLSearchParams();
-    if (opts.host) params.set('host', opts.host);
-    if (opts.activeOnly) params.set('active_only', 'true');
-    if (opts.since) params.set('since', opts.since);
-    params.set('group_array_jobs', 'false');
-    return this.request<JobStatusResult[]>('GET', `/api/status?${params}`);
-  }
-
-  async getJobOutput(jobId: string, hostname: string, lines = 300): Promise<JobOutput> {
-    return this.request<JobOutput>(
-      'GET',
-      `/api/jobs/${encodeURIComponent(jobId)}/output?host=${encodeURIComponent(hostname)}&lines=${lines}`
-    );
-  }
-
-  async launchJob(req: LaunchRequest): Promise<LaunchResponse> {
-    return this.request<LaunchResponse>('POST', '/api/jobs/launch', req);
-  }
-
-  async cancelJob(jobId: string, hostname: string): Promise<void> {
-    await this.request('POST', `/api/jobs/${encodeURIComponent(jobId)}/cancel?host=${encodeURIComponent(hostname)}`);
-  }
-
-  /** Connect to the WebSocket endpoint for real-time job updates. */
-  connectWebSocket(handlers: WebSocketHandlers): WebSocketConnection {
-    const wsUrl = this.apiUrl.replace(/^http/, 'ws') + '/ws/jobs';
-    const url = new URL(wsUrl);
-    if (this.apiKey) url.searchParams.set('api_key', this.apiKey);
-
-    const ws = new WebSocket(url.toString(), { rejectUnauthorized: false });
-
-    ws.on('open', () => handlers.onConnect());
-
-    ws.on('message', (raw) => {
-      try {
-        const data = JSON.parse(raw.toString());
-        if (data.type === 'pong') {
-          handlers.onPong?.();
-          return;
-        }
-        if (data.type === 'initial') {
-          handlers.onInitial(data);
-        } else if (data.type === 'batch_update' && Array.isArray(data.updates)) {
-          handlers.onUpdate(data.updates);
-        } else if (data.type === 'job_update' || data.type === 'state_change' || data.type === 'job_completed') {
-          handlers.onUpdate([data]);
-        }
-      } catch { /* ignore parse errors */ }
+  async getJobs(options: { activeOnly?: boolean; since?: string; force?: boolean } = {}): Promise<JobStatusResult[]> {
+    const query = new URLSearchParams({ group_array_jobs: 'false' });
+    if (options.activeOnly) query.set('active_only', 'true');
+    if (options.since) query.set('since', options.since);
+    if (options.force) query.set('force_refresh', 'true');
+    const result = await this.request<unknown>('GET', `api/status?${query}`);
+    if (!Array.isArray(result)) throw new Error('Server returned an invalid job list.');
+    return result.map(host => {
+      if (!record(host) || typeof host.hostname !== 'string' || !Array.isArray(host.jobs)) {
+        throw new Error('Server returned an invalid job list.');
+      }
+      const hostname = host.hostname;
+      return { hostname, jobs: host.jobs.map(job => parseJob(job, hostname)) };
     });
-
-    ws.on('close', () => handlers.onClose());
-    ws.on('error', (err) => handlers.onError(err));
-
+  }
+  async getJobOutput(jobId: string, hostname: string, lines = 500): Promise<JobOutput> {
+    const result = await this.request<unknown>('GET', `api/jobs/${encodeURIComponent(jobId)}/output?host=${encodeURIComponent(hostname)}&lines=${lines}`);
+    if (!record(result) || !['stdout', 'stderr'].every(key => result[key] == null || typeof result[key] === 'string')) {
+      throw new Error('Server returned invalid job output.');
+    }
+    return { stdout: result.stdout as string | null | undefined, stderr: result.stderr as string | null | undefined };
+  }
+  async launchJob(body: LaunchRequest): Promise<LaunchResponse> {
+    const result = await this.request<LaunchResponse>('POST', 'api/jobs/launch', body);
+    if (!record(result) || typeof result.success !== 'boolean' || typeof result.message !== 'string') {
+      throw new Error('Server returned an invalid launch response. Check jobs before submitting again.');
+    }
+    return result;
+  }
+  async getLaunchStatus(id: string): Promise<LaunchStatus> {
+    const result = await this.request<LaunchStatus>('GET', `api/launches/${encodeURIComponent(id)}`);
+    if (!record(result) || typeof result.terminal !== 'boolean' || typeof result.stage !== 'string') {
+      throw new Error('Server returned an invalid launch status.');
+    }
+    return result;
+  }
+  async cancelJob(jobId: string, hostname: string): Promise<void> {
+    await this.request('POST', `api/jobs/${encodeURIComponent(jobId)}/cancel?host=${encodeURIComponent(hostname)}`);
+  }
+  connectWebSocket(handlers: WebSocketHandlers): WebSocketConnection {
+    if (this.configurationError || this.disposed) {
+      queueMicrotask(() => { handlers.onError(new Error(this.configurationError ?? 'Connection closed.')); handlers.onClose(); });
+      return { close() {}, ping() {} };
+    }
+    const url = new URL('ws/jobs', this.url);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url, {
+      rejectUnauthorized: this.verifyTls, headers: { 'X-API-Key': this.apiKey },
+      handshakeTimeout: this.timeoutMs, maxPayload: 16 * 1024 * 1024,
+    });
+    socket.on('open', handlers.onConnect);
+    socket.on('error', handlers.onError);
+    socket.on('close', handlers.onClose);
+    socket.on('message', raw => {
+      try {
+        const data: unknown = JSON.parse(raw.toString());
+        if (!record(data)) return;
+        if (data.type === 'pong') { handlers.onPong(); return; }
+        if (data.type === 'initial' && record(data.jobs)) {
+          const jobs = Object.entries(data.jobs).flatMap(([host, list]) => {
+            if (!Array.isArray(list)) throw new Error('Invalid realtime snapshot.');
+            return list.map(job => parseJob(job, host));
+          });
+          handlers.onJobs(jobs, true, Object.keys(data.jobs));
+        } else if (['batch_update', 'job_update', 'state_change', 'job_completed'].includes(String(data.type))) {
+          const updates = data.type === 'batch_update' ? data.updates : [data];
+          if (!Array.isArray(updates)) throw new Error('Invalid realtime update.');
+          const jobs = updates.flatMap(update => {
+            if (!record(update)) throw new Error('Invalid realtime update.');
+            if (!update.job) { handlers.onRefresh(); return []; }
+            return [parseJob(update.job, typeof update.hostname === 'string' ? update.hostname : undefined)];
+          });
+          handlers.onJobs(jobs, false, []);
+        }
+      } catch {
+        handlers.onError(new Error('Invalid realtime data; refreshing from the server.'));
+        handlers.onRefresh();
+      }
+    });
     return {
-      close: () => ws.close(),
-      ping: () => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' })); },
+      close: () => socket.terminate(),
+      ping: () => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping' })); },
     };
+  }
+  dispose(): void {
+    this.disposed = true;
+    for (const request of this.requests) request.destroy(new Error('Connection changed. Please try again.'));
+    this.requests.clear();
   }
 }
